@@ -2,7 +2,6 @@
 title: 'The canonical pointer moves BACK, and the previous generation answers exactly as before'
 slug: the-canonical-pointer-moves-back-without-re-ingesting
 spec: the-server-and-cli-hold-generations-too
-needsAnswers: true
 blockedBy: [a-changed-context-creates-a-successor-instead-of-clearing, one-registry-entry-holds-several-live-wire-contexts, the-rebuild-replays-the-local-stream-in-bounded-chunks]
 covers: [3, 10]
 ---
@@ -10,22 +9,34 @@ covers: [3, 10]
 <!-- open-questions -->
 
 ## Open questions
-1. **What is the OPERATOR's affordance for the revert on this runtime?** The mechanism is a registry
-   commit and is already built; what is unpinned is how an operator reaches it. The candidates all have
-   costs: an ADMIN HTTP route beside `/admin/setup` (the closest prior art, but the milestone spec
-   rejects growing the server's surface, and this one would move what answers reads); a FLAG or
-   argument on an existing command (the command set is pinned at five — `run`, `build`, `fetch`,
-   `index`, `serve` — with no default command, so a sixth verb is not available); or NO operator surface
-   at all in this task, leaving the revert a library call a host wires (which delivers the mechanism and
-   arguably not the story). Which is it, and if it is a route, is it authenticated by the ingest token
-   or by something else, given that token guards the WRITE path?
-2. **What does the generation reverted TO actually hold at that moment?** This task's first acceptance
-   criterion depends on question 2 of `the-rebuild-replays-the-local-stream-in-bounded-chunks` (does a
-   retired-but-retained generation go on folding after the pointer moves?). If it does, its answers
-   after the revert are its own later state rather than the pre-promotion ones, and this task must
-   assert the honest property instead. Consume that answer; do not decide it here in a second place.
+1. ~~**What is the OPERATOR's affordance for the revert?**~~ **ANSWERED: an AUTHENTICATED ADMIN HTTP
+   ROUTE, guarded by a NEW `ADMIN_TOKEN` that fails closed when unset.**
 
-<!-- /open-questions -->
+   Decisive reason: it is the only affordance that exists on EVERY deployment shape. On Cloudflare
+   there is no CLI at all — a Worker is reachable only over HTTP — so a flag on a command cannot
+   serve a serverless deployment, and a library call with no operator surface does not deliver the
+   story. The command set is pinned at five with no default command, so a sixth verb is unavailable,
+   and hanging `--revert` on `run` conflates a long-running fold with a one-shot control action.
+
+   `/admin/setup` already exists, so `/admin` is an ESTABLISHED namespace rather than a new class of
+   surface — and that is what matters, because the milestone's "add no endpoint" fence protects the
+   QUERY surface (`/status` is the whole of it), not the admin one.
+
+   **NOT the ingest token.** That credential is handed to a log shipper and guards the WRITE path;
+   letting it also change which generation answers reads would give a fetcher control-plane authority.
+   A separate `ADMIN_TOKEN`, failing closed exactly as the ingest guard does ("refuses everyone when
+   no token is configured, rather than letting everyone in").
+
+   NOTE, flagged and deliberately NOT changed here: `/admin/setup` is currently UNAUTHENTICATED
+   (idempotent DDL, plausibly a deliberate bootstrap choice). This task introduces the first admin
+   credential rather than reusing one; it does not retrofit `setup`.
+2. ~~**What does the generation reverted TO actually hold?**~~ **ANSWERED by question 2 of
+   `the-rebuild-replays-the-local-stream-in-bounded-chunks`: it kept FOLDING, so it holds its OWN
+   CURRENT state, not a pre-promotion snapshot.**
+
+   So assert the HONEST property: reverting restores the OLD PROCESSOR's answers over the CURRENT
+   chain — NOT "the exact answers from the promotion instant". That is assertable, and it is the more
+   useful guarantee: a revert that handed back stale answers would be a poor revert.
 
 ## What to build
 
@@ -129,7 +140,3 @@ What has to be got right here:
 >
 > RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT. Do
 > not write the done record, the commit message or the PR body yourself.
-
-## Open questions
-
-- the-canonical-pointer-moves-back-without-re-ingesting is not blockedBy the-rebuild-replays-the-local-stream-in-bounded-chunks, but it cannot be built without it: on this runtime the chain-free container created by a-changed-context-creates-a-successor-instead-of-clearing deliberately stops short of promotion (its own What-to-build says so), and the rebuild task is the one that owns the FORWARD pointer move and explicitly takes the lift of the promotion trigger and its arming into a shared place as IN SCOPE. Built as written and in parallel, the revert task has nothing to revert FROM and no arming rule to assert its criterion 3 against, so it either stalls on a scope-fence violation or writes a second promotion trigger, which is exactly the two-sources-of-truth the rebuild task warns against. The revert task's own open question 2 also says it CONSUMES question 2 of the rebuild task, an ordering that is prose-only today. Fix: add the rebuild slug to blockedBy plus the Blocked-by prose (edit supplied). (work/tasks/backlog/the-canonical-pointer-moves-back-without-re-ingesting.md frontmatter blockedBy: [a-changed-context..., one-registry-entry...]; criterion 'After the revert, the automatic promotion policy does not move the pointer forward again'; rebuild task: 'The chain-free container this task builds on deliberately stops short of promotion ... That lift is IN SCOPE for this task.')

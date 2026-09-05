@@ -66,11 +66,47 @@ database and one of them is wrangler's D1 migration, which executes that file an
 `SCHEMA_VERSION` and the version row in the SQL together — a test asserts they agree, and another
 asserts every fixed name carries the `_` prefix.
 
+## WRITER SUCCESSION on a delete, DECIDED — and it is this task's, because the commit is
+
+ADR-0044 says which generation WRITES a stream is the FIRST one held on it, "registration order, not
+the canonical pointer". It does NOT say what happens when that generation is DELETED, and nothing
+else in the tree does either. Unhandled, deleting the writer is a SILENT STALL and worse: generations
+on one stream share a wire context and the RECEIVER for that context is the writer, so with it gone
+nothing appends AND an incoming batch resolves to no receiver. `/status` keeps looking healthy while
+the cursor quietly stops.
+
+**The rule is restated, not replaced: the writer of a stream is the OLDEST SURVIVING generation held
+on it.** That subsumes ADR-0044's rule (at the start, the oldest survivor IS the first held) and
+defines succession without letting the POINTER in. It is deliberately NOT "the canonical takes over":
+that would reintroduce the very coupling ADR-0044 refused, and leave two rules where one does. In the
+ordinary sequence — rebuild, promote, drop the old one — the promoted successor inherits the duty
+anyway, as a CONSEQUENCE of being the oldest survivor rather than as a special case.
+
+Succession happens ATOMICALLY WITH THE DROP, in the same registry commit, or a crash between them
+leaves a stream with no writer: the successor's `readOnlyStream` is swapped for the real writable
+`ExistingStream` (it stops being a follower), and the wire context's receiver moves to it.
+
+The COVERAGE ROW (see `the-stored-emission-stream-is-a-stream-a-successor-can-refold`) is a property
+of the STREAM, so it survives succession untouched and the new writer continues from it. Nothing to
+migrate.
+
+This is very likely an amendment to ADR-0044 (`work/protocol/ADR-FORMAT.md`); if it is, write it and
+name it in the `## Decisions` block.
+
 ## Acceptance criteria
 
 - [ ] A `GenerationRegistryPort` over `RemoteSQL`, scoped to one named indexer, passing the same
       behaviour the memory and IndexedDB substrates pass: register, resolve an already-registered
       generation instead of duplicating it, refuse at a cap naming what to delete, delete, reap.
+- [ ] **Deleting the WRITER hands the append duty to the oldest surviving generation on that stream,
+      in the SAME commit as the delete.** Asserted on the rows: after the drop, exactly one
+      generation holds the writable stream and the wire context resolves to it, so an incoming batch
+      is still received and still appends.
+- [ ] **Dropping the LAST generation on a stream reaps the stream subtree**, since no writer can
+      remain. Use `dropStreamSubtree`; this is the same sweep the criterion below performs, triggered
+      rather than discovered.
+- [ ] **Dropping the CANONICAL generation is REFUSED**, naming it: something must always be
+      answering, which is also what guarantees a survivor exists to inherit the duty.
 - [ ] The caps REFUSE loudly at the bound and evict nothing, and the refusal names the generations an
       operator could delete (story 7).
 - [ ] The canonical pointer survives a fresh handle: open a second registry over the same database and

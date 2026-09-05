@@ -2,7 +2,6 @@
 title: 'The rebuild replays the LOCAL stream in bounded chunks against a durable checkpoint, and the pointer moves at the end'
 slug: the-rebuild-replays-the-local-stream-in-bounded-chunks
 spec: the-server-and-cli-hold-generations-too
-needsAnswers: true
 blockedBy: [the-stored-emission-stream-is-a-stream-a-successor-can-refold, a-changed-context-creates-a-successor-instead-of-clearing]
 covers: [2, 8, 9, 10]
 ---
@@ -10,34 +9,35 @@ covers: [2, 8, 9, 10]
 <!-- open-questions -->
 
 ## Open questions
-1. **How is "the successor has caught up" decided on THIS runtime?** The promotion trigger compares the
-   successor's cursor against the CANONICAL generation's, live. That comparison is `lastToBlock`
-   against `lastToBlock` in the existing container, and it only works if the re-folding successor can
-   report a cursor comparable to the incumbent's. It may not be able to: `_emissions` stores no
-   coverage claim, so a successor's cursor derived from the rows it replayed can sit permanently below
-   an incumbent whose cursor advanced over ranges that carried no logs — and then `on-catch-up` never
-   fires and the rebuild never promotes. This is the same question as question 1 on
-   `the-stored-emission-stream-is-a-stream-a-successor-can-refold`, seen from the driver's side: is
-   catch-up (a) a block-number comparison made honest by a coverage row written with the append,
-   (b) a comparison against the stream's `seq` high-water, or (c) something else? Answer both together.
-   Whichever it is, ADR-0052 allows the stored stream to sit one batch AHEAD of the state that folded
-   it (the append is its own write, ordered BEFORE the fold), so "level" must be defined against that
-   asymmetry rather than against an assumed single transaction.
-2. **After the pointer moves, does the RETIRED generation go on folding — and who then writes the
-   shared stream?** On this runtime the writer of a stream is the `StreamBuilder` that RECEIVES wire
-   batches and appends what it folded (ADR-0052), and a successor on the SAME stream is a follower
-   that writes nothing (ADR-0044). Nothing in the model says what changes at the promotion, and
-   ADR-0008's own answer (feed both briefly, flip, DROP the old) is exactly the part this spec
-   supersedes: the old generation is now RETAINED. Three things hang on the answer and no task
-   currently owns it — whether the retired generation keeps advancing (which decides whether
-   `the-canonical-pointer-moves-back-without-re-ingesting` can assert 'the same answers as before the
-   promotion' at all), whether the promoted follower is fed live or stays a re-folder of somebody
-   else's appends, and whether a retired generation's WIRE CONTEXT stays live
-   (`one-registry-entry-holds-several-live-wire-contexts` owns the live set and deliberately does not
-   assume this). A 'pause' does NOT settle it: on this runtime pause is an explicit operator action,
-   and the container REFUSES to pause a follower (`CannotPauseFollowerError`).
+1. ~~**How is "the successor has caught up" decided?**~~ **ANSWERED, jointly with question 1 of
+   `the-stored-emission-stream-is-a-stream-a-successor-can-refold`: catch-up is decided on the
+   emission `seq` HIGH-WATER (`readStreamHighWaterMark`), not on a block comparison.** A follower
+   consumes rows; its completeness is a stream-space property, so `seq` is exact and has no
+   under-claim. Block coverage is answered separately by a per-`(indexer, stream)` coverage row (that
+   task's answer 1), which exists for the WIRE cursor rather than for this predicate.
 
-<!-- /open-questions -->
+   Because ADR-0052 lets the stored stream sit one batch AHEAD of the state that folded it, "level"
+   is defined against the stream's high-water `seq` at the moment of the check, and a successor that
+   reaches it is caught up even if a further batch lands immediately after — the next check simply
+   finds more.
+2. ~~**After the pointer moves, does the RETIRED generation go on folding, and who writes the shared
+   stream?**~~ **ANSWERED: it KEEPS FOLDING, and the WRITER DOES NOT CHANGE AT PROMOTION.**
+
+   Half of this is already decided: ADR-0044 says which generation writes a stream is the FIRST one
+   held on it, "registration order, not the canonical pointer", precisely so promotion does not hand
+   the append duty to a different engine mid-flight. So promotion moves the POINTER, not the APPEND
+   DUTY. The original generation stays the receiver and appender; the promoted successor keeps
+   following.
+
+   The retired generation keeps folding because a frozen one would answer STALE data the instant it
+   was reverted to, which defeats retaining it. It is a follower on a shared stream, so it fetches
+   nothing and costs only the re-fold of new rows; story 7's cap bounds accumulation. **Its wire
+   context therefore stays LIVE** — which is the answer
+   `one-registry-entry-holds-several-live-wire-contexts` deliberately declined to assume.
+
+   **The one case where the duty DOES move is DELETION, not promotion**, and it is owned by
+   `the-generation-registry-is-durable-on-sql`: the writer is the OLDEST SURVIVING generation on the
+   stream.
 
 ## What to build
 
@@ -144,7 +144,3 @@ named in the spec's Out of Scope. This task owes the driver and the checkpoint.
 > RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT —
 > in particular where the checkpoint lives and how a chunk is sized. Do not write the done record, the
 > commit message or the PR body yourself.
-
-## Open questions
-
-- the-canonical-pointer-moves-back-without-re-ingesting is not blockedBy the-rebuild-replays-the-local-stream-in-bounded-chunks, but it cannot be built without it: on this runtime the chain-free container created by a-changed-context-creates-a-successor-instead-of-clearing deliberately stops short of promotion (its own What-to-build says so), and the rebuild task is the one that owns the FORWARD pointer move and explicitly takes the lift of the promotion trigger and its arming into a shared place as IN SCOPE. Built as written and in parallel, the revert task has nothing to revert FROM and no arming rule to assert its criterion 3 against, so it either stalls on a scope-fence violation or writes a second promotion trigger, which is exactly the two-sources-of-truth the rebuild task warns against. The revert task's own open question 2 also says it CONSUMES question 2 of the rebuild task, an ordering that is prose-only today. Fix: add the rebuild slug to blockedBy plus the Blocked-by prose (edit supplied). (work/tasks/backlog/the-canonical-pointer-moves-back-without-re-ingesting.md frontmatter blockedBy: [a-changed-context..., one-registry-entry...]; criterion 'After the revert, the automatic promotion policy does not move the pointer forward again'; rebuild task: 'The chain-free container this task builds on deliberately stops short of promotion ... That lift is IN SCOPE for this task.')

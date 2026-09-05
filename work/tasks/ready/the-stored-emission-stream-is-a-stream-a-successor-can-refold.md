@@ -2,7 +2,6 @@
 title: 'The stored emission stream is a STREAM a successor can re-fold, read-only'
 slug: the-stored-emission-stream-is-a-stream-a-successor-can-refold
 spec: the-server-and-cli-hold-generations-too
-needsAnswers: true
 blockedBy: []
 covers: []
 ---
@@ -10,35 +9,37 @@ covers: []
 <!-- open-questions -->
 
 ## Open questions
-1. **What coverage does a reader over `_emissions` report, given that table stores no cursor record?**
-   `StreamFetcher` answers `{lastSync, eventStream}`, and on the segment keeper the `lastSync` comes
-   from the CURSOR RECORD stored beside the segments (the three block numbers). `_emissions` has no
-   such row: it is one row per emitted log, `seq`-addressed, holes legal. The WRITE side is settled —
-   there is exactly ONE append site and it is the fold's — and only the READ side is open. Note what
-   ADR-0052 actually decided about that write, because an earlier telling of this question got it
-   wrong: the append is its OWN `batch()`, ORDERED BEFORE the fold, and NOT in one transaction with
-   the state cursor. The accepted cost is recorded there: the stream may sit one batch AHEAD of the
-   state, never behind. So a coverage row written with the append can legitimately be ahead of the
-   state cursor of the generation that folded it, and any answer below has to be honest about that
-   asymmetry rather than assume the two move together. Candidates, none pinned:
-   - **(a)** add a per-(indexer, stream) coverage/high-water row written in the SAME transaction as the
-     append, making this a full keeper that satisfies the cursor contract's three properties directly;
-   - **(b)** derive it from `MAX(blockNumber)` of the stored rows — which UNDER-claims, since a stream
-     legitimately covers ranges that carried no logs, so a re-folding successor would report a cursor
-     permanently behind the canonical generation's and the `on-catch-up` promotion would never fire
-     (see the coupled question on `the-rebuild-replays-the-local-stream-in-bounded-chunks`);
-   - **(c)** report no block coverage at all and decide catch-up on the emission `seq` high-water
-     instead (`readStreamHighWaterMark` already exists), leaving the successor's own cursor to be
-     whatever its fold wrote.
-2. **Does the spec's testing decision "the cursor contract is satisfied by the SQL keeper, asserted
-   against the same three properties as the IndexedDB keeper" still stand?** The answer to question 9
-   says this implementation is READ-ONLY (`saveNewEvents` and `clear` are no-ops), holds no cursor of
-   its own, and does not ride the segment port, so the shared conformance material has nothing to
-   attach to. If the answer to question 1 is (a), a cursor contract exists again and should be
-   asserted; under (b)/(c) there is nothing to assert and that testing decision is superseded. Say
-   which.
+1. ~~**What coverage does a reader over `_emissions` report?**~~ **ANSWERED: (a), a per-`(indexer,
+   stream)` COVERAGE ROW written in the same `batch()` as the append — and the catch-up PREDICATE is
+   `seq`, not blocks. They are complementary, not alternatives.**
 
-<!-- /open-questions -->
+   **(b) is ruled out on its own terms**: `MAX(blockNumber)` under-claims over ranges that carried no
+   logs, so a successor sits permanently behind the incumbent and `on-catch-up` never fires.
+
+   **(c) alone is not enough, and this is the part to get right.** `seq` answers "have I consumed
+   everything" exactly, but it cannot answer the WIRE. At promotion the canonical generation must
+   present a correct `expectedFromBlock` (ADR-0004, receiver-authoritative). A cursor derived from
+   stored rows alone under-claims, so the fetcher is told to re-send from too far back — and under
+   ADR-0052 those re-sent batches APPEND DUPLICATE ROWS. (c) alone turns a promotion into stream
+   corruption.
+
+   **The resolving idea: coverage is a property of the STREAM, not of any generation's fold.** Store
+   it once, beside the stream. Every generation folding it inherits the same claim, so promotion hands
+   over a correct wire cursor with no reconciliation, and WRITER SUCCESSION (see
+   `the-generation-registry-is-durable-on-sql`) leaves it untouched. Use `seq` via the existing
+   `readStreamHighWaterMark` for the catch-up predicate: a follower is caught up when it has folded
+   through the stream's high-water `seq`.
+
+   **State the ADR-0052 asymmetry rather than assuming it away:** the coverage row moves with the
+   APPEND, which is ordered BEFORE the fold, so coverage may sit one batch ahead of every generation's
+   state. That is the allowed direction (ADR-0038: stream ahead of state, never behind).
+
+   **The keeper stays READ-ONLY** (spec answer 9 is unchanged): the coverage row is written by the
+   emission appender, never by `saveNewEvents`.
+2. ~~**Does the cursor-contract testing decision still stand?**~~ **ANSWERED: YES, it stands, because
+   question 1 resolved to (a).** A cursor contract exists again, so assert the SAME three properties
+   as the IndexedDB keeper. What does NOT apply is the segment-port conformance material, since this
+   implementation does not ride `createSegmentedStream`.
 
 ## What to build
 
@@ -132,7 +133,3 @@ two claimable tasks race the same `SCHEMA_VERSION` bump.
 >
 > RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT. Do
 > not write the done record, the commit message or the PR body yourself.
-
-## Open questions
-
-- the-canonical-pointer-moves-back-without-re-ingesting is not blockedBy the-rebuild-replays-the-local-stream-in-bounded-chunks, but it cannot be built without it: on this runtime the chain-free container created by a-changed-context-creates-a-successor-instead-of-clearing deliberately stops short of promotion (its own What-to-build says so), and the rebuild task is the one that owns the FORWARD pointer move and explicitly takes the lift of the promotion trigger and its arming into a shared place as IN SCOPE. Built as written and in parallel, the revert task has nothing to revert FROM and no arming rule to assert its criterion 3 against, so it either stalls on a scope-fence violation or writes a second promotion trigger, which is exactly the two-sources-of-truth the rebuild task warns against. The revert task's own open question 2 also says it CONSUMES question 2 of the rebuild task, an ordering that is prose-only today. Fix: add the rebuild slug to blockedBy plus the Blocked-by prose (edit supplied). (work/tasks/backlog/the-canonical-pointer-moves-back-without-re-ingesting.md frontmatter blockedBy: [a-changed-context..., one-registry-entry...]; criterion 'After the revert, the automatic promotion policy does not move the pointer forward again'; rebuild task: 'The chain-free container this task builds on deliberately stops short of promotion ... That lift is IN SCOPE for this task.')
