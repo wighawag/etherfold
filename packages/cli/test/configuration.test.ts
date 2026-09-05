@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {INPUTS, OWNERSHIP, resolveCommandConfig, type ConfigInput} from '../src/config.js';
+import {DEFAULT_INDEXER_NAME, INPUTS, OWNERSHIP, resolveCommandConfig, type ConfigInput} from '../src/config.js';
 import type {CommandName, Options} from '../src/types.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -117,9 +117,11 @@ describe('a required input that is missing is refused, naming the flag and the v
 		);
 	});
 
-	it('refuses BOTH halves of the wire with no indexer NAME, since a host defaults none', () => {
-		// the name is a ROUTE SEGMENT (ADR-0036): the sender addresses `/{indexer}/ingest`
-		// and the receiver registers exactly that name, so neither half may invent one
+	it('refuses BOTH halves of the WIRE with no indexer NAME, since a host defaults none', () => {
+		// On the wire the name is a ROUTE SEGMENT (ADR-0036): the sender addresses
+		// `/{indexer}/ingest` and the receiver registers exactly that name, so neither
+		// half may invent one. That rule is about ROUTING, which is why the combined
+		// shapes below may default the same input (ADR-0052) -- they route nothing.
 		const sending: Options = {
 			nodeUrl: 'http://localhost:8545',
 			deployments: './d',
@@ -242,18 +244,54 @@ describe('the two asymmetries the table exists for', () => {
 		).toThrow(/--node-url \(ETH_NODE_URI\) is not accepted by `etherfold index`.*NO chain call/s);
 	});
 
-	it('refuses an indexer NAME on the three commands that route no batch by name', () => {
-		// `run` and `build` hold both halves in one process and `serve` receives no
-		// push at all, so none of them addresses or registers a name
-		expect(() => resolveCommandConfig('run', {...FOLDING, indexer: 'alpha'}, {})).toThrow(
-			/--indexer \(INDEXER_NAME\) is not accepted by `etherfold run`.*ONE process/s,
-		);
-		expect(() => resolveCommandConfig('build', {...FOLDING, indexer: 'alpha'}, {})).toThrow(
-			/--indexer \(INDEXER_NAME\) is not accepted by `etherfold build`/,
-		);
+	it('refuses an indexer NAME on the read tier, which folds nothing and registers nothing', () => {
+		// `serve` is the one command left that has no use for the value: it receives no
+		// push, so it registers no name, and it folds nothing, so it stores no emission
+		// row to key on one
 		expect(() => resolveCommandConfig('serve', {db: ':memory:', indexer: 'alpha'}, {})).toThrow(
 			/--indexer \(INDEXER_NAME\) is not accepted by `etherfold serve`.*read tier/s,
 		);
+	});
+
+	// -------------------------------------------------------------------------
+	// THE NAME IS UNIVERSAL, AND ONLY THE WIRE MAY NOT DEFAULT IT (ADR-0052)
+	// -------------------------------------------------------------------------
+	// `run` and `build` refused `--indexer` outright, on the ground that the name
+	// is a route segment and they route nothing. That left the shapes which FOLD
+	// in one process with no name to key a stored emission row on -- the column is
+	// `NOT NULL` -- so they stored no stream at all. The name is universal
+	// (ADR-0036) and only its ROUTING use is undefaultable, so they take it,
+	// optionally, and default it.
+	// -------------------------------------------------------------------------
+
+	it('accepts an indexer NAME on the combined shapes, and defaults one when none is given', () => {
+		expect(resolveCommandConfig('run', {...FOLDING, indexer: 'alpha'}, {}).indexer).toBe('alpha');
+		expect(resolveCommandConfig('build', {...FOLDING, indexer: 'alpha'}, {}).indexer).toBe('alpha');
+
+		// ...and with none given, the documented default rather than a refusal: this is
+		// `etherfold run`, the readme's headline one-liner, and nothing about it routes
+		expect(resolveCommandConfig('run', FOLDING, {}).indexer).toBe(DEFAULT_INDEXER_NAME);
+		expect(resolveCommandConfig('build', FOLDING, {}).indexer).toBe(DEFAULT_INDEXER_NAME);
+
+		// the SAME default on both, so an artifact `build` emitted is one `run`
+		// continues rather than forks a second stream beside
+		expect(resolveCommandConfig('build', FOLDING, {}).indexer).toBe(resolveCommandConfig('run', FOLDING, {}).indexer);
+	});
+
+	it('lets the variable stand behind the flag on the combined shapes too', () => {
+		// one name per input, and the same precedence as every other: flag, then
+		// variable, then -- here alone among the folding commands -- a default
+		expect(resolveCommandConfig('run', FOLDING, {INDEXER_NAME: 'from-env'}).indexer).toBe('from-env');
+		expect(resolveCommandConfig('run', {...FOLDING, indexer: 'from-flag'}, {INDEXER_NAME: 'from-env'}).indexer).toBe(
+			'from-flag',
+		);
+	});
+
+	it('documents the default where the flag is described, so --help says what it will do', () => {
+		// the flag is registered from this description (`src/program.ts`), so this is
+		// the one place the default has to be readable from
+		expect(INPUTS.indexer.describe).toContain(DEFAULT_INDEXER_NAME);
+		expect(INPUTS.indexer.describe).toMatch(/never defaulted/);
 	});
 
 	it('refuses a wire on `run` and on `build`, because the halves meet in one process', () => {

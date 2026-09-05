@@ -167,11 +167,15 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 
 		const providedStreamConfig = streamConfigFor(env);
 		const streamConfig = resolveStreamConfig(providedStreamConfig);
-		const {processor, store, db, recordReorg} = await buildProcessor<ABI, ProcessResultType>(
+		const {processor, store, db, recordReorg, appendEmissions} = await buildProcessor<ABI, ProcessResultType>(
 			declared,
 			config.destination,
 			{
 				finalityDepth: streamConfig.finality,
+				// the name the OPERATOR gave, which is also the route segment a sender
+				// addresses: one value, required here and never defaulted, because on this
+				// half it routes as well as keys (ADR-0036)
+				indexer: config.wire.indexer,
 				...(deps.createDB ? {createDB: deps.createDB} : {}),
 			},
 		);
@@ -184,13 +188,15 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// authoritative about the cursor, deriving every reorg, making no chain call.
 		// It reads the persisted cursor on every batch rather than holding one, which
 		// is what makes a resumed or replayed push safe.
-		// ...and it counts the reverts it concludes through the recorder the store's
-		// owner built, exactly as `run` and `build` do. The ingest route below is a
-		// CALLER of `receive` and no longer counts anything itself, so a process that
-		// both concludes and receives cannot double-count (ADR-0050).
+		// ...and it counts the reverts it concludes, and stores the emissions it folded,
+		// through the two ports the store's owner built, exactly as `run` and `build`
+		// do. The ingest route below is a CALLER of `receive` and writes neither itself,
+		// so a process that both concludes and receives cannot double-count a revert
+		// (ADR-0050) or store a batch twice (ADR-0052).
 		const streamBuilder = new StreamBuilder<ABI, ProcessResultType>(processor, source, {
 			stream: providedStreamConfig,
 			recordReorg,
+			appendEmissions,
 		});
 
 		// The store's own tables, before a port is bound rather than when the first

@@ -45,6 +45,10 @@ function declaring(name: string): EntityProcessor<typeof abi, any> {
 async function foldInto(handle: RemoteSQL, declared: EntityProcessor<typeof abi, any>) {
 	return buildProcessor<typeof abi, unknown>(declared, target(), {
 		finalityDepth: FINALITY,
+		// the name the stored emission stream is keyed on, which every folding command
+		// resolves before it gets here (ADR-0052): required, so that no shape can fold
+		// into a database without saying under which name it stores what it folded
+		indexer: 'alpha',
 		createDB: () => handle,
 		applyFixedSchema: true,
 	});

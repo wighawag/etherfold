@@ -51,10 +51,13 @@ CREATE TABLE IF NOT EXISTS _meta (
 --
 -- ## The KEY: two discriminators, both on every row
 --
--- `indexer` is the NAMED INDEXER (ADR-0036), the multi-tenancy unit, which
--- arrives as the route segment a batch was posted to. `stream` is WHICH stream
--- those logs belong to, as `streamDigestOf` renders it: a wide digest over the
--- deduplicated per-entry stream hashes plus the stream config hash.
+-- `indexer` is the NAMED INDEXER (ADR-0036), the multi-tenancy unit. It is the
+-- HOST's value, not the fold's: the route segment a batch was posted to on a
+-- split deployment, and the name the operator gave a combined one, which is
+-- what a host closes over when it supplies the appender (ADR-0052). `stream` is
+-- WHICH stream those logs belong to, as `streamDigestOf` renders it: a wide
+-- digest over the deduplicated per-entry stream hashes plus the stream config
+-- hash.
 --
 -- `stream` is deliberately NOT the wire context's `{source, config}`. That is a
 -- 32-bit whole-entry hash kept whole on purpose (ADR-0034) as an identity check
@@ -83,7 +86,7 @@ CREATE TABLE IF NOT EXISTS _meta (
 -- and are re-derived on replay against the source running now, so persisting
 -- them would persist an opinion that a decode-only change invalidates.
 CREATE TABLE IF NOT EXISTS _emissions (
-    -- the NAMED INDEXER, from the route segment: the tenancy discriminator
+    -- the NAMED INDEXER the host folds under: the tenancy discriminator
     indexer TEXT NOT NULL,
     -- WHICH stream, as `streamDigestOf` renders it (NOT the wire identity)
     stream TEXT NOT NULL,

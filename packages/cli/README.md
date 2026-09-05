@@ -40,7 +40,7 @@ It is ASSEMBLY and not a fourth engine. A log-fetcher pushes into a stream-build
 | everything `build` takes | same flags, same variables, same refusals: see the table below |
 | `--port <port>` | port to listen on (or `PORT`). Defaults to `2000`; `0` asks the OS for any free port |
 | `--host <hostname>` | hostname to bind. Binds every interface when absent |
-| `--no-auto-setup` | do not apply the fixed-table schema at startup |
+| `--no-auto-setup` | do not apply the fixed-table schema at startup. Then somebody else must: this process stores the stream it folds into those tables, and it will not advance until it can (see below) |
 
 **How it stops.** On `SIGINT` or `SIGTERM` it finishes the cycle in flight and exits `0`; nothing needs to be saved, because the store holds the rows AND the sync cursor in one transaction (ADR-0027), which is also why an interrupted run resumes from the store rather than from the start block. A refusal no waiting fixes -- a foreign `{source, config}`, the wrong chain, a suspected truncation -- ends it with a non-zero code, so a supervisor can tell a stop from a wedge. A retryable failure (an unreachable node) is retried indefinitely on an escalating, capped backoff rather than after N attempts: a transient outage should not leave a stopped indexer behind. Reaching the tip is not one of the ways it ends; that is `build`.
 
@@ -57,7 +57,11 @@ Four numbers, deliberately, and never the cursor itself: the stored cursor is a 
 
 **All three folding shapes carry these counters, not just the one behind an HTTP route.** `run`, `build` and `index` all count the reverts they concluded, into the database they fold into, through one writer (ADR-0050) -- so `run` and `fetch` plus `index` agree about a reorg the way they already agree about state and the cursor, and `packages/cli/test/equivalence.test.ts` compares them directly. `serve` reports what its database holds, since it folds nothing and concludes nothing. A count that cannot be written (a database with no fixed tables, see `--no-auto-setup`) is a logged miscount and never a fold that stops.
 
-**A `run` process hosts no remote writer.** It fetches for itself, so no registry is injected into its server: an authenticated call to `/{anything}/ingest` answers `501 ingestion-not-configured`, and an unauthenticated one answers `401`, exactly as on the read tier. A remote sender pushing into a process that is already fetching would be a second writer nobody asked for; the command that receives pushes is `index`. That is why `--indexer`, `--ingest-endpoint` and `--ingest-token` are refused here: the two halves meet in this process through a direct in-process ingestion, so there is no wire to configure.
+**And all three STORE THE STREAM they folded** (ADR-0052): every emitted log, retractions included, in the `_emissions` table of the database they fold into, which is what a later processor change re-folds from instead of re-fetching the whole history from your node, and what both feed views read. That write is NOT best-effort, and it is the one thing that can stop a fold: it happens BEFORE the batch is processed, and a batch that could not be stored is not processed at all, because a state that advanced past events the stream never received is silent, permanent damage nothing downstream can detect. So a `run` pointed with `--no-auto-setup` at a database nobody has migrated retries its cycle and reports no progress, rather than indexing into a database that cannot record what it indexed; it catches up by itself once the schema is applied.
+
+**A `run` process hosts no remote writer.** It fetches for itself, so no registry is injected into its server: an authenticated call to `/{anything}/ingest` answers `501 ingestion-not-configured`, and an unauthenticated one answers `401`, exactly as on the read tier. A remote sender pushing into a process that is already fetching would be a second writer nobody asked for; the command that receives pushes is `index`. That is why `--ingest-endpoint` and `--ingest-token` are refused here: the two halves meet in this process through a direct in-process ingestion, so there is no wire to configure.
+
+**`--indexer` is accepted here, and it is the one input this command may default.** It is NOT a wire setting: the name is what every row of the stored stream is keyed on (ADR-0036), so a process that folds needs one whether or not anything addresses it by one. This process routes no batch by name -- it registers none, as above -- so the never-defaulted rule that binds `fetch` and `index` does not reach it, and it defaults to `default` (ADR-0052). Name it explicitly when two answer sets will share a database, or when a consumer should follow the feed under a name you chose.
 
 ## `etherfold build` -- one shot, to the tip, then exit
 
@@ -74,7 +78,7 @@ Named for what it PRODUCES: a database. What it does: load the processor module,
 
 **It is a ONE-SHOT and nothing else.** It does not follow the chain, does not stay up, and cannot be reconfigured while it runs: to keep a database current, run it again (a cron, a loop, a job). It resumes rather than restarting, because the sync cursor is in the store, written in the same transaction as the block it describes (ADR-0027). Live reconfiguration is the browser package's ability, not this one's.
 
-**The database it emits carries its provenance**, which is why `build` applies the fixed-table schema even though it binds no port: the artifact records the schema version and the reorgs it concluded (`absence` versus `contradiction`, exactly as `run` and `index` record them -- ADR-0050), so a `serve` pointed at it, or a later process fed it, reads the same facts a `run` database carries. Nothing else in this command would ever create those tables, and a database that loses its provenance the moment it becomes an INPUT is the failure this prevents. `--no-auto-setup` is refused here: the one-shot answers no queries, and there is no startup to decline the tables at.
+**The database it emits carries its provenance**, which is why `build` applies the fixed-table schema even though it binds no port: the artifact records the schema version, the reorgs it concluded (`absence` versus `contradiction`, exactly as `run` and `index` record them -- ADR-0050) and the STREAM it folded (ADR-0052), so a `serve` pointed at it, or a later process fed it, reads the same facts a `run` database carries. The stream is the part that makes the artifact re-foldable: a processor-logic change replays what is already on disk instead of re-fetching a whole history from a node that may no longer serve it. Nothing else in this command would ever create those tables, and a database that loses its provenance the moment it becomes an INPUT is the failure this prevents. `--no-auto-setup` is refused here: the one-shot answers no queries, and there is no startup to decline the tables at.
 
 | flag | |
 | --- | --- |
@@ -85,6 +89,7 @@ Named for what it PRODUCES: a database. What it does: load the processor module,
 | `-d, --deployments <folder>` | contract deployments in hardhat-deploy / rocketh format, or `INDEXING_SOURCE` as JSON. Optional when the module supplies `contractsDataPerChain` |
 | `-n, --node-url <url>` | the JSON-RPC endpoint (or `ETH_NODE_URI`) |
 | `--rps <n>` | cap the requests per second made to the node (or `REQUESTS_PER_SECOND`) |
+| `--indexer <name>` | the NAMED INDEXER the artifact's stored stream is keyed on (or `INDEXER_NAME`). Optional here, and the only input besides `--port` that defaults: `default` (ADR-0052). It routes nothing -- this command answers no requests |
 
 A flag combination that names no store is REFUSED rather than ignored: an accepted-and-ignored flag is a deployment believing a retention window is enforced, or a database is being written, when neither is true. Nothing prunes automatically, because pruning costs time proportional to what it drops and is a call a host schedules (ADR-0022).
 
@@ -138,7 +143,7 @@ etherfold index \
 | `--store <sqlite>` / `--db <url>` | REQUIRED, exactly as on `build`: this command owns the database |
 | `--retention <blocks\|revert-only\|unbounded>` | as on `build`. Nothing prunes automatically (ADR-0022) |
 | `-d, --deployments <folder>` | what to index, or `INDEXING_SOURCE` as JSON. REQUIRED here in one form or the other -- see below |
-| `--indexer <name>` | REQUIRED. The NAMED INDEXER this process HOSTS (or `INDEXER_NAME`), which is the name a sender addresses it by. It registers exactly this one and refuses every other with a `404`, rather than serving a misdirected push from the only indexer it holds |
+| `--indexer <name>` | REQUIRED, and never defaulted on this half of the wire (unlike `run` / `build`, which route nothing). The NAMED INDEXER this process HOSTS (or `INDEXER_NAME`): the name a sender addresses it by, and the name the stream it stores is keyed on. It registers exactly this one and refuses every other with a `404`, rather than serving a misdirected push from the only indexer it holds |
 | `--ingest-token <token>` | REQUIRED. The wire's shared secret, the same name on both sides (or `INGEST_TOKEN`, which is preferable: a secret on a command line is visible to every process on the host) |
 | `--port <port>` / `--host <hostname>` | where it LISTENS for pushes (or `PORT`). `/{indexer}/ingest` and `/status` hang off it |
 | `--no-auto-setup` | do not apply the fixed-table schema at startup |
@@ -149,7 +154,7 @@ etherfold index \
 
 **A replayed or resumed push is safe, because the cursor IS the idempotency key.** A batch that does not start where this receiver says the next one must is refused with a `409` carrying that block, and the sender re-sends from there; a sender that fell behind is corrected with no operator involved, and a batch re-sent after a lost acknowledgement cannot be applied twice. There is no dedupe table and no idempotency header, deliberately.
 
-**`/status` reports the cursor here, exactly as on `run`**, because this is the half that owns the store. It also counts the reorgs it derived (`absence` versus `contradiction`, ADR-0004): a rising rate of the absence kind means truncation or misconfiguration rather than chain activity. Those counts are taken by the FOLD and written by the process that owns the store (ADR-0050), so this half and a combined `run` over the same chain report the same numbers -- the ingest route is a caller of that path rather than the owner of it, and a receiver that both concludes a revert and serves the request that carried it counts it once.
+**`/status` reports the cursor here, exactly as on `run`**, because this is the half that owns the store. It also counts the reorgs it derived (`absence` versus `contradiction`, ADR-0004): a rising rate of the absence kind means truncation or misconfiguration rather than chain activity. Those counts are taken by the FOLD and written by the process that owns the store (ADR-0050), so this half and a combined `run` over the same chain report the same numbers -- the ingest route is a caller of that path rather than the owner of it, and a receiver that both concludes a revert and serves the request that carried it counts it once. The same is true of the STREAM it stores (ADR-0052): the append happens inside the fold, before the batch is processed, so this half and a combined `run` over one chain store the same rows, and a store that cannot take a batch answers the sender a `500` having applied nothing -- its next push meets the cursor it already had, so nothing is lost and nothing is applied twice.
 
 **How it stops.** `SIGINT` / `SIGTERM` shut the listener down and exit `0`. It never stops on its own: a receiver has no tip to reach, because what it folds arrives from somewhere else. A configuration it refuses, a module it cannot drive or a database it cannot open exits `1` without binding a port.
 
@@ -161,7 +166,7 @@ One thing it does not have yet: an indexer-NAME route segment. This is one index
 etherfold serve --db file:./etherfold.db --port 2000
 ```
 
-**It only serves.** It holds no processor, makes no chain call, receives no logs and writes no indexed state: it answers queries over a database something ELSE wrote, so a serving tier can scale or move without carrying an indexer with it. Point it at a database `etherfold build` produced, or at the one `etherfold index` is folding into -- both carry the fixed tables and both carry their reorg counters, so a read tier reports the same numbers whichever shape wrote the database.
+**It only serves.** It holds no processor, makes no chain call, receives no logs and writes no indexed state: it answers queries over a database something ELSE wrote, so a serving tier can scale or move without carrying an indexer with it. Point it at a database `etherfold build` produced, or at the one `etherfold index` is folding into -- both carry the fixed tables, their reorg counters and the stream they folded, so a read tier reports the same numbers whichever shape wrote the database. (The FEED views are the one thing it cannot serve: validating a consumer's cursor needs to know which stream is served NOW, and only a process holding the receiver knows that.)
 
 **It answers `/status` WITHOUT a cursor, and that is correct rather than missing.** The cursor reaches `/status` only through a reporter the host injects, and only a process that OWNS the store can read one; a read tier owns none and is given none, so its `/status` carries no `cursor` field at all rather than an invented one. What it does report is what the server derives from the DATABASE itself -- health, the schema version, the reorg counters -- so those agree with what the writer of that database reports.
 
@@ -195,7 +200,7 @@ Seven inputs have a variable and six do not, and the line is deliberate: **the e
 | `ETH_NODE_URI` | `-n, --node-url` | the chain's JSON-RPC endpoint |
 | `DB` | `--db` | the libSQL database |
 | `PORT` | `--port` | the port an HTTP surface binds |
-| `INDEXER_NAME` | `--indexer` | the NAMED INDEXER the ingest wire addresses: `fetch` pushes into it, `index` hosts it |
+| `INDEXER_NAME` | `--indexer` | the NAMED INDEXER: what `fetch` pushes into and `index` hosts (required on both), and what the stream `run` or `build` stores is keyed on (optional there, defaulting to `default`) |
 | `INGEST_ENDPOINT` | `--ingest-endpoint` | the indexer-server a `fetch` pushes to |
 | `INGEST_TOKEN` | `--ingest-token` | the ingest wire's shared secret, the same name on both sides. Prefer the variable: a secret on a command line is visible to every process on the host |
 | `REQUESTS_PER_SECOND` | `--rps` | the rate limit applied to the node |

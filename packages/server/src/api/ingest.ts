@@ -8,7 +8,6 @@ import {
 import {Hono} from 'hono';
 import type {Context} from 'hono';
 import {logs} from 'named-logs';
-import {appendEmissions} from '../emissions.js';
 import type {Env} from '../env.js';
 import {resolveIndexer} from './resolve.js';
 import {setup} from '../setup.js';
@@ -89,22 +88,21 @@ function authorized(c: Context<{Bindings: Env}>): {ok: true} | {ok: false; messa
  * after a lost acknowledgement fails the `expectedFromBlock` check and is
  * corrected, so it cannot be applied twice.
  *
- * **And no reorg COUNTING.** This route used to own that write, which quietly
- * made an operational counter a fact about the TRANSPORT: a combined process
- * folds through `createDirectIngestion`, never reaches here, and reported no
- * reverts at all. A revert is concluded by the fold, so it is counted inside
- * `receive` through a `ReorgRecorder` the store's owner injected (ADR-0050), and
- * this route is a CALLER of that path. Counting here as well would double-count
- * the split shape, which both concludes and receives.
+ * **And no DURABLE WRITE of any kind.** This route used to own two of them, and
+ * each made a fact about the FOLD into a fact about the TRANSPORT: a combined
+ * process folds through `createDirectIngestion`, never reaches here, and so
+ * reported no reverts at all (ADR-0050) and stored no emission stream (ADR-0052).
+ * Both are concluded by the fold, so both are written inside `receive` through a
+ * port the store's owner injected -- `ReorgRecorder` for the count, and
+ * `EmissionAppender` for the stream -- and this route is a CALLER of that path.
+ * Writing either here as well would double it on the split shape, which both
+ * concludes and receives.
  *
- * ## What this route DOES write: the stored emission stream
- *
- * The append-only log of ADR-0006, and the one write here that is not an
- * exception to the paragraph above but a consequence of what it is KEYED on. Its
- * key carries the INDEXER NAME, and the route segment is the only place that
- * value exists: an entry deliberately does not carry one, and `run` and `build`
- * refuse `--indexer` outright. See `../emissions.ts`, which spells out what that
- * costs and what would move the write into the fold.
+ * What this route still decides is what a transport must: who may call it, and
+ * which status code each refusal is. A refusal from the STREAM APPEND is not one
+ * of them by design: it is not a class the sender can act on, so it falls to the
+ * `500` below with `lastError` set, and the sender's own recovery is unaffected
+ * -- nothing was applied, so its next attempt meets the cursor it already had.
  */
 export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<CustomEnv>) {
 	return (
@@ -190,7 +188,6 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 				const resolved = resolveIndexer(options, c as never, 'ingest');
 				if (!resolved.ok) return resolved.response;
 				const {ingestion} = resolved.entry;
-				const {name} = resolved;
 
 				let batch: UntypedWireBatch;
 				try {
@@ -210,29 +207,13 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 				}
 
 				try {
-					// One call, and everything a concluded reorg costs -- the revert, the log
-					// line, the count -- happens inside it. `outcome.reorg` is REPORTED back to
-					// the sender below and acted on by nobody here.
+					// ONE call, and everything a batch costs durably happens inside it: the
+					// emission stream is appended BEFORE the fold, the revert is made, the log
+					// line is written and the count is taken. `outcome.reorg` is REPORTED back to
+					// the sender below and acted on by nobody here, and `outcome.emissions` is
+					// likewise read by nobody: storing it from here would store a second time on
+					// the shape that both concludes and receives.
 					const outcome = await ingestion.receive(batch);
-
-					// The APPEND-ONLY EMISSION STREAM (ADR-0006), under the two discriminators:
-					// the NAME this request addressed, and the STREAM this receiver folds as
-					// `streamDigestOf` renders it -- never the wire context, which is a change
-					// detector rather than a key.
-					//
-					// It is NOT swallowed the way a reorg count is. A count that fails costs an
-					// operational number; this failing costs the STREAM ITSELF, and a stream
-					// silently missing a batch the state already applied is a HOLE -- invisible,
-					// permanent and self-consistent, since the rows that would prove it are the
-					// ones that never arrived. So it raises, becomes a `500` with `lastError` set,
-					// and the sender's own recovery is unaffected: the batch WAS applied, so its
-					// next attempt is the ordinary `409` carrying the cursor that already moved,
-					// and nothing is applied twice.
-					await appendEmissions(c.get('config').db, {
-						indexer: name,
-						stream: ingestion.streamDigest,
-						emissions: outcome.emissions,
-					});
 
 					return c.json({
 						success: true,
