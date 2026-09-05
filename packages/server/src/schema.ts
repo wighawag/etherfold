@@ -9,14 +9,19 @@ import db from './schema/ts/db.sql.js';
  * query.
  *
  * Renaming the fixed tables into the reserved `_` namespace was NOT such a
- * change, which is why this still reads 2. The version row lives IN the table
+ * change, which is why this read 2 across it. The version row lives IN the table
  * that was renamed, so a database migrated by an older build has no `_meta` for
  * this to read and reports `applied: false` -- a stronger signal than a number
  * mismatch, and the correct one, since those tables really did change. No
- * database can hold a `_meta` row this build did not write, so version 2 there
+ * database can hold a `_meta` row this build did not write, so a version there
  * is unambiguous.
+ *
+ * **3 adds the generation registry**: `_generations` and `_generation_pointer`,
+ * the durable records and the canonical pointer a restarted server resolves
+ * reads through. Both are `IF NOT EXISTS`, so applying this schema to a version-2
+ * database creates them and moves the row; nothing already stored is touched.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 

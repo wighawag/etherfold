@@ -276,6 +276,8 @@ export type GenerationRegistry = {
 	streams(): Promise<string[]>;
 	/** The generation that answers reads, or nothing if none has been created. */
 	canonical(): Promise<GenerationRecord | undefined>;
+	/** The generation that WRITES this stream: the oldest surviving one on it. */
+	writerOf(stream: string): Promise<GenerationRecord | undefined>;
 	/** Move the canonical pointer. Forwards it is promotion; backwards it is revert. */
 	moveCanonicalTo(id: GenerationId): Promise<GenerationRecord>;
 	/** Drop a generation's state store, and reap its stream if it was the last one. */
@@ -287,6 +289,39 @@ export type GenerationRegistry = {
 /** Whether two identities name the SAME generation. */
 export function sameGeneration(a: GenerationId, b: GenerationId): boolean {
 	return a.stream === b.stream && a.processor === b.processor;
+}
+
+/**
+ * WHICH generation writes a stream: the OLDEST SURVIVING one registered on it.
+ *
+ * Only one generation may append to a stream (the **one-writer rule**), and
+ * ADR-0044 says which one: the FIRST held on it -- registration order, never the
+ * canonical pointer -- so that a promotion cannot hand the append duty to a
+ * different engine mid-flight. What it does not say is what happens when THAT
+ * generation is deleted, and unhandled the answer is a silent stall: generations
+ * on one stream share a wire context whose receiver is the writer, so with it
+ * gone nothing appends AND an incoming batch resolves to no receiver, while
+ * `/status` goes on looking healthy.
+ *
+ * So the rule is RESTATED rather than replaced (see ADR-0044's amendment): the
+ * oldest SURVIVING generation on the stream. At the start the oldest survivor IS
+ * the first one held, so ADR-0044's rule is subsumed rather than contradicted,
+ * and succession is defined without letting the POINTER in -- "the canonical
+ * takes over" would reintroduce the very coupling ADR-0044 refused, and leave
+ * two rules where one does.
+ *
+ * **Succession is ATOMIC WITH THE DELETE because it is stored NOWHERE.** There is
+ * no writer column to move in a second write, so no crash can land between the
+ * two: the commit that removes the record is already the commit that makes the
+ * next-oldest generation the answer here. Deriving it also keeps it true across a
+ * restart, where a container's own in-memory registration order is whatever this
+ * boot happened to add in.
+ *
+ * `undefined` means no registered generation folds this stream, which is
+ * precisely when there is nothing left to append for and the stream is reaped.
+ */
+export function writerOf(generations: readonly GenerationRecord[], stream: string): GenerationRecord | undefined {
+	return generations.filter((record) => record.stream === stream).sort(byAge)[0];
 }
 
 /** The identity alone, so a pointer write carries no record with it. */
@@ -466,6 +501,17 @@ export async function openGenerationRegistry(
 			return current.canonical
 				? current.generations.find((record) => sameGeneration(record, current.canonical as GenerationId))
 				: undefined;
+		},
+
+		/**
+		 * Which generation WRITES this stream, read from the records themselves.
+		 *
+		 * See `writerOf`: the oldest SURVIVING generation on the stream, so deleting
+		 * a writer hands the append duty on in the same commit as the delete, with
+		 * nothing stored and nothing to migrate.
+		 */
+		async writerOf(stream: string): Promise<GenerationRecord | undefined> {
+			return writerOf((await port.read()).generations, stream);
 		},
 
 		/**
