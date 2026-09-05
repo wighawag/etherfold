@@ -1,5 +1,11 @@
 import {normalizeEntity, type FieldType} from '@etherfold/state-store';
-import {assertStorableEntityNames, quoted, quotedList} from './identifiers.js';
+import {
+	assertStorableEntityNames,
+	assertStorableTableNamespace,
+	inTableNamespace,
+	quoted,
+	quotedList,
+} from './identifiers.js';
 import type {EntityDeclaration, Statement} from './types.js';
 
 /**
@@ -41,6 +47,17 @@ import type {EntityDeclaration, Statement} from './types.js';
  * entity's derived index name -- would have made a declaration's legality depend
  * on which OTHER entities were declared beside it, and leaked this store's
  * naming scheme into the shared surface.
+ *
+ * ## Why the names are a VALUE rather than constants
+ *
+ * Because one database holds several GENERATIONS, each in its own table-name
+ * namespace (ADR-0053; what a namespace may be, and where it goes in a name, is
+ * `inTableNamespace` in `identifiers.ts`). `TableNames` is that namespace
+ * resolved ONCE, at construction, so no statement builder spells a name for
+ * itself and no code path can be the one that forgets the namespace -- which
+ * would not fail, it would quietly read and write the UNNAMESPACED table beside
+ * the generation's own. It is a REQUIRED argument for exactly that reason: a
+ * default would make forgetting it compile.
  */
 
 /** Block number at which a version became valid (inclusive). */
@@ -50,7 +67,7 @@ export const UPPER = '_upper';
 /** Surrogate identity of ONE version (a business key has many). */
 export const ROWID = '_rowid';
 
-/** The canonical block table: the fixed part of the schema. */
+/** The canonical block table, unnamespaced: the fixed part of the schema. */
 export const BLOCKS_TABLE = '_blocks';
 
 /**
@@ -74,6 +91,52 @@ export const CURSOR_KEY = '"key"';
 export const CURSOR_VALUE = '"value"';
 
 /**
+ * Every name ONE store uses, resolved from its namespace: SQL-ready text, and
+ * the only place a table or an index name is spelled.
+ *
+ * The quoting follows the rule in `identifiers.ts` and nothing else: a name that
+ * came from a DECLARATION is quoted (the entity tables, and the indexes derived
+ * from their names), and the store's OWN fixed names stay bare. A namespace is
+ * neither, so it is admitted only in a shape that is a legal bare identifier
+ * fragment, which is what lets `_blocks` stay bare as `_<ns>_blocks`.
+ */
+export type TableNames = {
+	/** The namespace, or `undefined` for the names this store has always used. */
+	readonly namespace: string | undefined;
+	/** The block table. */
+	readonly blocks: string;
+	/** The sync-cursor table. */
+	readonly cursor: string;
+	/** One declared entity's table, quoted. */
+	entity(name: string): string;
+	/** One index derived from an entity name, quoted, in the store's `_` namespace. */
+	index(entity: string, suffix: string): string;
+};
+
+/**
+ * The names for one namespace, or -- with no argument -- the names this store
+ * creates today, byte for byte.
+ *
+ * The namespace is VALIDATED here, which makes this the one gate between a
+ * configured namespace and an identifier: `VersionedStateStore` calls it in its
+ * constructor, so a namespace this store could not keep separate is refused
+ * where it was configured rather than at `migrate()` on a deployed server.
+ */
+export function tableNames(namespace?: string): TableNames {
+	if (namespace !== undefined) assertStorableTableNamespace(namespace);
+	const qualified = (name: string) => inTableNamespace(namespace, name);
+	return {
+		namespace,
+		blocks: qualified(BLOCKS_TABLE),
+		cursor: qualified(CURSOR_TABLE),
+		entity: (name) => quoted(qualified(name)),
+		// the `_` prefix is what keeps a derived index out of the space a
+		// DECLARATION draws from; the namespace goes inside it. See the module note.
+		index: (entity, suffix) => quoted(qualified(`_${entity}_${suffix}`)),
+	};
+}
+
+/**
  * Rows exist here only for blocks that carry our logs, not for every chain
  * block: state only changes where our events occur.
  *
@@ -88,18 +151,20 @@ export const CURSOR_VALUE = '"value"';
  * design's §9, and if it is ever built it needs the field plumbed onto the log
  * stream first, not reconstructed here.
  */
-export const FIXED_SCHEMA_DDL: string[] = [
-	`CREATE TABLE IF NOT EXISTS ${BLOCKS_TABLE} (
+export function fixedSchemaDDL(names: TableNames): string[] {
+	return [
+		`CREATE TABLE IF NOT EXISTS ${names.blocks} (
 	number INTEGER PRIMARY KEY,
 	hash TEXT NOT NULL UNIQUE,
 	timestamp INTEGER NOT NULL
 )`,
-	`CREATE INDEX IF NOT EXISTS ${BLOCKS_TABLE}_timestamp ON ${BLOCKS_TABLE} (timestamp)`,
-	`CREATE TABLE IF NOT EXISTS ${CURSOR_TABLE} (
+		`CREATE INDEX IF NOT EXISTS ${names.blocks}_timestamp ON ${names.blocks} (timestamp)`,
+		`CREATE TABLE IF NOT EXISTS ${names.cursor} (
 	${CURSOR_KEY} TEXT PRIMARY KEY,
 	${CURSOR_VALUE} TEXT NOT NULL
 )`,
-];
+	];
+}
 
 function sqlType(type: FieldType): string {
 	switch (type) {
@@ -119,13 +184,13 @@ function sqlType(type: FieldType): string {
  * The caller writes no SQL, which is the point: `{name, id, fields}` in, a
  * time-travellable table out.
  */
-export function ddlForEntity(declaration: EntityDeclaration): string[] {
+export function ddlForEntity(declaration: EntityDeclaration, names: TableNames): string[] {
 	const entity = normalizeEntity(declaration);
 	assertStorableEntityNames([entity]);
-	const table = quoted(entity.name);
+	const table = names.entity(entity.name);
 	const idList = quotedList(entity.id);
 	/** An index of this entity, in the store's own `_` namespace. See the module note. */
-	const index = (suffix: string) => quoted(`_${entity.name}_${suffix}`);
+	const index = (suffix: string) => names.index(entity.name, suffix);
 
 	const columns = [
 		`${ROWID} INTEGER PRIMARY KEY AUTOINCREMENT`,
@@ -160,10 +225,37 @@ export function ddlForEntity(declaration: EntityDeclaration): string[] {
  * resume: unlike applying a block, migrating is idempotent and therefore does
  * not need to be one atomic unit.
  */
-export function migrationStatements(declarations: Iterable<EntityDeclaration>): Statement[] {
-	const sql = [...FIXED_SCHEMA_DDL];
+export function migrationStatements(declarations: Iterable<EntityDeclaration>, names: TableNames): Statement[] {
+	const sql = [...fixedSchemaDDL(names)];
 	for (const declaration of declarations) {
-		sql.push(...ddlForEntity(declaration));
+		sql.push(...ddlForEntity(declaration, names));
 	}
+	return sql.map((statement) => ({sql: statement, args: []}));
+}
+
+/**
+ * Every statement needed to remove THIS store's tables and nothing else: what
+ * retiring a generation is.
+ *
+ * ADR-0053 chose a table-name namespace over a generation COLUMN largely for
+ * this: discarding a rebuild is a `DROP` per table rather than a full-scan
+ * `DELETE ... WHERE generation = ?` that has to be driven in bounded chunks and
+ * does not reclaim a page without `VACUUM`. There is no predicate here, and so
+ * no filter anyone can forget.
+ *
+ * The indexes are deliberately not named. SQLite drops an index with its table,
+ * and naming them would be a second list to keep in step with `ddlForEntity` --
+ * one that would go stale silently, since a leftover index is invisible until a
+ * name collides with it much later.
+ *
+ * `IF EXISTS` throughout, so this is idempotent in the same way migrating is,
+ * and dropping a generation that never migrated is a no-op rather than an error.
+ */
+export function dropSchemaStatements(declarations: Iterable<EntityDeclaration>, names: TableNames): Statement[] {
+	const sql: string[] = [];
+	for (const declaration of declarations) {
+		sql.push(`DROP TABLE IF EXISTS ${names.entity(normalizeEntity(declaration).name)}`);
+	}
+	sql.push(`DROP TABLE IF EXISTS ${names.blocks}`, `DROP TABLE IF EXISTS ${names.cursor}`);
 	return sql.map((statement) => ({sql: statement, args: []}));
 }

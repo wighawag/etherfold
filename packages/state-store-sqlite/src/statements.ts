@@ -7,7 +7,7 @@ import {
 	prefixValues,
 	type EntityIdPrefix,
 } from '@etherfold/state-store';
-import {BLOCKS_TABLE, CURSOR_KEY, CURSOR_TABLE, CURSOR_VALUE, LOWER, ROWID, UPPER} from './ddl.js';
+import {CURSOR_KEY, CURSOR_VALUE, LOWER, ROWID, UPPER, type TableNames} from './ddl.js';
 import {quoted, quotedList} from './identifiers.js';
 import type {BlockPointer, EntityDeclaration, Mutation, NormalizedEntity, Statement} from './types.js';
 
@@ -27,8 +27,15 @@ export {idValues};
  *
  * Every identifier that came from a DECLARATION is quoted on the way out
  * (`identifiers.ts`), for the reason set out there: a validated identifier shape
- * can still be a SQL keyword. The store's own names (`_lower`, `_upper`,
- * `_rowid`, `_blocks`) are fixed and stay bare.
+ * can still be a SQL keyword. The store's own COLUMN names (`_lower`, `_upper`,
+ * `_rowid`) are fixed and stay bare.
+ *
+ * No function here spells a TABLE name. Every one of them takes the `TableNames`
+ * its store resolved at construction, because a database holds several
+ * generations, each in its own table-name namespace (ADR-0053), and a statement
+ * that named a table itself would read and write the unnamespaced one beside the
+ * generation it belongs to -- silently, and only under a namespace, which is
+ * exactly the shape a test is least likely to have.
  */
 
 /** `_lower <= N AND (_upper IS NULL OR N < _upper)` — the whole of time travel. */
@@ -46,13 +53,13 @@ const BLOCK_COLUMNS = 'number, hash, timestamp';
  * `hash` is UNIQUE, so this is a one-row index probe, and an empty result means
  * "no such block" rather than "no such entity" (see `blocks.ts`).
  */
-export function blockByHashStatement(hash: string): Statement {
-	return {sql: `SELECT ${BLOCK_COLUMNS} FROM ${BLOCKS_TABLE} WHERE hash = ? LIMIT 1`, args: [normalizeBlockHash(hash)]};
+export function blockByHashStatement(hash: string, names: TableNames): Statement {
+	return {sql: `SELECT ${BLOCK_COLUMNS} FROM ${names.blocks} WHERE hash = ? LIMIT 1`, args: [normalizeBlockHash(hash)]};
 }
 
 /** Look a block up by height. Only recorded blocks have a row; heights need none. */
-export function blockByNumberStatement(number: number): Statement {
-	return {sql: `SELECT ${BLOCK_COLUMNS} FROM ${BLOCKS_TABLE} WHERE number = ? LIMIT 1`, args: [number]};
+export function blockByNumberStatement(number: number, names: TableNames): Statement {
+	return {sql: `SELECT ${BLOCK_COLUMNS} FROM ${names.blocks} WHERE number = ? LIMIT 1`, args: [number]};
 }
 
 /**
@@ -66,9 +73,9 @@ export function blockByNumberStatement(number: number): Statement {
  * Nothing at or before T resolves to no row, never to the first recorded block:
  * the state before we started indexing is not the state at our first block.
  */
-export function blockAtOrBeforeStatement(timestamp: number): Statement {
+export function blockAtOrBeforeStatement(timestamp: number, names: TableNames): Statement {
 	return {
-		sql: `SELECT ${BLOCK_COLUMNS} FROM ${BLOCKS_TABLE} WHERE timestamp <= ? ORDER BY timestamp DESC, number DESC LIMIT 1`,
+		sql: `SELECT ${BLOCK_COLUMNS} FROM ${names.blocks} WHERE timestamp <= ? ORDER BY timestamp DESC, number DESC LIMIT 1`,
 		args: [timestamp],
 	};
 }
@@ -81,8 +88,8 @@ export function blockAtOrBeforeStatement(timestamp: number): Statement {
  * refuses nothing and a `revert-only` store refuses everything, so neither pays
  * this round-trip.
  */
-export function latestBlockStatement(): Statement {
-	return {sql: `SELECT ${BLOCK_COLUMNS} FROM ${BLOCKS_TABLE} ORDER BY number DESC LIMIT 1`, args: []};
+export function latestBlockStatement(names: TableNames): Statement {
+	return {sql: `SELECT ${BLOCK_COLUMNS} FROM ${names.blocks} ORDER BY number DESC LIMIT 1`, args: []};
 }
 
 export function idPredicate(entity: NormalizedEntity): string {
@@ -105,14 +112,20 @@ export function idPredicate(entity: NormalizedEntity): string {
  * Both bind `limit + 1`. The extra row never reaches the caller: it is what
  * turns "there may be more" into the `truncated` flag the seam answers with.
  */
-function listStatement(entity: NormalizedEntity, prefix: EntityIdPrefix, limit: number, asOf?: number): Statement {
+function listStatement(
+	entity: NormalizedEntity,
+	prefix: EntityIdPrefix,
+	limit: number,
+	names: TableNames,
+	asOf?: number,
+): Statement {
 	const values = prefixValues(entity, prefix);
 	assertListingLimit(entity, limit);
 	const predicate = asOf === undefined ? CURRENT_PREDICATE : AS_OF_PREDICATE;
 	const bounds = asOf === undefined ? [] : [asOf, asOf];
 	return {
 		sql:
-			`SELECT * FROM ${quoted(entity.name)} ` +
+			`SELECT * FROM ${names.entity(entity.name)} ` +
 			`WHERE ${values.map((_, index) => `${quoted(entity.id[index])} = ?`).join(' AND ')} AND ${predicate} ` +
 			`ORDER BY ${quotedList(entity.id)} LIMIT ?`,
 		args: [...values, ...bounds, limit + 1],
@@ -120,8 +133,13 @@ function listStatement(entity: NormalizedEntity, prefix: EntityIdPrefix, limit: 
 }
 
 /** The children of a prefix at the tip, riding the id index. */
-export function listCurrentStatement(entity: NormalizedEntity, prefix: EntityIdPrefix, limit: number): Statement {
-	return listStatement(entity, prefix, limit);
+export function listCurrentStatement(
+	entity: NormalizedEntity,
+	prefix: EntityIdPrefix,
+	limit: number,
+	names: TableNames,
+): Statement {
+	return listStatement(entity, prefix, limit, names);
 }
 
 /** The same range, as of a resolved block NUMBER, under the validity predicate. */
@@ -130,8 +148,9 @@ export function listAsOfStatement(
 	prefix: EntityIdPrefix,
 	at: number,
 	limit: number,
+	names: TableNames,
 ): Statement {
-	return listStatement(entity, prefix, limit, at);
+	return listStatement(entity, prefix, limit, names, at);
 }
 
 /**
@@ -149,9 +168,9 @@ export function listAsOfStatement(
  * immediately instead of silently double-writing versions.
  */
 /** Read one cursor. `undefined` (no row) is "never written", not an error. */
-export function readCursorStatement(key: string): Statement {
+export function readCursorStatement(key: string, names: TableNames): Statement {
 	return {
-		sql: `SELECT ${CURSOR_VALUE} AS value FROM ${CURSOR_TABLE} WHERE ${CURSOR_KEY} = ? LIMIT 1`,
+		sql: `SELECT ${CURSOR_VALUE} AS value FROM ${names.cursor} WHERE ${CURSOR_KEY} = ? LIMIT 1`,
 		args: [key],
 	};
 }
@@ -163,30 +182,31 @@ export function readCursorStatement(key: string): Statement {
  * same block twice is a caller bug the store makes a primary-key violation on
  * purpose, whereas a cursor exists precisely to be overwritten.
  */
-export function writeCursorStatement(key: string, value: string): Statement {
+export function writeCursorStatement(key: string, value: string, names: TableNames): Statement {
 	return {
 		sql:
-			`INSERT INTO ${CURSOR_TABLE} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, ?) ` +
+			`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, ?) ` +
 			`ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = excluded.${CURSOR_VALUE}`,
 		args: [key, value],
 	};
 }
 
 /** Forget one cursor. Deleting a row that is not there is a no-op, which is the contract. */
-export function clearCursorStatement(key: string): Statement {
-	return {sql: `DELETE FROM ${CURSOR_TABLE} WHERE ${CURSOR_KEY} = ?`, args: [key]};
+export function clearCursorStatement(key: string, names: TableNames): Statement {
+	return {sql: `DELETE FROM ${names.cursor} WHERE ${CURSOR_KEY} = ?`, args: [key]};
 }
 
 export function applyBlockStatements(
 	declarations: Iterable<EntityDeclaration> | ReadonlyMap<string, NormalizedEntity>,
 	block: BlockPointer,
 	mutations: readonly Mutation[],
+	names: TableNames,
 	cursor?: {key: string; value: string},
 ): Statement[] {
 	const entities = asEntityMap(declarations);
 	const statements: Statement[] = [
 		{
-			sql: `INSERT INTO ${BLOCKS_TABLE} (number, hash, timestamp) VALUES (?, ?, ?)`,
+			sql: `INSERT INTO ${names.blocks} (number, hash, timestamp) VALUES (?, ?, ?)`,
 			// the hash is folded to one spelling here, since it is the identity a
 			// consumer pins and later looks up (see `normalizeBlockHash`).
 			args: [block.number, normalizeBlockHash(block.hash), block.timestamp],
@@ -195,7 +215,7 @@ export function applyBlockStatements(
 
 	for (const mutation of mutations) {
 		const entity = mustGet(entities, mutation.entity);
-		const table = quoted(entity.name);
+		const table = names.entity(entity.name);
 		const values = idValues(entity, mutation.id);
 
 		// (1) close the live version at this height
@@ -218,7 +238,7 @@ export function applyBlockStatements(
 	// LAST, and in the SAME list, which is the same `batch([...])` and therefore
 	// the same transaction: the cursor and the block it describes move together or
 	// neither moves. See `cursor.ts` at the seam for what the gap used to cost.
-	if (cursor) statements.push(writeCursorStatement(cursor.key, cursor.value));
+	if (cursor) statements.push(writeCursorStatement(cursor.key, cursor.value, names));
 
 	return statements;
 }
@@ -245,10 +265,15 @@ export function applyBlockStatements(
  * partially pruned store converges towards the window from the far end instead
  * of keeping arbitrary holes.
  */
-export function prunableVersionsStatement(entity: NormalizedEntity, floor: number, limit: number): Statement {
+export function prunableVersionsStatement(
+	entity: NormalizedEntity,
+	floor: number,
+	limit: number,
+	names: TableNames,
+): Statement {
 	return {
 		sql:
-			`SELECT ${ROWID} FROM ${quoted(entity.name)} ` +
+			`SELECT ${ROWID} FROM ${names.entity(entity.name)} ` +
 			`WHERE ${UPPER} IS NOT NULL AND ${UPPER} <= ? ORDER BY ${UPPER} LIMIT ?`,
 		args: [floor, limit],
 	};
@@ -266,9 +291,13 @@ export function prunableVersionsStatement(entity: NormalizedEntity, floor: numbe
  * affected-row count, so a blind bounded DELETE could not report what it did or
  * know when it was finished.
  */
-export function dropVersionsStatement(entity: NormalizedEntity, rowids: readonly number[]): Statement {
+export function dropVersionsStatement(
+	entity: NormalizedEntity,
+	rowids: readonly number[],
+	names: TableNames,
+): Statement {
 	return {
-		sql: `DELETE FROM ${quoted(entity.name)} WHERE ${ROWID} IN (${rowids.map(() => '?').join(', ')})`,
+		sql: `DELETE FROM ${names.entity(entity.name)} WHERE ${ROWID} IN (${rowids.map(() => '?').join(', ')})`,
 		args: [...rowids],
 	};
 }
@@ -299,18 +328,22 @@ export function dropVersionsStatement(entity: NormalizedEntity, rowids: readonly
 export function revertToStatements(
 	declarations: Iterable<EntityDeclaration> | ReadonlyMap<string, NormalizedEntity>,
 	keepUpTo: number,
+	names: TableNames,
 ): Statement[] {
 	const entities = asEntityMap(declarations);
 	const statements: Statement[] = [];
 
 	for (const entity of entities.values()) {
+		const table = names.entity(entity.name);
 		// A) drop versions opened above the fork (this clears their open rows)
-		statements.push({sql: `DELETE FROM ${quoted(entity.name)} WHERE ${LOWER} > ?`, args: [keepUpTo]});
+		statements.push({sql: `DELETE FROM ${table} WHERE ${LOWER} > ?`, args: [keepUpTo]});
 		// B) re-open versions closed above the fork
-		statements.push({sql: `UPDATE ${quoted(entity.name)} SET ${UPPER} = NULL WHERE ${UPPER} > ?`, args: [keepUpTo]});
+		statements.push({sql: `UPDATE ${table} SET ${UPPER} = NULL WHERE ${UPPER} > ?`, args: [keepUpTo]});
 	}
 
-	statements.push({sql: `DELETE FROM ${BLOCKS_TABLE} WHERE number > ?`, args: [keepUpTo]});
+	// the block table is this generation's own too, so a revert here cannot delete
+	// a block another generation on the same chain still needs (ADR-0053)
+	statements.push({sql: `DELETE FROM ${names.blocks} WHERE number > ?`, args: [keepUpTo]});
 	return statements;
 }
 

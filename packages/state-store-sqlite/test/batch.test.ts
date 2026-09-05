@@ -1,6 +1,12 @@
 import {describe, expect, it} from 'vitest';
 import {normalizeEntity} from '@etherfold/state-store';
-import {DEFAULT_BATCH_BOUNDS, VersionedStateStore, dropVersionsStatement, planBatches} from '../src/index.js';
+import {
+	DEFAULT_BATCH_BOUNDS,
+	VersionedStateStore,
+	dropVersionsStatement,
+	planBatches,
+	tableNames,
+} from '../src/index.js';
 import {FailingTailSQL, RecordingSQL, createTestDB, rows, sqlOf} from './utils/db.js';
 import {TOKEN, block, owns} from './utils/fixtures.js';
 
@@ -85,7 +91,7 @@ describe('the batch chunk bound', () => {
 		// dropVersionsStatement and this fails, which is the point.
 		const D1_MAX_BOUND_PARAMETERS_PER_QUERY = 100;
 		const rowids = Array.from({length: DEFAULT_BATCH_BOUNDS.maxRowsPerStatement}, (_, i) => i + 1);
-		const statement = dropVersionsStatement(normalizeEntity(TOKEN), rowids);
+		const statement = dropVersionsStatement(normalizeEntity(TOKEN), rowids, tableNames());
 
 		expect(statement.args.length).toBe(rowids.length);
 		expect(statement.args.length).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMETERS_PER_QUERY);

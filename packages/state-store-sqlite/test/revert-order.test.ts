@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {VersionedStateStore, revertToStatements} from '../src/index.js';
+import {VersionedStateStore, revertToStatements, tableNames} from '../src/index.js';
 import {createTestDB, rows} from './utils/db.js';
 import {TOKEN, block, owns} from './utils/fixtures.js';
 
@@ -33,7 +33,7 @@ async function forkedChain() {
 
 describe('revertTo statement ordering', () => {
 	it('emits the DELETE of opened versions before the re-open of closed ones', () => {
-		const statements = revertToStatements([TOKEN], 101);
+		const statements = revertToStatements([TOKEN], 101, tableNames());
 		const deleteIndex = statements.findIndex((s) => /^DELETE FROM "token"/i.test(s.sql));
 		const reopenIndex = statements.findIndex((s) => /^UPDATE "token" SET _upper = NULL/i.test(s.sql));
 
@@ -57,7 +57,7 @@ describe('revertTo statement ordering', () => {
 
 		// Same statements, re-open before DELETE. This is the order a well-meaning
 		// refactor would produce, and it cannot work.
-		const statements = revertToStatements([TOKEN], 101);
+		const statements = revertToStatements([TOKEN], 101, tableNames());
 		const reopenFirst = [...statements].reverse();
 
 		await expect(db.batch(reopenFirst.map((s) => db.prepare(s.sql).bind(...s.args)))).rejects.toThrow(
@@ -69,7 +69,7 @@ describe('revertTo statement ordering', () => {
 		const {db} = await forkedChain();
 		const before = await rows(db, `SELECT * FROM token ORDER BY _rowid`);
 
-		const reopenFirst = [...revertToStatements([TOKEN], 101)].reverse();
+		const reopenFirst = [...revertToStatements([TOKEN], 101, tableNames())].reverse();
 		await expect(db.batch(reopenFirst.map((s) => db.prepare(s.sql).bind(...s.args)))).rejects.toThrow();
 
 		const after = await rows(db, `SELECT * FROM token ORDER BY _rowid`);

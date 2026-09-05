@@ -23,6 +23,14 @@ import {createTestDB} from './utils/db.js';
  * history for revert alone. All three are ordinary configuration: the windowed
  * run was a test double while this package had no pruning and could not honestly
  * claim a window, and it is a real store now that it can.
+ *
+ * A fourth run puts the store in a TABLE NAMESPACE, beside another generation
+ * already migrated into the same handle (ADR-0053). The namespace must be
+ * invisible from outside -- every case here is the seam's own behaviour and none
+ * of them knows a table name -- and the decoy is what makes the run worth having:
+ * a statement that spelled a table name for itself would address the
+ * unnamespaced one, which under a namespace exists nowhere, so the case fails
+ * loudly instead of passing on a store that was quietly alone.
  */
 
 await describeStateStoreConformance(
@@ -38,4 +46,13 @@ await describeStateStoreConformance(
 await describeStateStoreConformance(
 	'VersionedStateStore, set to revert-only',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: 'revert-only'}),
+);
+
+await describeStateStoreConformance(
+	'VersionedStateStore, in a table namespace beside another generation',
+	async (declarations) => {
+		const db = createTestDB();
+		await new VersionedStateStore(db, declarations, {tableNamespace: 'incumbent'}).migrate();
+		return new VersionedStateStore(db, declarations, {tableNamespace: 'successor'});
+	},
 );
