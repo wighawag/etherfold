@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/state-store-indexeddb",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The browser state store: versioned rows in IndexedDB, so a tab keeps history, reverts a reorg and pays a write cost proportional to what changed rather than to total state.",
 	"publishConfig": {
 		"access": "public"

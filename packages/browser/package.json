@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/browser",
-	"version": "0.8.0",
+	"version": "1.0.0",
 	"description": "Index a chain in the browser tab: the etherfold engine wrapped in observable stores (state, syncing, status), with IndexedDB persistence, auto-indexing and in-place reconfigure.",
 	"license": "MIT",
 	"repository": {

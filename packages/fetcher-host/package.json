@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/fetcher-host",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "The host-side half of the log-fetcher: configuration, what a cycle's outcome means, how long to wait before the next one, and the two shapes a host schedules in (a loop, one bounded run). Names no runtime.",
 	"publishConfig": {
 		"access": "public"

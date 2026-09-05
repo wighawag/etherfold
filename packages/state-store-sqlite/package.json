@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/state-store-sqlite",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Versioned-row state store behind the @etherfold/state-store seam: entity state kept with half-open block-validity ranges on the remote-sql interface, with as-of reads and reorg revert.",
 	"publishConfig": {
 		"access": "public"

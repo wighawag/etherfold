@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/processor-sqlite",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "An EventProcessor whose derived state lives in the versioned-row state store instead of memory, so indexing a chain produces time-travellable state as a side effect of normal processing.",
 	"publishConfig": {
 		"access": "public"
