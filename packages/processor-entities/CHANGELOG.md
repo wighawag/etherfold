@@ -1,5 +1,132 @@
 # @etherfold/processor-entities
 
+## 1.0.0
+
+### Major Changes
+
+- da289e2: A published snapshot a client cannot read is REFUSED, never installed as state — closing the last corner `tagged-bigint-codec-across-storage-adapters` left open knowingly (ADR-0040).
+
+  The blob snapshot's format number now lives in `@etherfold/core` as `BLOB_SNAPSHOT_FORMAT`, beside the codec it versions, so the WRITER (`@etherfold/cli`'s keeper) and every READER import one number. It used to be the CLI's own `SNAPSHOT_FORMAT`, which the browser could not see (`@etherfold/browser` must not depend on the CLI and still bundles for a tab), so the CLI refused a format-1 file locally while `keepStateOnIndexedDB` installed the same bytes — whose every `uint256`, with no fallback reviver left, arrived as the string `"123n"` instead of a BigInt. `isReadableBlobSnapshot` and the `BlobSnapshotEnvelope` type are exported alongside it; the CLI no longer exports a format constant of its own.
+
+  `keepStateOnIndexedDB` now checks the number on every remote fetch: an unreadable snapshot is refused whole (never translated, never half-read) and the refusal is logged with the location and both numbers. An unreadable mirror is treated exactly as an unreachable one already was — skipped when it loses selection, failed over from when it wins — and local state that is already ahead still wins over any remote, readable or not. A prefix-form mirror's bare `lastSync` file carries no format and is read as SELECTION data only: nothing from it is installed, and the state file it selects for carries the check.
+
+  The ENTITY snapshot envelope's constant is renamed `ENTITY_SNAPSHOT_FORMAT` (`@etherfold/state-store`; re-exported by `@etherfold/processor-entities`) so the two envelopes — which version different file shapes and revise independently — are distinguishable by NAME at a call site that can hold both. They are not merged.
+
+  Nothing is published under `@etherfold/*` yet, so no format-1 snapshot exists in the wild: this is a guard added before the first release rather than a breaking correction to one already shipped.
+
+### Minor Changes
+
+- f3dc9a5: `on<EventName>` handler args are now a UNION when one event name covers two wire events, instead of the two input lists MERGED.
+
+  An upgraded contract can emit `Transfer(address,address,uint256)` before the upgrade block and `Transfer(address,address,uint256,bytes)` after it. They share a name, so `ExtractAbiEventNames` collapses them and the author writes one `onTransfer` -- which is fine. What was not fine is what `args` said about it: `InputValues` mapped over the extracted event with `T` taken WHOLE, so the mapped type did not distribute and the two input lists merged into `{from, to, id, memo}` with `memo` REQUIRED. A pre-upgrade log then handed the author `undefined` through a type promising a value, with no cast and no warning anywhere.
+
+  `InputValues` now distributes. (It landed in both authoring packages, which each held their own copy; the free-form one has since been deleted with its package, ADR-0037.) `event.args.memo` no longer compiles un-narrowed; `if ('memo' in event.args)` narrows to the version that has it, shared fields included.
+
+  A single-version ABI -- every processor written today -- is unaffected: distributing over a non-union is the mapped type itself, and that is pinned as a type-identity assertion rather than assumed. Handler keys stay NAME-based; a signature-keyed alias (`on['Transfer(address,address,uint256,bytes)']`) is a later addition and would remove nothing.
+
+  Both directions run under `pnpm typecheck` (`@ts-expect-error` as the assertion), since vitest strips types without checking them.
+
+### Patch Changes
+
+- 29895dc: Fixed silent, permanent event loss when a `feed`/`replay` batch loop is interrupted: every intermediate cursor is now true on its own.
+
+  `promiseToFeed` hands the processor one batch at a time, and the processor PERSISTS the cursor it is given (`applyEventStream` writes it verbatim for the batch's last block). Those cursors were built by copying the FINAL cursor and walking `lastToBlock` forward, so every intermediate batch carried the final unconfirmed WINDOW: a cursor claiming to have synced through block X while listing blocks above X as already folded.
+
+  That is unresumable. The engine treats the top of the window as the boundary above which events are new, so a run resuming from such a cursor skips every block between `lastToBlock` and the top of the window: they are neither below the resume point nor above the window, and nothing ever delivers them again. The loss is bounded by the finality window, permanent, and completely silent.
+
+  The same defect handed a RETRACTION-ONLY batch the extent of the whole scan. A batch that reverts blocks 101 to 103 and applies nothing was told `lastToBlock: 103` while the fold was back at 100, with the replacement blocks still queued behind it. A crash between the revert and the re-apply left state reverted and a cursor claiming completeness, so the resumed run applied nothing and the replacement branch was lost outright.
+
+  Both are reachable on the ordinary path, not only on a crash: every reconfigure verb calls `disableProcessing()` first, and a cancellation lands in exactly this loop.
+
+  Now each batch is handed a cursor narrowed to what IT has folded, and only the LAST batch gets the stream's own cursor, at which point the whole stream is folded and the claim is true. A retraction-only batch reports the fork point, which is a genuine move backwards and the correct one: the state really is back there until the replacements land. A retraction-only batch that is the last one still takes the stream's cursor, so a scan that legitimately found nothing continues to advance.
+
+  The narrowing rule now exists ONCE, as `cursorSyncedThrough`, newly exported from `@etherfold/core`. `@etherfold/processor-entities` re-exports it as `syncedThrough`, the name its callers already use: the engine narrows per batch and the processor narrows per block, and two copies of a rule this subtle is how the two halves drift apart.
+
+- 0bf9dc7: Package READMEs now link to sibling packages by absolute URL instead of by relative path.
+
+  A README is read in three places and a relative `../state-store` link is only correct in one of them. On npmjs.com it resolves against the registry page and 404s, so every cross-reference in every published README was broken for the audience most likely to follow one. In the generated API documentation the same links became `_media/<package>` references to files that do not exist, which is what turned the docs site's build red.
+
+  No prose changed; only the link targets.
+
+- bb86a77: The free-form JS-object processor path is DELETED. There is one way to author a processor: entity declarations plus handlers over a `MutationContext` (ADR-0037).
+
+  `@etherfold/js-processor` is gone, with `fromJSProcessor`, `JSProcessor`, `JSObjectEventProcessor` and its immer `History`. What it uniquely offered was an authoring STYLE, not a capability: no as-of queries, no retention or pruning, no bounded listing, and no schema for the query layer, which is generated from entity declarations. Its state was also a whole blob rewritten per save, which is the shape this repo has spent a design pass removing from the stream. What is NOT lost is its STORAGE characteristic: a plain object with history as immer reverse patches survives behind the proper seam as `@etherfold/state-store-patch` (the light store), with the capability reporting and conformance coverage the seam provides.
+
+  **`@etherfold/browser`: one kind, one call shape.** `createIndexerState(processor)` takes the processor itself. The `ProcessorKind` / `TaggedProcessor` union, the bare `EventProcessorWithInitialState` form it also accepted, and the `keepState` option are removed, along with `keepStateOnIndexedDB` and `keepStateOnLocalStorage`. `updateProcessor` takes the same bare shape.
+
+  ```ts
+  // before
+  const indexer = createIndexerState({kind: 'entities', processor: fromEntityProcessor(p)(store)});
+  // after
+  const indexer = createIndexerState(fromEntityProcessor(p)(store));
+  ```
+
+  **`@etherfold/core`: the `KeepState` family is deleted, snapshot half included.** `KeepState`, `ExistingStateFetcher`, `StateSaver`, `AllData`, `ProcessorContext` and `EventProcessorWithInitialState` go, and so does the BLOB snapshot envelope beside them (`BLOB_SNAPSHOT_FORMAT`, `BlobSnapshotEnvelope`, `isReadableBlobSnapshot`). The seam had exactly one caller, `JSObjectEventProcessor.keepState`, and its two masters turned out to be one: the entity path's bootstrap never used it. Installing state somebody else computed is `openSnapshotAware` / `bootstrapFromSnapshot` at the STORAGE seam, where a store's own transaction is, and `ENTITY_SNAPSHOT_FORMAT` is now the only envelope number. ADR-0040's rule (a format a reader cannot read is refused, never translated) is unaffected and is what the surviving reader still does.
+
+  **`etherfold`: `--store` loses its `file` value and `--folder` goes with it.** `--store sqlite --db <libsql url>` is the whole of it, and `--store` stays required: it is the axis a second backend arrives on. `packages/cli/src/keepState.ts` (`createFileKeepState`, the blob snapshot writer) is deleted, and so is the kind/store mismatch refusal, which had nothing left to be a mismatch between.
+
+  **`@etherfold/utils`: a module hands over the PROCESSOR, not a kind tag** (superseding ADR-0039). `createProcessor` returns the authoring object itself; `instantiateProcessorWithKind`, `ResolvedProcessor` and `ProcessorKind` are removed, and `instantiateProcessor` returns what the factory made, typed by the caller. A module still returning `{kind, processor}` is REFUSED naming ADR-0037, rather than unwrapped, so the retired shape cannot reach a store that would ask it for `entities` and get `undefined`. The `@etherfold/utils/indexer` subpath goes too: it existed for `contextFilenames`, the blob snapshot's file naming, and `@etherfold/browser` no longer depends on this package at all.
+
+  **The stratagems conformance workload keeps its question and loses its regeneration.** The committed golden state is still what the ported entity processor is compared against on every backend, and the vendored original is still committed (typechecked, with its `JSProcessor` type vendored beside it). What is gone is `src/oracle.ts` and the `regenerate-golden-state` script, because driving that original needed `fromJSProcessor`: the golden is now a FROZEN expectation rather than a recomputable one. `CONTEXT.md` already treated a diff on it as a FINDING and not a fixture update, so regeneration was never the normal path.
+
+  **Six example apps used the deleted path.** `event-processor-nfts` keeps only its entity processor (which the browser demo and `etherfold index` already ran) and is the end-to-end demonstration, beside `browser-reference`. `basic`, `event-processor-bleeps`, `event-processor-conquest-eth`, `event-processor-conquest-fplay` and `mud` are DELETED rather than left broken, and `web-demo` goes with them: it consumed three of them and rendered a state blob as a JSON tree, which is the shape the entity path does not have.
+
+- c0d694f: The acceptance gate no longer assumes an idle machine: every package that runs vitest sets `testTimeout` and `hookTimeout` to 60s instead of inheriting the 5s default.
+
+  No runtime code changes in any of these packages. The bump is only because each gained (or had amended) a `vitest.config.ts`.
+
+  Vitest's 5s default is fine on an idle box and wrong on a machine someone is working on. The gate runs `pnpm test` across the whole workspace, so suites compete with each other and with everything else running. Three unrelated packages timed out at 5s in a single session -- `core`'s base36 digest sweep, four cases in `state-store-sqlite`'s conformance suite, and `server`'s `sql2ts` round-trip -- each passing in seconds when run alone, and each blocking a task that had nothing to do with the code that failed.
+
+  That makes a red gate ambiguous, which defeats the point of having one: red should mean broken, not "someone opened a browser". A generous timeout costs nothing when tests pass, since it is only reached on failure.
+
+  The base36 digest sweep in `@etherfold/core`, skipped earlier the same day, is un-skipped: raising the timeout is the fix that skip was standing in for.
+
+  See ADR-0032 for the rejected alternatives, including why a shared config file is not possible here (per-package `rootDir` puts `vitest.config.ts` under the typechecker, so importing a root-level file fails `TS6059`).
+
+- Updated dependencies [0ba3c60]
+- Updated dependencies [a1fccd0]
+- Updated dependencies [5427806]
+- Updated dependencies [c6b5215]
+- Updated dependencies [0f33468]
+- Updated dependencies [a64a843]
+- Updated dependencies [5729da5]
+- Updated dependencies [2e10f5e]
+- Updated dependencies [ce43a7b]
+- Updated dependencies [1524a04]
+- Updated dependencies [a4d106e]
+- Updated dependencies [351c585]
+- Updated dependencies [839e781]
+- Updated dependencies [4e5067e]
+- Updated dependencies [dc08d24]
+- Updated dependencies [29895dc]
+- Updated dependencies [e7d06c9]
+- Updated dependencies [da289e2]
+- Updated dependencies [1d9be43]
+- Updated dependencies [ab779b0]
+- Updated dependencies [793f3d6]
+- Updated dependencies [8bb063e]
+- Updated dependencies [1a6f68b]
+- Updated dependencies [56acbef]
+- Updated dependencies [1d619c9]
+- Updated dependencies [d50583b]
+- Updated dependencies [37146b2]
+- Updated dependencies [74f74f5]
+- Updated dependencies [9a41ba3]
+- Updated dependencies [0bf9dc7]
+- Updated dependencies [b0e9a0d]
+- Updated dependencies [bb86a77]
+- Updated dependencies [5adafa9]
+- Updated dependencies [c0d694f]
+- Updated dependencies [d10b64e]
+- Updated dependencies [01ed0ef]
+- Updated dependencies [9e2c66d]
+- Updated dependencies [b824312]
+- Updated dependencies [35fc4c2]
+- Updated dependencies [4f206c3]
+- Updated dependencies [8c8341a]
+  - @etherfold/core@1.0.0
+  - @etherfold/state-store@1.0.0
+
 ## 0.1.0
 
 ### Minor Changes

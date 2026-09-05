@@ -1,5 +1,53 @@
 # @etherfold/state-store-sqlite
 
+## 0.2.0
+
+### Minor Changes
+
+- 2c6ef82: **`DEFAULT_BATCH_BOUNDS` is now set by the tightest hosted backend's FREE tier, so an unconfigured deployment works everywhere.** `maxRowsPerStatement` drops from 500 to **100** and `maxStatementsPerBatch` from 100 to **50**; `maxBytesPerBatch` is unchanged at 90,000.
+
+  The `maxRowsPerStatement` change is a BUG FIX, not a tuning change. `prune` deletes by an explicit list of row ids and each id is a bound parameter, so the old default of 500 emitted a query with 500 bound parameters against a hosted backend that caps them at 100 per query. Retention enforcement therefore failed there while passing on every other backend and in every test: the shape that runs locally and fails only in production. The previous docstring claimed the default was "small enough to fit inside the tightest hosted limits we are aware of", which was not true.
+
+  Both remain CONFIGURATION: pass `{bounds}` to raise them on a local file database or a paid tier, where they are an ordinary throughput knob. `maxRowsPerStatement` is the exception and should not be raised without checking the target backend's per-query parameter limit.
+
+  The vendor's specific limits, their dated source and the plan split are recorded in `work/notes/findings/` rather than in this package, which names no hosted backend by assertion (`test/no-platform-leakage.test.ts`).
+
+### Patch Changes
+
+- 1a6f68b: Every published package now carries a `description` and its own `README.md`.
+
+  Metadata and docs only: no runtime code changed. Four manifests had no `description` at all (`@etherfold/core`, `@etherfold/browser`, `etherfold`, `@etherfold/utils`), which is the line npm shows in search results and on the package page, and seven packages had no README (the four above plus `@etherfold/server`, `@etherfold/platform-nodejs` and the private Worker host). Each README says what the package is, when to reach for it INSTEAD of its neighbours, a minimal snippet taken from code that runs, and links to the related packages.
+
+  Two summaries are worth calling out because a guessed one would have been wrong. **`etherfold index` is a ONE-SHOT**: it folds to the tip it observed and exits, does not follow the chain and cannot be reconfigured while running, so keeping a database current is running it again; live reconfigure is `@etherfold/browser`'s ability. And **`@etherfold/utils` is not a bag of hashing helpers** any more: what is in it is the Node-side loader that turns a processor PATH into the authoring object plus its indexing source, since `contextFilenames` and the `@etherfold/utils/indexer` subpath went with the blob snapshot (ADR-0037).
+
+  One existing description is CORRECTED rather than added: `@etherfold/state-store-sqlite` called itself a "state store for `@etherfold/core`", which names the wrong seam. It depends on `@etherfold/state-store`, `remote-sql` and `named-logs` and on nothing else, and a test in that package asserts as much, because a storage backend depending on the indexer would invert ADR-0016.
+
+  **`etherfold` no longer publishes the repo's root README.** Its `prepack` copied `../../README.md` into the package, so the npm page for the CLI described the monorepo and documented none of its flags; the package now has a README of its own, committed rather than generated, and `prepack` copies only the LICENSE.
+
+- 0bf9dc7: Package READMEs now link to sibling packages by absolute URL instead of by relative path.
+
+  A README is read in three places and a relative `../state-store` link is only correct in one of them. On npmjs.com it resolves against the registry page and 404s, so every cross-reference in every published README was broken for the audience most likely to follow one. In the generated API documentation the same links became `_media/<package>` references to files that do not exist, which is what turned the docs site's build red.
+
+  No prose changed; only the link targets.
+
+- c0d694f: The acceptance gate no longer assumes an idle machine: every package that runs vitest sets `testTimeout` and `hookTimeout` to 60s instead of inheriting the 5s default.
+
+  No runtime code changes in any of these packages. The bump is only because each gained (or had amended) a `vitest.config.ts`.
+
+  Vitest's 5s default is fine on an idle box and wrong on a machine someone is working on. The gate runs `pnpm test` across the whole workspace, so suites compete with each other and with everything else running. Three unrelated packages timed out at 5s in a single session -- `core`'s base36 digest sweep, four cases in `state-store-sqlite`'s conformance suite, and `server`'s `sql2ts` round-trip -- each passing in seconds when run alone, and each blocking a task that had nothing to do with the code that failed.
+
+  That makes a red gate ambiguous, which defeats the point of having one: red should mean broken, not "someone opened a browser". A generous timeout costs nothing when tests pass, since it is only reached on failure.
+
+  The base36 digest sweep in `@etherfold/core`, skipped earlier the same day, is un-skipped: raising the timeout is the fix that skip was standing in for.
+
+  See ADR-0032 for the rejected alternatives, including why a shared config file is not possible here (per-package `rootDir` puts `vitest.config.ts` under the typechecker, so importing a root-level file fails `TS6059`).
+
+- Updated dependencies [da289e2]
+- Updated dependencies [8bb063e]
+- Updated dependencies [0bf9dc7]
+- Updated dependencies [c0d694f]
+  - @etherfold/state-store@1.0.0
+
 ## 0.1.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/state-store-conformance",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The conformance suite a state-store backend must pass to earn its place behind the seam: external-behaviour cases for versioned reads, as-of reads tested against the backend's own capability claims, reorg revert with a counter that must decrease, read-your-writes and block atomicity.",
 	"publishConfig": {
 		"access": "public"

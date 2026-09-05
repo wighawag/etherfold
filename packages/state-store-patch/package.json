@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/state-store-patch",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The light state store: current state as a plain object, history as immer reverse patches, reorg revert by replaying them backwards. Memory-only, and it advertises revert-only.",
 	"publishConfig": {
 		"access": "public"
