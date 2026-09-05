@@ -1,0 +1,61 @@
+{
+  "measuredAt": "2026-09-05T18:30:49.675Z",
+  "commit": "2efd858e91e941cf2ffb5d9faf0a897092fe44cc",
+  "runtime": {
+    "node": "v24.13.1",
+    "cpu": "AMD Ryzen 7 PRO 6850U with Radeon Graphics",
+    "machine": "Linux 6.12.105+deb13-amd64"
+  },
+  "events": 31330,
+  "correctness": {
+    "allThreeAgree": true,
+    "unknownTopic0": 0
+  },
+  "timingsMs": {
+    "production": {
+      "label": "production reparse (whole-abi, via LogEventFetcher)",
+      "runs": [
+        1783.9178880000009,
+        1800.3978669999997,
+        1786.5281910000012,
+        1807.6430539999983,
+        1790.7268300000014
+      ],
+      "medianMs": 1790.7268300000014
+    },
+    "wholeAbi": {
+      "label": "viem decodeEventLog, whole address ABI per call",
+      "runs": [
+        1759.4739179999997,
+        1761.6445609999973,
+        1772.5646080000006,
+        1768.875884000001,
+        1773.574686
+      ],
+      "medianMs": 1768.875884000001
+    },
+    "preselected": {
+      "label": "viem decodeEventLog, ONE-member abi preselected by topic0",
+      "runs": [
+        570.835744,
+        559.0830349999997,
+        564.1076940000021,
+        556.726799,
+        566.418743000002
+      ],
+      "medianMs": 564.1076940000021
+    },
+    "mapBuildMs": 0.2388619999983348
+  },
+  "perEventUs": {
+    "production": 57.15693680178747,
+    "wholeAbi": 56.45949198850945,
+    "preselected": 18.005352505585765
+  },
+  "speedup": 3.174441421463744,
+  "abiSizes": {
+    "0x5ab6d5bb8012fc60ab3653e025be4a59b4406ff2": 14,
+    "0xb2d822732347e3dc60258dcf6cf0d4c7a432b678": 4,
+    "0xb0855eaf94bf7f122af4f444141e83b7408cc7a7": 6
+  }
+}

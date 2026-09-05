@@ -1,0 +1,104 @@
+{
+  "measuredAt": "2026-09-05T18:27:10.791Z",
+  "commit": "2efd858e91e941cf2ffb5d9faf0a897092fe44cc",
+  "target": {
+    "address": "0x5ab6d5bb8012fc60ab3653e025be4a59b4406ff2",
+    "eventName": "CommitmentMade",
+    "param": "commitmentHash"
+  },
+  "baseline": {
+    "digests": {
+      "stream": "222f9f7167d2edf981cdcbe9e10c50ec",
+      "decode": "h1cjbpl3",
+      "wire": "hztxnu6"
+    },
+    "sampleArgs": {
+      "eventName": "CommitmentMade",
+      "args": {
+        "player": "0x784bd82DA3eF62c48b85749efD49a79D191b5111",
+        "epoch": 19804,
+        "commitmentHash": "0xcbe214bdf4cd0f42fa916e9df998f73f03fbb57f6737c745"
+      }
+    }
+  },
+  "renamedSampleArgs": {
+    "eventName": "CommitmentMade",
+    "args": {
+      "player": "0x784bd82DA3eF62c48b85749efD49a79D191b5111",
+      "epoch": 19804,
+      "commitmentHashRenamed": "0xcbe214bdf4cd0f42fa916e9df998f73f03fbb57f6737c745"
+    }
+  },
+  "cases": [
+    {
+      "name": "rename a NON-INDEXED parameter (decode-only ABI change)",
+      "digests": {
+        "stream": "222f9f7167d2edf981cdcbe9e10c50ec",
+        "decode": "h5y8vyk",
+        "wire": "h10a6r4s"
+      },
+      "streamMoved": false,
+      "decodeMoved": true,
+      "wireMoved": true,
+      "argsChanged": true,
+      "mustBe": {
+        "streamMoved": false,
+        "decodeMoved": true,
+        "argsChanged": true
+      }
+    },
+    {
+      "name": "add a VIEW FUNCTION (ABI regeneration, nothing indexed moves)",
+      "digests": {
+        "stream": "222f9f7167d2edf981cdcbe9e10c50ec",
+        "decode": "h1cjbpl3",
+        "wire": "hp4hz6"
+      },
+      "streamMoved": false,
+      "decodeMoved": false,
+      "wireMoved": true,
+      "argsChanged": false,
+      "mustBe": {
+        "streamMoved": false,
+        "decodeMoved": false,
+        "argsChanged": false
+      }
+    },
+    {
+      "name": "add a NEW EVENT (the fetch filter widens)",
+      "digests": {
+        "stream": "430818c1fe9a1938381a15c8a0cf125e",
+        "decode": "h1uvuoow",
+        "wire": "h2uxauf"
+      },
+      "streamMoved": true,
+      "decodeMoved": true,
+      "wireMoved": true,
+      "argsChanged": false,
+      "mustBe": {
+        "streamMoved": true,
+        "decodeMoved": true,
+        "argsChanged": false
+      }
+    },
+    {
+      "name": "a PROCESSOR-ONLY change (the case option B exists for)",
+      "digests": {
+        "stream": "222f9f7167d2edf981cdcbe9e10c50ec",
+        "decode": "h1cjbpl3",
+        "wire": "hztxnu6"
+      },
+      "streamMoved": false,
+      "decodeMoved": false,
+      "wireMoved": false,
+      "argsChanged": false,
+      "mustBe": {
+        "streamMoved": false,
+        "decodeMoved": false,
+        "argsChanged": false
+      }
+    }
+  ],
+  "failures": [],
+  "canonicalFormNote": "[[\"probe\",1]]"
+}

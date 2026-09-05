@@ -4,6 +4,26 @@ slug: replay-parse-cost
 source: 'measured by docs/spikes/replay-parse-cost/ (capture-full.mjs, measure.ts) on top of etherfold 5e0f455 (the decode/stream/process seams unchanged at HEAD dd304a7 — verified by diff), replaying the LAUNCHED stratagems game on Base (deployments/alpha1, 31,330 logs over 1,040 blocks) re-captured 2026-09-01 from base-mainnet.g.alchemy.com at the same pinned range (blocks 12,082,307–23,400,000) the committed conformance fixture holds, both halves present, verified event-for-event against it (every identity matches; only its two UNPARSED pre-#26/#27 events are absent, by design); AMD Ryzen 7 PRO 6850U, node 24.13.1 on Debian 13, one laptop, medians of 5 warm runs, 2026-09-01. Raw output in docs/spikes/replay-parse-cost/results/.'
 ---
 
+> **SUPERSEDED IN ITS HEADLINE, 2026-09-05. The "~62%" is NOT reproducible at HEAD, and its
+> `measure.ts` MUST NOT be re-run for a number.** The read and decode terms still reproduce within
+> noise (461 vs 488 ms; 1,794 vs 1,962 ms, the same 57-63 us/event band). The PROCESS term does not:
+> it was measured through `fromJSProcessor` / `@etherfold/js-processor`, which ADR-0037 retired and
+> which now has ZERO tracked files. **The trap is that the spike still appears to run**, because
+> `packages/js-processor/dist/` survives on disk as stale untracked build output, so a re-run silently
+> produces a number from code that is not in the repository.
+>
+> Re-measured on the surviving ENTITY path across three backends, decode's share is a RANGE and not
+> one number: **80% on memory, 59% on the light patch store, 18% on sqlite** — the process term spans
+> 38x. So "decode is most of a replay" is a claim about the BROWSER's light store and is false on the
+> server. The read term is also shape-dependent, which no number here exposed: the decoded half nearly
+> doubles it (456 vs 251 ms).
+>
+> Current truth: `work/notes/findings/replay-decode-share-is-18-to-80-percent-by-backend.md` and
+> `work/notes/findings/decoding-is-3x-faster-with-a-memoised-topic0-map.md`, both measured by
+> `docs/spikes/replay-decode-cache/` and asserted against the committed golden state. What survives
+> here unchanged and still load-bearing: consequence 1 (raw-only storage does not ADD replay decode
+> cost, because `reparse` re-derives either way) and consequence 3's size figures.
+
 > This finding is REQUIRED rather than optional: `work/specs/proposed/the-stream-stores-only-what-the-node-said.md` proposes storing the RAW half only so a replay pays decode-on-read, warns that "no task should quote a figure without re-measuring", and — until this spike — had NO measurement of the cost it was proposing to pay on every replay. Nothing else in the repo held one: the committed conformance fixture omits `data`/`topics` (nothing to decode), and the sqlite-in-the-browser spike timed `fetch+parse-fixture` (JSON.parse), not ABI decoding. This is the number its tasking and its acceptance thinking should read.
 
 **Decode is the DOMINANT term of a processor-change reindex from the stored stream — not a rounding

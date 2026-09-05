@@ -26,11 +26,29 @@ ADR-0034 already had to work around this with an unconditional `reparse`: the st
 event which ABI decoded it, so every replay re-decodes regardless. That is a workaround for storing
 a derivation next to its source.
 
-**This is a correctness-shaped problem, not a size one.** The repo's own numbers disagree about the
-size: the capture script says 32.5 MB against 8.6 MB with `topics` and `data` stripped, while the
-fixture README, the sqlite finding and two changelogs say 32.5 against 20.5. So `args` is somewhere
-between 9 and 37 percent of a stream. Size is NOT the case for this change, and no task should quote
-a figure without re-measuring.
+**This is a correctness-shaped problem, not a size one.** The three inherited figures that used to
+disagree here (32.5 against 8.6, and 32.5 against 20.5) are RETIRED: they were re-measured on the
+same 31,330 real Base logs and are now **27.8 MB full (raw + decoded), 21.1 MB raw-only, 17.0 MB
+decoded-only** (`work/notes/findings/replay-parse-cost.md`, consequence 3). So raw-only saves 24% of
+today's stored bytes while being 24% LARGER than the decoded half alone — which is exactly why the
+case is CORRECTNESS (the decoded half is the only half that can go stale) and not size. Quote these
+figures rather than re-measuring, and do not resurrect the retired ones.
+
+> **EVALUATED AND REJECTED, recorded so the next reader does not re-derive it: making story 3's reuse
+> CONDITIONAL on a decode identity.** The idea is to keep the decoded half as a guarded cache, keyed
+> on a decode-sensitive digest, so a processor-only change skips decoding and only an ABI change
+> reparses. It was investigated with measurement (`docs/spikes/replay-decode-cache/`) and refused on
+> four counts: the cost it removes is mostly not decoding at all but a per-call ABI re-search that
+> can simply be DELETED (see the memoisation task below, 3.2x for zero stored bytes); what remains
+> afterwards is 11.5 us/event, which is 4% of a server replay; the guard covers the ABI but NOT the
+> decoder, so it is incomplete in a way this repo cannot close; and it would fork the storage shape
+> away from the server's `_emissions`, which already stores raw only. Adopting it would also need a
+> stored type that permits the decoded half, a per-segment identity field, a new 128-bit decode
+> digest and a decoder-version input — a different spec, not an amendment to this one.
+>
+> **Ordering, decided:** `decoding-is-3x-faster-with-a-memoised-topic0-map` lands FIRST and
+> SEPARATELY. It is a private-method optimisation; this spec is a breaking type migration. Merging
+> them would entangle a behavioural change with an API change for no gain.
 
 ## Solution
 

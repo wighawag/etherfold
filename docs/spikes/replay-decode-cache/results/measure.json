@@ -1,0 +1,339 @@
+{
+  "measuredAt": "2026-09-05T18:05:24.000Z",
+  "commit": "2efd858e91e941cf2ffb5d9faf0a897092fe44cc",
+  "runtime": {
+    "node": "v24.13.1",
+    "cpu": "AMD Ryzen 7 PRO 6850U with Radeon Graphics",
+    "cores": 16,
+    "machine": "Linux 6.12.105+deb13-amd64",
+    "viem": "2.52.0"
+  },
+  "fixture": {
+    "path": "docs/spikes/replay-parse-cost/results/stratagems-alpha1-full.stream.json.gz",
+    "events": 31330,
+    "blocks": 1040,
+    "provenance": {
+      "what": "stratagems on Base (deployments/alpha1): Stratagems + Gems + GemsGenerator, every log in the range, BOTH the raw and the decoded half",
+      "deployment": "alpha1",
+      "stratagemsRepo": "github.com/wighawag/stratagems",
+      "stratagemsCommit": "3d5a0b3f46bcc0d8370643b8382f11f99f81df00",
+      "contracts": [
+        {
+          "address": "0x5ab6d5bb8012fc60ab3653e025be4a59b4406ff2",
+          "startBlock": 13499257
+        },
+        {
+          "address": "0xb2d822732347e3dc60258dcf6cf0d4c7a432b678",
+          "startBlock": 12082307
+        },
+        {
+          "address": "0xb0855eaf94bf7f122af4f444141e83b7408cc7a7",
+          "startBlock": 12082311
+        }
+      ],
+      "node": "base-mainnet.g.alchemy.com",
+      "chainHeadAtCapture": 50749669,
+      "capturedBy": "docs/spikes/replay-parse-cost/capture-full.mjs",
+      "captureMethod": "one captureStream call PER CONTRACT (the merged three-contract ABI is refused by LogEventFetcher's ambiguity guard since #28), merged in stream order (blockNumber, then logIndex) and verified event-for-event against the committed fixture",
+      "companionTo": "packages/conformance-workload-stratagems/fixtures/stratagems-alpha1.stream.json.gz (same pinned range, data/topics omitted there)",
+      "fromBlock": 12082307,
+      "toBlock": 23400000,
+      "capturedAt": "2026-09-01T18:52:50.985Z",
+      "chainId": "8453"
+    }
+  },
+  "methodology": {
+    "warmup": 1,
+    "runs": 5,
+    "note": "medians; each run does the whole 31k-event pass"
+  },
+  "correctness": {
+    "reparseRawEqualsFull": true,
+    "entityReplayMatchesGolden": true,
+    "replayReport": {
+      "matchesGolden": true,
+      "events": 31330,
+      "blocks": 1040,
+      "mutations": 29492,
+      "tip": 23303136
+    }
+  },
+  "timingsMs": {
+    "read": {
+      "label": "read (gunzip + JSON.parse + reviver)",
+      "runs": [
+        505.00331500000084,
+        475.1288890000005,
+        461.26585200000045,
+        444.5309559999996,
+        434.43178400000033
+      ],
+      "medianMs": 461.26585200000045
+    },
+    "readFull": {
+      "label": "read: full (raw + decoded) — option B stored shape",
+      "runs": [
+        485.5104250000004,
+        462.04401300000063,
+        450.0146220000006,
+        435.87038399999983,
+        456.2801670000008
+      ],
+      "medianMs": 456.2801670000008
+    },
+    "readRawOnly": {
+      "label": "read: raw-only — option A stored shape",
+      "runs": [
+        265.6983849999997,
+        243.37403199999972,
+        252.02239200000076,
+        238.21653199999855,
+        250.84882300000027
+      ],
+      "medianMs": 250.84882300000027
+    },
+    "decodeRawOnly": {
+      "label": "decode: reparse(raw-only)",
+      "runs": [
+        1796.384473,
+        1769.0627949999998,
+        1781.4607619999988,
+        1794.0889450000032,
+        1795.470347999999
+      ],
+      "medianMs": 1794.0889450000032
+    },
+    "decodeFull": {
+      "label": "decode: reparse(full)",
+      "runs": [
+        1793.9052990000018,
+        1809.2771979999998,
+        1805.732097,
+        1823.9028470000012,
+        1817.9109310000022
+      ],
+      "medianMs": 1809.2771979999998
+    },
+    "process": {
+      "memory": {
+        "label": "process: entity path on memory",
+        "runs": [
+          220.71156999999948,
+          196.5861139999979,
+          202.07221500000014,
+          193.39397800000006,
+          209.60550599999988
+        ],
+        "medianMs": 202.07221500000014
+      },
+      "patch": {
+        "label": "process: entity path on patch",
+        "runs": [
+          990.5602090000029,
+          945.4512829999949,
+          934.0744960000011,
+          1210.4963330000028,
+          999.792211
+        ],
+        "medianMs": 990.5602090000029
+      },
+      "sqlite": {
+        "label": "process: entity path on sqlite",
+        "runs": [
+          7182.749286000006,
+          7630.016686000003,
+          7803.320179000002,
+          7736.732202999992,
+          8359.668216000005
+        ],
+        "medianMs": 7736.732202999992
+      }
+    }
+  },
+  "perThousandEvents": {
+    "read": 14.722816852856702,
+    "decodeRawOnly": 57.26424976061293,
+    "decodeFull": 57.74903281200127,
+    "process": {
+      "memory": 6.44979939355251,
+      "patch": 31.616987200766133,
+      "sqlite": 246.94325576125095
+    }
+  },
+  "replayComposition": {
+    "memory": {
+      "readFull": 456.2801670000008,
+      "readRawOnly": 250.84882300000027,
+      "decode": 1794.0889450000032,
+      "process": 202.07221500000014,
+      "optionA": 2247.0099830000036,
+      "optionBHit": 659.620008860501,
+      "optionBMiss": 2453.708953860504,
+      "decodeShareOfOptionAPercent": 79.8433900415831,
+      "bSavesOverAPercent": 70.64454480171752,
+      "bCostsOverAOnMissPercent": 9.198845239865596
+    },
+    "patch": {
+      "readFull": 456.2801670000008,
+      "readRawOnly": 250.84882300000027,
+      "decode": 1794.0889450000032,
+      "process": 990.5602090000029,
+      "optionA": 3035.4979770000064,
+      "optionBHit": 1448.1080028605038,
+      "optionBMiss": 3242.196947860507,
+      "decodeShareOfOptionAPercent": 59.10361194749033,
+      "bSavesOverAPercent": 52.29421947130815,
+      "bCostsOverAOnMissPercent": 6.809392476182176
+    },
+    "sqlite": {
+      "readFull": 456.2801670000008,
+      "readRawOnly": 250.84882300000027,
+      "decode": 1794.0889450000032,
+      "process": 7736.732202999992,
+      "optionA": 9781.669970999996,
+      "optionBHit": 8194.279996860492,
+      "optionBMiss": 9988.368941860495,
+      "decodeShareOfOptionAPercent": 18.341335889669057,
+      "bSavesOverAPercent": 16.22821030402462,
+      "bCostsOverAOnMissPercent": 2.1131255856444366
+    }
+  },
+  "identity": {
+    "iterations": 2000,
+    "streamDigestMsPerCall": 1.3884683829999995,
+    "decodeDigestCandidateMsPerCall": 1.2676268605000005,
+    "sourceEntries": 25,
+    "distinctDecodeHashes": 25,
+    "distinctStreamHashes": 25
+  },
+  "sizes": {
+    "events": 31330,
+    "full": {
+      "jsonBytes": 27831853,
+      "gzBytes": 976232
+    },
+    "rawOnly": {
+      "jsonBytes": 21123584,
+      "gzBytes": 632999
+    },
+    "decodedOnly": {
+      "jsonBytes": 17041188,
+      "gzBytes": 580470
+    }
+  },
+  "segmentOverhead": [
+    {
+      "eventsPerSegment": 1,
+      "segments": 31330,
+      "bytes": 1347190,
+      "percentOfFullJson": 4.840461035777962
+    },
+    {
+      "eventsPerSegment": 10,
+      "segments": 3133,
+      "bytes": 134719,
+      "percentOfFullJson": 0.4840461035777963
+    },
+    {
+      "eventsPerSegment": 50,
+      "segments": 627,
+      "bytes": 26961,
+      "percentOfFullJson": 0.09687102040960047
+    },
+    {
+      "eventsPerSegment": 100,
+      "segments": 314,
+      "bytes": 13502,
+      "percentOfFullJson": 0.04851275982235175
+    },
+    {
+      "eventsPerSegment": 500,
+      "segments": 63,
+      "bytes": 2709,
+      "percentOfFullJson": 0.009733451811490957
+    },
+    {
+      "eventsPerSegment": 1000,
+      "segments": 32,
+      "bytes": 1376,
+      "percentOfFullJson": 0.004943975523296994
+    }
+  ],
+  "spread": [
+    {
+      "eventName": "Transfer",
+      "count": 9603,
+      "share": 0.3065113309926588
+    },
+    {
+      "eventName": "GlobalRewardUpdated",
+      "count": 5352,
+      "share": 0.17082668368975423
+    },
+    {
+      "eventName": "AccountSharedRewardUpdated",
+      "count": 5347,
+      "share": 0.17066709224385573
+    },
+    {
+      "eventName": "AccounFixedRewardUpdated",
+      "count": 5347,
+      "share": 0.17066709224385573
+    },
+    {
+      "eventName": "MoveProcessed",
+      "count": 4255,
+      "share": 0.13581232045962335
+    },
+    {
+      "eventName": "CommitmentMade",
+      "count": 450,
+      "share": 0.014363230130864985
+    },
+    {
+      "eventName": "ReserveDeposited",
+      "count": 402,
+      "share": 0.012831152250239387
+    },
+    {
+      "eventName": "CommitmentRevealed",
+      "count": 389,
+      "share": 0.012416214490903287
+    },
+    {
+      "eventName": "MultiPoke",
+      "count": 156,
+      "share": 0.004979253112033195
+    },
+    {
+      "eventName": "CommitmentCancelled",
+      "count": 18,
+      "share": 0.0005745292052345994
+    },
+    {
+      "eventName": "GameEnabled",
+      "count": 5,
+      "share": 0.00015959144589849984
+    },
+    {
+      "eventName": "CommitmentVoid",
+      "count": 3,
+      "share": 0.0000957548675390999
+    },
+    {
+      "eventName": "SinglePoke",
+      "count": 2,
+      "share": 0.00006383657835939994
+    },
+    {
+      "eventName": "OwnershipTransferred",
+      "count": 1,
+      "share": 0.00003191828917969997
+    }
+  ],
+  "perAddress": {
+    "0xb2d822732347e3dc60258dcf6cf0d4c7a432b678": 2,
+    "0xb0855eaf94bf7f122af4f444141e83b7408cc7a7": 21398,
+    "0x5ab6d5bb8012fc60ab3653e025be4a59b4406ff2": 9930
+  }
+}
