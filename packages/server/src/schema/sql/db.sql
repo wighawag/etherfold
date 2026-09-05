@@ -135,5 +135,73 @@ CREATE INDEX IF NOT EXISTS _emissions_canonical
 CREATE INDEX IF NOT EXISTS _emissions_by_address_topic
     ON _emissions (indexer, stream, address, topic0, blockNumber);
 
-INSERT INTO _meta (key, value) VALUES ('schemaVersion', '2')
+-- ---------------------------------------------------------------------------
+-- THE GENERATION REGISTRY (ADR-0053)
+-- ---------------------------------------------------------------------------
+-- WHICH generations a named indexer holds, and WHICH ONE answers reads. A
+-- generation is a stream plus a fold over it, identified by the stream digest
+-- plus the processor's version hash; an indexer holds several, one is canonical,
+-- and reconfiguring builds a successor beside the live one and moves the pointer
+-- when it is ready -- which is why a reconfigure is not an outage, and why
+-- moving the pointer BACK is a revert that re-indexes nothing.
+--
+-- They are ROWS because a server or a CLI must come back up holding what it
+-- held: the superseded generation it kept is the thing the pointer moves back
+-- to, and a read tier has to resolve the pointer before it can even name a state
+-- table (ADR-0053). This is what ADR-0008's `current_version` row becomes,
+-- superseded in its KEY (the processor hash alone cannot express a filter
+-- change) and in its RETENTION (dropping the old namespace is what made a revert
+-- impossible), never in its mechanism.
+--
+-- The `indexer` column is the same discriminator `_emissions` carries and is
+-- redundant for the same reason: ADR-0053 gives each named indexer a database of
+-- its own. It is kept because it stays correct, costs little, and is what a
+-- colocated deployment would need.
+--
+-- ## What is NOT here
+--
+-- The CAPS. `maxGenerations` and `maxStreams` are a CONFIGURED argument of
+-- `openGenerationRegistry`, applied to what these rows say; a cap column would
+-- fork a model this schema merely stores the inputs of. Nor is anything about
+-- where a generation's STATE lives: that is a table-name namespace the state
+-- store owns (ADR-0053), and dropping one is a port operation the host supplies.
+CREATE TABLE IF NOT EXISTS _generations (
+    -- the NAMED INDEXER these generations belong to: the tenancy discriminator
+    indexer TEXT NOT NULL,
+    -- WHICH stream, as `streamDigestOf` renders it
+    stream TEXT NOT NULL,
+    -- the processor's version hash, as `getVersionHash()` returns it
+    processor TEXT NOT NULL,
+    -- ms since the epoch, for ORDERING only and never identity: it is what puts
+    -- "the previous generation" in a defined place in a listing an operator
+    -- reads, and what makes the WRITER of a stream (the oldest surviving
+    -- generation on it) a question these rows can answer
+    createdAt INTEGER NOT NULL,
+    -- the identity IS the key: two fields, compared element by element, never
+    -- one delimited string in which one component could be read as another
+    PRIMARY KEY (indexer, stream, processor)
+);
+
+-- THE CANONICAL POINTER: one small row per named indexer, and the whole of
+-- promotion. Moving it forwards is promotion, moving it backwards is revert.
+--
+-- `stream` and `processor` are NULLABLE because a pointer that has never been
+-- set is a real state (an indexer holding no generation yet), and they are only
+-- ever written together.
+--
+-- `revision` is the CONCURRENCY GUARD every registry commit is conditional on
+-- (ADR-0054). `RemoteSQL` is `prepare` + `batch` and nothing else, so a
+-- transaction cannot stay open across the decision a commit makes: instead each
+-- commit reads this value, guards every statement it writes on it, swaps it for
+-- a fresh unique token in the same batch, and reads it back to learn whether it
+-- won. A loser's statements applied to nothing and it retries. It lives on THIS
+-- row rather than on one of its own because every commit already writes here.
+CREATE TABLE IF NOT EXISTS _generation_pointer (
+    indexer TEXT PRIMARY KEY,
+    stream TEXT,
+    processor TEXT,
+    revision TEXT NOT NULL
+);
+
+INSERT INTO _meta (key, value) VALUES ('schemaVersion', '3')
     ON CONFLICT (key) DO UPDATE SET value = excluded.value;

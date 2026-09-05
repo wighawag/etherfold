@@ -39,6 +39,30 @@ export type {RecordedReorg, ReorgCounters} from './reorgs.js';
 export {appendEmissions, emissionAppenderFor, EMISSION_STREAM_TABLE} from './emissions.js';
 export type {EmissionAppend} from './emissions.js';
 /**
+ * THE GENERATION REGISTRY AS ROWS (ADR-0053): which generations this named
+ * indexer holds, and which one is CANONICAL, so a restart comes back holding
+ * what it held and pointing where it last pointed.
+ *
+ * A SUBSTRATE and nothing more. Every rule -- registration, the caps that REFUSE
+ * rather than evict, deletion, reaping, the sweep and the pointer -- belongs to
+ * `openGenerationRegistry` in `@etherfold/core`, over a five-operation port that
+ * this package supplies rows for. The CAPS are that function's argument and are
+ * stored nowhere here, and `dropState` is injected by whoever owns the state
+ * store.
+ *
+ * Exported because whoever owns the DATABASE opens it, exactly like the emission
+ * appender above: a combined `run`, an `index` half and a read tier all resolve
+ * the same rows.
+ */
+export {
+	generationRegistryPortOnSQL,
+	openGenerationRegistryOnSQL,
+	GenerationCommitContentionError,
+	GENERATION_TABLE,
+	GENERATION_POINTER_TABLE,
+} from './generations.js';
+export type {SQLGenerationRegistryOptions} from './generations.js';
+/**
  * PAIR-COMPACTION (ADR-0006): the one thing that ever DELETES from that stream,
  * and a call the HOST SCHEDULES rather than something an append does on its way
  * past (ADR-0022).
