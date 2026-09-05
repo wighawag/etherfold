@@ -236,6 +236,101 @@ filesystem storage is not supported.
    The one thing to build carefully: a successor's context becomes live when the successor is created
    and stops being live when its generation is dropped or the successor becomes canonical and the old
    stream is reaped. That lifetime is this spec's, since it owns generation creation and the caps.
+7. ~~**Where does a NON-CANONICAL generation's state live on ONE SQL database?**~~ **ANSWERED: a
+   TABLE-NAME NAMESPACE per generation, never a generation COLUMN.** A column's single advantage is
+   cross-generation queries, which this spec does not want. Against it: ADR-0008 ends blue-green by
+   DROPPING the old namespace, which is `DROP TABLE` under a namespace and a full-scan
+   `DELETE ... WHERE generation = ?` under a column — not reclaiming pages without `VACUUM`, and
+   bounded by the D1 per-request limits `platforms/cf-worker/src/d1.ts` already encodes, so undoing a
+   rebuild would need its own bounded-chunk driver. A column also forces every index to LEAD with the
+   generation and makes every read seek past rows it can never return, degrading reads during exactly
+   the window ADR-0008 says readers must keep being served. And a namespace makes story 5 structural:
+   deleting one generation is a `DROP`, not an argument about a filter nobody forgot.
+
+   **Why this does NOT contradict the emission table choosing COLUMNS.** That decision was justified
+   by a constraint that does not reach here: "a table per partition pushes the log table into dynamic
+   DDL the fixed schema deliberately excludes". `packages/server/src/schema/sql/db.sql` is a STATIC,
+   enumerable artifact (`schemaStatements` parses that one file, and a test asserts the statements
+   come from it), so a table whose NAME is computed at runtime cannot be expressed in it. The state
+   store has no such artifact and never could: `ddlForEntity` GENERATES `CREATE TABLE IF NOT EXISTS
+   "<entity>"` at runtime from user-declared entities. Adding the generation is one more input to a
+   generator that already exists. Dynamic DDL is impossible in the log regime and already the norm in
+   the state regime, so choosing differently is principled rather than inconsistent.
+
+   Rejected: **database-per-generation**. D1 bindings are static (`wrangler.toml`), so a generation
+   created at RUNTIME cannot get one, and it would break the one-handle property `run` relies on.
+8. ~~**Does the INDEXER NAME use the same mechanism at a second level?**~~ **ANSWERED: NO — one
+   DATABASE per named indexer, and the namespace mechanism is used only for generations.** The two
+   levels have different LIFETIMES, and that is what picks the mechanism. The indexer set is known at
+   DEPLOY time ("a host registers the N named indexers it was built with"), so N static D1 bindings
+   express it exactly; a generation is created at RUNTIME, so it must live inside an existing binding
+   and can only be a namespace within one.
+
+   This is also what the code already does: `packages/server/test/ingest.test.ts` gives each named
+   indexer its OWN database, saying "there is no shared table here to partition yet". And there is a
+   correctness reason not to merely share one: `_blocks` is `number INTEGER PRIMARY KEY` with `hash`
+   UNIQUE, so two indexers on DIFFERENT chains collide on block number with different hashes. Sharing
+   a database would force `_blocks` and `_cursor` to be namespaced too, at which point separate
+   databases are simpler and give story 5 the stronger guarantee.
+
+   **Accepted cost, stated:** this makes `_emissions.indexer` redundant for the shapes this spec
+   builds. It is kept — it stays correct, costs little, and is what a future serverless (D1)
+   deployment would need to colocate several indexers in one database. Colocation is explicitly NOT
+   required now.
+9. ~~**What IS the SQL stream keeper, and does it become the `_emissions` writer?**~~ **ANSWERED:
+   NEITHER — the FOLD writes, and the keeper only READS.** The question assumed the route must own
+   the append because only the route segment holds the indexer name. That premise is the defect, not
+   the constraint: it is the same shape ADR-0050 removed for reorg counters, and it is being fixed
+   ahead of this spec by `work/tasks/.../every-deployment-shape-stores-the-stream-it-folded.md`,
+   which injects an emission-appending port into `StreamBuilder` (the sibling of `ReorgRecorder`) so
+   every deployment shape stores what it folded. TASK THIS SPEC AGAINST THAT WORLD.
+
+   With the append in the fold, the "SQL stream keeper" is simply an `ExistingStream` over
+   `_emissions` whose `saveNewEvents` and `clear` are NO-OPS — which is exactly ADR-0044's
+   `readOnlyStream`, the thing a FOLLOWER generation re-folds through. So there is no second writer to
+   reason about and the one-writer rule stays structural.
+
+   **The cursor question dissolves with it:** the contract wants the cursor to move in the SAME
+   transaction as the append, and once the append is in the fold, that is already the transaction
+   where state and cursor move atomically.
+
+   **Do NOT ride `createSegmentedStream` over SQL.** Implement `ExistingStream` directly over `seq`.
+   Segments exist because the IndexedDB keeper needs batched writes; SQL does not, and `_emissions` is
+   already `seq`-addressed with holes legal and a validated cursor codec. Accepted cost, stated: the
+   shared conformance material attached to the segment port does not apply to this implementation.
+
+   **Vocabulary warning for the tasker:** "keeper" is overloaded in `CONTEXT.md`. The STATE keeper
+   (`KeepState`) is DELETED (ADR-0037) and nothing persists through one; the STREAM keeper
+   (`ExistingStream` / `keepStream`) is live and is what this answer means.
+10. ~~**How much of story 9's serverless HOST does this spec owe?**~~ **ANSWERED: the
+    PLATFORM-NEUTRAL bounded-chunk driver here; the Worker's queue and cron wiring elsewhere.** This
+    repo already has the pattern twice — `prune` and `compactEmissionPairs` are host-scheduled calls
+    doing bounded work per invocation and reporting whether they finished (ADR-0022), with the
+    compaction task asserting resumability by driving call after call through a FRESH container. Story
+    9 is that same shape: a rebuild driver doing bounded work against a durable checkpoint row, tested
+    the same way.
+
+    ADR-0008's self-enqueueing queue with a cron watchdog is a SCHEDULING POLICY over that driver. It
+    needs a queue binding and a cron handler `platforms/cf-worker` does not have (three files, no
+    processor, no store), and it is Cloudflare-specific where the driver must serve a Node cron, a CLI
+    loop and a browser equally. Building both here would make the whole generation model undeployable
+    until the Worker grows bindings. The Worker wiring is a FOLLOW-ON task against
+    `platforms/cf-worker`, and is named in Out of Scope so it is not lost.
+11. ~~**Which surface makes a rebuild in progress distinguishable from an empty result (story 4)?**~~
+    **ANSWERED: it is TWO surfaces, and separating them dissolves the question.**
+
+    - **An OPERATOR watching progress reads `/status`.** ADR-0047 already reserves the room — the
+      generation dimension "grows inside" the cursor envelope, and the host owns the contents — so the
+      envelope gains a per-generation entry: the canonical one, plus any rebuilding one with its
+      checkpoint. Additive, and it adds no endpoint, which `one-command-runs-the-whole-pipeline`
+      forbids.
+    - **A CONSUMER doing a read has no ambiguity, by construction.** A read is served from the
+      CANONICAL generation and already advertises the generation identity it answered from, and
+      ADR-0008's whole point is that readers never see partial state. A rebuilding generation is never
+      the one answering.
+    - **The one real case is "no canonical generation YET"** — a first build, where the state is
+      genuinely empty AND a rebuild is running. That is ADR-0015's territory: REFUSE the read, naming
+      the generation that has not caught up. Never answer empty.
 
 <!-- /open-questions -->
 
@@ -292,6 +387,15 @@ recorded on the ADR; this spec is the thing it points at for the server.
   promotion.
 - **Seeding a generation from a published artifact**, which is
   `a-generation-can-be-seeded-from-a-published-artifact`.
+- **The Cloudflare Worker's rebuild SCHEDULING** — ADR-0008's self-enqueueing queue plus cron
+  watchdog. This spec owes the platform-neutral bounded-chunk driver and its durable checkpoint
+  (open question 10); the queue binding, the cron trigger and the handler are a FOLLOW-ON task
+  against `platforms/cf-worker`, which today has three files, hosts no processor, owns no store and
+  has neither binding. Named here so the deferral is deliberate rather than forgotten.
+- **Storing the emission stream on every deployment shape**, which is the prerequisite task
+  `every-deployment-shape-stores-the-stream-it-folded`. Story 8 rebuilds from the LOCALLY stored
+  stream, and until that task lands `run` and `build` store none; this spec READS that table and
+  never reshapes it.
 
 ## Further Notes
 
