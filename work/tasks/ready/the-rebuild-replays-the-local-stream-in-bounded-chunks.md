@@ -10,7 +10,6 @@ covers: [2, 8, 9, 10]
 <!-- open-questions -->
 
 ## Open questions
-
 1. **How is "the successor has caught up" decided on THIS runtime?** The promotion trigger compares the
    successor's cursor against the CANONICAL generation's, live. That comparison is `lastToBlock`
    against `lastToBlock` in the existing container, and it only works if the re-folding successor can

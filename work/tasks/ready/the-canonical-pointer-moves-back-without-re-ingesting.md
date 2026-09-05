@@ -10,7 +10,6 @@ covers: [3, 10]
 <!-- open-questions -->
 
 ## Open questions
-
 1. **What is the OPERATOR's affordance for the revert on this runtime?** The mechanism is a registry
    commit and is already built; what is unpinned is how an operator reaches it. The candidates all have
    costs: an ADMIN HTTP route beside `/admin/setup` (the closest prior art, but the milestone spec

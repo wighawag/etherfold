@@ -4,7 +4,6 @@ slug: two-named-indexers-never-touch-each-others-data
 spec: the-server-and-cli-hold-generations-too
 blockedBy: [one-registry-entry-holds-several-live-wire-contexts, a-generation-folds-into-its-own-tables]
 covers: [5]
-needsAnswers: true
 ---
 
 ## What to build
@@ -92,6 +91,3 @@ required now.
 > RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT. Do
 > not write the done record, the commit message or the PR body yourself.
 
-## Open questions
-
-- the-canonical-pointer-moves-back-without-re-ingesting is not blockedBy the-rebuild-replays-the-local-stream-in-bounded-chunks, but it cannot be built without it: on this runtime the chain-free container created by a-changed-context-creates-a-successor-instead-of-clearing deliberately stops short of promotion (its own What-to-build says so), and the rebuild task is the one that owns the FORWARD pointer move and explicitly takes the lift of the promotion trigger and its arming into a shared place as IN SCOPE. Built as written and in parallel, the revert task has nothing to revert FROM and no arming rule to assert its criterion 3 against, so it either stalls on a scope-fence violation or writes a second promotion trigger, which is exactly the two-sources-of-truth the rebuild task warns against. The revert task's own open question 2 also says it CONSUMES question 2 of the rebuild task, an ordering that is prose-only today. Fix: add the rebuild slug to blockedBy plus the Blocked-by prose (edit supplied). (work/tasks/backlog/the-canonical-pointer-moves-back-without-re-ingesting.md frontmatter blockedBy: [a-changed-context..., one-registry-entry...]; criterion 'After the revert, the automatic promotion policy does not move the pointer forward again'; rebuild task: 'The chain-free container this task builds on deliberately stops short of promotion ... That lift is IN SCOPE for this task.')

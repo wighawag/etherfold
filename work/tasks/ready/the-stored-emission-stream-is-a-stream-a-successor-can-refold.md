@@ -10,7 +10,6 @@ covers: []
 <!-- open-questions -->
 
 ## Open questions
-
 1. **What coverage does a reader over `_emissions` report, given that table stores no cursor record?**
    `StreamFetcher` answers `{lastSync, eventStream}`, and on the segment keeper the `lastSync` comes
    from the CURSOR RECORD stored beside the segments (the three block numbers). `_emissions` has no
