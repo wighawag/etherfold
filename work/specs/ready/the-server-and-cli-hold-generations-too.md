@@ -2,6 +2,7 @@
 title: 'The server and the CLI hold generations too, over the emission-stream table'
 slug: the-server-and-cli-hold-generations-too
 taskedAfter: [a-reconfigure-is-not-an-outage, indexer-server-feed]
+needsAnswers: true
 ---
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
