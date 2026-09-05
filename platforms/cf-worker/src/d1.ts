@@ -156,7 +156,12 @@ export type D1StoreOptions = Omit<VersionedStateStoreOptions, 'bounds'> & {
  * ```ts
  * const db = createD1DB(env);
  * const store = createD1Store(db, processor.entities, {plan: resolveD1Plan(env), retention});
- * const ingestion = new StreamBuilder(new EntityEventProcessor(store, processor), source, {stream});
+ * const ingestion = new StreamBuilder(new EntityEventProcessor(store, processor), source, {
+ * 	stream,
+ * 	// the host owns the store, so the host stores the stream the fold produces,
+ * 	// under the name it registers that ingestion by (ADR-0052)
+ * 	appendEmissions: emissionAppenderFor(db, 'alpha'),
+ * });
  * createServer({getDB: () => db, getEnv: (c) => c.env, getIndexer: indexerRegistry({alpha: ingestion})});
  * ```
  *

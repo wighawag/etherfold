@@ -50,7 +50,7 @@ export type Options = {
 	host?: string;
 	/** `--no-auto-setup` sets this to `false`; commander materialises `true` otherwise. */
 	autoSetup?: boolean;
-	/** `--indexer <name>`, behind it `INDEXER_NAME`: the named indexer the wire addresses. */
+	/** `--indexer <name>`, behind it `INDEXER_NAME`: the named indexer this process holds. */
 	indexer?: string;
 	/** `--ingest-endpoint <url>`, behind it `INGEST_ENDPOINT`. */
 	ingestEndpoint?: string;
@@ -131,7 +131,13 @@ export type ReceivingWire = {readonly kind: 'receiving'; readonly indexer: strin
 
 export type Wire = SendingWire | ReceivingWire;
 
-/** `run`: follows the chain, folds, answers queries, never terminates. */
+/**
+ * `run`: follows the chain, folds, answers queries, never terminates.
+ *
+ * `indexer` is deliberately NOT inside a `Wire`: this process has none. It is
+ * the NAMED INDEXER the fold stores its emission stream under (ADR-0036's
+ * universal name, ADR-0052's default), and it addresses and registers nothing.
+ */
 export type RunConfig<ABI extends Abi = Abi> = {
 	readonly command: 'run';
 	readonly processor: string;
@@ -140,6 +146,7 @@ export type RunConfig<ABI extends Abi = Abi> = {
 	readonly rps?: number;
 	readonly destination: StoreTarget;
 	readonly serving: Serving;
+	readonly indexer: string;
 };
 
 /** `build`: the same, without the serving, stopping at the tip. */
@@ -150,6 +157,8 @@ export type BuildConfig<ABI extends Abi = Abi> = {
 	readonly nodeUrl: string;
 	readonly rps?: number;
 	readonly destination: StoreTarget;
+	/** The name the ARTIFACT's stored stream is keyed on. See `RunConfig.indexer`. */
+	readonly indexer: string;
 };
 
 /**

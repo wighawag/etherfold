@@ -173,11 +173,16 @@ export async function prepareIndexing<
 	// receiving stream builder hash this same object into the wire identity
 	const providedStreamConfig = streamConfigFor(env);
 	const streamConfig = resolveStreamConfig(providedStreamConfig);
-	const {processor, store, db, recordReorg} = await buildProcessor<ABI, ProcessResultType>(
+	const {processor, store, db, recordReorg, appendEmissions} = await buildProcessor<ABI, ProcessResultType>(
 		declared,
 		resolved.destination,
 		{
 			finalityDepth: streamConfig.finality,
+			// The NAME this process's stored emissions are keyed on. A combined command
+			// routes no batch by name, so it may DEFAULT one (ADR-0052) -- which is the
+			// whole reason this shape can store a stream at all: the emission table's key
+			// is `NOT NULL` and there was no fold-side value to put in it.
+			indexer: resolved.indexer,
 			// The one-shot binds no port, so nothing else ever creates the fixed tables --
 			// and `build` exists to emit a publishable ARTIFACT, which must carry its
 			// schema version and the reverts it concluded or it loses its provenance the
@@ -202,12 +207,15 @@ export async function prepareIndexing<
 	// The receiving half of ADR-0004: authoritative about the cursor, derives every reorg, makes no
 	// chain call. It reads the persisted cursor on every batch rather than holding one, which is what
 	// makes an interrupted run resume from the store instead of from the start block.
-	// `recordReorg` is the store owner's, handed to the engine that concludes the
-	// reverts: the count is taken once, inside `receive`, on every deployment shape
-	// rather than only on the one behind an HTTP route (ADR-0050).
+	// Both PORTS are the store owner's, handed to the engine that concludes what they
+	// record: the count is taken once inside `receive` (ADR-0050) and the emission
+	// stream is appended there too, before the fold (ADR-0052). So a combined
+	// process stores what it folded exactly as a receiver behind an HTTP route does,
+	// and the database `build` emits carries its stream.
 	const streamBuilder = new StreamBuilder<ABI, ProcessResultType>(processor, source, {
 		stream: providedStreamConfig,
 		recordReorg,
+		appendEmissions,
 	});
 
 	const host = createFetcherHost<ABI>(

@@ -28,12 +28,15 @@ export type {RecordedReorg, ReorgCounters} from './reorgs.js';
  * THE STORED EMISSION STREAM (ADR-0006): append-only, retractions included,
  * superseded rows flagged rather than deleted.
  *
- * The WRITE is exported because it is this package's, and because the two views
- * over the table are the same package's reads: what a caller outside gets from
- * it is the ability to append under a name it holds, which is what a host that
- * routes batches some other way (a queue consumer) would need.
+ * The WRITE lives here because this package OWNS the table -- its DDL is in
+ * `schema/sql/db.sql`, both of ADR-0006's views read it, and the append and the
+ * high-water read have to agree about what a position in it means. It is
+ * EXPORTED because whoever owns the STORE is who calls it: `emissionAppenderFor`
+ * binds it to a database and a named indexer, and the result is handed to a
+ * `StreamBuilder`, which appends every batch it folds BEFORE it folds it
+ * (ADR-0052). The ingest route is a caller of that path and writes nothing.
  */
-export {appendEmissions, EMISSION_STREAM_TABLE} from './emissions.js';
+export {appendEmissions, emissionAppenderFor, EMISSION_STREAM_TABLE} from './emissions.js';
 export type {EmissionAppend} from './emissions.js';
 /**
  * PAIR-COMPACTION (ADR-0006): the one thing that ever DELETES from that stream,

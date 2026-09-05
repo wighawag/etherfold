@@ -1,4 +1,11 @@
-import type {Abi, EventProcessor, IndexingSource, ProvidedStreamConfig, ReorgRecorder} from '@etherfold/core';
+import type {
+	Abi,
+	EmissionAppender,
+	EventProcessor,
+	IndexingSource,
+	ProvidedStreamConfig,
+	ReorgRecorder,
+} from '@etherfold/core';
 import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
 import type {EntityProcessor, StateStore} from '@etherfold/processor-entities';
 import {loadContracts} from '@etherfold/utils';
@@ -70,8 +77,9 @@ export async function openExplicitSource<ABI extends Abi>(origin: ExplicitSource
 
 /**
  * Build the `EventProcessor` a stream-builder drives, plus the store it writes
- * to, the ONE database handle underneath both, and the recorder that counts what
- * a reorg did to them.
+ * to, the ONE database handle underneath both, and the two PORTS that put what a
+ * fold concluded into that database: the recorder that counts a reorg and the
+ * appender that stores the emission stream.
  *
  * The handle is returned rather than kept, because a command that also serves
  * hands this SAME object to the server (`platforms/nodejs`'s `StartOptions.db`
@@ -79,14 +87,20 @@ export async function openExplicitSource<ABI extends Abi>(origin: ExplicitSource
  * two connections with two views of it -- against `:memory:` they would not even
  * be the same database.
  *
- * ## Why the reorg recorder is built HERE
+ * ## Why both ports are built HERE
  *
- * Because this is where the store is OWNED, and a concluded reorg is counted by
- * whoever owns the store (ADR-0050). All three folding commands come through
- * this function, so all three count, and none of them can bind the recorder to a
- * different database than the one they fold into. `run` used to count nothing at
- * all, because the write lived on an HTTP route a combined process never
- * touches.
+ * Because this is where the store is OWNED, and both durable facts a fold
+ * concludes are written by whoever owns the store: the reorg count (ADR-0050)
+ * and the stored emission stream (ADR-0052). All three folding commands come
+ * through this function, so all three write both, and none of them can bind a
+ * port to a different database than the one it folds into. Each used to live on
+ * an HTTP route a combined process never touches, so `run` counted nothing and
+ * `run` and `build` stored no stream at all.
+ *
+ * The two are not interchangeable and the difference is in the ENGINE rather
+ * than here: the count is best-effort, and the append is not (a lost emission is
+ * a hole). What this function owes them is the same thing -- the handle, and the
+ * NAME the rows are keyed on.
  *
  * The imports are dynamic so that a command which never opens a database does
  * not pay for libSQL, matching how `serve` keeps the server's dependency tree
@@ -97,6 +111,16 @@ export async function buildProcessor<ABI extends Abi, ProcessResultType>(
 	target: StoreTarget,
 	context: {
 		finalityDepth: number;
+		/**
+		 * The NAMED INDEXER this deployment folds under, which every stored emission
+		 * row is keyed on (ADR-0036).
+		 *
+		 * Required here and defaulted nowhere in this function: WHETHER a command may
+		 * default it is a question about the command (`resolveIndexerName` for the
+		 * combined shapes, `requireIndexerName` for the two halves of the wire), and a
+		 * fallback here would be a third answer neither of them could see.
+		 */
+		indexer: string;
 		createDB?: (url: string) => RemoteSQL;
 		/**
 		 * Create the fixed tables (`_meta`) if they are absent, rather than leaving it
@@ -116,12 +140,19 @@ export async function buildProcessor<ABI extends Abi, ProcessResultType>(
 	store: StateStore;
 	db: RemoteSQL;
 	recordReorg: ReorgRecorder;
+	appendEmissions: EmissionAppender;
 }> {
-	const [{EntityEventProcessor}, {VersionedStateStore}, {createNodeDB, ensureFixedSchema}] = await Promise.all([
-		import('@etherfold/processor-entities'),
-		import('@etherfold/state-store-sqlite'),
-		import('@etherfold/platform-nodejs'),
-	]);
+	const [{EntityEventProcessor}, {VersionedStateStore}, {createNodeDB, ensureFixedSchema}, {emissionAppenderFor}] =
+		await Promise.all([
+			import('@etherfold/processor-entities'),
+			import('@etherfold/state-store-sqlite'),
+			import('@etherfold/platform-nodejs'),
+			// the append is the TABLE OWNER's: `@etherfold/server` ships the DDL, both of
+			// ADR-0006's views and the seq allocation the two have to agree about, so a
+			// second copy of the write here would be a second definition of what a position
+			// in that stream means. What this module owns is which DATABASE and which NAME.
+			import('@etherfold/server'),
+		]);
 
 	const handle = context.createDB ? context.createDB(target.db) : createNodeDB(target.db);
 	if (context.applyFixedSchema) {
@@ -147,5 +178,6 @@ export async function buildProcessor<ABI extends Abi, ProcessResultType>(
 		store,
 		db: handle,
 		recordReorg: reorgRecorderFor(handle),
+		appendEmissions: emissionAppenderFor(handle, context.indexer),
 	};
 }

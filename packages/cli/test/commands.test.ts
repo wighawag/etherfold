@@ -107,17 +107,28 @@ describe('`run` is the follower, and the default thing to reach for', () => {
 		expect(cli.served).toEqual([]);
 	});
 
-	it('shows the folding flags AND the serving ones, and no wire', async () => {
+	it('shows the folding flags AND the serving ones, and the name, and no wire', async () => {
 		const cli = programUnderTest();
 
 		await expect(cli.run(['run', '--help'])).rejects.toMatchObject({code: 'commander.helpDisplayed'});
 		const help = cli.output.join('');
-		for (const owned of ['--processor', '--store', '--db', '--node-url', '--port', '--host', '--no-auto-setup']) {
+		for (const owned of [
+			'--processor',
+			'--store',
+			'--db',
+			'--node-url',
+			'--port',
+			'--host',
+			'--no-auto-setup',
+			// the NAME this process folds under: it routes nothing by it, and its stored
+			// emission stream is keyed on it, so it is owned and optional here (ADR-0052)
+			'--indexer',
+		]) {
 			expect(help).toMatch(owned);
 		}
-		// this process runs both halves in ONE process, so there is no wire to
-		// configure: the flags parse and are refused with that reason
-		for (const notOwned of ['--indexer', '--ingest-endpoint', '--ingest-token']) {
+		// this process runs both halves in ONE process, so there is no WIRE to
+		// configure: those flags parse and are refused with that reason
+		for (const notOwned of ['--ingest-endpoint', '--ingest-token']) {
 			expect(help).not.toMatch(notOwned);
 		}
 	});
@@ -355,10 +366,21 @@ describe('flags a command does not own reach the resolver, and are refused there
 
 		await expect(cli.run(['build', '--help'])).rejects.toMatchObject({code: 'commander.helpDisplayed'});
 		const help = cli.output.join('');
-		for (const owned of ['--processor', '--deployments', '--node-url', '--rps', '--store', '--db', '--retention']) {
+		for (const owned of [
+			'--processor',
+			'--deployments',
+			'--node-url',
+			'--rps',
+			'--store',
+			'--db',
+			'--retention',
+			// the artifact it emits carries a stored stream, and that stream is keyed on
+			// this name (ADR-0052)
+			'--indexer',
+		]) {
 			expect(help).toMatch(owned);
 		}
-		for (const notOwned of ['--port', '--host', '--indexer', '--ingest-endpoint', '--ingest-token']) {
+		for (const notOwned of ['--port', '--host', '--ingest-endpoint', '--ingest-token']) {
 			expect(help).not.toMatch(notOwned);
 		}
 	});

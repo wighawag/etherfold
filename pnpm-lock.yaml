@@ -188,6 +188,9 @@ importers:
       '@etherfold/processor-entities':
         specifier: workspace:*
         version: link:../processor-entities
+      '@etherfold/server':
+        specifier: workspace:*
+        version: link:../server
       '@etherfold/state-store-sqlite':
         specifier: workspace:*
         version: link:../state-store-sqlite
@@ -216,9 +219,6 @@ importers:
         specifier: ^0.0.7
         version: 0.0.7
     devDependencies:
-      '@etherfold/server':
-        specifier: workspace:*
-        version: link:../server
       '@etherfold/state-store':
         specifier: workspace:*
         version: link:../state-store

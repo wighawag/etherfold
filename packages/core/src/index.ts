@@ -14,6 +14,16 @@ export * from './streamBuilder.js';
  * `ReorgCause` means in the first place.
  */
 export * from './reorgCounters.js';
+/**
+ * THE STORED EMISSION STREAM's write PORT: where a fold's emissions are kept.
+ *
+ * Exported from here for the same reason the reorg keys are, and with one
+ * difference that is the point of it (ADR-0052): a stored stream is a fact about
+ * the FOLD, so the port hangs off the receiver every shape passes through, but
+ * unlike a count it is written BEFORE the state advances and a failure REFUSES
+ * the batch -- because a lost count is a number and a lost emission is a hole.
+ */
+export * from './emissionStream.js';
 export * from './logFetcher.js';
 export * from './ingestClient.js';
 export * from './directIngestion.js';

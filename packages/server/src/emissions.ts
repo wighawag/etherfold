@@ -1,4 +1,4 @@
-import type {EmittedLog} from '@etherfold/core';
+import type {EmissionAppender, EmittedLog} from '@etherfold/core';
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 
 // ---------------------------------------------------------------------------------------------------
@@ -10,26 +10,30 @@ import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 // derivation, while the canonical view is cheaply derived from it and not the
 // reverse. No retraction information is ever destroyed here.
 //
-// ## Why the WRITE is on the route rather than inside the fold
+// ## WHO calls this, and when (ADR-0052)
 //
-// ADR-0050 moved the reorg COUNT the other way, into `StreamBuilder.receive`,
-// on the ground that a concluded reorg is a fact about the fold and not about
-// the transport. The emission stream is a fact about the fold too, and it is
-// still written from here, for a reason that is about the KEY rather than about
-// the fact: half of it is the INDEXER NAME, and the route segment is the only
-// place that value exists. `IndexerRegistryEntry` deliberately does not carry a
-// name ("a second copy an entry could disagree with is a discriminator a write
-// path might key on wrongly") and `--indexer` is refused on `run` and `build`
-// altogether, so there is no fold-side value to key on: a receiver moved here
-// would have to be told its own name, which is the duplication the registry
-// refuses. Where the name lives is where the write goes.
+// The fold does, through the `EmissionAppender` port on `StreamBuilder`, which
+// `emissionAppenderFor` below binds to a database and a NAME. It used to be the
+// HTTP ingest route, which made the stored stream a fact about the TRANSPORT in
+// exactly the way ADR-0050 found the reorg count to be: a combined `etherfold
+// run` folds through `createDirectIngestion`, reaches no route, and produced a
+// database whose emission table was EMPTY -- on the deployment shape the
+// milestone calls the default, and on the artifact `build` exists to emit.
 //
-// The visible consequence, recorded rather than hidden: a COMBINED `etherfold
-// run` folds through `createDirectIngestion`, reaches no route, and therefore
-// stores no emission stream. That is not this module declining to serve it --
-// that shape has no indexer name to store one under. When it gets one, the
-// receiver can be handed a writer exactly as it is handed a `ReorgRecorder`, and
-// this becomes the caller of that path.
+// The objection that kept it here was the KEY: half of it is the INDEXER NAME,
+// and the route segment was the only place that value existed, since `--indexer`
+// was refused on `run` and `build` outright. That is what changed. The name is
+// UNIVERSAL rather than a wire concept (ADR-0036), so a combined process now
+// resolves one too (optional, with a default -- it routes no batch, so ADR-0036's
+// never-defaulted rule, which protects the WIRE, does not reach it), and the
+// value is closed over by the HOST that supplies the appender. Nothing is
+// duplicated: `IndexerRegistryEntry` still carries no name, because the closure
+// is not a second copy an entry could disagree with -- it IS the host's copy.
+//
+// **This write is not best-effort, and that is the one way it differs from the
+// reorg counter.** See `EmissionAppender` in `@etherfold/core`: it runs BEFORE
+// the fold and its failure refuses the batch, because a lost count is a number
+// and a lost emission is a HOLE.
 // ---------------------------------------------------------------------------------------------------
 
 /**
@@ -45,7 +49,13 @@ export const EMISSION_STREAM_TABLE = '_emissions';
 
 /** One append: the two discriminators every row carries, and the emissions to write under them. */
 export type EmissionAppend = {
-	/** The NAMED INDEXER, which is the route segment a batch was posted to. */
+	/**
+	 * The NAMED INDEXER (ADR-0036): the multi-tenancy unit these rows belong to.
+	 *
+	 * It is the HOST's value, never the fold's -- the route segment a batch was
+	 * posted to on a split deployment, and the name the operator gave a combined one
+	 * (`--indexer`, defaulted there and only there).
+	 */
 	indexer: string;
 	/**
 	 * WHICH stream, as `streamDigestOf` renders it (`LogIngestion.streamDigest`).
@@ -117,6 +127,24 @@ export async function appendEmissions(db: RemoteSQL, append: EmissionAppend): Pr
 	}
 
 	await db.batch(statements);
+}
+
+/**
+ * The APPENDER a receiver is built with, bound to one database and one NAME.
+ *
+ * This is the shape the write travels in now: a host that owns a store closes
+ * over its handle and the named indexer it holds, and hands the result to the
+ * `StreamBuilder` it builds (ADR-0052). The fold supplies the other half of the
+ * key -- WHICH stream -- because that is a fact about the receiver rather than
+ * about the deployment, and closing over it here would mean reading it off a
+ * receiver that does not exist yet.
+ *
+ * One function, so that the shapes which fold (a combined process, a receiver
+ * behind an HTTP route, a queue consumer) cannot bind three different things:
+ * whatever database a host opened is what its fold is stored into.
+ */
+export function emissionAppenderFor(db: RemoteSQL, indexer: string): EmissionAppender {
+	return ({stream, emissions}) => appendEmissions(db, {indexer, stream, emissions});
 }
 
 /**

@@ -12,6 +12,7 @@ import {
 	wireContextOf,
 	type ReorgDetection,
 } from './internal/engine/utils.js';
+import type {EmissionAppender} from './emissionStream.js';
 import type {GenerationId} from './generation/registry.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {streamDigestOf} from './stream/identity.js';
@@ -46,11 +47,15 @@ export type IngestionOutcome = {
 	 * was taken back, retractions carrying their ORIGINAL block.
 	 *
 	 * Reported for the same reason `reorg` is, and with the same discipline: a host
-	 * that STORES the stream (ADR-0006) must not re-derive it, because a second
-	 * derivation is a second answer, and the one thing this receiver is
-	 * authoritative about is what the fold concluded. The counts above are this
-	 * list partitioned on `removed`, kept because a caller that only reports
-	 * progress should not have to walk it.
+	 * that reads this must not re-derive it, because a second derivation is a
+	 * second answer, and the one thing this receiver is authoritative about is what
+	 * the fold concluded. The counts above are this list partitioned on `removed`,
+	 * kept because a caller that only reports progress should not have to walk it.
+	 *
+	 * It is REPORTED and no longer the only way a host can store the stream: the
+	 * append is a port on this receiver (`EmissionAppender`, ADR-0052), taken once
+	 * per batch and before the fold, so a caller that stored this list itself would
+	 * store the shape that already went to disk a second time.
 	 *
 	 * Untyped in the ABI (`EmittedLog`), because a host that stores logs is not a
 	 * host that decodes them.
@@ -126,10 +131,10 @@ export type LogIngestion = {
  * What a receiver is built with: the stream configuration half of the wire
  * identity, plus the one collaborator a receiver has that is not the processor.
  *
- * `stream` is HASHED into `context` and `recordReorg` deliberately is not: where
- * a count is written down is a deployment's business, and a receiver that hashed
- * it would refuse every batch from a sender configured identically but wired to
- * a different database.
+ * `stream` is HASHED into `context` and the two PORTS deliberately are not:
+ * where a count and a stream are written down is a deployment's business, and a
+ * receiver that hashed either would refuse every batch from a sender configured
+ * identically but wired to a different database.
  */
 export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<ABI>, 'stream'> & {
 	/**
@@ -138,6 +143,16 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
 	 * counted and nothing else changes.
 	 */
 	recordReorg?: ReorgRecorder;
+	/**
+	 * Where the emission stream is STORED, supplied by whoever owns the store
+	 * (ADR-0052), closed over the NAMED INDEXER that host holds.
+	 *
+	 * The SIBLING of `recordReorg` and not its twin: this one runs BEFORE the fold
+	 * and its failure REFUSES the batch, because a lost count is a number and a
+	 * lost emission is a hole. Absent on a host that stores no stream, and then
+	 * nothing is stored and nothing else changes.
+	 */
+	appendEmissions?: EmissionAppender;
 };
 
 /**
@@ -181,15 +196,20 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
  * range is possible, and the processor already applies block by block
  * atomically.
  *
- * It also does not STORE the emission stream (ADR-0006). It REPORTS one
- * (`IngestionOutcome.emissions`) and says which stream it belongs to
- * (`streamDigest`); a HOST writes it down, and today that is
- * `@etherfold/server`'s ingest route. Deliberately not the shape ADR-0050 gave
- * the reorg count, which is injected and written from in here: the difference is
- * the KEY rather than the fact, since half of that table's key is the INDEXER
- * NAME and a route segment is the only place that value exists -- a receiver
- * told its own name would be exactly the duplicate discriminator
- * `IndexerRegistryEntry` refuses to carry.
+ * ## The two things it hands OUT, and the one it must not lose
+ *
+ * It knows no database, so both durable facts a fold concludes leave through a
+ * PORT the store's owner supplies: the reorg COUNT (`recordReorg`, ADR-0050) and
+ * the emission STREAM (`appendEmissions`, ADR-0052). Neither is a fact about the
+ * transport, so neither may live on an entrance: a combined process folds
+ * through `createDirectIngestion` and reaches no route, and putting either write
+ * at both entrances would double it on the shape that both concludes and
+ * receives.
+ *
+ * They are ORDERED DIFFERENTLY on purpose, and that is the only asymmetry
+ * between them. The count is taken AFTER the batch was applied and its failure
+ * is swallowed; the stream is written BEFORE, and its failure refuses the batch.
+ * See `noteReorg` and `receive`.
  */
 export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> implements LogIngestion {
 	/** The earliest block this source can have anything to say about. */
@@ -215,6 +235,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 
 	private readonly finality: number;
 	private readonly recordReorg: ReorgRecorder | undefined;
+	private readonly appendEmissions: EmissionAppender | undefined;
 
 	constructor(
 		private readonly processor: EventProcessor<ABI, ProcessResultType>,
@@ -222,6 +243,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 		config: StreamBuilderOptions<ABI> = {},
 	) {
 		this.recordReorg = config.recordReorg;
+		this.appendEmissions = config.appendEmissions;
 		// The defaults MUST match `IndexerGeneration`'s and the sending `LogFetcher`'s,
 		// because the hash of the resolved config is half the wire identity: a
 		// receiver that defaulted `finality` differently would refuse every batch a
@@ -278,6 +300,22 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 			finality: this.finality,
 		});
 
+		// THE STREAM GOES DOWN FIRST, AND A BATCH THAT COULD NOT BE STORED IS NOT
+		// FOLDED. Not the shape the count below has, and deliberately so: a failed
+		// count loses a number, while a state that advanced past events the stream
+		// never received is a HOLE -- invisible to the gap check, silent, permanent and
+		// self-consistent, because on the next state discard the stream replays as
+		// though it were whole (`CONTEXT.md`, "hole" versus "gap"; ADR-0038). So there
+		// is no try/catch here: the failure propagates, the processor sees nothing, the
+		// cursor does not move, and the next cycle re-derives exactly this delta.
+		//
+		// What this ordering costs, accepted rather than hidden: if the APPEND lands
+		// and the FOLD then fails, the stream is one batch AHEAD of the state and the
+		// re-derived delta is appended again. The stream may be ahead of the state or
+		// level with it, never behind (ADR-0038), so that is the survivable side of the
+		// trade and a hole is not.
+		await this.storeEmissions(eventStream);
+
 		await this.processor.process(eventStream, newLastSync);
 
 		if (reorg) {
@@ -305,11 +343,31 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	// -- internals -----------------------------------------------------------
 
 	/**
+	 * Hand this batch's emissions to whoever stores the stream, and let a refusal
+	 * through.
+	 *
+	 * The one write in this class that is NOT best-effort. It is called before
+	 * `processor.process` and it catches nothing, so a store that cannot take the
+	 * batch refuses the batch: on the wire that is a `500` and the sender's
+	 * ordinary `409` recovery is unaffected (nothing was applied, so the cursor it
+	 * is corrected to is the one it already had), and in a combined process the
+	 * fetcher's cycle fails and is retried, re-deriving the same delta.
+	 *
+	 * An EMPTY batch writes nothing: a cycle that emitted no logs still advances the
+	 * cursor, and there is nothing about it for a stream to hold.
+	 */
+	private async storeEmissions(emissions: EmittedLog[]): Promise<void> {
+		if (!this.appendEmissions || emissions.length === 0) return;
+		await this.appendEmissions({stream: this.streamDigest, emissions});
+	}
+
+	/**
 	 * Say what was reverted, and count it if this deployment gave us somewhere to.
 	 *
-	 * AFTER the batch was applied, and best-effort by design: the state and the
-	 * cursor already moved atomically inside the processor, so a failure here loses
-	 * a count rather than a block. An operational counter that could roll back the
+	 * AFTER the batch was applied, and best-effort by design -- the opposite of
+	 * `storeEmissions` above, on purpose: the state and the cursor already moved
+	 * atomically inside the processor, so a failure here loses a count rather than
+	 * a block. An operational counter that could roll back the
 	 * state it describes -- or fail the request that earned it, telling a sender to
 	 * re-send a batch which was in fact applied -- would be a far worse trade. That
 	 * guarantee used to belong to the ingest route (`recordReorgSafely`); it is

@@ -13,7 +13,7 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {expect} from 'vitest';
-import {createServer, indexerRegistry} from '../../src/index.js';
+import {createServer, emissionAppenderFor, indexerRegistry} from '../../src/index.js';
 
 // ---------------------------------------------------------------------------
 // THE FIXTURE BOTH VIEWS ARE ASSERTED THROUGH
@@ -22,9 +22,15 @@ import {createServer, indexerRegistry} from '../../src/index.js';
 // because ADR-0006's two views read ONE table and an assertion about either is
 // only worth something if it was reached the way a batch actually arrives:
 // through `/{indexer}/ingest`, so the stream-builder derives its own reorgs and
-// the route writes the rows. A second copy of this harness in the second view's
-// file would be a second definition of what "a reorg" means in a test, and the
-// two would drift.
+// stores what it folded. A second copy of this harness in the second view's file
+// would be a second definition of what "a reorg" means in a test, and the two
+// would drift.
+//
+// The APPENDER is the host's, exactly as it is in a deployment: the route writes
+// nothing any more, and a fold is stored by whoever owns the store (ADR-0052).
+// So this harness supplies one per named indexer, closed over the NAME it
+// registered that indexer under -- which is the same value the route segment
+// carries, and the reason the rows below are unchanged by the move.
 // ---------------------------------------------------------------------------
 
 export const abi = [
@@ -163,7 +169,10 @@ export async function deploy(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessorAt(options.processorVersion ?? PROCESSOR_VERSION),
 		);
-		const builder = new StreamBuilder<TestABI, unknown>(processor, source, {stream: STREAM_CONFIG});
+		const builder = new StreamBuilder<TestABI, unknown>(processor, source, {
+			stream: STREAM_CONFIG,
+			appendEmissions: emissionAppenderFor(database, name),
+		});
 		hosted[name] = {builder};
 		ingestions[name] = builder;
 	}

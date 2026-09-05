@@ -4,7 +4,7 @@ import {IndexerGeneration} from '../src/indexer.js';
 import {InvalidBatchError, UnexpectedFromBlockError, WireContextMismatchError} from '../src/errors.js';
 import {StreamBuilder, parseWireBatch, serializeWireBatch} from '../src/streamBuilder.js';
 import type {ReorgDetection} from '../src/index.js';
-import type {EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
+import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
 
 // ---------------------------------------------------------------------------
 // THE RECEIVING SIDE OF THE WIRE (ADR-0004)
@@ -447,6 +447,224 @@ describe('reorgs are derived here, from raw logs alone', () => {
 		const identity = (events: LogEvent<TestABI>[]) =>
 			events.map((e) => `${e.removed ? '-' : '+'}${e.blockNumber}:${e.blockHash}:${e.transactionHash}`);
 		expect(identity(viaWire.flat())).toEqual(identity(viaEngine.flat()));
+	});
+});
+
+// ---------------------------------------------------------------------------
+// THE STREAM IS WRITTEN HERE, BEFORE THE STATE ADVANCES (ADR-0052)
+// ---------------------------------------------------------------------------
+// The stored EMISSION STREAM (ADR-0006) used to be written by the HTTP ingest
+// route, which made it a fact about the TRANSPORT in exactly the way the reorg
+// count below was: a combined process folds through `createDirectIngestion`,
+// reaches no route, and produced a database whose `_emissions` table was EMPTY.
+// So the append is a port on this receiver, supplied by whoever owns the store.
+//
+// It is the SIBLING of the recorder below and NOT its twin, and the difference
+// is the whole of what is asserted here. A count is best-effort: it is taken
+// after the fold and a failure is caught, because losing a number is better than
+// rolling back the state it describes. An EMISSION is not: a state that advanced
+// past events the stream never received is a HOLE -- silent, permanent,
+// self-consistent and invisible to the gap check, because the rows that would
+// prove it are the ones that never arrived (`CONTEXT.md`, "hole" versus "gap";
+// ADR-0038). So the append comes FIRST and a batch whose append failed is NOT
+// processed.
+// ---------------------------------------------------------------------------
+
+describe('the stream is written before the state advances', () => {
+	/** An appender that records what it was handed, in the order the fold called it. */
+	function journal() {
+		const order: string[] = [];
+		const appended: {stream: string; emissions: readonly EmittedLog[]}[] = [];
+		return {
+			order,
+			appended,
+			append: async (write: {stream: string; emissions: readonly EmittedLog[]}) => {
+				order.push(`append:${write.emissions.length}`);
+				appended.push(write);
+			},
+		};
+	}
+
+	/**
+	 * A processor that says when it was called, so the ORDER of the two writes is
+	 * asserted rather than assumed.
+	 */
+	function watchedProcessor(order: string[]) {
+		const target = recordingProcessor();
+		const process = target.processor.process;
+		target.processor.process = async (eventStream, lastSync) => {
+			order.push(`process:${eventStream.length}`);
+			return process(eventStream, lastSync);
+		};
+		return target;
+	}
+
+	it('appends what it is about to fold, BEFORE it folds it, under its own stream digest', async () => {
+		const writes = journal();
+		const target = watchedProcessor(writes.order);
+		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: writes.append,
+		});
+
+		const result = await builder.receive(
+			batch(builder, {
+				fromBlock: 100,
+				toBlock: 105,
+				latestBlock: 105,
+				logs: [transfer(101, '0xa101', 1n), transfer(104, '0xa104', 2n)],
+			}),
+		);
+
+		// the ORDER is the contract: the stream is on disk before the state moves past
+		// the events it holds, which is what makes a lost append a refusal rather than a
+		// hole
+		expect(writes.order).toEqual(['append:2', 'process:2']);
+		// the SAME emissions the outcome reports, so a host cannot store a second
+		// opinion of what the fold concluded
+		expect(writes.appended).toEqual([{stream: builder.streamDigest, emissions: result.emissions}]);
+	});
+
+	it('appends the RETRACTIONS with the applications, in one write per batch', async () => {
+		const writes = journal();
+		const target = recordingProcessor();
+		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: writes.append,
+		});
+		await builder.receive(
+			batch(builder, {fromBlock: 100, toBlock: 105, latestBlock: 105, logs: [transfer(104, '0xa104', 2n)]}),
+		);
+
+		await builder.receive(
+			batch(builder, {fromBlock: 102, toBlock: 106, latestBlock: 106, logs: [transfer(104, '0xb104', 3n)]}),
+		);
+
+		// the reorg batch: the retraction of the dead block AND the replacement, handed
+		// over together, because a store that saw only one of them would be a stream
+		// that disagrees with the fold
+		expect(
+			writes.appended.map((write) => write.emissions.map((e) => `${e.removed ? '-' : '+'}${e.blockHash}`)),
+		).toEqual([['+0xa104'], ['-0xa104', '+0xb104']]);
+	});
+
+	it('does NOT process a batch whose append failed, and leaves the cursor where it was', async () => {
+		// THE POINT. A count that cannot be written is a logged miscount; a stream that
+		// cannot be written is a HOLE the next rebuild folds around silently. So this
+		// one raises, and it raises BEFORE the processor has seen anything.
+		const order: string[] = [];
+		const target = watchedProcessor(order);
+		let refuse = true;
+		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: async () => {
+				if (refuse) throw new Error('no such table: _emissions');
+				order.push('append');
+			},
+		});
+
+		const refused = batch(builder, {
+			fromBlock: 100,
+			toBlock: 105,
+			latestBlock: 105,
+			logs: [transfer(101, '0xa101', 1n), transfer(104, '0xa104', 2n)],
+		});
+		await expect(builder.receive(refused)).rejects.toThrow(/_emissions/);
+
+		// nothing was folded and nothing was persisted: the state did not advance past
+		// events the stream never received
+		expect(order).toEqual([]);
+		expect(target.flat()).toEqual([]);
+		expect(target.lastSync).toBeUndefined();
+		// ...so the receiver still asks for the same range, and this is what "no hole"
+		// means concretely: the state and the stream agree about how far they got,
+		// which here is nowhere
+		expect(await builder.expectedFromBlock()).toBe(START_BLOCK);
+	});
+
+	it('re-derives the SAME delta on the next cycle, and lands it once the store accepts it', async () => {
+		const order: string[] = [];
+		const target = watchedProcessor(order);
+		const appended: readonly EmittedLog[][] = [];
+		let refuse = true;
+		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: async ({emissions}) => {
+				if (refuse) throw new Error('the database went away');
+				(appended as EmittedLog[][]).push([...emissions]);
+			},
+		});
+
+		const cycle = () =>
+			builder.receive(
+				batch(builder, {
+					fromBlock: 100,
+					toBlock: 105,
+					latestBlock: 105,
+					logs: [transfer(101, '0xa101', 1n), transfer(104, '0xa104', 2n)],
+				}),
+			);
+
+		await expect(cycle()).rejects.toThrow(/went away/);
+		refuse = false;
+		const result = await cycle();
+
+		// the same two events, applied exactly once, and stored exactly once: the
+		// refused cycle left nothing behind for this one to skip or to duplicate
+		expect(result.applied).toBe(2);
+		expect(target.flat()).toHaveLength(2);
+		expect(appended.map((emissions) => emissions.length)).toEqual([2]);
+		expect(target.lastSync?.lastToBlock).toBe(105);
+	});
+
+	it('appends nothing for a batch that emitted nothing, so an empty cycle costs no write', async () => {
+		const writes = journal();
+		const target = recordingProcessor();
+		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: writes.append,
+		});
+
+		await builder.receive(batch(builder, {fromBlock: 100, toBlock: 105, latestBlock: 105, logs: []}));
+
+		// the fold still advanced (the cursor moves on an empty range), and the stream
+		// has nothing to say about it
+		expect(writes.appended).toEqual([]);
+		expect(target.lastSync?.lastToBlock).toBe(105);
+	});
+
+	it('folds exactly the same with no appender at all, which is a host that stores no stream', async () => {
+		const writes = journal();
+		const storing = recordingProcessor();
+		const withAppender = new StreamBuilder<TestABI, void>(storing.processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: writes.append,
+		});
+		const blind = recordingProcessor();
+		const withoutAppender = builderOn(blind.processor);
+
+		for (const round of [
+			{fromBlock: 100, toBlock: 105, latestBlock: 105, logs: [transfer(104, '0xa104', 2n)]},
+			{fromBlock: 102, toBlock: 106, latestBlock: 106, logs: [transfer(104, '0xb104', 3n)]},
+		]) {
+			await withAppender.receive(batch(withAppender, round));
+			await withoutAppender.receive(batch(withoutAppender, round));
+		}
+
+		const identity = (events: LogEvent<TestABI>[]) =>
+			events.map((e) => `${e.removed ? '-' : '+'}${e.blockNumber}:${e.blockHash}`);
+		expect(identity(blind.flat())).toEqual(identity(storing.flat()));
+		// ...and only one of them could be replayed afterwards
+		expect(writes.appended).toHaveLength(2);
+	});
+
+	it('hashes no appender into the wire identity: where a stream is stored is not what a sender asserts', () => {
+		const plain = builderOn(recordingProcessor().processor);
+		const storing = new StreamBuilder<TestABI, void>(recordingProcessor().processor, SOURCE, {
+			stream: {finality: FINALITY},
+			appendEmissions: async () => undefined,
+		});
+		expect(storing.context).toEqual(plain.context);
 	});
 });
 

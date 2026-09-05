@@ -13,15 +13,21 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {beforeEach, describe, expect, it} from 'vitest';
-import {createServer, indexerRegistry, applySchema} from '../src/index.js';
+import {createServer, emissionAppenderFor, indexerRegistry, applySchema} from '../src/index.js';
 import {schemaStatements} from '../src/schema.js';
 import {clearLastError} from '../src/api/status.js';
 
 // ---------------------------------------------------------------------------
 // THE STORED EMISSION STREAM (ADR-0006)
 // ---------------------------------------------------------------------------
-// The append-only log the ingest route writes: every emission the fold produced,
-// retractions INCLUDED, superseded rows FLAGGED rather than deleted.
+// The append-only log the FOLD writes: every emission it produced, retractions
+// INCLUDED, superseded rows FLAGGED rather than deleted.
+//
+// Every row here arrives through a real `/{indexer}/ingest` push, exactly as
+// before, and every assertion about which rows land is UNCHANGED by the move of
+// the write out of the route (ADR-0052) -- which is the point: the split shape's
+// stored stream is what it always was, and the appender the harness supplies is
+// bound to the same name the route segment carries.
 //
 // What is under test here is the part a schema cannot be sloppy about, which is
 // the KEY. Every row carries two discriminators, both structurally part of every
@@ -181,7 +187,13 @@ async function deploy(sources: Record<string, IndexingSource<TestABI>>): Promise
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessor,
 		);
-		const builder = new StreamBuilder<TestABI, unknown>(processor, source, {stream: STREAM_CONFIG});
+		// the APPENDER is the host's, closed over the name this indexer is registered
+		// under and bound to the shared database: the route is a caller of the fold and
+		// writes nothing itself (ADR-0052)
+		const builder = new StreamBuilder<TestABI, unknown>(processor, source, {
+			stream: STREAM_CONFIG,
+			appendEmissions: emissionAppenderFor(db, name),
+		});
 		hosted[name] = {builder};
 		ingestions[name] = builder;
 	}
@@ -405,7 +417,10 @@ describe('the stream column is the WIDE digest, not the wire identity', () => {
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessor,
 		);
-		const builder = new StreamBuilder<TestABI, unknown>(processor, DECODE_ONLY_SOURCE, {stream: STREAM_CONFIG});
+		const builder = new StreamBuilder<TestABI, unknown>(processor, DECODE_ONLY_SOURCE, {
+			stream: STREAM_CONFIG,
+			appendEmissions: emissionAppenderFor(before.db, 'alpha'),
+		});
 		const after: Deployment = {
 			app: createServer<TestEnv>({
 				getDB: () => before.db,

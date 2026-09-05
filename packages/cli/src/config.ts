@@ -84,6 +84,44 @@ export type InputSpec = {
 };
 
 /**
+ * The NAME a COMBINED process folds under when the operator named none, and the
+ * SECOND default this file has ever had -- ADR-0048 allowed exactly one, the
+ * port, and this is the amendment ADR-0052 records.
+ *
+ * ## What the name is for here, which is not routing
+ *
+ * Every row of the stored emission stream is keyed on `(indexer, stream, seq)`,
+ * and `indexer` is `NOT NULL`: a fold that stores what it folded needs a name
+ * whether or not anything addresses it by one. A combined `run` has no wire, no
+ * route and no second tenant to be confused with -- it is one process, one
+ * database, one answer set -- so the value is a LABEL on rows it alone writes and
+ * alone reads back.
+ *
+ * ## Why defaulting it does not re-open ADR-0036's never-defaulted rule
+ *
+ * That rule protects the WIRE: a name a host was not built with must be a
+ * ROUTING error (`404`) and never a batch that landed somewhere plausible, so
+ * `fetch` and `index` require it and default nothing. Nothing here routes, so
+ * the hazard the rule exists for cannot occur. What defaulting it here would
+ * cost, weighed against ADR-0048's test ("what does it look like when this is
+ * wrong and nobody notices?"): a run under an unintended name stores its
+ * emissions under that name in its OWN database, and reads them back under the
+ * same one, so nothing is mis-answered and nothing is lost -- the visible
+ * consequence is a feed served under a name an operator did not expect, which is
+ * a label they can correct with `--indexer` and re-index or rename. Against
+ * that, REQUIRING it would break `etherfold run`, the readme's headline
+ * one-liner, for a discriminator that only starts to matter once two answer sets
+ * share a database.
+ *
+ * A CONSTANT and deliberately not derived from the database file's name: rows
+ * already stored must keep being found after a file is copied or moved, and a
+ * name that moved with the path would silently fork the stored stream in two.
+ * `run` and `build` take the same one, so an artifact one built is one the other
+ * continues.
+ */
+export const DEFAULT_INDEXER_NAME = 'default';
+
+/**
  * The name of every input, once.
  *
  * Six inputs have an environment variable and six do not, and the line between
@@ -132,9 +170,11 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 		flag: '--indexer <name>',
 		variable: 'INDEXER_NAME',
 		describe:
-			'the NAMED INDEXER this half of the wire addresses: one indexed answer set over one chain, and ' +
-			'the first segment of every ingest route (/{indexer}/ingest). Never defaulted: a receiving host ' +
-			'registers the names it was built with',
+			'the NAMED INDEXER this process holds: one indexed answer set over one chain, and the ' +
+			'discriminator every row of the stored emission stream carries. On the WIRE it is also the first ' +
+			'segment of every ingest route (/{indexer}/ingest), where it is required and never defaulted, ' +
+			`because a receiving host registers the names it was built with. A combined run routes no batch ` +
+			`by name, so there it is optional and defaults to '${DEFAULT_INDEXER_NAME}'`,
 	},
 	ingestEndpoint: {
 		flag: '--ingest-endpoint <url>',
@@ -153,22 +193,25 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 /**
  * The command table, as code.
  *
- * | command | processor | source | node URL | destination | serving | ingest wire |
- * | --- | --- | --- | --- | --- | --- | --- |
- * | `run` | required | required | required | store + database, required | port and host | none |
- * | `build` | required | required | required | store + database, required | none | none |
- * | `fetch` | NOT ACCEPTED | required | required | NOT ACCEPTED | none | indexer + endpoint + token, required |
- * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | indexer + token (it receives) |
- * | `serve` | NOT ACCEPTED | none | NOT ACCEPTED | database, required | port and host | none |
+ * | command | processor | source | node URL | destination | serving | indexer name | ingest wire |
+ * | --- | --- | --- | --- | --- | --- | --- | --- |
+ * | `run` | required | required | required | store + database, required | port and host | optional, defaults | none |
+ * | `build` | required | required | required | store + database, required | none | optional, defaults | none |
+ * | `fetch` | NOT ACCEPTED | required | required | NOT ACCEPTED | none | REQUIRED | endpoint + token, required |
+ * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
+ * | `serve` | NOT ACCEPTED | none | NOT ACCEPTED | database, required | port and host | NOT ACCEPTED | none |
  *
- * The INDEXER NAME belongs to the wire column and to the two commands in it,
- * which is what makes a split deployment's two halves agree on one route:
- * `fetch` addresses `/{indexer}/ingest` and `index` registers exactly that name.
- * The three commands with no wire (`run`, `build`, `serve`) refuse it rather
- * than accepting it: none of them routes a batch by name, and an
- * accepted-and-ignored flag is a deployment believing something untrue. What
- * they hold instead is one indexer per process, unnamed, which is what they have
- * always held.
+ * The INDEXER NAME has a column of its own, because it is NOT a wire input
+ * (ADR-0036: the name is universal, and one discriminator has two sources for
+ * its value). On the wire it is what makes a split deployment's two halves agree
+ * on one route -- `fetch` addresses `/{indexer}/ingest` and `index` registers
+ * exactly that name -- and it is REQUIRED and never defaulted on both halves,
+ * because a name a host was not built with must be a routing error rather than a
+ * batch that landed somewhere plausible. Off the wire it is what every stored
+ * EMISSION row is keyed on, so a FOLDING command needs one whether or not it
+ * routes anything: `run` and `build` take it optionally and default it
+ * (ADR-0052). `serve` still refuses it outright, because a read tier folds
+ * nothing and registers nothing, and would have nothing to do with the value.
  *
  * Two of those rows are asymmetries rather than accidents, and both are load-bearing:
  *
@@ -198,7 +241,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		port: 'optional',
 		host: 'optional',
 		autoSetup: 'optional',
-		indexer: 'refused',
+		indexer: 'optional',
 		ingestEndpoint: 'refused',
 		ingestToken: 'refused',
 	},
@@ -213,7 +256,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		port: 'refused',
 		host: 'refused',
 		autoSetup: 'refused',
-		indexer: 'refused',
+		indexer: 'optional',
 		ingestEndpoint: 'refused',
 		ingestToken: 'refused',
 	},
@@ -323,11 +366,6 @@ const NO_WIRE_SERVE =
 	'a read tier receives no pushes: its ingestion routes are mounted but answer 501, because holding a ' +
 	'processor is a CAPABILITY it does not have. The receiver is `index`.';
 
-const NO_NAME_COMBINED =
-	'this command runs both halves in ONE process and routes no batch by name, so there is no indexer NAME ' +
-	'to address: the name is a ROUTE SEGMENT on the ingest wire, and this process has no wire. It is ' +
-	'`fetch` (which pushes to /{indexer}/ingest) and `index` (which registers that name) that own it.';
-
 const NO_NAME_SERVE =
 	'a read tier receives no pushes, so it registers no named indexer and routes nothing by name: it answers ' +
 	'over the database something else wrote. The name belongs to the wire, whose halves are `fetch` and `index`.';
@@ -337,12 +375,11 @@ const INDEX_RECEIVES =
 	'listens on is --port / --host (PORT).';
 
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
-	run: {indexer: NO_NAME_COMBINED, ingestEndpoint: NO_WIRE_COMBINED, ingestToken: NO_WIRE_COMBINED},
+	run: {ingestEndpoint: NO_WIRE_COMBINED, ingestToken: NO_WIRE_COMBINED},
 	build: {
 		port: NOT_SERVING_BUILD,
 		host: NOT_SERVING_BUILD,
 		autoSetup: ALWAYS_MIGRATES_BUILD,
-		indexer: NO_NAME_COMBINED,
 		ingestEndpoint: NO_WIRE_COMBINED,
 		ingestToken: NO_WIRE_COMBINED,
 	},
@@ -561,7 +598,7 @@ export function resolveDatabaseTarget(command: CommandName, options: Options, en
 }
 
 /**
- * The one input that MAY fall back to a default, and the reason it may.
+ * The port every serving command falls back to, and the reason it may.
  *
  * A port is not a claim about the deployment: a wrong one fails visibly and at
  * once, nothing is silently written to the wrong place, and every HTTP tool in
@@ -569,6 +606,10 @@ export function resolveDatabaseTarget(command: CommandName, options: Options, en
  * instead, because getting it wrong is SILENT -- a defaulted database answers,
  * healthily, about nothing. ADR-0048, which also records the asymmetry that
  * settles it: adding a default later is free, and removing one is breaking.
+ *
+ * It was the ONLY default here for as long as no combined shape needed a name to
+ * store its stream under. `DEFAULT_INDEXER_NAME` is the second, argued the same
+ * way and only for the commands that route nothing (ADR-0052).
  */
 export const DEFAULT_PORT = 2000;
 
@@ -667,6 +708,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					...(rps === undefined ? {} : {rps}),
 					destination: resolveStoreTarget('run', options, env),
 					serving: resolveServing(options, env),
+					// the name its stored emissions are keyed on, not a route it answers
+					// under: this process registers no named indexer at all
+					indexer: resolveIndexerName(options, env),
 				};
 			}
 			case 'build': {
@@ -678,6 +722,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					nodeUrl: requireNodeUrl('build', options, env),
 					...(rps === undefined ? {} : {rps}),
 					destination: resolveStoreTarget('build', options, env),
+					// the ARTIFACT carries the name its stream is stored under, so a `run`
+					// continuing it and a feed served over it find the same rows
+					indexer: resolveIndexerName(options, env),
 				};
 			}
 			case 'fetch': {
@@ -743,6 +790,19 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 	return resolved as ConfigFor<C, ABI>;
 }
 
+/**
+ * The NAMED INDEXER a COMBINED command folds under: what the operator said, or
+ * the default.
+ *
+ * Separate from `requireIndexerName` below rather than a flag on it, because the
+ * two answer different questions and only one of them may default. This one
+ * names ROWS in a database this process owns; that one names a ROUTE two
+ * processes have to agree on.
+ */
+export function resolveIndexerName(options: Options, env: EnvRecord): string {
+	return given('indexer', options, env) ?? DEFAULT_INDEXER_NAME;
+}
+
 function requireProcessor(command: CommandName, options: Options, env: EnvRecord): string {
 	return requireInput(
 		'processor',
@@ -754,13 +814,19 @@ function requireProcessor(command: CommandName, options: Options, env: EnvRecord
 }
 
 /**
- * The NAMED INDEXER this half of the wire addresses.
+ * The NAMED INDEXER this half of the WIRE addresses.
  *
  * Required by both halves and defaulted by neither, which is the whole of
  * ADR-0036 at the command line: an operator supplies the name, a receiving host
  * registers what it was built with, and nothing invents one. Defaulting it (to
  * `default`, or to the database file's name) would make a typo on one half a
  * batch that lands somewhere plausible on the other.
+ *
+ * That is a rule about ROUTING and it does not reach a process that routes
+ * nothing, which is why `run` and `build` resolve the same input through
+ * `resolveIndexerName` and may default it (ADR-0052). The two are separate
+ * functions so that neither can be made to do the other's job by passing a
+ * command name.
  */
 function requireIndexerName(command: CommandName, options: Options, env: EnvRecord): string {
 	return requireInput(
