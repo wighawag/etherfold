@@ -26,9 +26,14 @@ import {describe, expect, it} from 'vitest';
 // shape (`the-old-indexer-shape-is-deleted`), so that spelling came out of the
 // patterns below with it. A guard left on an identifier nothing can resolve any
 // more would stay GREEN and enforce nothing, which is worse than no guard.
-// Deliberately NOT extended to `Indexer`, the generation CONTAINER: whether a
-// CLI holds generations is `the-server-and-cli-hold-generations-too`'s question,
-// and a grep here must not pre-answer it.
+// Deliberately NOT extended to `Indexer`, the generation CONTAINER, and that is
+// now a POSITIVE statement rather than a deferral: the CLI holds generations
+// through `ReceivingIndexer` (`openReceivingIndexer`), the CHAIN-FREE container
+// over the same `StreamBuilder` -- which is exactly why it can, since
+// `IndexerGeneration` opens `load()` with `eth_chainId` and could never be split
+// into the two halves a receiver is one of. Holding generations and constructing
+// the browser's engine are two different questions, and only the second is
+// refused here.
 //
 // A SOURCE-TEXT GUARD IS ONLY WORTH ITS LINES IF IT STILL BITES, so the patterns
 // are named here and asserted against deliberate violations below. A rename that
@@ -76,7 +81,11 @@ describe("the CLI's indexing path", () => {
 
 	it('assembles the two ADR-0003 halves instead', () => {
 		const index = fs.readFileSync(path.join(src, 'index.ts'), 'utf-8');
-		expect(index).toMatch(/new StreamBuilder/);
+		const folding = fs.readFileSync(path.join(src, 'folding.ts'), 'utf-8');
+		// the RECEIVING half, built by the generation container so that a changed
+		// context creates a successor instead of reaching `processor.clear()`: it is a
+		// `StreamBuilder` either way, and the container is what holds several of them
+		expect(folding).toMatch(/openReceivingIndexer/);
 		expect(index).toMatch(/createDirectIngestion/);
 		// the LogFetcher is built by the fetcher host, which also owns the cycle
 		// classification and the backoff this command's one-shot rides on

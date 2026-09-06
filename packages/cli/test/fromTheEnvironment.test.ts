@@ -6,6 +6,7 @@ import {prepareIndexing} from '../src/index.js';
 import {serve} from '../src/serve.js';
 import type {Options} from '../src/types.js';
 import {abi, ALICE, CONTRACT, entityModule, fakeChain, noChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE RESOLVED VALUES REACH THE PIPELINE, AND THE ENVIRONMENT IS A FIRST-CLASS WAY IN
@@ -51,9 +52,10 @@ describe('`build`, configured from the environment', () => {
 
 		// the resolved database is the one the store was built on, not a default
 		expect(opened).toEqual(['file:./from-the-environment.db']);
-		// ...and it really folded, so the environment reached the whole pipeline
-		const {VersionedStateStore} = await import('@etherfold/state-store-sqlite');
-		const store = new VersionedStateStore(db, [{name: 'counter', id: ['name'], fields: {value: 'integer'}}]);
+		// ...and it really folded, so the environment reached the whole pipeline --
+		// read through the canonical pointer, which is how a generation's tables are
+		// named (ADR-0053)
+		const store = await canonicalStoreIn(db, [{name: 'counter', id: ['name'], fields: {value: 'integer'}}]);
 		expect(await store.getCurrent<{value: number}>('counter', {name: 'transfers'})).toMatchObject({value: 1});
 	});
 
@@ -116,7 +118,9 @@ describe('`serve`, configured from the environment', () => {
 			started,
 			startServer: async (options: {db: string; port: number; hostname?: string; autoSetup: boolean}) => {
 				started.push(options);
-				return {url: `http://localhost:${options.port}`, port: options.port};
+				// the HANDLE the adapter opened comes back too, because the read tier resolves
+				// the canonical pointer over it to say which generation answers (ADR-0053)
+				return {url: `http://localhost:${options.port}`, port: options.port, db: oneDatabase()};
 			},
 		};
 	}

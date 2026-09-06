@@ -103,11 +103,12 @@ export {storedEmissionReplaySource} from './streamReader.js';
 export {
 	generationRegistryPortOnSQL,
 	openGenerationRegistryOnSQL,
+	readHeldGenerations,
 	GenerationCommitContentionError,
 	GENERATION_TABLE,
 	GENERATION_POINTER_TABLE,
 } from './generations.js';
-export type {SQLGenerationRegistryOptions} from './generations.js';
+export type {HeldGenerations, SQLGenerationRegistryOptions} from './generations.js';
 /**
  * PAIR-COMPACTION (ADR-0006): the one thing that ever DELETES from that stream,
  * and a call the HOST SCHEDULES rather than something an append does on its way

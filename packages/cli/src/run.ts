@@ -1,11 +1,11 @@
-import type {Abi, EventProcessor, StreamBuilder} from '@etherfold/core';
+import type {Abi, EventProcessor, ReceivingIndexer, StreamBuilder} from '@etherfold/core';
 import type {FetcherHost, RunSummary} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
 import type {StateStore} from '@etherfold/processor-entities';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
-import {readStatusReport} from './cursorReport.js';
+import {foldingStatusReport} from './folding.js';
 import {prepareIndexing, type IndexingDependencies} from './index.js';
 import type {Options} from './types.js';
 
@@ -39,6 +39,18 @@ const logger = logs('etherfold');
 // to an unauthenticated one: the token guard sits on the PATH, ahead of the
 // capability lookup, so the absence of a processor is not something an anonymous
 // caller can probe). The command for receiving pushes is `index`.
+//
+// ## It HOLDS GENERATIONS, and it is the shape that may add one and promote one
+//
+// The fold is a GENERATION in a durable registry over the handle it folds into
+// (`openFolding`, `folding.ts`), exactly as `index`'s is, so what a developer
+// tests locally is what deploys down to which tables the state lands in. What
+// `run` has that `build` has not is TIME: it is a long-running host, so a
+// successor may be added BESIDE the live fold (`RunningIndexer.container`), it is
+// advanced by a bounded rebuild between fetch cycles, and the canonical pointer
+// moves when it catches up. Nothing about the state a reader sees moves while it
+// does: the successor folds into its own table namespace and the pointer moves
+// once, at the end.
 // ---------------------------------------------------------------------------------------------------
 
 /** Starts the HTTP surface. Defaults to the Node platform adapter's `startServer`, imported lazily. */
@@ -68,6 +80,17 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/** The receiving half. Present so a caller can assert WHICH engine folds, rather than trust it. */
 	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	/**
+	 * THE GENERATIONS THIS PROCESS HOLDS: the registry, the canonical pointer, and
+	 * the folds over them.
+	 *
+	 * Exposed because this is the shape that may grow one. A reconfigure reaching a
+	 * long-running host is `container.add(...)`, which registers a SUCCESSOR beside
+	 * the live fold rather than discarding its state, and the pointer moves on its
+	 * own once that successor has caught up. It is the same object `index` holds and
+	 * the same one `/status` is reported from.
+	 */
+	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
 	/** The sending half, plus the policy for reading what a cycle did. */
 	host: FetcherHost<ABI>;
 	/**
@@ -141,18 +164,17 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// No `getIndexer`: this process fetches for itself, so its ingestion is the
 			// in-process direct wire and its HTTP ingestion routes are a capability it
 			// does not have. It registers NO named indexer either, which is why they
-			// answer `501` under every name rather than `404` under all but one.
+			// answer `501` under every name rather than `404` under all but one. That is
+			// unchanged by this process now HOLDING generations: registering the
+			// container here would open the write path to a remote sender, which is the
+			// second writer this command exists without. The operator's affordance over
+			// the pointer (ADR-0057) therefore belongs to `index`, the shape that is fed
+			// over HTTP in the first place.
 			//
-			// ONE fold, reported as the ONE GENERATION this process holds -- which is
-			// the same field a host mid-upgrade fills with two entries, so the shape of
-			// `/status` does not depend on how many a deployment happens to hold.
-			// Driving the container that holds several is
-			// `the-cli-and-the-server-hold-generations-the-same-way`.
-			getCursorReport: () =>
-				readStatusReport({
-					folds: [{generation: prepared.streamBuilder.generation, store: prepared.store}],
-					canonical: prepared.streamBuilder.generation,
-				}),
+			// ONE entry per generation held, which is one until something adds a
+			// successor and two while it catches up: the shape of `/status` does not
+			// depend on how many a deployment happens to hold.
+			getCursorReport: () => foldingStatusReport(prepared.container),
 		});
 
 		const close = async () => {
@@ -179,6 +201,7 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			store: prepared.store,
 			processor: prepared.processor,
 			streamBuilder: prepared.streamBuilder,
+			container: prepared.container,
 			host: prepared.host,
 			stopped,
 			stop: async () => {

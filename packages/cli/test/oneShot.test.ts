@@ -5,6 +5,7 @@ import {describe, expect, it} from 'vitest';
 import {main, prepareIndexing, type IndexingDependencies} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, entityModule, fakeChain, nftProcessor, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE ONE-SHOT: IT STOPS AT THE TIP, IT EXITS ON ITS CODE, AND IT RESUMES
@@ -40,9 +41,9 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
+/** What a produced artifact answers: the canonical generation's tables (ADR-0053). */
 async function transfersIn(db: RemoteSQL): Promise<number | undefined> {
-	const {VersionedStateStore} = await import('@etherfold/state-store-sqlite');
-	const store = new VersionedStateStore(db, nftProcessor.entities);
+	const store = await canonicalStoreIn(db, nftProcessor.entities);
 	return (await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value;
 }
 

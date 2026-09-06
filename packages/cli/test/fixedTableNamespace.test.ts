@@ -4,9 +4,9 @@ import {createClient} from '@libsql/client';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
-import {buildProcessor} from '../src/folding.js';
+import {openFolding} from '../src/folding.js';
 import type {StoreTarget} from '../src/types.js';
-import {abi, nftProcessor} from './utils/chain.js';
+import {abi, nftProcessor, SOURCE} from './utils/chain.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN ENTITY CANNOT BE NAMED AFTER A FIXED TABLE, BECAUSE THEY SHARE ONE DATABASE
@@ -24,6 +24,12 @@ import {abi, nftProcessor} from './utils/chain.js';
 // `_emissions`, beside the store's own `_blocks` and `_cursor`), so the refusal
 // that already existed is the one that fires. Nothing here was told the server's
 // names, and `@etherfold/state-store` still knows nothing about `@etherfold/server`.
+//
+// The store's own tables now live under a GENERATION's table namespace (ADR-0053)
+// and the server's fixed ones deliberately do not, which does NOT weaken the
+// refusal and is why it is still asserted here: the reserved-namespace rule is a
+// fact about the DECLARATION, refused where the store is constructed, so it fires
+// whether or not a prefix would in fact have kept the two apart.
 // ---------------------------------------------------------------------------------------------------
 
 const RETENTION = 'unbounded' as const;
@@ -41,16 +47,18 @@ function declaring(name: string): EntityProcessor<typeof abi, any> {
 	} as unknown as EntityProcessor<typeof abi, any>;
 }
 
-/** The combined shape: one handle, the server's fixed schema on it, a store built over it. */
+/** The combined shape: one handle, the server's fixed schema on it, a generation folding into it. */
 async function foldInto(handle: RemoteSQL, declared: EntityProcessor<typeof abi, any>) {
-	return buildProcessor<typeof abi, unknown>(declared, target(), {
+	await applySchema(handle);
+	return openFolding<typeof abi, unknown>(declared, target(), handle, {
+		source: SOURCE,
+		stream: {},
 		finalityDepth: FINALITY,
-		// the name the stored emission stream is keyed on, which every folding command
-		// resolves before it gets here (ADR-0052): required, so that no shape can fold
-		// into a database without saying under which name it stores what it folded
+		// the name the stored emission stream and the generation records are keyed on,
+		// which every folding command resolves before it gets here (ADR-0052): required,
+		// so that no shape can fold into a database without saying under which name it
+		// stores what it folded
 		indexer: 'alpha',
-		createDB: () => handle,
-		applyFixedSchema: true,
 	});
 }
 
@@ -91,18 +99,35 @@ describe('an entity named after one of the server fixed tables', () => {
 });
 
 describe('the database those two things share', () => {
-	it('holds the fixed tables and the entity tables together, which is why the namespace matters', async () => {
+	it('holds the fixed tables and the generation`s tables together, which is why the namespace matters', async () => {
 		const handle = oneDatabase();
-		const {store} = await foldInto(handle, nftProcessor as EntityProcessor<typeof abi, any>);
+		const {store, container} = await foldInto(handle, nftProcessor as EntityProcessor<typeof abi, any>);
 		await store.migrate();
 
 		const names = await namesIn(handle);
+		const {generationDigestOf} = await import('@etherfold/core');
+		const namespace = generationDigestOf(container.generation);
 
-		// the server's, the store's, and the processor's -- one file
-		expect(names).toEqual(expect.arrayContaining(['_meta', '_emissions', '_blocks', '_cursor', 'nft', 'counter']));
-		// and every one that is NOT a declared entity is inside the reserved namespace,
-		// which is what makes a collision unreachable rather than merely unlikely
-		const declared = new Set(['nft', 'counter']);
+		// the server's fixed tables, the store's own and the processor's entities -- one
+		// file, with the second and third under this GENERATION's namespace (ADR-0053)
+		// and the first deliberately not, because they are per NAMED INDEXER and shared
+		// across its generations
+		expect(names).toEqual(
+			expect.arrayContaining([
+				'_meta',
+				'_emissions',
+				'_generations',
+				'_generation_pointer',
+				`_${namespace}_blocks`,
+				`_${namespace}_cursor`,
+				`${namespace}_nft`,
+				`${namespace}_counter`,
+			]),
+		);
+		// and every one that is NOT a declared entity of this generation is inside the
+		// reserved namespace, which is what makes a collision unreachable rather than
+		// merely unlikely
+		const declared = new Set([`${namespace}_nft`, `${namespace}_counter`]);
 		const fixed = names.filter((name) => !declared.has(name) && !name.startsWith('sqlite_'));
 		expect(fixed.filter((name) => !name.startsWith('_'))).toEqual([]);
 	});

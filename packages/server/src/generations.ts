@@ -130,6 +130,23 @@ export type SQLGenerationRegistryOptions = {
 /** A generation record, as its row spells it. */
 type GenerationRow = {stream: string; processor: string; createdAt: number};
 
+/**
+ * WHAT ONE NAMED INDEXER HOLDS IN THIS DATABASE, as a reader that owns no store
+ * reads it off the rows.
+ *
+ * The name is carried because a READER discovers it here rather than being told
+ * it: every row of both tables keys on it (ADR-0036), and on every shape this
+ * repo builds today a database holds exactly one name (ADR-0053).
+ */
+export type HeldGenerations = {
+	/** The NAMED INDEXER whose rows these are. */
+	indexer: string;
+	/** Every generation registered under it, oldest first. */
+	generations: GenerationRecord[];
+	/** WHICH of them answers reads, or nothing where the pointer names none yet. */
+	canonical?: GenerationId;
+};
+
 /** The pointer row: the canonical identity (or nothing yet) plus the guard. */
 type PointerRow = {stream: string | null; processor: string | null; revision: string};
 
@@ -252,6 +269,61 @@ export function generationRegistryPortOnSQL(
 			await options?.dropState?.(id);
 		},
 	};
+}
+
+/**
+ * WHAT ONE DATABASE HOLDS, READ AND NOTHING ELSE: every named indexer with rows
+ * here, the generations registered under each, and which one answers reads.
+ *
+ * The READ TIER's half of ADR-0053 ("a read tier must resolve the canonical
+ * pointer before it can name a state table"), and the reason it is a function of
+ * its own rather than `openGenerationRegistryOnSQL(...).canonical()`: OPENING the
+ * registry SWEEPS every stored stream no registered generation claims, which is a
+ * WRITE -- and a process that holds no fold, states no caps and folds nothing must
+ * not delete a stream on its way to asking which generation answers. It also
+ * needs no NAME, because a named indexer IS a database (ADR-0053) and `etherfold
+ * serve` is therefore given none (`--indexer` is refused there, ADR-0048): the
+ * rows carry the discriminator, so the read tier learns the name from the
+ * database instead of being told it.
+ *
+ * Oldest generation first per name, which is the order the registry lists them
+ * in and the order the caps are decided in. A name whose pointer row names no
+ * generation yet reports `canonical: undefined` -- a real answer meaning NOTHING
+ * ANSWERS READS HERE YET (ADR-0058), never an empty page.
+ */
+export async function readHeldGenerations(db: RemoteSQL): Promise<HeldGenerations[]> {
+	const [records, pointers] = await db.batch([
+		db.prepare(`SELECT indexer, stream, processor, createdAt FROM ${GENERATION_TABLE}`),
+		db.prepare(`SELECT indexer, stream, processor FROM ${GENERATION_POINTER_TABLE}`),
+	]);
+
+	const held = new Map<string, HeldGenerations>();
+	const under = (indexer: string): HeldGenerations => {
+		const existing = held.get(indexer);
+		if (existing) return existing;
+		const fresh: HeldGenerations = {indexer, generations: []};
+		held.set(indexer, fresh);
+		return fresh;
+	};
+
+	for (const row of (records?.results ?? []) as (GenerationRow & {indexer: string})[]) {
+		under(row.indexer).generations.push({
+			stream: row.stream,
+			processor: row.processor,
+			createdAt: Number(row.createdAt),
+		});
+	}
+	for (const row of (pointers?.results ?? []) as (PointerRow & {indexer: string})[]) {
+		if (row.stream === null || row.processor === null) continue;
+		under(row.indexer).canonical = {stream: row.stream, processor: row.processor};
+	}
+
+	return [...held.values()]
+		.map((entry) => ({
+			...entry,
+			generations: [...entry.generations].sort((a, b) => a.createdAt - b.createdAt),
+		}))
+		.sort((a, b) => (a.indexer < b.indexer ? -1 : a.indexer > b.indexer ? 1 : 0));
 }
 
 /**

@@ -7,6 +7,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {describe, expect, it, vi} from 'vitest';
 import {prepareIndexing} from '../src/index.js';
 import type {Options} from '../src/types.js';
+import {canonicalStoreIn} from './utils/reads.js';
 import {
 	abi,
 	ALICE,
@@ -188,8 +189,11 @@ describe('--store sqlite', () => {
 	});
 });
 
-/** A second store over the same database, for reading a previous run's rows back. */
+/**
+ * A second store over the same database, for reading a previous run's rows back
+ * -- through the CANONICAL POINTER, which is the only way to name a generation's
+ * tables (ADR-0053).
+ */
 async function storeOf(db: RemoteSQL): Promise<StateStore> {
-	const {VersionedStateStore} = await import('@etherfold/state-store-sqlite');
-	return new VersionedStateStore(db, nftProcessor.entities);
+	return canonicalStoreIn(db, nftProcessor.entities);
 }

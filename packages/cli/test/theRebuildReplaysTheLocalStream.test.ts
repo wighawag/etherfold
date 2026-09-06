@@ -61,9 +61,12 @@ import {
 //  - READS, resolved through the canonical POINTER to a table namespace, answer
 //    the incumbent throughout and switch exactly once.
 //
-// WIRING THE COMMANDS ONTO THIS IS A LATER TASK
-// (`the-cli-and-the-server-hold-generations-the-same-way`); the assembly below is
-// what that task will move into `folding.ts`.
+// THE COMMANDS NOW FOLD THROUGH EXACTLY THIS ASSEMBLY, which lives in
+// `src/folding.ts` (`openFolding`), and `run` schedules the chunks between its
+// own fetch cycles. It is written out again here on purpose: the rebuild's
+// resumability is asserted by building a genuinely fresh object graph over the
+// same rows, which is a thing a test can arrange directly and a running command
+// cannot.
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'alpha';

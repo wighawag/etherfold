@@ -5,6 +5,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {run, runMain, type RunDependencies, type RunningIndexer} from '../src/index.js';
 import type {StoreCursorReport} from '../src/cursorReport.js';
 import type {Options} from '../src/types.js';
+import {canonicalStoreIn} from './utils/reads.js';
 import {
 	ALICE,
 	BOB,
@@ -88,9 +89,13 @@ function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: RunD
 	};
 }
 
+/**
+ * What this database answers, read the way a reader over it reads: the CANONICAL
+ * POINTER resolved to a table namespace (ADR-0053), never the tables a namespace
+ * guessed at.
+ */
 async function transfersIn(db: RemoteSQL): Promise<number | undefined> {
-	const {VersionedStateStore} = await import('@etherfold/state-store-sqlite');
-	const store = new VersionedStateStore(db, nftProcessor.entities);
+	const store = await canonicalStoreIn(db, nftProcessor.entities);
 	return (await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value;
 }
 
