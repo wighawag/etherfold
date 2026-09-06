@@ -4,7 +4,6 @@ slug: the-stream-seam-takes-only-the-stored-event
 spec: the-stream-stores-only-what-the-node-said
 blockedBy: [the-stream-is-saved-without-its-decoded-half, a-fixture-reader-is-not-a-stream-keeper]
 covers: [2, 4]
-needsAnswers: true
 ---
 
 ## What to build
@@ -70,6 +69,3 @@ The seam is described in the project glossary (`CONTEXT.md`, the **stream / keep
 >
 > RECORD non-obvious in-scope decisions you make while building, in a `## Decisions` block at the end of your FINAL REPORT. Do not write the done record, the commit message or the PR body yourself. If a choice meets the ADR gate (hard to reverse, surprising without context, a real trade-off) — "the stored type governs writes, reads tolerate a decoded half, nothing is migrated" is a candidate — also write the durable WHY as an ADR in `docs/adr/` and name it in the block.
 
-## Open questions
-
-- The decomposition mints StoredLogEvent without ever naming EmittedLog, which already exists in the SAME module and already claims almost the same meaning. Lens 4c fork risk, and a concrete hole in the-stream-seam-takes-only-the-stored-event: its criterion forbids re-typing an implementation to the base event type, but EmittedLog is a SECOND supertype with the identical hole (a decoded event satisfies it), and it sits right beside the server keeper this task narrows. A keeper annotated EmittedLog would compile and enforce nothing, which is exactly the failure the spec minted a new name to prevent. Fixed by the edits: task 3 must state the relation in the new type docstring and leave EmittedLog untouched; task 5 forbids both supertypes. (packages/core/src/types.ts:49 exports EmittedLog = NumberifiedLog, docstring: one entry of the emission stream as a host that STORES it sees it, deliberately does NOT promise the decoded half. Used by streamBuilder.ts, emissionStream.ts, server/src/emissions.ts.)
