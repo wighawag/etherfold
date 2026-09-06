@@ -42,6 +42,25 @@ Pruning is not in the write path because it costs time proportional to what it d
 
 `retention: 'revert-only'` refuses every historical read while `revertTo` keeps working, and prunes to the declared `finalityDepth` (its whole retention) when one is given.
 
+## Several generations in one database
+
+A **generation** is a stream plus a fold over it; an indexer holds several and one is canonical, so a successor can rebuild while the incumbent keeps answering. A generation's state is a **table-name namespace** inside ONE database (ADR-0053; a generation column and a database-per-generation were both rejected there), and a store takes the name:
+
+```ts
+const incumbent = new VersionedStateStore(db, declarations, {tableNamespace: 'genA'});
+const successor = new VersionedStateStore(db, declarations, {tableNamespace: 'genB'});
+```
+
+The two are as separate as two databases: separate entity tables, separate `_blocks`, separate `_cursor`, separate derived indexes. Writing in one changes nothing readable in the other, a `revertTo` in one touches none of the other's blocks or rows, and `await successor.drop()` removes exactly the successor's tables (with their indexes) and leaves the incumbent complete and readable. `drop()` is what a host wires into the generation registry's `dropState` (`@etherfold/server`), which owns no naming convention of its own.
+
+**`_blocks` and `_cursor` are in the namespace, not just the entity tables.** Two generations on one chain would otherwise share one block table, where one generation's `revertTo` deletes rows the other still needs, and one fixed cursor key (`lastSync`, the same string for every fold), where the second fold silently resumes on the first's position.
+
+**The namespace covers what this store owns and nothing else.** `_meta`, `_emissions` and the generation registry belong to `@etherfold/server`, are per NAMED INDEXER and are deliberately SHARED across its generations: a processor-only change re-folds the SAME stored stream, which is what makes it free.
+
+A namespace is `[A-Za-z0-9]+` and is checked when the store is constructed. The underscore is the SEPARATOR, so one inside a namespace is refused: it would make `a_b` + `c` and `a` + `b_c` the same table, which is two generations silently sharing rows. A rendered generation digest (`generationDigestOf`, `@etherfold/core`) is a valid namespace as it comes, leading digit and all, because every name this package emits is either quoted or begins with `_`. `sqlite` is refused for the same reason a `sqlite_` entity name is.
+
+The namespace goes INSIDE the reserved `_` prefix (`token` becomes `genA_token`, and `_blocks` becomes `_genA_blocks`), so everything this store owns still starts with `_` and is still recognisable as a fixed table on the one database a combined deployment shares with the server. **With no namespace configured, the names are exactly what they have always been, byte for byte.**
+
 ## Usage
 
 ```ts
@@ -126,4 +145,4 @@ This package ports a verified prototype (`~/dev/github/wighawag/research/ethereu
 
 `pnpm --filter @etherfold/state-store-sqlite test`, vitest, against a real in-memory libSQL database. Never a mock: the ordering rule above is a property of how SQLite enforces a partial index, and a fake would accept the broken order happily.
 
-The cases that are the SEAM's rather than this backend's (versioned reads, as-of reads against the declared capabilities, reorg revert with a counter that must go back down, read-your-writes, block atomicity) are not written here: `test/conformance.test.ts` runs the shared suite, [`@etherfold/state-store-conformance`](https://github.com/wighawag/etherfold/tree/main/packages/state-store-conformance), against this store under three retention claims. What stays in this package's own tests is what only a versioned-row backend can be asked: the partial unique index, the batch, the `revertTo` ordering, the DDL, the block addressing, and the SQL query surface.
+The cases that are the SEAM's rather than this backend's (versioned reads, as-of reads against the declared capabilities, reorg revert with a counter that must go back down, read-your-writes, block atomicity) are not written here: `test/conformance.test.ts` runs the shared suite, [`@etherfold/state-store-conformance`](https://github.com/wighawag/etherfold/tree/main/packages/state-store-conformance), against this store under three retention claims and once more inside a table namespace, beside another generation already migrated into the same handle. What stays in this package's own tests is what only a versioned-row backend can be asked: the partial unique index, the batch, the `revertTo` ordering, the DDL, the block addressing, and the SQL query surface.

@@ -27,8 +27,8 @@ import {
 	type StateStoreCapabilities,
 	type CursorWrite,
 } from '@etherfold/state-store';
-import {ROWID, migrationStatements} from './ddl.js';
-import {assertStorableEntityNames, quoted} from './identifiers.js';
+import {ROWID, dropSchemaStatements, migrationStatements, tableNames, type TableNames} from './ddl.js';
+import {assertStorableEntityNames} from './identifiers.js';
 import {
 	AS_OF_PREDICATE,
 	CURRENT_PREDICATE,
@@ -63,6 +63,37 @@ const logger = logs('@etherfold/state-store-sqlite');
 export type VersionedStateStoreOptions = RetentionOptions & {
 	/** Per-request limits of the backend. See `DEFAULT_BATCH_BOUNDS`. */
 	bounds?: Partial<BatchBounds>;
+	/**
+	 * The TABLE-NAME NAMESPACE this store's tables live in, so that several
+	 * GENERATIONS fold into ONE database and touch nothing of each other's.
+	 *
+	 * A generation is a stream plus a fold over it, an indexer holds several and
+	 * one is canonical; ADR-0053 makes a generation's state a table-name namespace
+	 * inside one database (a generation COLUMN and a database-per-generation were
+	 * both rejected there). It covers everything THIS store owns -- the entity
+	 * tables, `_blocks`, `_cursor` and the indexes derived from them -- and nothing
+	 * the server owns: `_meta`, `_emissions` and the generation registry are per
+	 * NAMED INDEXER and are shared across its generations on purpose, because a
+	 * processor-only change re-folds the SAME stored stream and that is what makes
+	 * it free.
+	 *
+	 * `_blocks` and `_cursor` are in it, not just the entity tables, and that is
+	 * the half that is easy to get wrong: two generations on one chain would
+	 * otherwise share one block table, where one generation's `revertTo` deletes
+	 * rows the other still needs, and one fixed cursor key (`lastSync`, the same
+	 * string for every fold), where the second fold silently resumes on the first's
+	 * position.
+	 *
+	 * It is a NAME the caller chooses, and the caller is whoever holds the
+	 * generation identity: `{stream digest, processor version hash}` is computable
+	 * before the processor exists, so naming the namespace up front keeps the
+	 * state-then-processor build order (ADR-0043) intact. What it may be, and where
+	 * it goes inside a name, is `inTableNamespace` (`identifiers.ts`); a namespace
+	 * this store could not keep separate is refused HERE, at construction.
+	 *
+	 * ABSENT means the names this store has always created, byte for byte.
+	 */
+	tableNamespace?: string;
 	/**
 	 * How far back this deployment wants superseded versions kept, in BLOCK
 	 * NUMBERS. Defaults to `unbounded`.
@@ -116,6 +147,8 @@ export type QueryOptions = {
  */
 export class VersionedStateStore implements StateStore {
 	private readonly entities: ReadonlyMap<string, NormalizedEntity>;
+	/** Every table and index name this store uses, resolved once. See `tableNamespace`. */
+	private readonly names: TableNames;
 	private readonly bounds: BatchBounds;
 	private readonly provided: Retention;
 	private readonly finalityDepth: number | undefined;
@@ -130,6 +163,10 @@ export class VersionedStateStore implements StateStore {
 		// `sqlite_` is a namespace SQLite refuses however the name is quoted, so it
 		// has to fail here rather than at `migrate()` (`identifiers.ts`).
 		assertStorableEntityNames(this.entities.values());
+		// and the namespace this store's tables live in, resolved and validated at the
+		// same moment and for the same reason: a name that could not be kept separate
+		// from another generation's must fail where it was configured (ADR-0053).
+		this.names = tableNames(options.tableNamespace);
 		this.bounds = {...DEFAULT_BATCH_BOUNDS, ...options.bounds};
 		// Resolved at CONSTRUCTION, before `migrate` and before any read: a window
 		// below the finality depth is a configuration error, and it belongs where it
@@ -172,9 +209,39 @@ export class VersionedStateStore implements StateStore {
 	 * because re-running it converges (see `migrationStatements`).
 	 */
 	async migrate(): Promise<void> {
-		const statements = migrationStatements(this.entities.values());
+		const statements = migrationStatements(this.entities.values(), this.names);
 		logger.debug(`migrating ${this.entities.size} entities (${statements.length} DDL statements)`);
 		// each DDL statement is its own group: none of them depend on the others
+		for (const batch of planBatches(
+			statements.map((statement) => [statement]),
+			this.bounds,
+		)) {
+			await this.db.batch(this.prepare(batch));
+		}
+	}
+
+	/**
+	 * Remove this store's tables, and nothing else: what RETIRING a generation is.
+	 *
+	 * Under a namespace it drops exactly that generation's entity tables, its
+	 * `_blocks` and its `_cursor`, with their indexes; every other generation in the
+	 * database is left complete and READABLE, which is the property that makes
+	 * moving the canonical pointer back a revert rather than a re-index. It is the
+	 * verb a host wires into the generation registry's `dropState`
+	 * (`@etherfold/server`), which deliberately defaults to doing nothing rather
+	 * than inventing a naming convention it does not own.
+	 *
+	 * It is NOT on the `StateStore` seam. A backend whose whole storage is a
+	 * keyspace or a database expresses the same disposal differently, and a handler
+	 * must never be able to reach this at all.
+	 *
+	 * Idempotent (`IF EXISTS`), and a dropped store can be `migrate`d back to an
+	 * empty one. Chunked rather than atomic for the reason `migrate` is: each drop
+	 * is independent, and re-running converges.
+	 */
+	async drop(): Promise<void> {
+		const statements = dropSchemaStatements(this.entities.values(), this.names);
+		logger.info(`dropping the state of ${this.names.namespace ?? 'the unnamespaced generation'}`);
 		for (const batch of planBatches(
 			statements.map((statement) => [statement]),
 			this.bounds,
@@ -211,7 +278,7 @@ export class VersionedStateStore implements StateStore {
 	 * see `cursor.ts` at the seam.
 	 */
 	async applyBlock(block: BlockPointer, mutations: readonly Mutation[] = [], cursor?: CursorWrite): Promise<void> {
-		const statements = applyBlockStatements(this.entities, block, mutations, cursor);
+		const statements = applyBlockStatements(this.entities, block, mutations, this.names, cursor);
 		if (statements.length > this.bounds.maxStatementsPerBatch) {
 			logger.warn(
 				`block ${block.number} needs ${statements.length} statements, above the configured bound of ` +
@@ -223,18 +290,18 @@ export class VersionedStateStore implements StateStore {
 
 	/** The opaque string last written under `key`, or `undefined`. See `cursor.ts`. */
 	async readCursor(key: string): Promise<string | undefined> {
-		const rows = await this.select<{value: string}>(readCursorStatement(key));
+		const rows = await this.select<{value: string}>(readCursorStatement(key, this.names));
 		return rows[0]?.value;
 	}
 
 	/** Move a cursor with no block behind it. See `StateStore.writeCursor`. */
 	async writeCursor(key: string, value: string): Promise<void> {
-		await this.db.batch(this.prepare([writeCursorStatement(key, value)]));
+		await this.db.batch(this.prepare([writeCursorStatement(key, value, this.names)]));
 	}
 
 	/** Forget it. A `DELETE` matching nothing is the no-op the contract asks for. */
 	async clearCursor(key: string): Promise<void> {
-		await this.db.batch(this.prepare([clearCursorStatement(key)]));
+		await this.db.batch(this.prepare([clearCursorStatement(key, this.names)]));
 	}
 
 	/**
@@ -245,7 +312,9 @@ export class VersionedStateStore implements StateStore {
 	 * many blocks it carries, and a block is never split across two batches.
 	 */
 	async applyBlocks(updates: readonly BlockUpdate[]): Promise<void> {
-		const groups = updates.map((update) => applyBlockStatements(this.entities, update.block, update.mutations));
+		const groups = updates.map((update) =>
+			applyBlockStatements(this.entities, update.block, update.mutations, this.names),
+		);
 		const batches = planBatches(groups, this.bounds);
 		logger.debug(`applying ${updates.length} blocks in ${batches.length} batches`);
 		for (const batch of batches) {
@@ -266,7 +335,7 @@ export class VersionedStateStore implements StateStore {
 		// got is not entity state, and the caller moves it when it applies the
 		// canonical branch. See `cursor.ts`.
 		logger.info(`reverting state above block ${keepUpTo}`);
-		const statements = revertToStatements(this.entities, keepUpTo);
+		const statements = revertToStatements(this.entities, keepUpTo, this.names);
 		// one batch: a partially reverted store would violate the one-live-version
 		// invariant while it lasted.
 		await this.db.batch(this.prepare(statements));
@@ -323,13 +392,16 @@ export class VersionedStateStore implements StateStore {
 				const limit = Math.min(this.bounds.maxRowsPerStatement, budget - versionsDeleted);
 				// keyed off ROWID rather than a literal: the column name is `ddl.ts`'s to
 				// choose, and renaming it must not silently produce a list of undefineds.
-				const found = await this.select<Record<typeof ROWID, number>>(prunableVersionsStatement(entity, floor, limit));
+				const found = await this.select<Record<typeof ROWID, number>>(
+					prunableVersionsStatement(entity, floor, limit, this.names),
+				);
 				if (found.length === 0) break;
 				await this.db.batch(
 					this.prepare([
 						dropVersionsStatement(
 							entity,
 							found.map((row) => row[ROWID]),
+							this.names,
 						),
 					]),
 				);
@@ -348,7 +420,7 @@ export class VersionedStateStore implements StateStore {
 	/** Whether any version is still unreachable at `floor`: one indexed probe per table. */
 	private async hasPrunableVersions(floor: number): Promise<boolean> {
 		for (const entity of this.entities.values()) {
-			if ((await this.select(prunableVersionsStatement(entity, floor, 1))).length > 0) return true;
+			if ((await this.select(prunableVersionsStatement(entity, floor, 1, this.names))).length > 0) return true;
 		}
 		return false;
 	}
@@ -400,7 +472,7 @@ export class VersionedStateStore implements StateStore {
 	 * refuses everything) never pay the round-trip.
 	 */
 	private async tipBlockNumber(): Promise<number | undefined> {
-		const statement = latestBlockStatement();
+		const statement = latestBlockStatement(this.names);
 		const result = await this.db
 			.prepare(statement.sql)
 			.bind(...statement.args)
@@ -411,10 +483,10 @@ export class VersionedStateStore implements StateStore {
 	private async lookupBlock(parsed: ParsedBlockAddress): Promise<RecordedBlock | undefined> {
 		const statement =
 			parsed.axis === 'hash'
-				? blockByHashStatement(parsed.hash)
+				? blockByHashStatement(parsed.hash, this.names)
 				: parsed.axis === 'timestamp'
-					? blockAtOrBeforeStatement(parsed.timestamp)
-					: blockByNumberStatement(parsed.number);
+					? blockAtOrBeforeStatement(parsed.timestamp, this.names)
+					: blockByNumberStatement(parsed.number, this.names);
 		const result = await this.db
 			.prepare(statement.sql)
 			.bind(...statement.args)
@@ -461,7 +533,7 @@ export class VersionedStateStore implements StateStore {
 		await assertRetained(this.capabilities, blockNumber, () => this.tipBlockNumber());
 		const result = await this.db
 			.prepare(
-				`SELECT * FROM ${quoted(declaration.name)} WHERE ${idPredicate(declaration)} AND ${AS_OF_PREDICATE} LIMIT 1`,
+				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${idPredicate(declaration)} AND ${AS_OF_PREDICATE} LIMIT 1`,
 			)
 			.bind(...idValues(declaration, id), blockNumber, blockNumber)
 			.all<T>();
@@ -473,7 +545,7 @@ export class VersionedStateStore implements StateStore {
 		const declaration = mustGet(this.entities, entity);
 		const result = await this.db
 			.prepare(
-				`SELECT * FROM ${quoted(declaration.name)} WHERE ${idPredicate(declaration)} AND ${CURRENT_PREDICATE} LIMIT 1`,
+				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${idPredicate(declaration)} AND ${CURRENT_PREDICATE} LIMIT 1`,
 			)
 			.bind(...idValues(declaration, id))
 			.all<T>();
@@ -496,7 +568,7 @@ export class VersionedStateStore implements StateStore {
 		prefix: EntityIdPrefix,
 		limit: number,
 	): Promise<Listing<T>> {
-		const statement = listCurrentStatement(mustGet(this.entities, entity), prefix, limit);
+		const statement = listCurrentStatement(mustGet(this.entities, entity), prefix, limit, this.names);
 		return boundedListing(await this.select<T>(statement), limit);
 	}
 
@@ -517,7 +589,10 @@ export class VersionedStateStore implements StateStore {
 		const declaration = mustGet(this.entities, entity);
 		const blockNumber = await this.resolveForRead(at);
 		await assertRetained(this.capabilities, blockNumber, () => this.tipBlockNumber());
-		return boundedListing(await this.select<T>(listAsOfStatement(declaration, prefix, blockNumber, limit)), limit);
+		return boundedListing(
+			await this.select<T>(listAsOfStatement(declaration, prefix, blockNumber, limit, this.names)),
+			limit,
+		);
 	}
 
 	/**
@@ -539,7 +614,7 @@ export class VersionedStateStore implements StateStore {
 		const {tail, tailArgs} = paginate(options);
 		const result = await this.db
 			.prepare(
-				`SELECT * FROM ${quoted(declaration.name)} WHERE ${AS_OF_PREDICATE}${filter(options)}${order(options)}${tail}`,
+				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${AS_OF_PREDICATE}${filter(options)}${order(options)}${tail}`,
 			)
 			.bind(blockNumber, blockNumber, ...(options.args ?? []), ...tailArgs)
 			.all<T>();
@@ -552,7 +627,7 @@ export class VersionedStateStore implements StateStore {
 		const {tail, tailArgs} = paginate(options);
 		const result = await this.db
 			.prepare(
-				`SELECT * FROM ${quoted(declaration.name)} WHERE ${CURRENT_PREDICATE}${filter(options)}${order(options)}${tail}`,
+				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${CURRENT_PREDICATE}${filter(options)}${order(options)}${tail}`,
 			)
 			.bind(...(options.args ?? []), ...tailArgs)
 			.all<T>();

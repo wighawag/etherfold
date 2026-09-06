@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {VersionedStateStore, listAsOfStatement, listCurrentStatement} from '../src/index.js';
+import {VersionedStateStore, listAsOfStatement, listCurrentStatement, tableNames} from '../src/index.js';
 import {normalizeEntity} from '@etherfold/state-store';
 import {createTestDB, rows} from './utils/db.js';
 import {PLACEMENT, block, placed} from './utils/fixtures.js';
@@ -39,7 +39,7 @@ async function queryPlan(db: ReturnType<typeof createTestDB>, sql: string, args:
 
 describe('the statement a listing compiles to', () => {
 	it('is an equality on the leading id columns, ordered by the id, with a bound', () => {
-		expect(listCurrentStatement(ENTITY, {epoch: 7}, 3)).toEqual({
+		expect(listCurrentStatement(ENTITY, {epoch: 7}, 3, tableNames())).toEqual({
 			sql:
 				`SELECT * FROM "placement" WHERE "epoch" = ? AND _upper IS NULL ` +
 				`ORDER BY "epoch", "position", "playerIndex" LIMIT ?`,
@@ -49,7 +49,7 @@ describe('the statement a listing compiles to', () => {
 	});
 
 	it('adds the as-of predicate and nothing else when it is asked about a block', () => {
-		expect(listAsOfStatement(ENTITY, {epoch: 7, position: 1}, 102, 3)).toEqual({
+		expect(listAsOfStatement(ENTITY, {epoch: 7, position: 1}, 102, 3, tableNames())).toEqual({
 			sql:
 				`SELECT * FROM "placement" WHERE "epoch" = ? AND "position" = ? AND ` +
 				`_lower <= ? AND (_upper IS NULL OR ? < _upper) ` +
@@ -59,7 +59,7 @@ describe('the statement a listing compiles to', () => {
 	});
 
 	it('has nowhere to put a predicate, a sort or an offset', () => {
-		const sql = listCurrentStatement(ENTITY, {epoch: 7}, 3).sql;
+		const sql = listCurrentStatement(ENTITY, {epoch: 7}, 3, tableNames()).sql;
 		expect(sql).not.toMatch(/OFFSET/i);
 		// the only ORDER BY is the declared id, and it is not caller-supplied
 		expect(sql.match(/ORDER BY/gi)).toHaveLength(1);
@@ -70,7 +70,7 @@ describe('the statement a listing compiles to', () => {
 describe('a listing is ONE indexed range scan', () => {
 	it('rides the id index at the tip, with no temp b-tree for the ordering', async () => {
 		const {db} = await withPlacements();
-		const statement = listCurrentStatement(ENTITY, {epoch: 7}, 3);
+		const statement = listCurrentStatement(ENTITY, {epoch: 7}, 3, tableNames());
 
 		const plan = await queryPlan(db, statement.sql, statement.args);
 
@@ -81,7 +81,7 @@ describe('a listing is ONE indexed range scan', () => {
 
 	it('rides it for a longer prefix too, using both columns to seek', async () => {
 		const {db} = await withPlacements();
-		const statement = listCurrentStatement(ENTITY, {epoch: 7, position: 1}, 3);
+		const statement = listCurrentStatement(ENTITY, {epoch: 7, position: 1}, 3, tableNames());
 
 		const plan = await queryPlan(db, statement.sql, statement.args);
 
@@ -91,7 +91,7 @@ describe('a listing is ONE indexed range scan', () => {
 
 	it('rides it for an as-of listing, which is the same range under the validity predicate', async () => {
 		const {db} = await withPlacements();
-		const statement = listAsOfStatement(ENTITY, {epoch: 7}, 100, 3);
+		const statement = listAsOfStatement(ENTITY, {epoch: 7}, 100, 3, tableNames());
 
 		const plan = await queryPlan(db, statement.sql, statement.args);
 

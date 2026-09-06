@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {normalizeEntity} from '@etherfold/state-store';
-import {VersionedStateStore, listCurrentStatement} from '../src/index.js';
+import {VersionedStateStore, listCurrentStatement, tableNames} from '../src/index.js';
 import {createTestDB, rows} from './utils/db.js';
 import {block} from './utils/fixtures.js';
 
@@ -129,7 +129,7 @@ describe('an identifier that is a SQL keyword', () => {
 		// quoting must not cost the access path: a listing over a keyword id column
 		// is still one indexed range scan, which is the whole reason the surface has
 		// the shape it has (see `test/listing.test.ts`).
-		const statement = listCurrentStatement(normalizeEntity(declaration), {group: 'a'}, 3);
+		const statement = listCurrentStatement(normalizeEntity(declaration), {group: 'a'}, 3, tableNames());
 		const plan = await rows<{detail: string}>(db, `EXPLAIN QUERY PLAN ${statement.sql}`, ...statement.args);
 		expect(plan).toHaveLength(1);
 		expect(plan[0].detail).toMatch(/^SEARCH "?order"? USING INDEX _order_\w+ \(group=\?\)$/);
