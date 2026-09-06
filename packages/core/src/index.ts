@@ -112,6 +112,17 @@ export * from './generation/promotion.js';
  * `container.ts`.
  */
 export * from './container.js';
+/**
+ * THE GENERATION CONTAINER ON THE RECEIVING SIDE, which is how the server and
+ * the CLI hold generations.
+ *
+ * The chain-free SIBLING of `Indexer`: that one builds `IndexerGeneration`
+ * engines, which open `load()` with `eth_chainId`, so the half of a split
+ * deployment that hosts the processor could never use it. `ReceivingIndexer`
+ * holds `StreamBuilder` receivers instead, and is what turns a changed context
+ * from a `processor.clear()` into a SUCCESSOR beside the live generation.
+ */
+export * from './receivingContainer.js';
 export * from './stream/identity.js';
 export * from './stream/fixture.js';
 /**
