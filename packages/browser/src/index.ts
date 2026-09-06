@@ -41,6 +41,11 @@ export type {
 	LogEvent,
 	LogParseConfig,
 	ExistingStream,
+	// What the KEEPER seam speaks, both halves of it: a browser keeper is written
+	// against these, and a caller that cannot name them cannot annotate one.
+	StoredLogEvent,
+	StoredLastSync,
+	StoredEventBlock,
 	TxInclusionQuery,
 	TxInclusionStatus,
 	TxInclusionBasis,

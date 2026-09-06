@@ -1,6 +1,6 @@
 import type {Abi} from 'abitype';
 import {logs} from 'named-logs';
-import type {ExistingStream, IndexingSource, LastSync, LogEvent} from '../types.js';
+import type {ExistingStream, IndexingSource, LastSync, StoredLastSync, StoredLogEvent} from '../types.js';
 import {degradingStream} from './degrading.js';
 
 const namedLogger = logs('@etherfold/core');
@@ -25,8 +25,15 @@ const namedLogger = logs('@etherfold/core');
  * it loses nothing. It is NOT an implementation of this seam -- a fixture serves
  * DECODED events and has its own reader type (ADR-0059) -- which is why it is
  * evidence rather than a keeper.
+ *
+ * Its events are STORED events -- the raw log plus the reorg verdict, and
+ * nothing an ABI made of those bytes (`StoredLogEvent`, ADR-0034) -- and it
+ * carries no ABI type parameter for that reason: the decoded half is what an ABI
+ * was needed FOR, and a segment holds none. That governs what is WRITTEN from
+ * here on; segments written before it still carry `args` and `eventName`, are
+ * still read (see `isSegment`), and are never rewritten.
  */
-export type StreamSegment<ABI extends Abi> = {events: LogEvent<ABI>[]};
+export type StreamSegment = {events: StoredLogEvent[]};
 
 /**
  * The CURSOR RECORD: a `LastSync` minus its window, plus two numbers of the
@@ -59,7 +66,7 @@ export type StreamCursorRecord<ABI extends Abi> = {
 /** What ONE commit writes: a segment at an ordinal, and the cursor beside it. */
 export type SegmentCommit<ABI extends Abi> = {
 	ordinal: number;
-	segment: StreamSegment<ABI>;
+	segment: StreamSegment;
 	cursor: StreamCursorRecord<ABI>;
 };
 
@@ -117,7 +124,21 @@ export type StreamSegmentPort<ABI extends Abi> = {
 	clearSubtree(source: IndexingSource<ABI>): Promise<number>;
 };
 
-function isSegment(value: unknown): value is StreamSegment<Abi> {
+/**
+ * Whether a stored value is a segment at all, which is the ONE thing the read
+ * side checks and deliberately not the shape of what is inside it.
+ *
+ * A value that does not parse is one of the three damage shapes and is cleared;
+ * a value that DOES is served as stored events. That is where READS tolerating
+ * a decoded half lives: a segment written before the seam narrowed carries
+ * `args` and `eventName` on its events, satisfies this check exactly as it did
+ * then, and is handed back under the stored type without being rewritten. The
+ * extra keys cost nothing and reach nothing -- `reparse` drops all three and
+ * re-derives them against the source running now (ADR-0034) -- so tolerating
+ * them is what makes a stricter stored type cost an existing deployment no
+ * rebuild.
+ */
+function isSegment(value: unknown): value is StreamSegment {
 	return typeof value === 'object' && value !== null && Array.isArray((value as {events?: unknown}).events);
 }
 
@@ -167,7 +188,7 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 	 */
 	function carryForward(
 		current: StreamCursorRecord<ABI> | undefined,
-		lastSync: LastSync<ABI>,
+		lastSync: StoredLastSync,
 	): {startBlock: number; nextOrdinal: number} | undefined {
 		if (!current) {
 			return {startBlock: lastSync.lastFromBlock, nextOrdinal: 0};
@@ -179,7 +200,7 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 	}
 
 	function cursorRecord(
-		lastSync: LastSync<ABI>,
+		lastSync: StoredLastSync,
 		carried: {startBlock: number; nextOrdinal: number},
 	): StreamCursorRecord<ABI> {
 		return {
@@ -221,7 +242,7 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 			}
 
 			const stored = await port.readSegments(source);
-			const eventStream: LogEvent<ABI>[] = [];
+			const eventStream: StoredLogEvent[] = [];
 			for (let i = 0; i < stored.length; i++) {
 				if (stored[i].ordinal !== i) {
 					await clearBecause(source, `a gap in the ordinals at ${i}`);
@@ -232,7 +253,7 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 					await clearBecause(source, `segment ${i} does not parse`);
 					return undefined;
 				}
-				eventStream.push(...(segment.events as LogEvent<ABI>[]));
+				eventStream.push(...segment.events);
 			}
 			if (stored.length !== cursor.nextOrdinal) {
 				await clearBecause(
@@ -266,7 +287,10 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 			};
 		},
 
-		async saveNewEvents(source: IndexingSource<ABI>, stream: {lastSync: LastSync<ABI>; eventStream: LogEvent<ABI>[]}) {
+		async saveNewEvents(
+			source: IndexingSource<ABI>,
+			stream: {lastSync: StoredLastSync; eventStream: StoredLogEvent[]},
+		) {
 			const {eventStream, lastSync} = stream;
 			let declined = false;
 

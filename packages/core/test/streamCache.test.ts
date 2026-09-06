@@ -1,7 +1,7 @@
 import type {Abi} from 'abitype';
 import {describe, expect, it, vi} from 'vitest';
 import {IndexerGeneration} from '../src/indexer.js';
-import type {ExistingStream, LogEvent} from '../src/types.js';
+import type {ExistingStream, StoredLogEvent} from '../src/types.js';
 import {
 	BRANCH_A,
 	BRANCH_A_TIP,
@@ -451,7 +451,7 @@ describe('a retraction is never written into a stream that lacks the retracted e
 		stream.succeed();
 		await indexToTip(indexer);
 
-		const written: LogEvent<Abi>[] = stream.events;
+		const written: StoredLogEvent[] = stream.events;
 		const held = new Set(written.filter((event) => !event.removed).map(idOf));
 		for (const retraction of written.filter((event) => event.removed)) {
 			expect(held.has(idOf(retraction))).toBe(true);

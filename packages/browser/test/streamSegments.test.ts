@@ -1,7 +1,13 @@
 import 'fake-indexeddb/auto';
 import {describe, expect, it, vi} from 'vitest';
 import {createStore, get, keys as allKeys, set, type UseStore} from 'idb-keyval';
-import {resolveStreamConfig, streamDigestOf, type IndexingSource, type LastSync} from '@etherfold/core';
+import {
+	resolveStreamConfig,
+	streamDigestOf,
+	type IndexingSource,
+	type StoredLastSync,
+	type StoredLogEvent,
+} from '@etherfold/core';
 import {keepStreamOnIndexedDB, KEYVAL_DATABASE, KEYVAL_OBJECT_STORE, streamAddress} from '../src/index.js';
 import {appliedIn, applyingProcessor, browserStore, indexerOver, keysOf} from './utils/applied.js';
 import {
@@ -106,24 +112,24 @@ async function captureLogs() {
 	return {messages, restore: () => spies.forEach((spy) => spy.mockRestore())};
 }
 
-function event(blockNumber: number, logIndex = 0) {
+function event(blockNumber: number, logIndex = 0): StoredLogEvent {
 	return {
 		blockNumber,
 		logIndex,
 		removed: false,
 		blockHash: `0x${blockNumber.toString(16)}`,
 		transactionHash: `0x${blockNumber.toString(16)}-${logIndex}`,
-	} as never;
+	} as unknown as StoredLogEvent;
 }
 
-function cursorAt(lastFromBlock: number, lastToBlock: number): LastSync<TestABI> {
+function cursorAt(lastFromBlock: number, lastToBlock: number): StoredLastSync {
 	return {
 		context: {source: [{startBlock: 0, hash: 'src'}], config: 'cfg', processor: 'proc'},
 		latestBlock: lastToBlock,
 		lastFromBlock,
 		lastToBlock,
 		unconfirmedBlocks: [{number: lastToBlock, hash: '0xtip', events: []}],
-	} as unknown as LastSync<TestABI>;
+	} as unknown as StoredLastSync;
 }
 
 const OTHER_CHAIN = {...SOURCE, chainId: '10'};

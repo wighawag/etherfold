@@ -8,7 +8,8 @@ import {
 	STREAM_DIGEST_LENGTH,
 	type Abi,
 	type IndexingSource,
-	type LastSync,
+	type StoredLastSync,
+	type StoredLogEvent,
 	type UsedStreamConfig,
 } from '@etherfold/core';
 import {createBrowserStateStore, createIndexerState, keepStreamOnIndexedDB, streamAddress} from '../src/index.js';
@@ -57,24 +58,24 @@ const addressFor = (
 	streamConfig: UsedStreamConfig = DEFAULT_CONFIG,
 ) => streamAddress(name, source, streamConfig);
 
-function event(blockNumber: number, logIndex = 0) {
+function event(blockNumber: number, logIndex = 0): StoredLogEvent {
 	return {
 		blockNumber,
 		logIndex,
 		removed: false,
 		blockHash: `0x${blockNumber.toString(16)}`,
 		transactionHash: `0x${blockNumber.toString(16)}-${logIndex}`,
-	} as never;
+	} as unknown as StoredLogEvent;
 }
 
-function cursorAt(lastFromBlock: number, lastToBlock: number): LastSync<TestABI> {
+function cursorAt(lastFromBlock: number, lastToBlock: number): StoredLastSync {
 	return {
 		context: {source: [{startBlock: 0, hash: 'src'}], config: 'cfg', processor: 'proc'},
 		latestBlock: lastToBlock,
 		lastFromBlock,
 		lastToBlock,
 		unconfirmedBlocks: [],
-	} as unknown as LastSync<TestABI>;
+	} as unknown as StoredLastSync;
 }
 
 /** Every array key written under one indexer name, whatever stream it belongs to. */

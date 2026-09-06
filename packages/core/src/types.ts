@@ -54,7 +54,7 @@ export type LogEvent<ABI extends Abi, Extra extends JSONObject | undefined = und
  * hold `args` and `eventName` forever and no migration rewrites them; a READ
  * tolerates that half and ignores it, because the re-decode drops and re-derives
  * it anyway. So this describes what goes IN, not what is guaranteed to be on
- * disk.
+ * disk. That rule, and the price of it, is ADR-0060.
  *
  * **The one hole, stated rather than hidden**: an event whose STATIC type has
  * already been widened to `BaseLogEvent` still assigns here, because nothing is
@@ -79,6 +79,55 @@ export type StoredLogEvent<Extra extends JSONObject | undefined = undefined> = B
 	args?: never;
 	eventName?: never;
 	decodeError?: never;
+};
+
+/**
+ * ONE BLOCK of the unconfirmed reorg window, as the STREAM seam speaks it: the
+ * block's identity plus the events the node reported in it, raw.
+ *
+ * `EventBlock` with its events narrowed to what is stored, and with no ABI type
+ * parameter left -- the ABI is what the decoded half was made under, so a shape
+ * that carries none needs none.
+ */
+export type StoredEventBlock = {
+	number: number;
+	hash: string;
+	events: StoredLogEvent[];
+};
+
+/**
+ * THE CURSOR AS THE STREAM SEAM SPEAKS IT: the same three block numbers and the
+ * same context as a `LastSync`, with the reorg window's events narrowed to what
+ * the node said.
+ *
+ * It exists so that the compile-time refusal covers BOTH halves of what a keeper
+ * is handed. Core strips the window on the way into `saveNewEvents` exactly as
+ * it strips the batch (`storedLastSyncOf`), so a seam that still declared
+ * `LastSync<ABI>` there would be promising an implementor a decoded half that is
+ * `undefined` at runtime -- a type that lies about the value, which is a worse
+ * hole than the one this spec set out to close.
+ *
+ * Deliberately a SEPARATE type and NOT a narrowing of `LastSync`, which the
+ * processor seam, the load path, the state keepers and the wire all speak. What
+ * a stream keeper is handed is the one place the window is raw; re-meaning the
+ * shared cursor for everybody else would be a far larger claim than this one,
+ * and this type is used by `StreamFetcher` and `StreamSaver` and by nothing
+ * else.
+ *
+ * The RETURN side costs a keeper nothing: no keeper stores a window at all
+ * (ADR-0035, as amended -- the stream's copy is read by nobody and
+ * `generateStreamFromReplay` rebuilds it by walking the events), so every
+ * shipped implementation returns an empty one.
+ *
+ * The choice between this and leaving the window typed `LastSync<ABI>`, and what
+ * each costs, is ADR-0060.
+ */
+export type StoredLastSync = {
+	context: ContextIdentifier;
+	latestBlock: number;
+	lastFromBlock: number;
+	lastToBlock: number;
+	unconfirmedBlocks: StoredEventBlock[];
 };
 
 /**
@@ -381,10 +430,31 @@ export type IndexingSource<ABI extends Abi> = {
 	readonly genesisHash?: `0x${string}`;
 };
 
+/**
+ * WHAT A KEEPER HANDS BACK: the stream it holds from `fromBlock` up, plus the
+ * cursor that describes it -- or `undefined`, which is ABSENT.
+ *
+ * Both halves are STORED shapes and neither may carry a decoded event. `args` /
+ * `eventName` are what SOME ABI made of those bytes and `decodeError` is what
+ * happened when one could not, so all three are a cache the engine re-derives on
+ * read against the source running now (`LogEventFetcher.reparse`, ADR-0034); a
+ * keeper that held them would be handing back an opinion it cannot date.
+ *
+ * READS TOLERATE what WRITES no longer produce. Bytes written before this seam
+ * narrowed still carry a decoded half and are still served: a keeper reading its
+ * own storage back asserts the stored type at that boundary (it cannot prove the
+ * shape of a row or a record to the compiler either way), the re-decode drops
+ * and re-derives the half regardless, and no migration rewrites anything.
+ *
+ * The `lastSync` window is `StoredLastSync`'s and is expected to be EMPTY: no
+ * keeper stores one (ADR-0035, as amended).
+ *
+ * ADR-0060 records what this type governs and why the cursor has a variant here.
+ */
 export type StreamFetcher<ABI extends Abi> = (
 	source: IndexingSource<ABI>,
 	fromBlock: number,
-) => Promise<{lastSync: LastSync<ABI>; eventStream: LogEvent<ABI>[]} | undefined>;
+) => Promise<{lastSync: StoredLastSync; eventStream: StoredLogEvent[]} | undefined>;
 /**
  * A keeper that DECLINED the batch: it was not written, and writing it would
  * have left a hole behind a cursor claiming to cover it.
@@ -399,11 +469,29 @@ export type StreamFetcher<ABI extends Abi> = (
  */
 export type StreamSaveDeclined = 'declined';
 
+/**
+ * WHAT A KEEPER IS HANDED: a batch to append, and the cursor that then describes
+ * the stream.
+ *
+ * Both halves arrive STRIPPED, and the types are what SAY so rather than a rule
+ * each implementation has to remember. Core strips ONCE, on the way in
+ * (`storedEventOf` / `storedLastSyncOf`), because this seam is
+ * third-party-implementable with several implementations already and a rule
+ * spread across them would drift.
+ *
+ * The window inside `lastSync` is stripped too and is not read back as events by
+ * anything: the load path takes a stored cursor for its three block numbers and
+ * its context alone, the live reorg window is the indexer's in-memory one, and a
+ * transaction-inclusion question is answered from the STATE keeper's copy. A
+ * keeper is free to drop the window entirely, and the shipped ones do.
+ *
+ * ADR-0060 records what this type governs and why the cursor has a variant here.
+ */
 export type StreamSaver<ABI extends Abi> = (
 	source: IndexingSource<ABI>,
 	stream: {
-		lastSync: LastSync<ABI>;
-		eventStream: LogEvent<ABI>[];
+		lastSync: StoredLastSync;
+		eventStream: StoredLogEvent[];
 	},
 ) => Promise<void | StreamSaveDeclined>;
 export type StreamClearer<ABI extends Abi> = (source: IndexingSource<ABI>) => Promise<void>;

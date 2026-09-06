@@ -6,7 +6,7 @@ import {
 	type StreamSegmentPort,
 	type StoredSegment,
 } from '../src/stream/segments.js';
-import type {IndexingSource, LastSync, LogEvent} from '../src/types.js';
+import type {IndexingSource, LastSync, StoredLastSync, StoredLogEvent} from '../src/types.js';
 
 // ---------------------------------------------------------------------------
 // THE SEGMENTATION HELPER, against a memory port.
@@ -24,24 +24,24 @@ import type {IndexingSource, LastSync, LogEvent} from '../src/types.js';
 
 const SOURCE: IndexingSource<Abi> = {chainId: '1', contracts: []};
 
-function event(blockNumber: number, logIndex = 0, removed = false): LogEvent<Abi> {
+function event(blockNumber: number, logIndex = 0, removed = false): StoredLogEvent {
 	return {
 		blockNumber,
 		logIndex,
 		removed,
 		blockHash: `0x${blockNumber.toString(16)}`,
 		transactionHash: `0x${blockNumber.toString(16)}${logIndex}`,
-	} as unknown as LogEvent<Abi>;
+	} as unknown as StoredLogEvent;
 }
 
-function cursor(lastFromBlock: number, lastToBlock: number, latestBlock = lastToBlock): LastSync<Abi> {
+function cursor(lastFromBlock: number, lastToBlock: number, latestBlock = lastToBlock): StoredLastSync {
 	return {
 		context: {source: [{startBlock: 0, hash: 'src'}], config: 'cfg', processor: 'proc'},
 		latestBlock,
 		lastFromBlock,
 		lastToBlock,
 		unconfirmedBlocks: [{number: lastToBlock, hash: '0xtip', events: []}],
-	} as unknown as LastSync<Abi>;
+	} as unknown as StoredLastSync;
 }
 
 type Call = {op: string; detail?: unknown};

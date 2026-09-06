@@ -1,7 +1,20 @@
 import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
 import {LogEventFetcher} from '../src/internal/decoding/LogEventFetcher.js';
-import type {BaseLogEvent, LogEvent, LogEventWithParsingFailure, ParsedLogEvent, StoredLogEvent} from '../src/types.js';
+import type {
+	BaseLogEvent,
+	ExistingStream,
+	IndexingSource,
+	LastSync,
+	LogEvent,
+	LogEventWithParsingFailure,
+	ParsedLogEvent,
+	StoredLastSync,
+	StoredLogEvent,
+	StreamClearer,
+	StreamFetcher,
+	StreamSaver,
+} from '../src/types.js';
 
 // ---------------------------------------------------------------------------
 // THE STORED EVENT REFUSES A DECODED ONE
@@ -20,7 +33,13 @@ import type {BaseLogEvent, LogEvent, LogEventWithParsingFailure, ParsedLogEvent,
 // a stored-event break is INVISIBLE there and those tests passing proves
 // nothing about the compile-time half.
 //
-// The second half is ordinary vitest over the one consumer that widened here:
+// The refusal is asserted TWICE and both halves are needed: once on the type
+// alias itself (a value handed to something taking a `StoredLogEvent`), and
+// once at the SEAM -- `StreamFetcher`, `StreamSaver` and the `ExistingStream`
+// built from them -- because the seam is what a third-party keeper implements
+// and a type alias nothing points at guards nothing.
+//
+// The last part is ordinary vitest over the one consumer that widened here:
 // the re-decode takes a stored array as readily as a decoded one, and does the
 // same thing with both.
 // ---------------------------------------------------------------------------
@@ -118,6 +137,75 @@ describe('the shape a stored event may take', () => {
 			storesOne(widened);
 
 			return {parsed, parsedWithoutInputs, failed, decoded, decodedStream, widened};
+		}
+
+		expect(typeof refusals).toBe('function');
+	});
+});
+
+// -- the same refusal AT THE SEAM, also evaluated by `pnpm typecheck` --------
+
+/** What a keeper hands back, and what it is handed, as the seam declares them. */
+function fetches(fetcher: StreamFetcher<WithInputs>) {
+	return fetcher;
+}
+function saves(saver: StreamSaver<WithInputs>) {
+	return saver;
+}
+function keeps(stream: ExistingStream<WithInputs>) {
+	return stream;
+}
+
+/** A fetcher that hands DECODED events back, which is what a keeper may no longer be. */
+type DecodedFetcher = (
+	source: IndexingSource<WithInputs>,
+	fromBlock: number,
+) => Promise<{lastSync: StoredLastSync; eventStream: LogEvent<WithInputs>[]} | undefined>;
+/** A fetcher whose CURSOR carries a decoded reorg window, the other half of the same claim. */
+type DecodedWindowFetcher = (
+	source: IndexingSource<WithInputs>,
+	fromBlock: number,
+) => Promise<{lastSync: LastSync<WithInputs>; eventStream: StoredLogEvent[]} | undefined>;
+/** A saver declaring that it takes decoded events, which core will never hand it. */
+type DecodedSaver = (
+	source: IndexingSource<WithInputs>,
+	stream: {lastSync: StoredLastSync; eventStream: LogEvent<WithInputs>[]},
+) => Promise<void>;
+type DecodedKeeper = {
+	fetchFrom: DecodedFetcher;
+	saveNewEvents: DecodedSaver;
+	clear: StreamClearer<WithInputs>;
+};
+
+describe('the shape a stream KEEPER may take', () => {
+	it('refuses a keeper that serves or accepts decoded events', () => {
+		// Deliberately never CALLED, exactly as above: what is asserted here are the
+		// `@ts-expect-error` comments, and each of them fails `pnpm typecheck` if the
+		// line it guards ever starts compiling.
+		function refusals(
+			decodedFetcher: DecodedFetcher,
+			decodedWindowFetcher: DecodedWindowFetcher,
+			decodedSaver: DecodedSaver,
+			decodedKeeper: DecodedKeeper,
+			storedFetcher: StreamFetcher<WithInputs>,
+			storedSaver: StreamSaver<WithInputs>,
+			storedKeeper: ExistingStream<WithInputs>,
+		) {
+			// @ts-expect-error what a keeper HANDS BACK is what the node said: a decoded event is not that
+			fetches(decodedFetcher);
+			// @ts-expect-error and the cursor's reorg window is narrowed with it, in the same direction
+			fetches(decodedWindowFetcher);
+			// @ts-expect-error what a keeper is HANDED is stripped before it arrives, so declaring decoded is a lie
+			saves(decodedSaver);
+			// @ts-expect-error and the whole seam moves with its two halves, which is what an implementor writes
+			keeps(decodedKeeper);
+
+			// the stored shape is what the seam is, on all three
+			fetches(storedFetcher);
+			saves(storedSaver);
+			keeps(storedKeeper);
+
+			return {decodedFetcher, decodedWindowFetcher, decodedSaver, decodedKeeper};
 		}
 
 		expect(typeof refusals).toBe('function');

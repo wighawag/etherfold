@@ -21,6 +21,8 @@ import type {
 	SourceHashEntry,
 	UsedStreamConfig,
 	LogEvent,
+	StoredLastSync,
+	StoredLogEvent,
 } from './types.js';
 import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
 import type {Abi} from 'abitype';
@@ -67,9 +69,47 @@ function sameEvent<ABI extends Abi>(a: LogEvent<ABI>, b: LogEvent<ABI>): boolean
  * themselves. Never the block NUMBER, which a reorg reuses for a different
  * block; never the decoded `args`, which are what SOME ABI made of the bytes
  * (ADR-0034) and are re-derived on every replay anyway.
+ *
+ * It takes EITHER shape because it reads only the raw half, and the events it is
+ * asked about arrive as both: the follower derives a mark from the STORED slice
+ * a keeper handed back, and the same mark from the decoded events it folded. The
+ * parameter is widened rather than the call site asserting -- an assertion there
+ * would claim a decoded half that is not present, to answer a question that does
+ * not read it.
  */
-function emissionMarkOf<ABI extends Abi>(event: LogEvent<ABI>): string {
+function emissionMarkOf<ABI extends Abi>(event: LogEvent<ABI> | StoredLogEvent): string {
 	return `${event.blockHash}:${event.logIndex}:${event.removed ? 'R' : 'A'}`;
+}
+
+/**
+ * THE CURSOR A KEEPER HANDED BACK, AS THE ENGINE'S OWN CURSOR: the stream's
+ * three block numbers and its context, with `lastFromBlock` set to the block
+ * this indexer ASKED for and an EMPTY unconfirmed window.
+ *
+ * Two things happen here and each is deliberate. The `lastFromBlock` assignment
+ * is not new -- all three read paths did it, in place, on the object the keeper
+ * returned -- and it is needed because `generateStreamFromReplay` refuses a
+ * stream that does not reach back to where the cursor resumes, while the stored
+ * cursor's own `lastFromBlock` is whatever the last fetch used. Doing it by
+ * CONSTRUCTION also stops the engine writing into a value it does not own.
+ *
+ * The WINDOW is where the stream seam and the engine's cursor part company
+ * (`StoredLastSync` versus `LastSync`): a keeper's holds raw events and the
+ * engine's holds decoded ones. Nothing has to be converted between them, because
+ * no keeper stores a window at all (ADR-0035, as amended) and a replay ignores
+ * the one it is handed, rebuilding it by WALKING the events (ADR-0042). Emptying
+ * it here says that out loud instead of carrying a value with no reader across
+ * the boundary behind a cast. ADR-0060 records why the two types differ at all,
+ * and why this is a construction rather than a widening of `replay`.
+ */
+function cursorFromStream<ABI extends Abi>(stored: StoredLastSync, lastFromBlock: number): LastSync<ABI> {
+	return {
+		context: stored.context,
+		latestBlock: stored.latestBlock,
+		lastFromBlock,
+		lastToBlock: stored.lastToBlock,
+		unconfirmedBlocks: [],
+	};
 }
 
 export type LoadingState = 'Loading' | 'FetchingEventStream' | 'ProcessingEventStream' | 'Loaded';
@@ -951,7 +991,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	 * slice, a shorter one, one that shares a prefix -- falls through to the replay,
 	 * which is always correct and merely costs a walk.
 	 */
-	protected hasAlreadyFolded(eventsStored: LogEvent<ABI>[]): boolean {
+	protected hasAlreadyFolded(eventsStored: readonly (LogEvent<ABI> | StoredLogEvent)[]): boolean {
 		const folded = this.followedEmissions;
 		if (!folded || folded.length !== eventsStored.length) {
 			return false;
@@ -1045,10 +1085,10 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 
 				// we assume the stream is correct and start from the requested number
 				if (existingStreamData) {
-					const {eventStream: eventsFetched, lastSync: lastSyncFetched} = existingStreamData;
-					// we assign the lastFromBlock as we fetched from that
-					// NOTE save shoudl probably do it itself, really, but here we deal even if it did not
-					lastSyncFetched.lastFromBlock = fromBlock;
+					const eventsFetched = existingStreamData.eventStream;
+					// the requested `fromBlock`, and the engine's own cursor shape: see
+					// `cursorFromStream`
+					const lastSyncFetched = cursorFromStream<ABI>(existingStreamData.lastSync, fromBlock);
 
 					// the STREAM half: these are raw logs under a topic-and-address filter, so
 					// they are reusable whenever that filter did not GROW -- which is what lets
@@ -1118,12 +1158,12 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 				// we still need to clear if it does not matches, as otherwise it will be written as if it contained all logs
 				const existingStreamData = await this.config.keepStream.fetchFrom(this.source, fromBlock);
 				if (existingStreamData) {
-					const {eventStream: eventsFetched, lastSync: lastSyncFetched} = existingStreamData;
-					// the requested `fromBlock`, assigned onto the fetched cursor exactly as the
+					const eventsFetched = existingStreamData.eventStream;
+					// the requested `fromBlock`, taken onto the fetched cursor exactly as the
 					// discarded branch does: `generateStreamToAppend` refuses a batch whose
 					// `lastFromBlock` is not the one the current cursor asks for, and the stored
 					// cursor's own is whatever the last fetch used
-					lastSyncFetched.lastFromBlock = fromBlock;
+					const lastSyncFetched = cursorFromStream<ABI>(existingStreamData.lastSync, fromBlock);
 					if (!this.streamMatches(lastSyncFetched.lastToBlock, lastSyncFetched.context)) {
 						await this.config.keepStream.clear(this.source);
 						this.forgetStoredStream();
@@ -1188,11 +1228,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			return current;
 		}
 
-		const {eventStream: eventsStored, lastSync: lastSyncStored} = existingStreamData;
-		// the requested `fromBlock`, assigned onto the fetched cursor exactly as both
-		// load branches do: `generateStreamFromReplay` refuses a stream that does not
-		// reach back to where this cursor resumes
-		lastSyncStored.lastFromBlock = fromBlock;
+		const eventsStored = existingStreamData.eventStream;
+		// the requested `fromBlock`, taken onto the fetched cursor exactly as both load
+		// branches do: `generateStreamFromReplay` refuses a stream that does not reach
+		// back to where this cursor resumes
+		const lastSyncStored = cursorFromStream<ABI>(existingStreamData.lastSync, fromBlock);
 		if (!this.streamMatches(lastSyncStored.lastToBlock, lastSyncStored.context)) {
 			// The stream was fetched under a filter this source is not covered by. The
 			// indexing generation is the one that decides what happens to it.
@@ -1376,19 +1416,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		const lastSyncToStore = storedLastSyncOf(lastSync);
 		let saved: void | 'declined';
 		try {
-			// TEMPORARY, and removed by `the-stream-seam-takes-only-the-stored-event`:
-			// the seam still DECLARES decoded events on both the batch and the window's
-			// blocks, and a stripped object satisfies neither by construction -- that
-			// refusal is what `StoredLogEvent` was minted for (the compiler says so itself:
-			// a direct conversion is refused as insufficiently overlapping, which is why it
-			// goes through `unknown`). So the lie is confined to this ONE boundary, over the
-			// whole argument the saver takes, while the strip's own locals and return types
-			// say STORED. That task narrows the seam and moves every implementation and fake
-			// at once; doing half of it here would leave the repo red in between.
-			saved = await keepStream.saveNewEvents(source, {eventStream: toStore, lastSync: lastSyncToStore} as unknown as {
-				eventStream: LogEvent<ABI>[];
-				lastSync: LastSync<ABI>;
-			});
+			// No conversion: the seam takes exactly what the strip produced, on both
+			// halves. `StreamSaver` is declared over `StoredLogEvent` / `StoredLastSync`,
+			// so a keeper that expected the decoded half would not compile against it
+			// rather than receiving `undefined` at runtime.
+			saved = await keepStream.saveNewEvents(source, {eventStream: toStore, lastSync: lastSyncToStore});
 		} catch (e) {
 			return this.onStreamWriteFailed(e, source);
 		}
