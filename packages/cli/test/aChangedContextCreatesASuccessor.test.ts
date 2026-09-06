@@ -43,10 +43,11 @@ import {abi, CONTRACT, nftProcessor, SOURCE, START_BLOCK, timestampOf, ZERO, ALI
 // This package is where that database is actually shared: ONE libSQL handle
 // carries the server's fixed tables, the stored emission stream and every
 // generation's state at once, which is the shape `run`, `build` and `index`
-// have. WIRING THE COMMANDS ONTO THIS CONTAINER IS A LATER TASK
-// (`the-cli-and-the-server-hold-generations-the-same-way`); the assembly below
-// is what that task will move into `folding.ts`, exercised here so the container
-// is proved over the real substrate rather than over a stand-in.
+// have. THE COMMANDS NOW FOLD THROUGH EXACTLY THIS ASSEMBLY, which lives in
+// `src/folding.ts` (`openFolding`); it is written out again here on purpose, so
+// that the CONTAINER is asserted over the real substrate with no command's
+// configuration, chain or HTTP surface in the way -- two processors at two
+// versions is a thing a test can arrange directly and a command line cannot.
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'alpha';

@@ -35,6 +35,13 @@ import {INDEXER} from './utils/receiver.js';
 /** The shared secret of the wire, under the same name on both sides. */
 const TOKEN = 'a-shared-secret';
 
+/**
+ * The OPERATOR's secret, which is deliberately NOT the wire's: the pointer
+ * surface fails closed under its own `ADMIN_TOKEN` (ADR-0057), so a sender's
+ * credential opens nothing there.
+ */
+const ADMIN_TOKEN = 'an-operator-secret';
+
 const AUTHENTICATED = {Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json'};
 
 /**
@@ -206,6 +213,51 @@ describe('the receiver runs, folds what is pushed to it, and keeps running', () 
 			expect(
 				(await globalThis.fetch(`${running.url}${path}`, {method: 'POST', headers: AUTHENTICATED, body: '{}'})).status,
 			).toBe(404);
+		}
+	});
+
+	it('resolves its NAME to a generation container, so the pointer surface answers here', async () => {
+		// The name resolves to a container over a durable registry rather than to a bare
+		// receiver, so this half can answer the two OPTIONAL questions a registry entry
+		// may hold: what there is to point AT, and the move itself (ADR-0057). A host
+		// holding one fold and no registry answers `501 generations-not-held` to both,
+		// which is what this command used to do.
+		process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+		try {
+			running = await index(RECEIVING, depsFor());
+
+			const listed = await globalThis.fetch(`${running.url}/${INDEXER}/admin/canonical-generation`, {
+				headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
+			});
+			expect(listed.status).toBe(200);
+			const body = (await listed.json()) as {
+				indexer: string;
+				canonical?: {generation: string; stream: string; processor: string};
+				generations: {generation: string; canonical: boolean}[];
+			};
+
+			// ONE fold, registered as ONE generation, and the pointer names it: the first
+			// generation registered takes the pointer, which is the registry's own rule
+			expect(body.indexer).toBe(INDEXER);
+			expect(body.generations).toHaveLength(1);
+			expect(body.generations[0]).toMatchObject({canonical: true});
+			expect(body.canonical).toMatchObject({
+				stream: running.streamBuilder.generation.stream,
+				processor: running.streamBuilder.generation.processor,
+			});
+			// ...and it is the generation the container holds, not a second opinion about it
+			expect((await running.container.generations()).map((record) => record.processor)).toEqual([
+				running.streamBuilder.generation.processor,
+			]);
+
+			// the guard is the ADMIN one and fails closed: it is deliberately not the ingest
+			// credential, so a sender's token opens nothing here
+			expect(
+				(await globalThis.fetch(`${running.url}/${INDEXER}/admin/canonical-generation`, {headers: AUTHENTICATED}))
+					.status,
+			).toBe(401);
+		} finally {
+			delete process.env.ADMIN_TOKEN;
 		}
 	});
 

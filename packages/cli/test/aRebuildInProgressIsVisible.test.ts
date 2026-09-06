@@ -59,10 +59,12 @@ import {
 //  - the envelope stays SMALL: four numbers per generation, no unconfirmed
 //    window and no raw serialized cursor anywhere in it.
 //
-// WIRING `run` ONTO A CONTAINER IS A LATER TASK
-// (`the-cli-and-the-server-hold-generations-the-same-way`); what this file drives
-// is the reporter that task will hand the container to, which today `run` and
-// `index` hand exactly one fold.
+// `run` AND `index` NOW HAND THAT REPORTER THEIR CONTAINER
+// (`foldingStatusReport`, `src/folding.ts`), so what this file drives is what
+// those two commands report -- with the folds arranged by hand, which is how a
+// mid-rebuild page is put on screen without a chain and a promotion in the way.
+// `packages/cli/test/equivalence.test.ts` asserts the same field through the
+// COMMANDS, over a real `run` that adds a successor and promotes it.
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'alpha';

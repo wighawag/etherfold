@@ -1,8 +1,9 @@
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {ReorgCounters} from '@etherfold/core';
+import {generationDigestOf, type GenerationId, type ReorgCounters} from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
+import {EntityEventProcessor, entityProcessorVersionHash, type EntityProcessor} from '@etherfold/processor-entities';
 import {createNodeDB, startServer, type RunningServer} from '@etherfold/platform-nodejs';
 import type {RunningFetcher} from '@etherfold/platform-nodejs-fetcher';
 import {
@@ -20,7 +21,9 @@ import {afterEach, describe, expect, it} from 'vitest';
 import {DEFAULT_INDEXER_NAME} from '../src/config.js';
 import {
 	build,
+	canonicalStateNamespaceIn,
 	fetch as startFetch,
+	heldGenerationsIn,
 	index,
 	run,
 	serve,
@@ -43,6 +46,52 @@ import {
 	transfer,
 	ZERO,
 } from './utils/chain.js';
+
+/**
+ * THE UPGRADE a reconfigure reaching a long-running `run` would bring: the same
+ * logs, a DIFFERENT fold.
+ *
+ * It counts each transfer TWICE, so the incumbent and the successor answer
+ * observably different things from byte-identical input -- which is what makes
+ * "the pointer moved" a real assertion rather than one two identical folds would
+ * pass by accident.
+ */
+const V2: EntityProcessor<typeof abi> = {
+	version: '2.0.0',
+	entities: nftEntities,
+	async onTransfer(state, event) {
+		const id = event.args.id.toString().padStart(78, '0');
+		const to = event.args.to.toLowerCase();
+		if (to === ZERO) {
+			state.delete('nft', {tokenID: id});
+		} else {
+			state.set('nft', {tokenID: id}, {owner: to});
+		}
+		const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
+		state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + 2});
+	},
+};
+
+/**
+ * ONE FOLD, as a host builds one: its own table namespace, then the processor
+ * over it (ADR-0043, ADR-0053).
+ *
+ * The same four lines `folding.ts` writes for the fold a command OPENS with --
+ * written out here because this is the caller's side of `container.add`, which is
+ * what a reconfigure reaching a running process is.
+ */
+function successorSpec(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
+	return {
+		createState: (context: {stream: string}) =>
+			new VersionedStateStore(db, declared.entities, {
+				tableNamespace: generationDigestOf({
+					stream: context.stream,
+					processor: entityProcessorVersionHash(declared),
+				}),
+			}),
+		createProcessor: (state: unknown) => new EntityEventProcessor<typeof abi>(state as never, declared) as never,
+	};
+}
 
 // ---------------------------------------------------------------------------------------------------
 // THE SPLIT IS A DEPLOYMENT CHOICE, ASSERTED AT THE COMMANDS
@@ -168,7 +217,12 @@ type Status = {
 	healthy: boolean;
 	reorgs?: ReorgCounters;
 	schema: {applied: boolean; version?: number; expected: number; matches?: boolean};
-	cursor?: {reported: boolean; value?: StoreCursorReport};
+	cursor?: {
+		reported: boolean;
+		value?: StoreCursorReport;
+		/** ONE ENTRY PER GENERATION HELD (ADR-0047), which is how a rebuild is watched. */
+		generations?: {generation: string; canonical: boolean; follows: boolean; value?: StoreCursorReport}[];
+	};
 };
 
 /**
@@ -213,9 +267,18 @@ async function cursorOf(url: string): Promise<StoreCursorReport | undefined> {
  * and the SQL tier a server-side reader gets (`queryCurrent`, which is the only
  * way to ask for a whole entity) -- because the read tier this milestone ships
  * is a database connection and not an HTTP query route.
+ *
+ * WHICH TABLES it opens is resolved through the CANONICAL POINTER, because on
+ * this runtime that is the whole of what a read tier does (ADR-0053): a
+ * generation's state is a table-name namespace, so a reader that named the
+ * un-namespaced tables would be reading a shape no deployment produces -- and
+ * after a promotion it would be reading the generation that STOPPED answering.
  */
 async function readsOver(url: string): Promise<unknown> {
-	const store = new VersionedStateStore(createNodeDB(url), nftEntities);
+	const db = createNodeDB(url);
+	const tableNamespace = await canonicalStateNamespaceIn(db);
+	expect(tableNamespace, `${url} names the generation that answers reads`).toBeDefined();
+	const store = new VersionedStateStore(db, nftEntities, {tableNamespace});
 	const surface = createQuerySurface(store, nftEntities);
 	return {
 		nfts: await surface.nft.queryCurrent({orderBy: 'tokenID'}),
@@ -243,6 +306,49 @@ const tokenID = (id: bigint) => id.toString().padStart(78, '0');
 async function emissionsIn(url: string): Promise<Record<string, unknown>[]> {
 	const db = createNodeDB(url);
 	return (await db.prepare(`SELECT * FROM _emissions ORDER BY indexer, seq`).all<Record<string, unknown>>()).results;
+}
+
+/**
+ * WHAT A DATABASE HOLDS ON THE GENERATION AXIS: which generations are registered
+ * in it, which one answers reads, and the TABLE NAMESPACE that one folds into.
+ *
+ * Read out of the durable rows rather than off any running process, because that
+ * is the only thing two deployment shapes can be compared on: an artifact handed
+ * to somebody else has no process attached to it.
+ *
+ * The NAME is deliberately not part of what is compared. A generation is
+ * `{stream, processor}` (`CONTEXT.md`), the name is the DATABASE it lives in
+ * (ADR-0053), and `build` defaults its name while a split deployment is told
+ * one -- so comparing names would compare the one axis the commands are supposed
+ * to differ on.
+ */
+async function generationsIn(url: string): Promise<{
+	registered: {stream: string; processor: string}[];
+	canonical?: {stream: string; processor: string};
+	namespace?: string;
+}> {
+	const db = createNodeDB(url);
+	const held = await heldGenerationsIn(db);
+	expect(held.length, `${url} holds exactly one named indexer`).toBe(1);
+	const entry = held[0]!;
+	return {
+		registered: entry.generations.map((record) => ({stream: record.stream, processor: record.processor})),
+		...(entry.canonical
+			? {
+					canonical: {stream: entry.canonical.stream, processor: entry.canonical.processor},
+					namespace: generationDigestOf(entry.canonical),
+				}
+			: {}),
+	};
+}
+
+/** Every table this database holds, minus the ones SQLite made for itself. */
+async function tablesIn(url: string): Promise<string[]> {
+	const db = createNodeDB(url);
+	const rows = await db
+		.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+		.all<{name: string}>();
+	return rows.results.map((row) => row.name);
 }
 
 /** `etherfold run`: the combined deployment, folding into a database it owns. */
@@ -460,6 +566,28 @@ describe('`run` and `fetch` plus `index` land on IDENTICAL state', () => {
 		expect(new Set(storedInOneProcess.map((row) => row['stream'])).size).toBe(1);
 	});
 
+	it('refuses to START against a database it may not migrate, naming what is missing', async () => {
+		// A fold is a GENERATION now, and a generation is REGISTERED before anything is
+		// read or written -- as rows in the registry and the canonical pointer
+		// (ADR-0053/ADR-0054). So a database carrying none of the fixed tables is not a
+		// database this command can hold a generation in at all, and `--no-auto-setup`
+		// says the operator has given somebody else the job of creating them.
+		//
+		// It is refused at START-UP rather than met on the first cycle, and NOT by
+		// applying the schema anyway: overriding the flag would be this process deciding
+		// migrations on the operator's behalf, and coming up regardless would be a
+		// process reporting itself healthy while every cycle failed for a reason no
+		// waiting fixes.
+		directory = mkdtempSync(join(tmpdir(), 'etherfold-unmigrated-'));
+		const unmigratedDB = `file:${join(directory, 'unmigrated.db')}`;
+
+		await expect(startCombined(unmigratedDB, fakeChain(), {autoSetup: false})).rejects.toThrow(
+			/does not carry the fixed-table schema/,
+		);
+		// nothing was created on the way to refusing
+		expect(await tablesIn(unmigratedDB)).toEqual([]);
+	});
+
 	it('refuses to advance while it cannot STORE what it folded, and leaves no hole', async () => {
 		// THE OTHER HALF OF ADR-0052, and the one that is not symmetric with the
 		// counter. A count that cannot be persisted is a logged miscount and the fold
@@ -469,17 +597,25 @@ describe('`run` and `fetch` plus `index` land on IDENTICAL state', () => {
 		// gap check, silent and permanent -- so the batch is not folded at all and the
 		// cycle is retried.
 		//
-		// `--no-auto-setup` is the honest way to produce that: the operator has said
-		// somebody else migrates this database, so the fixed tables the stream and the
-		// counters live in are simply not there yet and every write against them fails.
-		directory = mkdtempSync(join(tmpdir(), 'etherfold-unmigrated-'));
-		const unmigratedDB = `file:${join(directory, 'unmigrated.db')}`;
+		// The honest way to produce that, now that a fold REGISTERS a generation before
+		// it writes anything, is a database that was migrated (so this process starts,
+		// opens its registry and holds its generation -- see the test above) and then
+		// LOSES the one table the stream lives in, before it has folded anything. Every
+		// append then fails, and `--no-auto-setup` is what keeps this process from
+		// quietly repairing what the operator said somebody else owns.
+		directory = mkdtempSync(join(tmpdir(), 'etherfold-unstorable-'));
+		const unstorableDB = `file:${join(directory, 'unstorable.db')}`;
+		// a chain serving NOTHING yet, so the process comes up and folds nothing: what
+		// is under test is a batch that cannot be stored, never one stored beforehand
 		const chain = fakeChain();
 
+		// migrated by somebody else, which is what `--no-auto-setup` says happens
+		const migrated = createNodeDB(unstorableDB);
+		await applySchema(migrated);
+
 		const retries: unknown[] = [];
-		chain.serve([...CHAIN_STATES[0].logs], CHAIN_STATES[0].tip);
 		combined = await startCombined(
-			unmigratedDB,
+			unstorableDB,
 			chain,
 			{autoSetup: false},
 			{
@@ -489,6 +625,10 @@ describe('`run` and `fetch` plus `index` land on IDENTICAL state', () => {
 			},
 		);
 
+		// ...and then the table the append needs goes away underneath it
+		await combined.db.prepare(`DROP TABLE _emissions`).all();
+		chain.serve([...CHAIN_STATES[0].logs], CHAIN_STATES[0].tip);
+
 		// several cycles have now tried and failed, which is what makes the assertions
 		// below about a REFUSAL rather than about a process that had not started yet
 		await until(
@@ -497,16 +637,15 @@ describe('`run` and `fetch` plus `index` land on IDENTICAL state', () => {
 			'the deployment to refuse a batch it could not store, several times over',
 		);
 
-		// the write really could not land: no fixed tables at all
-		const refusing = await statusOf(combined.url);
-		expect(refusing.schema.applied).toBe(false);
+		// the write really could not land: there is nowhere to append to
+		await expect(emissionsIn(unstorableDB)).rejects.toThrow(/_emissions/);
 		// ...and NOTHING advanced. The state did not move past events no stream holds,
 		// so the two agree about how far they got, which here is nowhere: that is what
 		// "no hole" means, and it is the whole reason this write is not best-effort.
 		expect(await cursorOf(combined.url)).toBeUndefined();
-		await expect(emissionsIn(unmigratedDB)).rejects.toThrow(/_emissions/);
 
-		// now somebody else migrates it, which is what `--no-auto-setup` promised
+		// now somebody else finishes migrating it, which is what `--no-auto-setup`
+		// promised: the DDL is `IF NOT EXISTS`, so this creates exactly what was missing
 		await applySchema(combined.db);
 
 		// the next cycle re-derives exactly the delta the refused ones did, and this
@@ -520,7 +659,7 @@ describe('`run` and `fetch` plus `index` land on IDENTICAL state', () => {
 			);
 		}
 
-		expect(await readsOver(unmigratedDB)).toMatchObject({
+		expect(await readsOver(unstorableDB)).toMatchObject({
 			byId: {
 				1: {owner: ALICE.toLowerCase()},
 				2: {owner: BOB.toLowerCase()},
@@ -530,7 +669,7 @@ describe('`run` and `fetch` plus `index` land on IDENTICAL state', () => {
 		});
 		// and the stream it stored once it could is the whole stream, from the start
 		// block: nothing was skipped while it was refusing
-		expect((await emissionsIn(unmigratedDB)).map((row) => [row['seq'], row['blockNumber'], row['removed']])).toEqual([
+		expect((await emissionsIn(unstorableDB)).map((row) => [row['seq'], row['blockNumber'], row['removed']])).toEqual([
 			[1, START_BLOCK + 10, 0],
 			[2, START_BLOCK + 10, 0],
 			[3, START_BLOCK + 90, 0],
@@ -616,6 +755,186 @@ describe('`build` emits a database carrying the reorgs it concluded', () => {
 		// CONSTANT and not the file's name, so the artifact keeps answering under it
 		// wherever the file is copied to.
 		expect(new Set(stored.map((row) => row['indexer']))).toEqual(new Set([DEFAULT_INDEXER_NAME]));
+
+		// AND IT HOLDS EXACTLY ONE GENERATION, after TWO one-shots over the same
+		// inputs: the second RESOLVED the generation the first registered rather than
+		// registering another (the registry's own rule), which is what a one-shot's
+		// pointer read at start-up buys. A `build` that added one per invocation would
+		// reach the generation cap by running four times.
+		const held = await generationsIn(artifact);
+		expect(held.registered).toHaveLength(1);
+		// ...under the DEFAULTED name, exactly as its stored stream is: the registry rows
+		// key on the same value (ADR-0036), so the artifact resolves under it wherever it
+		// is copied to, with no operator having named anything
+		expect((await heldGenerationsIn(createNodeDB(artifact))).map((entry) => entry.indexer)).toEqual([
+			DEFAULT_INDEXER_NAME,
+		]);
+		// ...and it is the one the pointer names, because the FIRST generation
+		// registered takes the pointer and a one-shot never promotes
+		expect(held.canonical).toEqual(held.registered[0]);
+		// which is where its state landed: the reads above resolved this namespace
+		expect(await tablesIn(artifact)).toEqual(expect.arrayContaining([`${held.namespace}_nft`]));
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// A `build` ARTIFACT AND A `run` DATABASE ARE INDISTINGUISHABLE ON THE GENERATION AXIS
+// ---------------------------------------------------------------------------------------------------
+// The artifact test above says what a `build` database CARRIES. This one says
+// what it must not carry: a shape of its own. `build` holds exactly ONE
+// generation because a one-shot has no reconfigure -- but that is the same model
+// instantiated at N=1 and NOT a second model, and the distinction is load-bearing
+// precisely because the artifact is meant to become somebody else's INPUT. A
+// `build` that folded into differently-named tables, or registered nothing, or
+// left the pointer unset, would be distinguishable on exactly the axis a reader
+// of it resolves through.
+//
+// So both shapes are driven over ONE fixture chain, reorg included, and the
+// comparison is made on the durable rows -- which is all an artifact handed to
+// somebody else has.
+// ---------------------------------------------------------------------------------------------------
+
+describe('a `build` artifact and a `run` database, on the generation axis', () => {
+	it('register the same generation, point at it, and fold into the same table namespace', async () => {
+		directory = mkdtempSync(join(tmpdir(), 'etherfold-generation-axis-'));
+		const combinedDB = `file:${join(directory, 'combined.db')}`;
+		const artifact = `file:${join(directory, 'artifact.db')}`;
+
+		const combinedChain = fakeChain();
+		const buildChain = fakeChain();
+		combined = await startCombined(combinedDB, combinedChain);
+
+		for (const state of CHAIN_STATES) {
+			combinedChain.serve([...state.logs], state.tip);
+			buildChain.serve([...state.logs], state.tip);
+			await until(
+				() => cursorOf(combined!.url),
+				(cursor) => cursor?.lastToBlock === state.tip,
+				`the combined deployment to reach block ${state.tip}`,
+			);
+			// the one-shot meets the same two chain states as two invocations, which is the
+			// only way a stop-at-tip command sees a reorg at all
+			await build(
+				{processor: './nfts.js', store: 'sqlite', db: artifact, nodeUrl: 'http://localhost:0', indexer: INDEXER},
+				{
+					importModule: async () => entityModule,
+					provider: buildChain.provider,
+					sleep: async () => {},
+					env: DEPLOYMENT,
+				},
+			);
+		}
+
+		const inOneProcess = await generationsIn(combinedDB);
+		const inTheArtifact = await generationsIn(artifact);
+
+		// ONE generation each, and it is the SAME generation: the same stream (one
+		// source, one stream config) folded by the same processor version
+		expect(inTheArtifact).toEqual(inOneProcess);
+		expect(inTheArtifact.registered).toHaveLength(1);
+		// the pointer names it in both, so a reader resolves the same answer either way
+		expect(inTheArtifact.canonical).toEqual(inTheArtifact.registered[0]);
+
+		// the STATE NAMESPACE is therefore the same string, and the tables under it are
+		// the same tables: a reader pointed at either database names the same ones
+		const namespaced = (names: string[]) => names.filter((name) => name.includes(inOneProcess.namespace as string));
+		expect(namespaced(await tablesIn(artifact))).toEqual(namespaced(await tablesIn(combinedDB)));
+		expect(namespaced(await tablesIn(artifact)).length).toBeGreaterThan(0);
+
+		// ...and what those tables answer, the stream underneath them and the reverts
+		// they concluded are the same too -- the axes the earlier tests pin between `run`
+		// and the split shape, asserted here between `run` and the one-shot, because
+		// "indistinguishable" is a claim about all of them at once
+		expect(await readsOver(artifact)).toEqual(await readsOver(combinedDB));
+		expect(await emissionsIn(artifact)).toEqual(await emissionsIn(combinedDB));
+		expect(await readReorgCounters(createNodeDB(artifact))).toMatchObject({contradiction: 1, absence: 0});
+		expect(countsOf(await readReorgCounters(createNodeDB(artifact)))).toEqual(
+			countsOf((await statusOf(combined.url)).reorgs),
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// WHAT `run` HAS THAT `build` HAS NOT: TIME
+// ---------------------------------------------------------------------------------------------------
+// The two commands hold the SAME container over the same durable registry, and
+// what differs is EXECUTION: a `run` is a long-running host, so a reconfigure can
+// reach it. A fold added beside the live one is a SUCCESSOR -- it shares the
+// stream, so it is a FOLLOWER (ADR-0044): no receiver, and a bounded rebuild over
+// the stored stream instead, which this process schedules between fetch cycles
+// (ADR-0022). When it reaches the canonical generation's cursor the pointer
+// moves, once, and reads answer the new fold from then on.
+//
+// Nothing is discarded on the way: the incumbent keeps its own tables and keeps
+// answering throughout, which is the outage the generation model exists to
+// remove.
+// ---------------------------------------------------------------------------------------------------
+
+describe('`run` adds a successor beside the live fold and promotes it in-process', () => {
+	it('answers the incumbent until the rebuild catches up, then answers the successor', async () => {
+		directory = mkdtempSync(join(tmpdir(), 'etherfold-successor-'));
+		const combinedDB = `file:${join(directory, 'combined.db')}`;
+		const chain = fakeChain();
+		combined = await startCombined(combinedDB, chain);
+
+		for (const state of CHAIN_STATES) {
+			chain.serve([...state.logs], state.tip);
+			await until(
+				() => cursorOf(combined!.url),
+				(cursor) => cursor?.lastToBlock === state.tip,
+				`the combined deployment to reach block ${state.tip}`,
+			);
+		}
+		const incumbent = await readsOver(combinedDB);
+		expect(incumbent).toMatchObject({byId: {transfers: {value: 3}}});
+
+		// THE RECONFIGURE, reaching a process that is running: a different fold over the
+		// same stream. Nothing is cleared and nothing is re-fetched -- the successor
+		// re-folds the stream this process already stored.
+		const successor = await combined.container.add(successorSpec(combined.db, V2));
+		expect(successor.follows).toBe(true);
+		// ...and it does NOT write the stream: that duty stays with the oldest surviving
+		// generation on it (ADR-0044), so the history stays ONE history
+		expect(successor.writesStream).toBe(false);
+
+		// both are held, and the pointer has not moved: the incumbent still answers
+		expect((await combined.container.generations()).length).toBe(2);
+		expect(await combined.container.canonical()).toMatchObject(combined.streamBuilder.generation);
+		expect(await readsOver(combinedDB)).toEqual(incumbent);
+
+		// the rebuild is driven by the RUN itself, between its own cycles: nothing here
+		// calls `rebuildMore`, and the pointer moves when the successor is level
+		const promoted = (await until(
+			() => combined!.container.canonical(),
+			(canonical) => !!canonical && canonical.processor === successor.record.processor,
+			'the successor to catch up and the canonical pointer to move to it',
+		)) as GenerationId;
+
+		// A READER SEES THE MOVE AND NOTHING ELSE: the same resolution as before, now
+		// naming the successor's namespace, answering the upgraded fold's numbers
+		expect(generationDigestOf(promoted)).toBe(generationDigestOf(successor.record));
+		expect(await canonicalStateNamespaceIn(createNodeDB(combinedDB))).toBe(generationDigestOf(successor.record));
+		expect(await readsOver(combinedDB)).toMatchObject({byId: {transfers: {value: 6}}});
+
+		// and the incumbent was RETAINED rather than dropped, which is what makes moving
+		// the pointer BACK a revert instead of a re-index: its state is exactly what it
+		// was, in its own tables
+		expect((await combined.container.generations()).length).toBe(2);
+		const incumbentStore = new VersionedStateStore(createNodeDB(combinedDB), nftEntities, {
+			tableNamespace: generationDigestOf(combined.streamBuilder.generation),
+		});
+		expect(await incumbentStore.getCurrent('counter', {name: 'transfers'})).toMatchObject({value: 3});
+
+		// ...and `/status` says so on the page an operator already watches: two entries,
+		// one of them the follower, exactly one canonical
+		const reported = (await statusOf(combined.url)).cursor?.generations ?? [];
+		expect(reported.map((entry) => entry.generation).sort()).toEqual(
+			[generationDigestOf(combined.streamBuilder.generation), generationDigestOf(successor.record)].sort(),
+		);
+		expect(reported.filter((entry) => entry.canonical).map((entry) => entry.generation)).toEqual([
+			generationDigestOf(successor.record),
+		]);
+		expect(reported.find((entry) => entry.follows)?.generation).toBe(generationDigestOf(successor.record));
 	});
 });
 
@@ -729,6 +1048,15 @@ describe('both feed views answer over a database `run` folded', () => {
 //              reporter, and a read tier owns no store and is given none, so
 //              `serve` reports no cursor. That is correct rather than a bug, and
 //              the assertion below pins it as such.
+//
+// And the one thing the read tier DOES resolve for itself: WHICH GENERATION
+// ANSWERS. A generation's state is a table-name namespace and a named indexer IS
+// a database (ADR-0053), so naming a table is two steps, and the first one is the
+// canonical POINTER. `serve` does that step with no processor, no store and no
+// name -- `--indexer` is refused there (ADR-0048) and the rows carry the
+// discriminator, so the read tier LEARNS the name from the database it was
+// pointed at -- and says which generation it found beside the URL it is listening
+// on. It registers nothing, so the write path stays a `501`.
 // ---------------------------------------------------------------------------------------------------
 
 describe('`index` plus `serve` against ONE database answer what `run` answers', () => {
@@ -773,15 +1101,32 @@ describe('`index` plus `serve` against ONE database answer what `run` answers', 
 		// the READ TIER: a second process, holding no processor, over the database the
 		// receiver wrote. It resolves its own database and starts the real Node
 		// adapter; only the handle it hands back is captured, so the test can stop it.
+		const said: string[] = [];
 		await serve(
 			{db: splitDB, port: '0'},
 			{
 				env: {},
-				log: () => {},
+				log: (...args) => said.push(args.map(String).join(' ')),
 				startServer: async (options) => (readTier = await startServer(options)),
 			},
 		);
 		const served = readTier!;
+
+		// IT RESOLVED THE CANONICAL POINTER, and it is the writer's own generation: the
+		// read tier was given no name and no processor, and learned both which named
+		// indexer this database holds and which of its generations answers reads
+		const answering = await generationsIn(splitDB);
+		expect(answering.canonical).toEqual({
+			stream: receiver.streamBuilder.generation.stream,
+			processor: receiver.streamBuilder.generation.processor,
+		});
+		expect(said.join('\n')).toContain(`answering from the generation ${generationDigestOf(answering.canonical!)}`);
+		expect(said.join('\n')).toContain(JSON.stringify(INDEXER));
+		// ...and the RECEIVER holds that generation in the same container `run` holds,
+		// over the same durable registry: one fold, registered, pointed at
+		expect((await receiver.container.generations()).map((record) => record.processor)).toEqual([
+			receiver.streamBuilder.generation.processor,
+		]);
 
 		// the reads: the same surface, generated from the same declarations, over the
 		// database `serve` was pointed at

@@ -1,4 +1,11 @@
-import {resolveStreamConfig, StreamBuilder, type Abi, type EventProcessor, type IndexingSource} from '@etherfold/core';
+import {
+	resolveStreamConfig,
+	type Abi,
+	type EventProcessor,
+	type IndexingSource,
+	type ReceivingIndexer,
+	type StreamBuilder,
+} from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
@@ -7,8 +14,7 @@ import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {readStatusReport} from './cursorReport.js';
-import {buildProcessor, openExplicitSource, streamConfigFor} from './folding.js';
+import {foldingStatusReport, openFolding, openFoldingDatabase, openExplicitSource, streamConfigFor} from './folding.js';
 import type {IndexConfig, Options} from './types.js';
 
 const logger = logs('etherfold');
@@ -61,6 +67,14 @@ const logger = logs('etherfold');
 //     process is what this command builds today; a host registering SEVERAL is a
 //     registry with more entries in it and no change to the route
 //     (`ServerOptions.getIndexer`).
+//  6. **What that name resolves to is a GENERATION CONTAINER**, the same one
+//     `run` folds through (`openFolding`, `folding.ts`), so the two commands
+//     differ in where their batches come from and in nothing else. A batch
+//     naming a fold this process has not seen therefore CREATES a generation
+//     beside the live one instead of reaching `processor.clear()`, and because
+//     the container answers the registry entry's two questions itself, this name
+//     also carries the two OPTIONAL ones -- the listing and the pointer move
+//     (ADR-0057) -- which a host holding a bare receiver cannot.
 // ---------------------------------------------------------------------------------------------------
 
 /** Starts the HTTP surface. Defaults to the Node platform adapter's `startServer`, imported lazily. */
@@ -106,6 +120,12 @@ export type RunningReceiver<ABI extends Abi = Abi, ProcessResultType = unknown> 
 	 * than trust it.
 	 */
 	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	/**
+	 * THE GENERATIONS THIS PROCESS HOLDS, which is what the name it registered
+	 * resolves to: the durable registry, the canonical pointer and the folds over
+	 * them. The same container `run` holds.
+	 */
+	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
 	/**
 	 * Resolves when it has been asked to stop, which is the only way a receiver
 	 * ends: a signal, or `stop()`. Reaching a tip is not one of the ways, because
@@ -167,37 +187,44 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 
 		const providedStreamConfig = streamConfigFor(env);
 		const streamConfig = resolveStreamConfig(providedStreamConfig);
-		const {processor, store, db, recordReorg, appendEmissions} = await buildProcessor<ABI, ProcessResultType>(
-			declared,
-			config.destination,
-			{
-				finalityDepth: streamConfig.finality,
-				// the name the OPERATOR gave, which is also the route segment a sender
-				// addresses: one value, required here and never defaulted, because on this
-				// half it routes as well as keys (ADR-0036)
-				indexer: config.wire.indexer,
-				...(deps.createDB ? {createDB: deps.createDB} : {}),
-			},
-		);
+
+		// The ONE handle, with the fixed tables on it: a fold REGISTERS its generation
+		// before it reads or writes anything, and the registry and the canonical pointer
+		// are rows (ADR-0054). `--no-auto-setup` still means somebody else migrates this
+		// database, and against one that has not been migrated it is a refusal that never
+		// binds a port rather than an endpoint answering 500 to every sender.
+		const db = await openFoldingDatabase(config.destination, {
+			applyFixedSchema: config.serving.autoSetup,
+			...(deps.createDB ? {createDB: deps.createDB} : {}),
+		});
 
 		// No provider, and no `resolveSource` fallback: this is the whole of how a
 		// chain-free command learns what it indexes.
 		const source = await openExplicitSource<ABI>(config.source);
 
-		// The receiving half of ADR-0004, and the SAME object `run` folds through:
-		// authoritative about the cursor, deriving every reorg, making no chain call.
-		// It reads the persisted cursor on every batch rather than holding one, which
-		// is what makes a resumed or replayed push safe.
+		// The GENERATION CONTAINER, and inside it the receiving half of ADR-0004 -- the
+		// SAME assembly `run` folds through: authoritative about the cursor, deriving
+		// every reorg, making no chain call. It reads the persisted cursor on every batch
+		// rather than holding one, which is what makes a resumed or replayed push safe.
 		// ...and it counts the reverts it concludes, and stores the emissions it folded,
 		// through the two ports the store's owner built, exactly as `run` and `build`
 		// do. The ingest route below is a CALLER of `receive` and writes neither itself,
 		// so a process that both concludes and receives cannot double-count a revert
 		// (ADR-0050) or store a batch twice (ADR-0052).
-		const streamBuilder = new StreamBuilder<ABI, ProcessResultType>(processor, source, {
-			stream: providedStreamConfig,
-			recordReorg,
-			appendEmissions,
-		});
+		const {container, processor, store, streamBuilder} = await openFolding<ABI, ProcessResultType>(
+			declared,
+			config.destination,
+			db,
+			{
+				source,
+				stream: providedStreamConfig,
+				finalityDepth: streamConfig.finality,
+				// the name the OPERATOR gave, which is also the route segment a sender
+				// addresses: one value, required here and never defaulted, because on this
+				// half it routes as well as keys (ADR-0036)
+				indexer: config.wire.indexer,
+			},
+		);
 
 		// The store's own tables, before a port is bound rather than when the first
 		// push lands. A receiver OWNS its database, and everything `load` refuses -- an
@@ -232,38 +259,43 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// NAME -- is a deployment's choice and not an HTTP app's. Without it the same
 			// routes answer `501`; with it, they answer for this one name and refuse every
 			// other with a `404`.
-			// Written out rather than built with `indexerRegistry` / `singleContextEntry`
+			// Written out rather than built with `indexerRegistry` / `indexerEntryOn`
 			// (`@etherfold/server`) for the same reason the server is imported LAZILY
 			// below: this module's assembly must not pull hono into a process that only
-			// folds. ONE live wire context, because this command holds one fold: a name
-			// holds several once a filter-change successor is created beside the
-			// incumbent, which is the generation container's to hand over
-			// (`the-cli-and-the-server-hold-generations-the-same-way`).
+			// folds. The four questions are FORWARDED rather than spread, because they are
+			// methods on an object that reads its own durable state: copying them off the
+			// container would unbind them.
 			getIndexer: (_c, name) =>
 				name === config.wire.indexer
 					? {
 							// THE DATABASE THIS NAME OWNS (ADR-0053), which on this command is the
-							// same handle the store folds into and the server answers over: one
-							// process, one named indexer, one database. A host registering several
-							// gives each name its own, and that is a registry with more entries in
-							// it rather than a change to this route.
+							// same handle every generation folds into and the server answers over:
+							// one process, one named indexer, one database. A host registering
+							// several gives each name its own, and that is a registry with more
+							// entries in it rather than a change to this route.
 							db,
-							liveIngestions: async () => [streamBuilder],
-							// DERIVED on the call: `generation` reads the processor's version hash
-							// at the moment it is asked, and a captured value can stop being true
-							canonicalGeneration: async () => streamBuilder.generation,
+							// ONE per LIVE WIRE CONTEXT, DERIVED from the registry rather than
+							// captured: a filter-change successor is fed beside the incumbent, and a
+							// generation deleted by an operator stops being fed without this process
+							// being told.
+							liveIngestions: () => container.liveIngestions(),
+							// WHICH generation answers reads, both halves in one read of the durable
+							// pointer -- not the fold this process happens to run
+							canonicalGeneration: () => container.canonicalGeneration(),
+							// ...and what there is to point AT, plus the move itself (ADR-0057): the
+							// two OPTIONAL questions, which this name can answer precisely because it
+							// resolves to a container over a durable registry rather than to a bare
+							// receiver. That is what makes `POST /{indexer}/admin/canonical-generation`
+							// -- promote forwards, revert BACK -- answer here instead of `501`.
+							generations: () => container.generations(),
+							promote: (id) => container.promote(id),
 						}
 					: undefined,
 			// ...and this is what makes a split deployment observable: `index` owns the
 			// store, so it is the half that can say where the fold has got to. A read
-			// tier owns none and is given none. ONE fold, reported as the ONE GENERATION
-			// this process holds, in the same field a host holding several fills with
-			// several entries.
-			getCursorReport: () =>
-				readStatusReport({
-					folds: [{generation: streamBuilder.generation, store}],
-					canonical: streamBuilder.generation,
-				}),
+			// tier owns none and is given none. ONE entry per generation held, in the
+			// same field a host mid-upgrade fills with two.
+			getCursorReport: () => foldingStatusReport(container),
 		});
 
 		const close = async () => {
@@ -292,6 +324,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			processor,
 			source,
 			streamBuilder,
+			container,
 			stopped,
 			stop: async () => {
 				controller.abort();

@@ -1,15 +1,17 @@
 import {
 	createDirectIngestion,
 	resolveStreamConfig,
-	StreamBuilder,
 	type Abi,
 	type EventProcessor,
 	type IndexingSource,
+	type ReceivingIndexer,
+	type StreamBuilder,
 } from '@etherfold/core';
 import {
 	createFetcherHost,
 	resolveFetcherHostConfig,
 	runFetcherLoop,
+	sleep,
 	type CycleReport,
 	type EnvRecord,
 	type FetcherHost,
@@ -23,13 +25,21 @@ import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {buildProcessor, openExplicitSource, streamConfigFor} from './folding.js';
+import {openFolding, openFoldingDatabase, openExplicitSource, streamConfigFor} from './folding.js';
 import type {BuildConfig, ConfigFor, Options, RunConfig, SourceOrigin} from './types.js';
 
 export * from './config.js';
 export * from './types.js';
 export {readCursorReport, readStatusReport, type ReportedFold, type StoreCursorReport} from './cursorReport.js';
-export {buildProcessor, openExplicitSource, streamConfigFor} from './folding.js';
+export {
+	foldingStatusReport,
+	openFolding,
+	openFoldingDatabase,
+	openExplicitSource,
+	streamConfigFor,
+	type FoldingAssembly,
+} from './folding.js';
+export {canonicalGenerationIn, canonicalStateNamespaceIn, heldGenerationsIn, type ReadTierOptions} from './readTier.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
 export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch.js';
 export {index, indexMain, type IndexDependencies, type RunningReceiver} from './indexCommand.js';
@@ -84,9 +94,19 @@ export type PreparedIndexing<
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/** The receiving half. Present so a test can assert WHICH engine folds, rather than trust it. */
 	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	/**
+	 * THE GENERATIONS THIS PROCESS HOLDS, and which one answers reads.
+	 *
+	 * The same container `index` folds through, over the same durable registry, which
+	 * is what makes "a developer's local `run` and a deployed server differ in
+	 * EXECUTION and in nothing else" true of generations too. `run` may ADD a fold to
+	 * it and promote one; `build` opens with one and exits, so the container it hands
+	 * back holds exactly that one.
+	 */
+	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
 	/** The sending half, plus the policy for reading what a cycle did. */
 	host: FetcherHost<ABI>;
-	/** The store the processor folds into. */
+	/** The store the OPENING fold folds into: its own table namespace (ADR-0053). */
 	store: StateStore;
 	/**
 	 * The ONE libSQL handle this command built, which the store folds into.
@@ -130,10 +150,19 @@ export type PreparedIndexing<
  *
  * ## The order of what happens here is part of the contract
  *
- * The processor is loaded and the state destination is built -- both BEFORE the
- * source is resolved, which is the first thing that can touch the chain. So a
- * module this command cannot drive, or a store it cannot open, fails without
- * first issuing `eth_chainId`.
+ * The configuration is resolved, the processor module is loaded and the DATABASE
+ * is opened -- all BEFORE the source is resolved, which is the first thing that
+ * can touch the chain. So a missing node URL, a module this command cannot drive,
+ * a database it cannot open and one it may not migrate all fail without first
+ * issuing `eth_chainId`.
+ *
+ * What no longer comes before the source is the STORE, and that is ADR-0053
+ * rather than a loosened rule: a generation's tables are named from the generation
+ * identity, whose stream half is a function of the source, so there is nothing to
+ * name until the source is known. The refusals that used to sit there (an illegal
+ * entity declaration, a retention window a reorg can outreach) still happen before
+ * a single batch is folded -- they are the state store's own, at CONSTRUCTION,
+ * which is now inside `openFolding`.
  */
 export async function prepareIndexing<
 	ABI extends Abi,
@@ -173,25 +202,18 @@ export async function prepareIndexing<
 	// receiving stream builder hash this same object into the wire identity
 	const providedStreamConfig = streamConfigFor(env);
 	const streamConfig = resolveStreamConfig(providedStreamConfig);
-	const {processor, store, db, recordReorg, appendEmissions} = await buildProcessor<ABI, ProcessResultType>(
-		declared,
-		resolved.destination,
-		{
-			finalityDepth: streamConfig.finality,
-			// The NAME this process's stored emissions are keyed on. A combined command
-			// routes no batch by name, so it may DEFAULT one (ADR-0052) -- which is the
-			// whole reason this shape can store a stream at all: the emission table's key
-			// is `NOT NULL` and there was no fold-side value to put in it.
-			indexer: resolved.indexer,
-			// The one-shot binds no port, so nothing else ever creates the fixed tables --
-			// and `build` exists to emit a publishable ARTIFACT, which must carry its
-			// schema version and the reverts it concluded or it loses its provenance the
-			// moment it becomes somebody's input. `run` gets the same tables from the
-			// server it starts, where `--no-auto-setup` can still decline them.
-			applyFixedSchema: command === 'build',
-			...(deps.createDB ? {createDB: deps.createDB} : {}),
-		},
-	);
+	// The ONE handle, with the fixed tables on it: the generation registry and the
+	// canonical pointer are rows (ADR-0054), so they have to be there before a fold
+	// can register itself. `build` applies them unconditionally -- it binds no port,
+	// so nothing else in this process ever would, and the database it emits is a
+	// publishable ARTIFACT that must carry its schema version, the reverts it
+	// concluded and the generation it folded under. `run` applies what
+	// `--no-auto-setup` said, and declining against an unmigrated database is a
+	// refusal there rather than a process that comes up and achieves nothing.
+	const db = await openFoldingDatabase(resolved.destination, {
+		applyFixedSchema: resolved.command === 'build' ? true : resolved.serving.autoSetup,
+		...(deps.createDB ? {createDB: deps.createDB} : {}),
+	});
 
 	const source: IndexingSource<ABI> | undefined = await openSource<ABI, ProcessResultType>(
 		resolved.source,
@@ -204,19 +226,30 @@ export async function prepareIndexing<
 		);
 	}
 
-	// The receiving half of ADR-0004: authoritative about the cursor, derives every reorg, makes no
-	// chain call. It reads the persisted cursor on every batch rather than holding one, which is what
+	// The GENERATION CONTAINER, and inside it the receiving half of ADR-0004:
+	// authoritative about the cursor, deriving every reorg, making no chain call. It
+	// reads the persisted cursor on every batch rather than holding one, which is what
 	// makes an interrupted run resume from the store instead of from the start block.
 	// Both PORTS are the store owner's, handed to the engine that concludes what they
 	// record: the count is taken once inside `receive` (ADR-0050) and the emission
 	// stream is appended there too, before the fold (ADR-0052). So a combined
 	// process stores what it folded exactly as a receiver behind an HTTP route does,
 	// and the database `build` emits carries its stream.
-	const streamBuilder = new StreamBuilder<ABI, ProcessResultType>(processor, source, {
-		stream: providedStreamConfig,
-		recordReorg,
-		appendEmissions,
-	});
+	const {container, store, processor, streamBuilder} = await openFolding<ABI, ProcessResultType>(
+		declared,
+		resolved.destination,
+		db,
+		{
+			source,
+			stream: providedStreamConfig,
+			finalityDepth: streamConfig.finality,
+			// The NAME this process's stored emissions and generation records are keyed on.
+			// A combined command routes no batch by name, so it may DEFAULT one (ADR-0052) --
+			// which is the whole reason this shape can store a stream at all: the emission
+			// table's key is `NOT NULL` and there was no fold-side value to put in it.
+			indexer: resolved.indexer,
+		},
+	);
 
 	const host = createFetcherHost<ABI>(
 		resolveFetcherHostConfig<ABI>(env, {
@@ -240,10 +273,11 @@ export async function prepareIndexing<
 		source,
 		processor,
 		streamBuilder,
+		container,
 		host,
 		store,
 		db,
-		index: () => driveCycles(command, host, deps),
+		index: () => driveCycles(command, host, container, deps),
 	};
 }
 
@@ -301,10 +335,30 @@ async function openSource<ABI extends Abi, ProcessResultType>(
  * Stopping a FOLLOWER is therefore a signal and never a report, which is what
  * `deps.signal` carries in from the caller (`run` installs the process's signal
  * handlers on it; a test aborts it by hand).
+ *
+ * ## The second difference, and it is the SAME one: who advances a SUCCESSOR
+ *
+ * A `run` is a long-running host, so a reconfigure can reach it: a fold added
+ * beside the live one is a FOLLOWER, and a follower is advanced by a bounded
+ * REBUILD its host SCHEDULES (ADR-0022) rather than by the wire. The gap the loop
+ * already waits between cycles is that host's own clock, so one chunk is taken
+ * there -- bounded by construction, on the same thread as the fold, so it can
+ * neither stall a cycle beyond a chunk nor write into the incumbent's tables
+ * while it folds. A `build` schedules none: a one-shot has no reconfigure, holds
+ * exactly ONE generation and exits, so there is never a second fold to advance,
+ * and never a promotion.
+ *
+ * The loop sleeps only where it decided to WAIT, so a process still catching the
+ * chain up flat out (`CATCH_UP_DELAY_MS=0`) advances its followers once it
+ * reaches the tip rather than while it is behind it. That is the right order and
+ * not a compromise: the generation that answers reads is the one still being
+ * caught up, and a rebuild competing with it for the same handle would slow the
+ * thing every reader is waiting on.
  */
-async function driveCycles<ABI extends Abi>(
+async function driveCycles<ABI extends Abi, ProcessResultType>(
 	command: ChainFollowingCommand,
 	host: FetcherHost<ABI>,
+	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>,
 	deps: IndexingDependencies,
 ): Promise<RunSummary> {
 	const stopAtTip = command === 'build';
@@ -316,10 +370,30 @@ async function driveCycles<ABI extends Abi>(
 		deps.signal?.addEventListener('abort', stop, {once: true});
 	}
 
+	const wait = deps.sleep ?? sleep;
+	/**
+	 * One bounded chunk for every follower held, then the sleep the loop asked for.
+	 *
+	 * A rebuild that fails is LOGGED and the loop carries on: the successor is behind
+	 * by one chunk and the canonical generation goes on answering, which is the whole
+	 * shape of a rebuild running beside a live fold. It costs one in-memory check on
+	 * a process holding no follower, which is every process until something adds one.
+	 */
+	const advanceFollowers: Sleep = async (ms, signal) => {
+		if (!stopAtTip && container.followers().length > 0) {
+			try {
+				await container.rebuildMore();
+			} catch (err) {
+				logger.error(`a rebuild chunk failed; the canonical generation is unaffected and the next cycle retries`, err);
+			}
+		}
+		await wait(ms, signal);
+	};
+
 	try {
 		const summary = await runFetcherLoop(host, {
 			signal: controller.signal,
-			...(deps.sleep ? {sleep: deps.sleep} : {}),
+			sleep: advanceFollowers,
 			onReport: (report) => {
 				if (report.kind === 'progress') {
 					console.log(`${report.outcome.toBlock} / ${report.outcome.latestBlock}`);
@@ -351,6 +425,16 @@ async function driveCycles<ABI extends Abi>(
  * answers queries and never terminates (`CONTEXT.md`, and `src/run.ts`). This
  * one stops at the tip, so it is `build`; the assembly under both is the same
  * `prepareIndexing`, and the difference is `driveCycles`'s `stopAtTip`.
+ *
+ * ## It holds exactly ONE generation, and that is the model at N=1
+ *
+ * A one-shot has no reconfigure: it opens the container with one fold and exits,
+ * so it never adds a second and never promotes. Run twice over the same inputs it
+ * RESOLVES the same generation rather than registering another (the registry's own
+ * rule), which costs a pointer read at start-up and is what makes a `build`
+ * artifact indistinguishable from a `run` database on the generation axis --
+ * exactly the axis it must not be distinguishable on, since the artifact's whole
+ * purpose is to become somebody else's INPUT.
  */
 export async function build(options: Options, deps: IndexingDependencies = {}): Promise<RunSummary> {
 	logger.info(JSON.stringify(options, null, 2));
