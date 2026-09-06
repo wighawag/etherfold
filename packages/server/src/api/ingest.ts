@@ -12,6 +12,7 @@ import {Hono} from 'hono';
 import type {Context} from 'hono';
 import {logs} from 'named-logs';
 import type {Env} from '../env.js';
+import {authorizedWith} from './auth.js';
 import {resolveIndexer} from './resolve.js';
 import {setup} from '../setup.js';
 import type {ServerOptions} from '../types.js';
@@ -19,41 +20,15 @@ import type {ServerOptions} from '../types.js';
 const logger = logs('@etherfold/server');
 
 /**
- * Compare two secrets without leaking WHERE they first differ.
- *
- * Written out rather than taken from `node:crypto`, because this package names
- * no runtime (a test asserts it). It leaks the LENGTH, which the archived
- * server's `timingSafeEqual` version also did, and which tells an attacker
- * nothing they cannot get by counting characters in a rejected guess.
- */
-function secretEquals(a: string, b: string): boolean {
-	if (a.length !== b.length) return false;
-	let difference = 0;
-	for (let i = 0; i < a.length; i++) {
-		difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
-	}
-	return difference === 0;
-}
-
-/**
  * Whether this caller may touch the cursor.
  *
- * Fail-closed on a missing `INGEST_TOKEN`: a server that can authenticate nobody
- * authenticates nobody. The message names the variable, because the alternative
- * is an operator staring at a 401 they configured themselves.
+ * The shared guard (`./auth.ts`) at the INGEST credential: this surface is the
+ * fetcher's private API, so what it takes is the secret a log shipper holds and
+ * never the operator's. The rule -- fail closed when none is configured -- is
+ * that module's and is the same on both surfaces.
  */
 function authorized(c: Context<{Bindings: Env}>): {ok: true} | {ok: false; message: string} {
-	const configured = c.get('config')?.env?.INGEST_TOKEN;
-	if (!configured) {
-		logger.error(`an ingest route was called with no INGEST_TOKEN configured: refusing every caller`);
-		return {ok: false, message: `no INGEST_TOKEN is configured on this server, so no caller can be authenticated`};
-	}
-	const header = c.req.header('Authorization');
-	const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-	if (!presented || !secretEquals(configured, presented)) {
-		return {ok: false, message: `expected an Authorization: Bearer <token> header matching INGEST_TOKEN`};
-	}
-	return {ok: true};
+	return authorizedWith(c, 'INGEST_TOKEN');
 }
 
 /**

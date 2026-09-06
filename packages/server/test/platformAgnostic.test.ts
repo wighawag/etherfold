@@ -59,17 +59,23 @@ describe('the server package names no runtime', () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE INGEST TOKEN IS NOT COMPARED WITH `===`
+// A SERVER CREDENTIAL IS NOT COMPARED WITH `===`
 // ---------------------------------------------------------------------------
 // Timing safety is not observable in an outcome, so it cannot be asserted
 // behaviourally: a test that compares two tokens sees the same 401 whichever
 // comparison produced it. This package already guards unobservable properties by
 // reading its own source (the platform rules above), so the same technique
 // applies to the one security property that has no other witness.
+//
+// There are TWO credentialled surfaces now -- the fetcher's INGEST routes and the
+// operator's ADMIN routes -- and ONE comparison, which is why the shape is
+// asserted where it lives (`api/auth.ts`) and each surface is asserted to reach
+// it. Two copies would be two answers to the same question, and only one of them
+// would be under this test.
 // ---------------------------------------------------------------------------
 
-describe('the ingest token comparison', () => {
-	const source = readFileSync(join(pkgRoot, 'src/api/ingest.ts'), 'utf-8');
+describe('a server credential comparison', () => {
+	const source = readFileSync(join(pkgRoot, 'src/api/auth.ts'), 'utf-8');
 
 	it('accumulates a difference over every character rather than short-circuiting', () => {
 		// the shape of a constant-time compare: XOR into an accumulator, one test at
@@ -79,8 +85,20 @@ describe('the ingest token comparison', () => {
 		expect(source).toMatch(/return difference === 0/);
 	});
 
-	it('is what the request path actually calls', () => {
-		// the guard above is worth nothing if the auth check stopped using it
+	it('is what the guard itself calls', () => {
+		// the shape above is worth nothing if the auth check stopped using it
 		expect(source).toMatch(/secretEquals\(/);
+	});
+
+	it('is what BOTH credentialled request paths reach, each at its own credential', () => {
+		const ingest = readFileSync(join(pkgRoot, 'src/api/ingest.ts'), 'utf-8');
+		const admin = readFileSync(join(pkgRoot, 'src/api/admin.ts'), 'utf-8');
+		expect(ingest).toMatch(/authorizedWith\(c[^,]*, 'INGEST_TOKEN'\)/);
+		expect(admin).toMatch(/authorizedWith\(c[^,]*, 'ADMIN_TOKEN'\)/);
+		// and neither GUARDS ON the other's: the write path's credential must not
+		// decide which generation answers reads. It is the CALL that is asserted and
+		// not the word, because each file explains in prose why it is not the other.
+		expect(ingest).not.toMatch(/authorizedWith\([^)]*ADMIN_TOKEN/);
+		expect(admin).not.toMatch(/authorizedWith\([^)]*INGEST_TOKEN/);
 	});
 });
