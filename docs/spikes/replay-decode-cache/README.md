@@ -204,6 +204,12 @@ event**. viem must then work out which member the log's `topic0` names, and does
 ABI and computing an event selector (a keccak over the canonical signature) per candidate, per call.
 Nothing memoises it.
 
+> **This landed, and the numbers below are the pre-landing ones.** The memo is pinned at `2efd858`
+> and is left as it was argued. `decode-breakdown.ts` now measures the SHIPPED preselection against
+> the pre-change algorithm, both through production code; for the numbers this repo publishes see
+> `work/notes/findings/decoding-is-3x-faster-with-a-memoised-topic0-map.md`. The ratio held: 58.2
+> µs/event against 18.4 µs/event, 3.2x, through `LogEventFetcher.reparse` itself.
+
 Same 31,330 logs, same viem instance (resolved from core's own `node_modules`), asserted to produce
 **identical** `eventName`/`args` all three ways:
 
