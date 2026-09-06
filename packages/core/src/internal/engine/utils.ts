@@ -113,6 +113,85 @@ export function groupStreamPerBlock<ABI extends Abi>(
 	return ordered;
 }
 
+/** One `process()` call's worth of a generated stream: the events, and the cursor TRUE OF THEM ALONE. */
+export type DeliveryBatch<ABI extends Abi> = {
+	events: LogEvent<ABI>[];
+	lastSync: LastSync<ABI>;
+};
+
+/**
+ * CUT A GENERATED STREAM INTO THE `process()` CALLS IT IS DELIVERED IN, and give
+ * each one a cursor that is true on its own.
+ *
+ * Extracted because TWO paths deliver a generated stream to a processor and the
+ * rule must not fork: `IndexerGeneration.promiseToFeed` (the single-process
+ * engine) and `GenerationRebuild` (the chain-free, bounded catch-up on the
+ * server and the CLI). It is a pure cut, so each caller keeps its own
+ * notifications, cancellation and pacing.
+ *
+ * Three rules, and each of them is a bug that has been paid for:
+ *
+ * 1. **Every retraction goes in ONE batch, whatever `batchSize` says.** A revert
+ *    is a single decision about a fork point, so splitting it across two calls
+ *    would leave the processor briefly holding half a dead branch, and a
+ *    processor that reverts to the lowest retracted block would compute that fork
+ *    point from a partial view.
+ * 2. **A batch STOPS at the first retraction after it**, which is what keeps an
+ *    application and its OWN retraction out of one call. A REPLAY can carry both
+ *    -- the stored stream holds `+X`, `-X` and the replacement `+Y` at ONE block
+ *    -- and a store records a block plainly, so handing all three to one call
+ *    reverts to the fork and then applies two blocks at the same height, which is
+ *    a primary-key collision and not a fold. That falls out of the two loops
+ *    below rather than being a rule of its own, and it is the reason a REPLAY
+ *    cannot skip this cut while a FETCH can (`StreamBuilder` does): in a fetch a
+ *    retraction always refers to something an earlier batch applied.
+ * 3. **Each batch's cursor is narrowed to what IT has folded**, and only the LAST
+ *    gets the stream's own. The processor PERSISTS the cursor it is handed, so an
+ *    intermediate batch carrying the FINAL window would claim to have synced
+ *    through X while listing blocks above X as folded -- and resuming from that
+ *    skips exactly the blocks in between, permanently and without a word. A
+ *    retraction-only batch has folded nothing above the fork, so it reports the
+ *    fork point: that IS a move backwards, and it is correct, because the state
+ *    really is back there until the replacements land.
+ */
+export function batchStreamForDelivery<ABI extends Abi>(
+	eventStream: LogEvent<ABI>[],
+	newLastSync: LastSync<ABI>,
+	batchSize: number,
+): DeliveryBatch<ABI>[] {
+	// Retractions are delivered, not dropped. `groupLogsPerBlock` skips `removed`
+	// events, which is right for logs coming IN from a fetch and wrong here: this
+	// stream is what the PROCESSOR consumes, and a `removed` marker is the only
+	// instruction it ever gets to revert.
+	const eventsInGroups = groupStreamPerBlock(eventStream);
+	const batches: DeliveryBatch<ABI>[] = [];
+	while (eventsInGroups.length > 0) {
+		const list: LogEvent<ABI>[] = [];
+		while (eventsInGroups.length > 0 && (eventsInGroups[0] as {removed: boolean}).removed) {
+			list.push(...(eventsInGroups.shift() as {events: LogEvent<ABI>[]}).events);
+		}
+		while (eventsInGroups.length > 0 && !(eventsInGroups[0] as {removed: boolean}).removed && list.length < batchSize) {
+			list.push(...(eventsInGroups.shift() as {events: LogEvent<ABI>[]}).events);
+		}
+		if (list.length === 0) {
+			// unreachable while `batchSize` is at least 1, and a `break` rather than a
+			// `continue` so that a zero one cannot spin instead of finishing
+			break;
+		}
+		const applied = list.filter((event) => !event.removed);
+		const isFinalBatch = eventsInGroups.length === 0;
+		const foldedThrough =
+			applied.length > 0
+				? (applied[applied.length - 1] as LogEvent<ABI>).blockNumber
+				: Math.max(0, Math.min(...list.map((event) => event.blockNumber)) - 1);
+		batches.push({
+			events: list,
+			lastSync: isFinalBatch ? newLastSync : cursorSyncedThrough(newLastSync, foldedThrough),
+		});
+	}
+	return batches;
+}
+
 /**
  * Turn a STORED emission stream back into the stream to deliver, honouring the
  * verdicts it already carries.

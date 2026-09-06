@@ -139,7 +139,9 @@ async function deploy(): Promise<Deployment> {
 			processor: indexer.processor as VersionedStateEventProcessor<TestABI>,
 		},
 		successor: {
-			context: successor.ingestion.context,
+			// a DIFFERENT fetch filter, so a different stream, so a receiver of its own:
+			// only a fold on a stream this container already holds is a follower (ADR-0044)
+			context: (successor.ingestion as NonNullable<typeof successor.ingestion>).context,
 			generation: {stream: successor.record.stream, processor: successor.record.processor},
 			processor: successor.processor as VersionedStateEventProcessor<TestABI>,
 		},

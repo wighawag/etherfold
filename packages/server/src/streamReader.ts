@@ -7,11 +7,14 @@ import {
 	type ExistingStream,
 	type IndexingSource,
 	type LogEvent,
+	type ReplayChunk,
+	type ReplayChunkQuery,
+	type ReplaySource,
 	type UsedStreamConfig,
 } from '@etherfold/core';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
-import {EMISSION_STREAM_TABLE, readStreamCoverage} from './emissions.js';
+import {EMISSION_STREAM_TABLE, readStreamCoverage, readStreamHighWaterMark} from './emissions.js';
 import {EMISSION_COLUMNS, entryOf, type EmissionRow} from './feed/entries.js';
 
 const logger = logs('@etherfold/server');
@@ -181,6 +184,177 @@ async function readStoredStream<ABI extends Abi>(
 				 ORDER BY seq`,
 			)
 			.bind(query.indexer, query.stream, query.fromBlock)
+			.all<EmissionRow>()
+	).results;
+	return rows.map(storedLogOf<ABI>);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// THE SAME ROWS, READ IN BOUNDED SLICES, SO A REBUILD FITS IN AN INVOCATION
+// ---------------------------------------------------------------------------------------------------
+// `storedEmissionStream` above answers "the whole stream from here", which is
+// what a LOAD wants and exactly what a serverless rebuild cannot ask for. This
+// is the same rows through the bounded port (`ReplaySource`, `@etherfold/core`),
+// so a host can schedule a chunk at a time against a durable checkpoint
+// (ADR-0022, ADR-0008). What one chunk IS, and why, is ADR-0056.
+//
+// ## The budget is EMISSIONS; the CUT is a BLOCK boundary
+//
+// A budget in rows is what the work is actually proportional to. But the cut
+// cannot be at an arbitrary row: this stream is `seq`-ordered and a reorg puts
+// an application, its retraction and its replacement at ONE block at
+// arbitrarily separated `seq` values, so a chunk ending mid-block would leave
+// rows BELOW its own resume point -- and the next chunk resumes above them, so
+// they would be skipped for ever, silently. So the cut lands on a BLOCK
+// boundary, which makes the budget a budget: a single block carrying more
+// emissions than it is served whole rather than halved.
+//
+// The cut is also never AT OR BELOW `foldedThrough`. A resume point reaches back
+// over the reorg window (`getFromBlock`), so a fold sitting inside that window
+// asks for blocks it has already folded; a budget spent inside them would cut
+// the chunk where the fold already is, and the same chunk would be asked for for
+// ever. The extra work that guarantee can cost is bounded by the reorg window,
+// which is exactly what one cycle of a live indexer already pays.
+//
+// The slice goes out in `seq` order, because `seq` is the order the fold
+// concluded these verdicts in and the only order a replay may honour them in:
+// delivering an application of block N+1 before the retraction of block N would
+// have the processor revert past what it had just applied.
+//
+// Two reads rather than one, for that reason: a PROBE ordered by block, which
+// finds the boundary, and then the slice itself ordered by `seq`.
+//
+// ## No index is added for this scan, deliberately
+//
+// The canonical index is PARTIAL on `alive = 1`, so ordering by block over a
+// stream that includes retractions is a scan of this `(indexer, stream)`'s rows
+// whatever the order -- the same position `compactEmissionPairs` is in, and the
+// same answer: a third index on a table already weighed against D1's 10GB
+// ceiling is paid for by every deployment, and nothing here has been measured
+// against a stream large enough to say it earns its keep. The day a rebuild is
+// measured slow on a real stream is the day it does.
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * The stored emission stream of one NAMED INDEXER, read in bounded slices for a
+ * REBUILD.
+ *
+ * The read counterpart of `emissionAppenderFor`, closing over the same two
+ * values for the same reason: the NAME is the HOST's (ADR-0036) and WHICH stream
+ * is the fold's, so it arrives on every query. Neither discriminator is ever
+ * omitted -- omitting the name would serve another tenant's rows under a `seq`
+ * that means something else there.
+ *
+ * It is READ-ONLY by construction rather than by convention: the port has no
+ * write on it at all, so a caller cannot obtain a handle that appends (ADR-0044).
+ */
+export function storedEmissionReplaySource<ABI extends Abi>(db: RemoteSQL, indexer: string): ReplaySource<ABI> {
+	return {
+		async readChunk(query: ReplayChunkQuery): Promise<ReplayChunk<ABI> | undefined> {
+			const {stream, fromBlock, foldedThrough, maxEmissions} = query;
+
+			// PRESENCE is the COVERAGE CLAIM and never "there are rows", exactly as the
+			// unbounded view above decides it: a stream scanned and found empty is present,
+			// and rows with no claim cannot say what filter produced them or how far they
+			// reach.
+			const coverage = await readStreamCoverage(db, {indexer, stream});
+			if (!coverage) {
+				return undefined;
+			}
+			if (coverage.startBlock > fromBlock) {
+				logger.info(
+					`the stored emission stream of '${indexer}' at ${stream} starts at block ${coverage.startBlock} and ` +
+						`does not reach back to ${fromBlock}, so a rebuild is told there is nothing to replay rather than ` +
+						`being handed a partial history to fold as if it were whole.`,
+				);
+				return undefined;
+			}
+
+			// REPORTED beside the slice, because a follower's completeness is a stream-space
+			// property and this is the number that expresses it. What DECIDES that a chunk
+			// finished the stream is whether the budget cut this read short.
+			const highWater = await readStreamHighWaterMark(db, {indexer, stream});
+
+			// THE PROBE: one more block number than the budget allows, so that hitting the
+			// budget is distinguishable from ending exactly on it, and so the extra row
+			// NAMES the block the cut has to fall before.
+			const probe = await probeBlocks(db, {indexer, stream, fromBlock, limit: maxEmissions + 1});
+
+			// The lowest block this chunk MUST reach, or it advances nothing and is asked
+			// for again for ever. See the section note.
+			const floor = Math.max(foldedThrough + 1, fromBlock);
+			const budgetCut = probe.length > maxEmissions ? (probe[maxEmissions] as number) - 1 : coverage.lastToBlock;
+			const lastToBlock = Math.min(coverage.lastToBlock, Math.max(budgetCut, floor));
+
+			return {
+				eventStream: await readRange<ABI>(db, {indexer, stream, fromBlock, toBlock: lastToBlock}),
+				lastFromBlock: fromBlock,
+				// on the un-truncated path this is the STREAM's own claim, which reaches past
+				// its last log: a range that carried none moved the cursor without adding a row
+				// (ADR-0055)
+				lastToBlock,
+				latestBlock: coverage.latestBlock,
+				// what a scheduler acts on: is there more of the stream above this chunk
+				truncated: lastToBlock < coverage.lastToBlock,
+				highWater,
+			};
+		},
+	};
+}
+
+/**
+ * THE PROBE: the block numbers of the next `limit` emissions, in block order.
+ *
+ * Block numbers alone, because all this decides is WHERE the cut falls; the
+ * slice itself is read again in `seq` order, which is the only order a replay
+ * may honour. Ordering by `(blockNumber, seq)` is what makes the `limit`-th row
+ * name a block boundary rather than an arbitrary position.
+ */
+async function probeBlocks(
+	db: RemoteSQL,
+	query: {indexer: string; stream: string; fromBlock: number; limit: number},
+): Promise<number[]> {
+	const rows = (
+		await db
+			.prepare(
+				`SELECT blockNumber
+				 FROM ${EMISSION_STREAM_TABLE}
+				 WHERE indexer = ?1 AND stream = ?2 AND blockNumber >= ?3
+				 ORDER BY blockNumber, seq
+				 LIMIT ?4`,
+			)
+			.bind(query.indexer, query.stream, query.fromBlock, query.limit)
+			.all<{blockNumber: number}>()
+	).results;
+	return rows.map((row) => Number(row.blockNumber));
+}
+
+/**
+ * THE SLICE: every emission of `[fromBlock, toBlock]`, in `seq` order,
+ * retractions included.
+ *
+ * Both bounds are applied to the row's OWN block: a retraction carries the block
+ * of the emission it takes back, so it travels with the thing it retracts rather
+ * than arriving to revert a block this fold never applied. That is also what
+ * makes a block-aligned cut complete -- every row of every block in the range is
+ * here, whatever `seq` it was written at.
+ */
+async function readRange<ABI extends Abi>(
+	db: RemoteSQL,
+	query: {indexer: string; stream: string; fromBlock: number; toBlock: number},
+): Promise<LogEvent<ABI>[]> {
+	if (query.toBlock < query.fromBlock) {
+		return [];
+	}
+	const rows = (
+		await db
+			.prepare(
+				`SELECT ${EMISSION_COLUMNS}
+				 FROM ${EMISSION_STREAM_TABLE}
+				 WHERE indexer = ?1 AND stream = ?2 AND blockNumber >= ?3 AND blockNumber <= ?4
+				 ORDER BY seq`,
+			)
+			.bind(query.indexer, query.stream, query.fromBlock, query.toBlock)
 			.all<EmissionRow>()
 	).results;
 	return rows.map(storedLogOf<ABI>);

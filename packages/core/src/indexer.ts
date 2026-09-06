@@ -26,12 +26,11 @@ import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
 import type {Abi} from 'abitype';
 import {
 	assertAscendingByBlock,
-	cursorSyncedThrough,
+	batchStreamForDelivery,
 	defaultFromBlockOf,
 	generateStreamFromReplay,
 	generateStreamToAppend,
 	getFromBlock,
-	groupStreamPerBlock,
 	resolveStreamConfig,
 	sourceInvalidationOf,
 	stateMatches,
@@ -1289,80 +1288,33 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			? generateStreamFromReplay(this.lastSync, this.defaultFromBlock, newEvents, bounds)
 			: generateStreamToAppend(this.lastSync, this.defaultFromBlock, newEvents, bounds);
 
-		// Retractions are delivered, not dropped. `groupLogsPerBlock` skips `removed`
-		// events, which is right for logs coming in from a fetch and wrong here: this
-		// stream is what the PROCESSOR consumes, and a `removed` marker is the only
-		// instruction it ever gets to revert. Dropping them meant the feed path could
-		// apply a reorged-out block and never take it back, so a processor fed through
-		// `feed()` silently kept state derived from a dead branch, while the same
-		// stream through `indexMore()` reverted correctly.
-		const eventsInGroups = groupStreamPerBlock(eventStream);
-		const batchSize = this.config.feedBatchSize;
-		while (eventsInGroups.length > 0) {
-			const list: LogEvent<ABI>[] = [];
-			// Every retraction goes in ONE batch, whatever `feedBatchSize` says. A revert
-			// is a single decision about a fork point: splitting it across two `process`
-			// calls would leave the processor briefly holding half a dead branch, and a
-			// processor that reverts to the lowest retracted block (rather than per
-			// event) would compute that fork point from a partial view.
-			while (eventsInGroups.length > 0 && eventsInGroups[0].removed) {
-				list.push(...(eventsInGroups.shift() as {events: LogEvent<ABI>[]}).events);
-			}
-			while (eventsInGroups.length > 0 && !eventsInGroups[0].removed && list.length < batchSize) {
-				const blockGroup = eventsInGroups.shift();
-				if (blockGroup) {
-					list.push(...blockGroup.events);
+		// THE CUT IS SHARED, and deliberately so: `GenerationRebuild` delivers a
+		// replayed stream on a runtime that has no engine at all, and two copies of the
+		// retraction batching and the per-batch cursor narrowing would be two answers to
+		// "what is one `process()` call". See `batchStreamForDelivery` for the three
+		// rules and what each of them costs when it is missing. What stays HERE is what
+		// only this engine has: the notifications, the cancellation window and the pacing.
+		for (const batch of batchStreamForDelivery(eventStream, newLastSync, this.config.feedBatchSize)) {
+			const currentLastSync = batch.lastSync;
+			// Cancelled AFTER this batch landed is still landed: see the same window in
+			// `promiseToIndex`. Recording it here is what keeps the loop's next entry, and
+			// the next cycle, from re-delivering a batch the processor already holds.
+			let outcome: ProcessResultType;
+			try {
+				outcome = await unlessCancelled(this.processor.process(batch.events, currentLastSync));
+			} catch (error) {
+				if (error instanceof CancellablePromiseCancelled) {
+					this.lastSync = currentLastSync;
+					this._onLastSyncUpdated();
 				}
+				throw error;
 			}
+			this.lastSync = currentLastSync;
+			this._onLastSyncUpdated();
 
-			if (list.length > 0) {
-				// THE CURSOR THIS BATCH IS HANDED HAS TO BE TRUE ON ITS OWN.
-				//
-				// The processor PERSISTS it (`applyEventStream` writes it verbatim for the
-				// batch's last block), so if the loop is interrupted -- a throwing processor, or
-				// a cancellation, which every reconfigure verb raises -- the last cursor accepted
-				// is what the next run resumes from. It used to be the FINAL cursor with only
-				// `lastToBlock` walked forward, so every intermediate batch carried the final
-				// unconfirmed WINDOW: a cursor claiming to have synced through X while listing
-				// blocks above X as already folded. Resuming from that skips exactly the blocks
-				// in between, permanently and without a word, because they are neither below the
-				// resume point nor above the window.
-				//
-				// So each batch gets a cursor narrowed to what IT has folded, and only the LAST
-				// gets the stream's own -- at which point the whole stream is folded and the
-				// claim is true. A retraction-only batch has folded nothing above the fork, so it
-				// reports the fork point rather than the extent of a scan whose replacements are
-				// still queued behind it. That IS a move backwards, and it is correct: the state
-				// really is back there until the replacements land. (When such a batch is the
-				// last one there is nothing queued behind it, so it takes the stream's cursor and
-				// a scan that legitimately found nothing still advances.)
-				const applied = list.filter((event) => !event.removed);
-				const isFinalBatch = eventsInGroups.length === 0;
-				const foldedThrough =
-					applied.length > 0
-						? applied[applied.length - 1].blockNumber
-						: Math.max(0, Math.min(...list.map((event) => event.blockNumber)) - 1);
-				const currentLastSync = isFinalBatch ? newLastSync : cursorSyncedThrough(newLastSync, foldedThrough);
-				// Cancelled AFTER this batch landed is still landed: see the same window in
-				// `promiseToIndex`. Recording it here is what keeps the loop's next entry, and
-				// the next cycle, from re-delivering a batch the processor already holds.
-				let outcome: ProcessResultType;
-				try {
-					outcome = await unlessCancelled(this.processor.process(list, currentLastSync));
-				} catch (error) {
-					if (error instanceof CancellablePromiseCancelled) {
-						this.lastSync = currentLastSync;
-						this._onLastSyncUpdated();
-					}
-					throw error;
-				}
-				this.lastSync = currentLastSync;
-				this._onLastSyncUpdated();
+			this._onStateUpdated(outcome);
 
-				this._onStateUpdated(outcome);
-
-				await unlessCancelled(wait(0.001));
-			}
+			await unlessCancelled(wait(0.001));
 		}
 		this.lastSync = newLastSync;
 

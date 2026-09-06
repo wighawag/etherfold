@@ -11,6 +11,8 @@ import {
 } from './generation/registry.js';
 import {
 	hasReachedCursor,
+	promotionOnAdd,
+	readyForPromotion,
 	resolvePromotionConfig,
 	type PromotionConfig,
 	type UsedPromotionConfig,
@@ -1008,21 +1010,24 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		if (!this.opened || entry === this.current) {
 			return;
 		}
-		switch (this.promotionConfig.policy) {
-			case 'immediate':
+		// The MAPPING is `generation/promotion.ts`'s, shared with the receiving
+		// container: two copies of it are two sources of truth about what `immediate`
+		// means, and they drift. What is here is what each verb DOES on this runtime.
+		switch (promotionOnAdd(this.promotionConfig.policy)) {
+			case 'promote':
 				// Canonical BEFORE it has caught up, which is the opt-in: a developer
 				// iterating on a fold would rather see an incomplete answer from the new one
 				// than a complete answer from the one they replaced (story 13).
 				await this.movePointerTo(entry);
 				return;
-			case 'on-catch-up':
+			case 'arm':
 				entry.candidate = true;
 				// Evaluated at once as well as per cycle: a generation added when it has
 				// already caught up (one named a second time, or one whose fold is level
 				// because it was built from the same stream) is ready NOW.
 				await this.settlePromotion();
 				return;
-			case 'manual':
+			case 'wait':
 				// The pointer moves only when asked, so an operator can inspect first.
 				return;
 		}
@@ -1041,9 +1046,14 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	protected async settlePromotion(): Promise<void> {
 		const current = this.current;
 		if (current) {
-			const ready = this.held.find(
-				(entry) => entry !== current && entry.candidate && hasReachedCursor(cursorOf(entry), cursorOf(current)),
-			);
+			// The RULE is `generation/promotion.ts`'s; what is here is this container's
+			// view of it -- which entries exist, which are armed, and where each cursor
+			// is kept. The receiving container answers the same two questions from a
+			// persisted cursor instead, over the same rule.
+			const ready = readyForPromotion(this.held, current, {
+				isCandidate: (entry) => entry.candidate,
+				cursorOf,
+			});
 			if (ready) {
 				await this.movePointerTo(ready);
 			}

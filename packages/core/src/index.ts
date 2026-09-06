@@ -118,6 +118,18 @@ export * from './generation/memory.js';
  */
 export * from './generation/promotion.js';
 /**
+ * THE BOUNDED REBUILD, and the port it reads a stored stream through.
+ *
+ * A successor on a shared stream catches up by REPLAYING what is already on
+ * disk, in chunks a host schedules (ADR-0022) against a checkpoint that is the
+ * successor's own sync cursor (ADR-0027) -- which is what makes a processor
+ * upgrade cost a local scan instead of a re-index (ADR-0008). Exported because
+ * the SOURCE of those chunks is a database this package does not know:
+ * `@etherfold/server` implements `ReplaySource` over `_emissions`, and a host
+ * hands the result to `ReceivingIndexer`.
+ */
+export * from './generation/rebuild.js';
+/**
  * THE GENERATION CONTAINER, which is how an indexer is built.
  *
  * `Indexer` HOLDS generations and points at the one that answers reads;

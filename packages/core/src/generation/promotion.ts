@@ -119,3 +119,79 @@ export function hasReachedCursor(cursor: number | undefined, target: number | un
 	}
 	return cursor >= target;
 }
+
+/**
+ * WHAT A CONTAINER DOES WITH A GENERATION THE MOMENT IT IS ADDED BESIDE THE LIVE
+ * ONE.
+ *
+ * The arming half of ADR-0046, as a value rather than as a `switch` each
+ * container writes for itself. Two containers apply this policy -- `Indexer`
+ * (chain-facing) and `ReceivingIndexer` (the server and the CLI) -- and a second
+ * copy of the mapping is a second source of truth that drifts, which is exactly
+ * what the successor tasks were told not to create.
+ *
+ * - `promote` -- move the pointer NOW (`immediate`).
+ * - `arm` -- make it a CANDIDATE and let the trigger decide (`on-catch-up`).
+ * - `wait` -- do nothing until somebody asks (`manual`).
+ */
+export type PromotionOnAdd = 'promote' | 'arm' | 'wait';
+
+/** The arming decision for one policy. See `PromotionOnAdd`. */
+export function promotionOnAdd(policy: PromotionPolicy): PromotionOnAdd {
+	switch (policy) {
+		case 'immediate':
+			return 'promote';
+		case 'on-catch-up':
+			return 'arm';
+		case 'manual':
+			return 'wait';
+	}
+}
+
+/**
+ * How a container SEES the generations it holds, for the purpose of this trigger
+ * and nothing else.
+ *
+ * Two questions, because the trigger asks exactly two: is this generation ARMED,
+ * and how far has it got. Everything else about a held generation -- its engine,
+ * its receiver, its state handle -- differs between the two containers, which is
+ * why the trigger is parameterised over these two functions rather than over a
+ * shared entry type neither runtime could honestly implement.
+ */
+export type PromotionView<T> = {
+	/** Whether `add` armed this one as a candidate. Never "is it non-canonical". */
+	isCandidate: (entry: T) => boolean;
+	/** `lastToBlock`, or `undefined` for a generation that has folded nothing. */
+	cursorOf: (entry: T) => number | undefined;
+};
+
+/**
+ * THE TRIGGER: which held generation, if any, should become canonical NOW.
+ *
+ * A candidate is ready the moment its cursor reaches the cursor the CANONICAL
+ * generation has -- compared LIVE, never against a snapshot taken when the
+ * successor was created, because a snapshot would let a successor be promoted
+ * while the incumbent had moved on, which is the state going backwards the
+ * default exists to prevent.
+ *
+ * ONE at a time, deliberately: a second candidate is still a candidate on the
+ * next cycle, and promoting twice inside one advance would publish a generation
+ * nobody ever read from.
+ *
+ * Arming is what keeps this from being "any non-canonical generation that is
+ * level", which would re-promote a successor on the cycle after a REVERT (a
+ * reverted-from generation is caught up by construction).
+ */
+export function readyForPromotion<T>(
+	entries: readonly T[],
+	current: T | undefined,
+	view: PromotionView<T>,
+): T | undefined {
+	if (!current) {
+		return undefined;
+	}
+	const target = view.cursorOf(current);
+	return entries.find(
+		(entry) => entry !== current && view.isCandidate(entry) && hasReachedCursor(view.cursorOf(entry), target),
+	);
+}
