@@ -1,4 +1,4 @@
-import type {EmissionAppender, EmittedLog} from '@etherfold/core';
+import type {EmissionAppender, EmittedLog, SourceHashEntry, StreamCoverage} from '@etherfold/core';
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 
 // ---------------------------------------------------------------------------------------------------
@@ -47,6 +47,16 @@ import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
  */
 export const EMISSION_STREAM_TABLE = '_emissions';
 
+/**
+ * The COVERAGE CLAIM's table, spelled once beside the stream it describes.
+ *
+ * A separate table rather than a column on `_emissions`, because it is a fact
+ * about the STREAM and not about any row of it: one claim per `(indexer,
+ * stream)`, moved by every batch including the ones that carried no logs. See
+ * `schema/sql/db.sql` for why it is called coverage and not a cursor.
+ */
+export const STREAM_COVERAGE_TABLE = '_stream_coverage';
+
 /** One append: the two discriminators every row carries, and the emissions to write under them. */
 export type EmissionAppend = {
 	/**
@@ -66,8 +76,27 @@ export type EmissionAppend = {
 	 * untouched -- which as a KEY orphans every row already stored.
 	 */
 	stream: string;
-	/** What the fold concluded, in order: applications and retractions together. */
+	/**
+	 * HOW FAR the stream reaches once this batch is in, and under WHICH FILTER.
+	 *
+	 * Written in the SAME `batch()` as the emissions, which is what makes the claim
+	 * and the rows one atomic fact rather than two that can disagree.
+	 */
+	coverage: StreamCoverage;
+	/**
+	 * What the fold concluded, in order: applications and retractions together.
+	 *
+	 * MAY BE EMPTY. An empty batch still moves `coverage` -- a range that carried no
+	 * logs is exactly the case the rows cannot report -- so it is a write here and
+	 * not an early return.
+	 */
 	emissions: readonly EmittedLog[];
+};
+
+/** The stream's coverage claim, as it is read back. */
+export type StoredStreamCoverage = StreamCoverage & {
+	/** The `lastFromBlock` of the FIRST batch stored under this pair. Written once. */
+	startBlock: number;
 };
 
 /**
@@ -100,16 +129,27 @@ export type EmissionAppend = {
  * the match so that a hash applied, retracted, and applied again flags the row
  * that is live at the time rather than the one already dead.
  *
+ * ## The COVERAGE CLAIM rides in the same batch
+ *
+ * One upsert into `_stream_coverage` saying how far this stream now reaches
+ * (ADR-0055). It is here rather than in a second call for the reason the whole
+ * append is one `batch()`: a claim that landed without its rows, or rows that
+ * landed without their claim, is a state a re-fold would read as truth. It is
+ * also why an EMPTY batch is no longer an early return -- a range that carried no
+ * logs still moved the claim, and it is the only thing that can say so.
+ *
  * The whole batch goes through `batch()` so a partially-appended stream is not a
  * state the next read can see.
  */
 export async function appendEmissions(db: RemoteSQL, append: EmissionAppend): Promise<void> {
-	const {indexer, stream, emissions} = append;
-	if (emissions.length === 0) return;
+	const {indexer, stream, coverage, emissions} = append;
 
-	let seq = await readStreamHighWaterMark(db, {indexer, stream});
+	// only asked for when there is something to number: an empty batch writes the
+	// claim and nothing else, so allocating from the table would be a round trip
+	// spent on a value no statement below reads
+	let seq = emissions.length > 0 ? await readStreamHighWaterMark(db, {indexer, stream}) : 0;
 
-	const statements: SQLPreparedStatement[] = [];
+	const statements: SQLPreparedStatement[] = [coverageUpsertOf(db, indexer, stream, coverage)];
 	for (const emission of emissions) {
 		if (emission.removed) {
 			statements.push(
@@ -144,7 +184,89 @@ export async function appendEmissions(db: RemoteSQL, append: EmissionAppend): Pr
  * whatever database a host opened is what its fold is stored into.
  */
 export function emissionAppenderFor(db: RemoteSQL, indexer: string): EmissionAppender {
-	return ({stream, emissions}) => appendEmissions(db, {indexer, stream, emissions});
+	return ({stream, coverage, emissions}) => appendEmissions(db, {indexer, stream, coverage, emissions});
+}
+
+/**
+ * How far this stream is claimed to reach, or nothing when no batch has ever
+ * been stored under this pair.
+ *
+ * NOTHING is the whole PRESENCE test, exactly as ADR-0035 defines it for a
+ * keeper: presence is "the read-cursor operation returns something", never "there
+ * are rows". A stream that has been scanned and found nothing yet is PRESENT
+ * with an empty row set, and a table full of rows with no claim is not a stream
+ * anything may fold -- it cannot say what filter produced it or how far it goes.
+ */
+export async function readStreamCoverage(
+	db: RemoteSQL,
+	at: {indexer: string; stream: string},
+): Promise<StoredStreamCoverage | undefined> {
+	const read = await db
+		.prepare(
+			`SELECT source, config, startBlock, latestBlock, lastFromBlock, lastToBlock
+			 FROM ${STREAM_COVERAGE_TABLE} WHERE indexer = ?1 AND stream = ?2`,
+		)
+		.bind(at.indexer, at.stream)
+		.all<CoverageRow>();
+	const row = read.results[0];
+	if (!row) return undefined;
+	return {
+		source: JSON.parse(row.source) as SourceHashEntry[],
+		config: row.config,
+		startBlock: Number(row.startBlock),
+		latestBlock: Number(row.latestBlock),
+		lastFromBlock: Number(row.lastFromBlock),
+		lastToBlock: Number(row.lastToBlock),
+	};
+}
+
+/** The coverage claim as SQLite hands it back. */
+type CoverageRow = {
+	source: string;
+	config: string;
+	startBlock: number;
+	latestBlock: number;
+	lastFromBlock: number;
+	lastToBlock: number;
+};
+
+/**
+ * The claim, upserted.
+ *
+ * `startBlock` is deliberately absent from the `DO UPDATE` list: it is the
+ * `lastFromBlock` of the FIRST batch ever stored under this pair, and updating
+ * it would erase the one fact that lets a read refuse a stream which does not
+ * reach back far enough -- a partial history would then replay as though it were
+ * whole, which is a hole with none of a hole's symptoms.
+ */
+function coverageUpsertOf(
+	db: RemoteSQL,
+	indexer: string,
+	stream: string,
+	coverage: StreamCoverage,
+): SQLPreparedStatement {
+	return db
+		.prepare(
+			`INSERT INTO ${STREAM_COVERAGE_TABLE} (
+				indexer, stream, source, config, startBlock, latestBlock, lastFromBlock, lastToBlock
+			 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+			 ON CONFLICT (indexer, stream) DO UPDATE SET
+				source = excluded.source,
+				config = excluded.config,
+				latestBlock = excluded.latestBlock,
+				lastFromBlock = excluded.lastFromBlock,
+				lastToBlock = excluded.lastToBlock`,
+		)
+		.bind(
+			indexer,
+			stream,
+			JSON.stringify(coverage.source),
+			coverage.config,
+			coverage.lastFromBlock,
+			coverage.latestBlock,
+			coverage.lastFromBlock,
+			coverage.lastToBlock,
+		);
 }
 
 /**

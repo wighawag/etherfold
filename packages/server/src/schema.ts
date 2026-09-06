@@ -20,8 +20,16 @@ import db from './schema/ts/db.sql.js';
  * the durable records and the canonical pointer a restarted server resolves
  * reads through. Both are `IF NOT EXISTS`, so applying this schema to a version-2
  * database creates them and moves the row; nothing already stored is touched.
+ *
+ * **4 adds the stream's COVERAGE CLAIM**: `_stream_coverage`, one row per
+ * `(indexer, stream)` saying how far the stored emission stream reaches and
+ * under which filter it was fetched, so a successor can re-fold it from local
+ * disk instead of the chain (ADR-0055). `IF NOT EXISTS` again, so a version-3
+ * database gains the table -- but note the honest limit of that: the table comes
+ * up EMPTY, and a stream with no coverage row reads as ABSENT until its writer
+ * appends its next batch. Nothing already stored is touched or lost.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 

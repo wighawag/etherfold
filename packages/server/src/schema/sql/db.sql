@@ -136,6 +136,72 @@ CREATE INDEX IF NOT EXISTS _emissions_by_address_topic
     ON _emissions (indexer, stream, address, topic0, blockNumber);
 
 -- ---------------------------------------------------------------------------
+-- THE STREAM'S COVERAGE CLAIM (ADR-0035, ADR-0055)
+-- ---------------------------------------------------------------------------
+-- HOW FAR the stored stream reaches, and under WHICH FILTER it was fetched. One
+-- row per `(indexer, stream)` pair, written in the SAME `batch()` as the
+-- emissions it describes, so a reader can never see rows the claim does not
+-- cover or a claim the rows do not back.
+--
+-- This is the CURSOR RECORD that ADR-0035 says a SQL keeper keeps beside its
+-- stream, in the shape that ADR ended up with: the three block numbers plus the
+-- stream's identity, and NO unconfirmed window -- a keeper's copy of the window
+-- is read by nobody, and a replay rebuilds it by walking the events (ADR-0042).
+--
+-- ## Why it is not derived from `_emissions`
+--
+-- Because those rows cannot answer it. `MAX(blockNumber)` is the highest block
+-- that carried a LOG, and a range that carried none moves the fetch cursor
+-- without adding a row -- so a claim derived from the rows UNDER-CLAIMS for as
+-- long as the chain is quiet, a successor promoted on it hands its fetcher an
+-- `expectedFromBlock` too far back, and ADR-0052 appends the re-sent batches a
+-- SECOND time. A stream that cannot say how far it reaches is not re-foldable.
+--
+-- ## Why it is keyed on the STREAM and not on a generation
+--
+-- Several generations fold one stream and only the writer appends to it
+-- (`CONTEXT.md`, **follower**). Stored once beside the stream, every generation
+-- folding it inherits the same claim, so a promotion needs no reconciliation and
+-- writer succession leaves this row untouched. For the same reason there is no
+-- `processor` column here, exactly as there is none on `_emissions`: a stream is
+-- identified by its fetch filter plus its stream config and by nothing else.
+--
+-- ## Why it is called COVERAGE and not a cursor
+--
+-- `_cursor` already exists in this same database and means something else: the
+-- versioned state store's opaque SYNC cursor, how far a PROCESSOR got (ADR-0027).
+-- A second `_..._cursor` holding a different thing, one table apart, is exactly
+-- the one-word-two-meanings hazard the reserved namespace exists to avoid. What
+-- this row holds is the stream's COVERAGE CLAIM, which is already the word
+-- `CONTEXT.md` uses for what a cursor asserts.
+CREATE TABLE IF NOT EXISTS _stream_coverage (
+    -- the NAMED INDEXER the host folds under: the tenancy discriminator
+    indexer TEXT NOT NULL,
+    -- WHICH stream, as `streamDigestOf` renders it. The same value `_emissions`
+    -- carries, so the claim and the rows are addressed alike.
+    stream TEXT NOT NULL,
+    -- the FETCH-filter half of the identity, as JSON: the `SourceHashEntry[]` a
+    -- re-folding generation runs `streamMatches` against before it trusts a row
+    source TEXT NOT NULL,
+    -- the stream CONFIG hash, the other half of that identity
+    config TEXT NOT NULL,
+    -- the `lastFromBlock` of the FIRST batch ever stored under this pair, written
+    -- once and never updated: it is what lets a read REFUSE a stream that does
+    -- not reach back to where the fold asked to resume from, rather than replay a
+    -- partial history as though it were whole
+    startBlock INTEGER NOT NULL,
+    -- the chain tip as it stood when the last batch was folded
+    latestBlock INTEGER NOT NULL,
+    lastFromBlock INTEGER NOT NULL,
+    -- how far this stream is claimed to cover. It may sit ONE BATCH AHEAD of
+    -- every generation's state, because the append is ordered before the fold
+    -- (ADR-0052); that is the allowed direction (ADR-0038: a stream may be ahead
+    -- of the state, never behind).
+    lastToBlock INTEGER NOT NULL,
+    PRIMARY KEY (indexer, stream)
+);
+
+-- ---------------------------------------------------------------------------
 -- THE GENERATION REGISTRY (ADR-0053)
 -- ---------------------------------------------------------------------------
 -- WHICH generations a named indexer holds, and WHICH ONE answers reads. A
@@ -203,5 +269,5 @@ CREATE TABLE IF NOT EXISTS _generation_pointer (
     revision TEXT NOT NULL
 );
 
-INSERT INTO _meta (key, value) VALUES ('schemaVersion', '3')
+INSERT INTO _meta (key, value) VALUES ('schemaVersion', '4')
     ON CONFLICT (key) DO UPDATE SET value = excluded.value;

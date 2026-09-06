@@ -44,6 +44,14 @@ const STREAM = '0fbe2d6c9a1e4b3d8c7f0a1b2c3d4e5f';
 const ENTITIES = [{name: 'token', id: ['id'], fields: {owner: 'text'}}] as const;
 
 /** One emission, so `_emissions` has a row the registry's sweep can see. */
+/**
+ * The stream's COVERAGE CLAIM, which every append carries beside its rows.
+ *
+ * Nothing in this file reads it -- what is under test is which TABLES exist and
+ * who finds them -- so it is the smallest honest one rather than a scenario.
+ */
+const coverage = {source: [], config: 'config', latestBlock: 100, lastFromBlock: 100, lastToBlock: 100};
+
 function emission(blockNumber = 100) {
 	return {
 		blockNumber,
@@ -99,7 +107,7 @@ describe('the server-owned fixed tables, in a database holding several generatio
 		expect(await readSchemaState(db)).toMatchObject({applied: true, matches: true});
 
 		// `_emissions`, written by whoever owns the store and read by both feed views
-		await appendEmissions(db, {indexer: INDEXER, stream: STREAM, emissions: [emission()]});
+		await appendEmissions(db, {indexer: INDEXER, stream: STREAM, coverage, emissions: [emission()]});
 
 		// `_generations` and `_generation_pointer`: the registry names generations
 		// from OUTSIDE any of them, which is why they cannot be namespaced by one
@@ -117,7 +125,7 @@ describe('the server-owned fixed tables, in a database holding several generatio
 
 	it('are unmoved by a generation dropping its state', async () => {
 		const {db, incumbent, successor} = await oneDatabase();
-		await appendEmissions(db, {indexer: INDEXER, stream: STREAM, emissions: [emission()]});
+		await appendEmissions(db, {indexer: INDEXER, stream: STREAM, coverage, emissions: [emission()]});
 		await incumbent.applyBlock({number: 100, hash: '0xa100', timestamp: 1_700_000_000}, [
 			{type: 'upsert', entity: 'token', id: {id: '1'}, values: {owner: '0xAlice'}},
 		]);
