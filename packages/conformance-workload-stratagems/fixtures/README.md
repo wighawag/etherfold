@@ -12,7 +12,7 @@
 | GemsGenerator | `0xbe2f7c303b53f16f447fd82bf549e65185bf3477` | `0xb0855eaf94bf7f122af4f444141e83b7408cc7a7` |
 | logs captured | 42 events over 9 event-bearing blocks | **31,332 events over 1,042 event-bearing blocks** |
 | reward events (`GlobalRewardUpdated` and friends) | absent from the ABI: an earlier contract version | present, and 16,046 of them fired |
-| stored as | plain JSON, because it is small enough to read | **gzipped**, 0.6 MB against 20.5 MB |
+| stored as | plain JSON, because it is small enough to read | **gzipped**, 1.05 MB against 33.8 MB |
 | what it is FOR | the fast smoke case, and nothing else | the conformance workload |
 
 ## What each file is
@@ -28,12 +28,20 @@ A BigInt is written as `{"__bigint__": "123"}`, because a decoded `uint256` argu
 
 **The states behind the goldens did not move**, and that is not asserted, it is checked: `docs/spikes/tagged-bigint-codec-across-storage-adapters/prove-goldens-unchanged.mjs` re-renders the current golden in the OLD encoding and compares it byte-for-byte against the file as committed at `b40298e`. `reencode-stream-fixtures.mjs`, beside it, is the migration, and it refuses to convert any value whose declared ABI type is not an integer.
 
-## Why the alpha1 stream is gzipped, and why `data` and `topics` are gone
+## Why the alpha1 stream is gzipped, and why `data` and `topics` came BACK
 
-0.6 MB against 20.5 MB of JSON, and git stores both at about 0.6 MB either way, so the compressed form costs nothing in the repository and saves 20 MB in every working tree. `loadStreamFixture` (`src/fixture-file.ts`) gunzips by extension, so no caller has to know.
+1.05 MB against 33.8 MB of JSON, so the compressed form saves 33 MB in every working tree. `loadStreamFixture` (`src/fixture-file.ts`) gunzips by extension, so no caller has to know.
 
-Each log's `data` and `topics` are omitted, because they are the encoded form of the `args` the fixture already carries decoded: keeping both took the file from 20.5 MB to 32.5 MB. The omission is recorded INSIDE the fixture as `provenance.omittedFields`, and the provenance says exactly which contracts and blocks to re-fetch if they are ever wanted.
+**Each log's `data` and `topics` were omitted until 2026-09-06, and that made the fixture unusable as a stream SEED.** They are the encoded form of the `args` the fixture already carries decoded, so dropping them was sound for the thing it was then used as: a REPLAY input, fed straight to a processor by `replayFixtureInto`, which never re-decodes. It is fatal for a seed. `LogEventFetcher.reparse` refuses an event with no `topics` or `data`, because the decoded half is a cache re-derived against the source running now (ADR-0034), and the load path answers that refusal by CLEARING the stream. A keeper seeded from the decode-only file was therefore deleted on first load, every time.
+
+So it was re-captured with `--full` (33.8 MB against 22.2 MB before, 1.05 MB against 0.65 MB gzipped), and it now carries the whole log. There is no `provenance.omittedFields` in it any more, and its absence is the signal: a fixture that omits fields says so, and this one omits none. The decision that turned on this is ADR-0063, and the negative control that keeps it honest is `docs/spikes/pin-the-seam-a-published-stream-arrives-through/`, which installs a stripped copy and asserts the subtree is cleared.
+
+The re-capture is faithful, and that is checked rather than asserted: 31,332 events over 1,042 event-bearing blocks, the same event-name histogram, and the golden state below still reproduced byte for byte on the memory, sqlite and patch backends. Its `provenance` also moved from the legacy single-hash source context to the current per-entry form carrying `streamHash` values, which is what a capture taken through today's `sourceHashesOf` produces.
 
 ## Re-capturing
 
-Deliberately a manual step, in the spike that produced them, because it is the one thing here that talks to a node: `docs/spikes/sqlite-in-the-browser/capture/capture-stratagems-base.mjs`, which needs `CHAIN_8453` in the repo's `.env.local`. A re-capture is byte-identical apart from `capturedAt` and `chainHeadAtCapture`, which is how it was verified: the committed `alpha1` stream is the SECOND capture (`capturedAt` 2026-08-23, chain head 50,338,047), and it differs from the first (2026-08-22, head 50,318,553, which is the one `work/notes/findings/sqlite-in-the-browser.md` quotes) in those two fields and nothing else. A fixture is a SNAPSHOT by definition, so pinning it to a stratagems commit and a block range is what keeps it honest indefinitely; re-capturing is not maintenance.
+Deliberately a manual step, in the spike that produced them, because it is the one thing here that talks to a node: `docs/spikes/sqlite-in-the-browser/capture/capture-stratagems-base.mjs`, which needs `CHAIN_8453` in the repo's `.env.local`. **Pass `--full`**, which is what keeps `data` and `topics`; the committed `alpha1` stream is the THIRD capture (2026-09-06, chain head 50,968,313) and the first taken that way.
+
+A re-capture is otherwise byte-identical apart from `capturedAt` and `chainHeadAtCapture`, which is how the earlier ones were verified. A fixture is a SNAPSHOT by definition, so pinning it to a stratagems commit and a block range is what keeps it honest indefinitely; re-capturing is not maintenance.
+
+One thing that WOULD have stopped a re-capture, and no longer does: the merged three-contract source declares `Transfer` and `Approval` twice with different decoding shapes (Stratagems is ERC-721, Gems and GemsGenerator are ERC-20), and until ADR-0061 the fetcher refused the whole source at construction. Capturing, indexing and replaying this workload through the production path all depend on that relaxation.

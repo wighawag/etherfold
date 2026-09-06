@@ -46,13 +46,15 @@ export type WorkloadFixture = {
  * Every log from Stratagems `0x5ab6d5bb8012fc60ab3653e025be4a59b4406ff2`, Gems
  * `0xb2d822732347e3dc60258dcf6cf0d4c7a432b678` and GemsGenerator
  * `0xb0855eaf94bf7f122af4f444141e83b7408cc7a7` on Base (chain 8453), blocks
- * 12,082,307 to 23,400,000, captured 2026-08-23 at chain head 50,338,047 (the
+ * 12,082,307 to 23,400,000, re-captured 2026-09-06 at chain head 50,968,313 (the
  * file's own `provenance` block is the authority; this comment is a summary):
- * 31,332 events in 1,042 event-bearing blocks. Stored GZIPPED (0.6 MB against
- * 20.5 MB of JSON; git stores both at about 0.6 MB, so the compressed form costs
- * nothing in the repository and saves 20 MB in every working tree). `data` and
- * `topics` are omitted, which the fixture records itself as
- * `provenance.omittedFields`.
+ * 31,332 events in 1,042 event-bearing blocks. Stored GZIPPED (1.05 MB against
+ * 33.8 MB of JSON, so the compressed form saves 33 MB in every working tree).
+ * It carries the FULL log, `data` and `topics` included: they were omitted until
+ * 2026-09-06 as the encoded form of the already-decoded `args`, which is sound
+ * for a replay input and makes the file unusable as a SEED, since an event with
+ * no raw log cannot be re-decoded and the load path clears such a stream
+ * (ADR-0034, ADR-0063).
  */
 export const ALPHA1: WorkloadFixture = {
 	name: 'stratagems alpha1 (the LAUNCHED game)',
