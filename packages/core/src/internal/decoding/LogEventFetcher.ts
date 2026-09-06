@@ -8,11 +8,13 @@ import {decodeEventLog} from 'viem';
 import {canonicalSignatureOf, decodingShapeOf, describeEventDeclaration, topic0Of} from './eventIdentity.js';
 import {deepEqual} from '../utils/compare.js';
 import type {
+	BaseLogEvent,
 	IncludedEIP1193Log,
 	LogEvent,
 	LogEventWithParsingFailure,
 	LogParseConfig,
 	ParsedLogEvent,
+	StoredLogEvent,
 } from '../../types.js';
 import {normalizeAddress} from '../utils/address.js';
 import {UnlessCancelledFunction} from '../utils/promises.js';
@@ -374,8 +376,15 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	 *
 	 * Pinned by `test/rawLogIsNeverStripped.test.ts`, both halves: unreachable for
 	 * anything written now, still reachable for those bytes.
+	 *
+	 * It takes a STORED event as readily as a decoded one, and that is the seam
+	 * "decoding happens on read" rests on: what a keeper hands back is the raw log
+	 * plus the reorg flag (`StoredLogEvent`), which belongs to neither member of
+	 * the `LogEvent` union by construction. Accepting both costs nothing at
+	 * runtime, since the decoded half is dropped below either way; what it returns
+	 * is decoded events in both cases, because a READ produces `LogEvent`s.
 	 */
-	reparse(events: readonly LogEvent<ABI>[]): LogEvent<ABI>[] | undefined {
+	reparse(events: readonly (LogEvent<ABI> | StoredLogEvent)[]): LogEvent<ABI>[] | undefined {
 		const reparsed: LogEvent<ABI>[] = [];
 		for (const stored of events) {
 			if (!stored.topics || !stored.data || !stored.address) {
@@ -383,12 +392,13 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 			}
 			// the decoded half is dropped rather than overwritten, so a decode that now
 			// FAILS cannot leave the previous `args` sitting next to its `decodeError`
+			// (and a stored event, which declares all three away, simply has none to drop)
 			const {
 				args: _args,
 				eventName: _eventName,
 				decodeError: _decodeError,
 				...raw
-			} = stored as LogEvent<ABI> & {
+			} = stored as BaseLogEvent & {
 				args?: unknown;
 				eventName?: unknown;
 				decodeError?: unknown;

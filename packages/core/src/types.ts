@@ -30,6 +30,58 @@ export type LogEvent<ABI extends Abi, Extra extends JSONObject | undefined = und
 	| LogEventWithParsingFailure<Extra>;
 
 /**
+ * ONE entry of the STORED STREAM: the raw log the node reported plus the reorg
+ * flag the indexer derived, and NOTHING an ABI made of those bytes.
+ *
+ * `args` / `eventName` are what SOME ABI made of a log and `decodeError` is what
+ * happened when one could not, so both are a CACHE: `LogEventFetcher.reparse`
+ * re-derives them on read against the source running now, unconditionally,
+ * because a stream cannot say per event which ABI decoded it (ADR-0034). What is
+ * stored is therefore the half that is true forever, and the three `?: never`
+ * clauses are what make the type SAY so rather than merely omit it.
+ *
+ * A raw-only event is deliberately NOT a `LogEvent`: that is the union of a
+ * decode that SUCCEEDED (`ParsedLogEvent`) and one that FAILED
+ * (`LogEventWithParsingFailure`), and an event carrying neither belongs to
+ * neither. It is equally not `BaseLogEvent`, which is the SUPERTYPE both of
+ * those extend and which therefore enforces nothing: a decoded `LogEvent[]` is
+ * assignable to a `BaseLogEvent[]` -- that is what a supertype is -- and
+ * excess-property checks fire only on fresh object literals, so a keeper
+ * declared over the supertype could receive, hold and persist decoded events in
+ * silence.
+ *
+ * **It governs WRITES, from here on.** Segments written before it existed still
+ * hold `args` and `eventName` forever and no migration rewrites them; a READ
+ * tolerates that half and ignores it, because the re-decode drops and re-derives
+ * it anyway. So this describes what goes IN, not what is guaranteed to be on
+ * disk.
+ *
+ * **The one hole, stated rather than hidden**: an event whose STATIC type has
+ * already been widened to `BaseLogEvent` still assigns here, because nothing is
+ * left for the `?: never` clauses to catch. The guard is at the SEAM -- what a
+ * keeper declares it takes and hands back -- and not through a widening, so a
+ * value laundered through the supertype defeats it.
+ *
+ * **Not `EmittedLog`, and both survive with this relation.** They speak
+ * different seams and only one of them refuses anything. `EmittedLog` (a few
+ * lines below) is the SERVER's emission-row shape (ADR-0006): deliberately free
+ * of an ABI type parameter, and PERMISSIVE -- a plain `NumberifiedLog` alias
+ * that does not PROMISE the decoded half but does not refuse it either, and that
+ * can express neither `extra` nor `removedStreamID`. This one is what a
+ * `keepStream` keeper persists, carries both of those, and REFUSES a decoded
+ * event. Neither substitutes for the other, and `EmittedLog` is not to be
+ * re-pointed at this.
+ *
+ * Pinned by `test/storedLogEvent.test.ts`, whose refusals are `@ts-expect-error`
+ * comments `pnpm typecheck` evaluates.
+ */
+export type StoredLogEvent<Extra extends JSONObject | undefined = undefined> = BaseLogEvent<Extra> & {
+	args?: never;
+	eventName?: never;
+	decodeError?: never;
+};
+
+/**
  * ONE entry of the EMISSION STREAM, as a host that STORES it sees it: the raw
  * log the node reported, plus the verdict the fold reached about it (`removed`).
  *
