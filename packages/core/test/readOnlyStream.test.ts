@@ -1,7 +1,6 @@
 import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
 import {readOnlyStream} from '../src/stream/readOnly.js';
-import {replayStream} from '../src/stream/fixture.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
 import type {ExistingStream, UsedStreamConfig} from '../src/types.js';
 import {makeLog, memoryStream, SOURCE} from './utils/streamCacheWorld.js';
@@ -15,9 +14,11 @@ import {makeLog, memoryStream, SOURCE} from './utils/streamCacheWorld.js';
 // not something a caller can express by declining to write; it is a VIEW whose
 // write operations do not reach the keeper at all.
 //
-// `replayStream` was already exactly this shape over a fixture. It is now the
-// same view over a different reader rather than a second implementation of the
-// idea.
+// What it wraps is always a KEEPER of the stream: a follower over the stream
+// another generation is indexing, and the server's stored emission stream read
+// back. A captured FIXTURE is not one of them -- it serves decoded events from
+// disk and answers to nobody's seam (`streamFixture.test.ts`), so its
+// immutability is a property of its own type rather than a swallowed write here.
 // ---------------------------------------------------------------------------
 
 describe('a read-only stream view', () => {
@@ -101,52 +102,5 @@ describe('a read-only stream view', () => {
 
 	it('has no `setStreamConfig` when the reader addresses nothing', () => {
 		expect(readOnlyStream<Abi>({fetchFrom: async () => undefined}).setStreamConfig).toBeUndefined();
-	});
-});
-
-describe('`replayStream` is that same view', () => {
-	it('still serves a fixture and still writes nothing', async () => {
-		const fixture = {
-			format: 2 as const,
-			provenance: {capturedAt: '2026-01-01T00:00:00.000Z', chainId: '1', fromBlock: 100, toBlock: 105},
-			source: SOURCE,
-			lastSync: {
-				context: {source: [], config: 'c', processor: ''},
-				latestBlock: 105,
-				lastFromBlock: 100,
-				lastToBlock: 105,
-				unconfirmedBlocks: [],
-			},
-			eventStream: [makeLog(100, '0xa100'), makeLog(104, '0xa104')],
-		};
-
-		const stream = replayStream<Abi>(fixture);
-		expect((await stream.fetchFrom(SOURCE, 102))?.eventStream.map((event) => event.blockNumber)).toEqual([104]);
-
-		await stream.saveNewEvents(SOURCE, {eventStream: [makeLog(105, '0xa105')], lastSync: fixture.lastSync});
-		await stream.clear(SOURCE);
-
-		// a fixture is a snapshot: replaying it must not change it
-		expect((await stream.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(2);
-	});
-
-	it('still refuses a fixture captured on another chain', async () => {
-		const fixture = {
-			format: 2 as const,
-			provenance: {capturedAt: '2026-01-01T00:00:00.000Z', chainId: '1', fromBlock: 100, toBlock: 105},
-			source: SOURCE,
-			lastSync: {
-				context: {source: [], config: 'c', processor: ''},
-				latestBlock: 105,
-				lastFromBlock: 100,
-				lastToBlock: 105,
-				unconfirmedBlocks: [],
-			},
-			eventStream: [],
-		};
-
-		await expect(replayStream<Abi>(fixture).fetchFrom({...SOURCE, chainId: '10'}, 0)).rejects.toThrow(
-			/stream fixture is for chain 1/,
-		);
 	});
 });

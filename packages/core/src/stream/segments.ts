@@ -19,8 +19,12 @@ const namedLogger = logs('@etherfold/core');
  * nobody -- `promiseToFeed` takes
  * only the three block numbers and `generateStreamFromReplay` rebuilds the window
  * by WALKING the replayed events (ADR-0042; it was `generateStreamToAppend` until
- * a replay stopped being routed through the fetch path). `captureStream`/`replayStream`
- * are the shipped third implementation of this seam that already stores none.
+ * a replay stopped being routed through the fetch path). The captured-stream path
+ * (`captureStream`/`replayStream`) is the standing evidence that nothing needs the
+ * stored window: it records an empty one and serves an empty one, and a replay off
+ * it loses nothing. It is NOT an implementation of this seam -- a fixture serves
+ * DECODED events and has its own reader type (ADR-0059) -- which is why it is
+ * evidence rather than a keeper.
  */
 export type StreamSegment<ABI extends Abi> = {events: LogEvent<ABI>[]};
 

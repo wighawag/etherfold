@@ -436,8 +436,8 @@ export type ExistingStream<ABI extends Abi> = {
 	 * an application repeating it at the keeper's construction site where it
 	 * could silently disagree with the config the indexer is actually running.
 	 *
-	 * OPTIONAL because a keeper that addresses NOTHING has no use for it: a
-	 * replayed fixture serves one captured stream whatever it is asked for.
+	 * OPTIONAL because a keeper that addresses NOTHING has no use for it: one that
+	 * holds exactly one stream serves it whatever it is asked for.
 	 */
 	setStreamConfig?: (streamConfig: UsedStreamConfig) => void;
 };

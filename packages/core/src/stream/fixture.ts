@@ -1,7 +1,6 @@
 import type {Abi} from 'abitype';
-import type {EventProcessor, ExistingStream, IndexingSource, LastSync, LogEvent, UsedStreamConfig} from '../types.js';
+import type {EventProcessor, IndexingSource, LastSync, LogEvent, UsedStreamConfig} from '../types.js';
 import {taggedBnReplacer, taggedBnReviver} from '../utils/bigint.js';
-import {readOnlyStream} from './readOnly.js';
 
 /**
  * The on-disk format version of a captured stream.
@@ -135,21 +134,55 @@ export function blocksOf<ABI extends Abi>(fixture: StreamFixture<ABI>): FixtureB
 }
 
 /**
- * An `ExistingStream` that serves a captured fixture and never writes.
+ * A READER over a captured fixture: fetch, and nothing else.
  *
- * This is the seam the indexer already consults before fetching, so pointing it
- * at a fixture is how a run gets its events from disk instead of from a node.
- * `saveNewEvents` is a no-op rather than an error: a fixture is immutable by
- * definition, and a replay that appended to it would stop being a replay of the
- * thing whose provenance is recorded at the top of the file.
+ * ## Why this is NOT the keeper seam (`ExistingStream`)
  *
- * The no-op HALF is `readOnlyStream`, and it is shared rather than repeated. A
- * fixture is one reader; a follower over a stream another generation is indexing
- * is the other, and what "read-only" means on this seam is one definition for
- * both. All that is left here is the fixture's own `fetchFrom`.
+ * A fixture and a stream KEEPER hold different things. A keeper stores what the
+ * NODE said, so the decoded half of an event (`args`, `eventName`) has no
+ * business in it: it is what some ABI made of the raw bytes, it is the only half
+ * that can go STALE, and it is re-derived on read. A fixture is the opposite by
+ * design -- its events are decoded ONCE, at capture, so a replay does not re-run
+ * the decoder, and that decoded half is exactly what makes it a reusable test
+ * INPUT.
+ *
+ * They shared `ExistingStream` for as long as nothing made them differ. Once the
+ * keeper seam speaks a STORED (raw-only) event, a fixture cannot satisfy it and
+ * should not: nothing wires a fixture as the indexer's `keepStream`, so the two
+ * never met at runtime anyway. Declaring its own reader type is what lets each
+ * say what it actually is.
+ *
+ * ## Why there is no write half
+ *
+ * A fixture is immutable BY DEFINITION -- a replay that appended to it would stop
+ * being a replay of the thing whose provenance is recorded at the top of the
+ * file. That used to be a `saveNewEvents` that SWALLOWED the write
+ * (`readOnlyStream`, ADR-0044). With no seam to satisfy there is nothing to
+ * swallow: the write is not expressible, so "writing through a fixture does not
+ * change what it serves" is a compile-time fact rather than a behaviour a test
+ * has to watch. `readOnlyStream` keeps its one meaning, read-only on the KEEPER
+ * seam, and keeps its callers there.
+ *
+ * `fetchFrom` always ANSWERS, where a keeper's may report ABSENT: a fixture is a
+ * stream that is present by construction. What it will not do is serve a chain
+ * it was not captured on, which is a mistake and not an absence.
  */
-export function replayStream<ABI extends Abi>(fixture: StreamFixture<ABI>): ExistingStream<ABI> {
-	return readOnlyStream<ABI>({
+export type StreamFixtureReader<ABI extends Abi> = {
+	fetchFrom: (
+		source: IndexingSource<ABI>,
+		fromBlock: number,
+	) => Promise<{lastSync: LastSync<ABI>; eventStream: LogEvent<ABI>[]}>;
+};
+
+/**
+ * Serve a captured fixture from disk, as a reader that cannot be written to.
+ *
+ * The cursor it hands back is the capture's own, whose unconfirmed window is
+ * EMPTY (ADR-0035): the window is read from the entity path's serialized cursor,
+ * and a stream's copy of it is read by nobody.
+ */
+export function replayStream<ABI extends Abi>(fixture: StreamFixture<ABI>): StreamFixtureReader<ABI> {
+	return {
 		fetchFrom: async (source: IndexingSource<ABI>, fromBlock: number) => {
 			if (source.chainId !== fixture.source.chainId) {
 				throw new Error(`stream fixture is for chain ${fixture.source.chainId}, asked for chain ${source.chainId}`);
@@ -159,7 +192,7 @@ export function replayStream<ABI extends Abi>(fixture: StreamFixture<ABI>): Exis
 				lastSync: fixture.lastSync,
 			};
 		},
-	});
+	};
 }
 
 export type ReplayOptions<ABI extends Abi> = {
