@@ -34,10 +34,9 @@ const STRATAGEMS = path.resolve(process.env.STRATAGEMS_REPO ?? `${process.env.HO
 const deploymentArg = process.argv.indexOf('--deployment');
 const DEPLOYMENT = deploymentArg === -1 ? 'alpha1' : process.argv[deploymentArg + 1];
 const DEPLOYMENTS = path.join(STRATAGEMS, 'contracts/deployments', DEPLOYMENT);
-// Gzipped for the launched game (20.5 MB of JSON, 0.6 MB compressed, and git
-// stores both at about 0.6 MB, so the compressed form costs nothing in the repo
-// and saves 20 MB in every working tree); plain JSON for the tiny abandoned
-// deployment, which is small enough to stay readable and diffable.
+// Gzipped for the launched game (33.8 MB of JSON, 1.05 MB compressed, so the
+// compressed form saves 33 MB in every working tree); plain JSON for the tiny
+// abandoned deployment, which is small enough to stay readable and diffable.
 const OUT = path.join(
 	HERE,
 	`../../../../packages/conformance-workload-stratagems/fixtures/stratagems-${DEPLOYMENT}.stream.json${DEPLOYMENT === 'base' ? '' : '.gz'}`,
@@ -140,15 +139,22 @@ const fixture = await captureStream(provider, source, {
 /**
  * Drop the ENCODED form of what is already decoded.
  *
- * `data` and `topics` are the wire form of `args`, and `args` is what a
- * processor reads, so keeping both roughly quadruples a fixture that is meant to
- * be committed and cloned forever (32.5 MB against 8.6 MB here). They are
- * recoverable from the chain at any time, because the provenance says exactly
- * which contracts and which blocks to re-fetch. Pass `--full` to keep them.
+ * **PASS `--full` IF YOU ARE RE-CAPTURING THE COMMITTED alpha1 FIXTURE.** That
+ * file carries `data` and `topics` since 2026-09-06 and a re-capture without the
+ * flag would silently regress it: an event with no raw log cannot be re-decoded
+ * (ADR-0034), so a stream seeded from such a capture is CLEARED on load, and
+ * seeding a generation from a published stream is the whole point of ADR-0063.
+ * The default stays trimmed because a decode-only capture is still the cheaper
+ * artifact for anything that only ever REPLAYS one into a processor.
  *
- * What is NOT dropped: block number and hash (grouping and reorg identity), log
- * index and transaction coordinates (ordering), address, `removed`, and the
- * block timestamp.
+ * `data` and `topics` are the wire form of `args`, and `args` is what a
+ * processor reads, so keeping both takes this capture from 22.2 MB to 33.8 MB.
+ * They are recoverable from the chain at any time, because the provenance says
+ * exactly which contracts and which blocks to re-fetch.
+ *
+ * What is NOT dropped either way: block number and hash (grouping and reorg
+ * identity), log index and transaction coordinates (ordering), address,
+ * `removed`, and the block timestamp.
  */
 const full = process.argv.includes('--full');
 const trimmed = full

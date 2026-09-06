@@ -26,11 +26,15 @@ import type {Abi} from '@etherfold/core';
  *
  * A `.gz` path is therefore gzipped on write and gunzipped on read, chosen by
  * the extension so a caller states its intent in the filename and nothing else
- * has to know. It matters more than it looks: a real capture here is 20.5 MB of
- * JSON and 0.6 MB gzipped, git stores both at about 0.6 MB, so the compressed
- * form costs nothing in the repository and saves 20 MB in every working tree.
+ * has to know. It matters more than it looks: a real capture here is 33.8 MB of
+ * JSON and 1.05 MB gzipped, so the compressed form saves 33 MB in every working
+ * tree.
  * The uncompressed form stays the default because a small fixture should be
  * readable and diffable.
+ *
+ * The numbers moved on 2026-09-06, when the alpha1 capture was re-taken with its
+ * `data` and `topics`: 33.8 MB of JSON against 1.05 MB gzipped, where the
+ * decode-only form it replaced was 22.2 MB against 0.65 MB.
  */
 function isGzipped(filePath: string): boolean {
 	return filePath.endsWith('.gz');

@@ -1,0 +1,51 @@
+{
+  "ranAt": "2026-09-06T21:42:16.711Z",
+  "node": "v24.13.1",
+  "cases": {
+    "installThenFold": {
+      "fixtureEvents": 31332,
+      "batches": 30,
+      "streamDigest": "222f9f7167d2edf981cdcbe9e10c50ec",
+      "keysWritten": 31,
+      "hasCursorRecord": true,
+      "segmentOrdinals": 30,
+      "nodeCalls": [
+        "eth_chainId"
+      ],
+      "eventsFolded": 31332,
+      "blocksFolded": 89,
+      "firstBlockFolded": 12082307,
+      "lastBlockFolded": 23303136,
+      "eventsCarryingADecodedHalf": 31332,
+      "eventsCarryingTheRawLog": 31332,
+      "cursorAfterLoad": {
+        "lastFromBlock": 12082307,
+        "lastToBlock": 23400000,
+        "latestBlock": 23400000
+      },
+      "captureCoverage": {
+        "fromBlock": 12082307,
+        "lastToBlock": 23400000,
+        "lastEventBlock": 23303136
+      },
+      "installMsOnFakeIndexedDB": 227,
+      "failures": []
+    },
+    "reload": {
+      "nodeCalls": [
+        "eth_chainId"
+      ],
+      "eventsFolded": 31332,
+      "keysStillStored": 31,
+      "cursorLastToBlock": 23400000,
+      "failures": []
+    },
+    "strippedIsRefused": {
+      "keysAfterInstall": 31,
+      "keysAfterLoad": 0,
+      "eventsFolded": 0,
+      "cursorLastToBlock": 0,
+      "failures": []
+    }
+  }
+}
