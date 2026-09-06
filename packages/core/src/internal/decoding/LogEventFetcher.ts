@@ -31,34 +31,60 @@ import {UnlessCancelledFunction} from '../utils/promises.js';
  * trivially told apart on the wire, so both are kept and both are requested.
  *
  * A shared topic0 with a different DEFINITION is the genuine ambiguity, and it
- * is refused here, at construction, naming both declarations. No block boundary
- * resolves it either: an upgrade transaction sits mid-block, so both meanings
- * share a block.
+ * is refused here, at construction, naming both declarations -- but ONLY where
+ * this list is what DECIDES a decode (`refuseACollision`, ADR-0061). Within one
+ * ADDRESS it always is, so the refusal there is unconditional and no block
+ * boundary resolves it either: an upgrade transaction sits mid-block, so both
+ * meanings share a block. Across the MERGED list of every contract it usually is
+ * NOT, because `decodeOnto` picks the ABI by the log's address, and then a
+ * shared topic0 is TOLERATED: both declarations are kept, each reachable only at
+ * its own address. An ERC-721 and an ERC-20 in one source is that case, and it
+ * is ordinary.
  *
  * What this must never do again is DROP one silently. A spliced event's topic0
  * never entered the fetch filter, so its logs were never asked for, and
  * afterwards nothing distinguished "the chain had none" from "we never asked"
  * -- an absence inferred from a request that was never made, the same failure
- * class as `absence` vs `contradiction` in the reorg model.
+ * class as `absence` vs `contradiction` in the reorg model. Tolerating is not
+ * dropping: both members stay in the list, and the one topic0 they share is
+ * still requested (once -- see the topic-filter loop).
+ *
+ * The shapes already seen for a signature are kept as a LIST rather than as one
+ * winner, so that COLLAPSING still works after a tolerate: a third declaration
+ * is compared against every shape kept so far, and is collapsed if it matches
+ * ANY of them. The conformance workload is exactly that order -- an ERC-721
+ * `Approval` followed by TWO identical ERC-20 ones -- and against a single
+ * remembered shape the third would have been tolerated as a second copy of the
+ * second, making "identical declarations are collapsed" untrue precisely where
+ * a collision is tolerated. Under `refuseACollision` the list can never hold
+ * more than one shape, so the message below still names the first declaration.
  */
-function deleteDuplicateEvents(events: AbiEvent[]) {
-	const declaredPerSignature = new Map<string, AbiEvent>();
+function deleteDuplicateEvents(events: AbiEvent[], refuseACollision: boolean) {
+	const declaredPerSignature = new Map<string, AbiEvent[]>();
 	for (let i = 0; i < events.length; i++) {
 		const event = events[i];
 		const signature = canonicalSignatureOf(event);
 		const declared = declaredPerSignature.get(signature);
 		if (!declared) {
-			declaredPerSignature.set(signature, event);
+			declaredPerSignature.set(signature, [event]);
 			continue;
 		}
-		if (!deepEqual(decodingShapeOf(event), decodingShapeOf(declared))) {
+		const shape = decodingShapeOf(event);
+		if (!declared.some((seen) => deepEqual(decodingShapeOf(seen), shape))) {
+			if (!refuseACollision) {
+				// TOLERATED: nothing here decodes a log, so nothing here has to tell the
+				// two apart. Kept rather than collapsed, because collapsing would pick a
+				// winner and the loser's address would decode against the wrong shape.
+				declared.push(event);
+				continue;
+			}
 			const topic0 = topic0Of(event);
 			throw new Error(
 				`ambiguous ABI: "${signature}" is declared more than once with different definitions, ` +
 					(topic0
 						? `so both arrive under topic0 ${topic0} and nothing on the wire tells them apart. `
 						: `and being anonymous they carry no topic0 to tell them apart. `) +
-					`Declared as \`${describeEventDeclaration(declared)}\` and as \`${describeEventDeclaration(event)}\`. ` +
+					`Declared as \`${describeEventDeclaration(declared[0])}\` and as \`${describeEventDeclaration(event)}\`. ` +
 					`Make the two declarations identical, or index only one of them.`,
 			);
 		}
@@ -183,7 +209,10 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	 * against, which is what makes a hit interchangeable with the whole-ABI
 	 * search: ADR-0031 collapses two declarations of one `topic0` that decode
 	 * identically and REFUSES a genuine collision at construction, so no address
-	 * can hold two members answering to one `topic0`.
+	 * can hold two members answering to one `topic0`. That per-address refusal is
+	 * UNCONDITIONAL and ADR-0061 leaves it exactly as it was; what ADR-0061
+	 * tolerates is a collision across DIFFERENT addresses, which this map keys
+	 * apart by construction.
 	 *
 	 * ANONYMOUS members are absent, because they have no `topic0` to key: their
 	 * logs carry an indexed ARGUMENT in `topics[0]`. They miss and fall back, which
@@ -192,7 +221,28 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	 */
 	private abiEventPerAddressAndTopic: Map<string, AbiEvent>;
 	private abiPerAddress: Map<`0x${string}`, AbiEvent[]>;
+	/**
+	 * May hold two members answering to ONE `topic0` (ADR-0061), so it is read
+	 * ONLY where `mergedListDecodes` is false -- which is to say, never.
+	 */
 	private allABIEvents: AbiEvent[];
+	/**
+	 * Whether the MERGED list is what decodes a log, decided ONCE.
+	 *
+	 * The construction-time refusal and the per-log route must ask the SAME
+	 * question, or the merged list is decoded against on a path that never checked
+	 * it for a `topic0` collision -- and that failure is silent, since
+	 * `decodeEventLog` would simply return the first member matching the `topic0`
+	 * and write another address's `args` onto the event with no `decodeError`. It
+	 * was two separately written copies of one expression 190 lines apart, which
+	 * nothing would have caught drifting.
+	 *
+	 * Storing it also FREEZES the verdict at the instant the refusal was evaluated.
+	 * `parseConfig` is the caller's object, held by reference, so re-reading the
+	 * flag per log let a mutation after construction flip the route onto a list
+	 * that was deliberately tolerated as ambiguous.
+	 */
+	private readonly mergedListDecodes: boolean;
 
 	constructor(
 		readonly provider: EIP1193ProviderWithoutEvents,
@@ -238,13 +288,23 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 			_allABIEvents.push(...(allContractsData.abi.filter((item) => item.type === 'event') as AbiEvent[]));
 		}
 
-		// the SAME rule on every list, so which events exist can never depend on
-		// `parseAllEventsIrrespectiveOfAddresses` -- a parse-config flag deciding
-		// that was the defect
+		// WHICH EVENTS EXIST is the same on every path and never depends on
+		// `parseAllEventsIrrespectiveOfAddresses` -- a parse-config flag deciding that
+		// was the defect ADR-0031 fixed, and every topic0 below still enters the
+		// filter either way. What is conditional is only the REFUSAL, and it follows
+		// the DECODE path (ADR-0061).
+		//
+		// PER ADDRESS: unconditional. One address holding two shapes under one topic0
+		// is undecidable, and it is what the preselection map rests on.
 		for (const abiAtAddress of _abiPerAddress.values()) {
-			deleteDuplicateEvents(abiAtAddress);
+			deleteDuplicateEvents(abiAtAddress, true);
 		}
-		deleteDuplicateEvents(_allABIEvents);
+		// MERGED: only where this list is the one that decodes, which is exactly
+		// `decodeOnto`'s `useAllABIEvents`. Otherwise the address tells the two apart
+		// and the collision is tolerated -- an ERC-721 and an ERC-20 in one source
+		// share `Transfer(address,address,uint256)` and differ only in `indexed`.
+		const _mergedListDecodes = _abiPerAddress.size === 0 || !!parseConfig?.parseAllEventsIrrespectiveOfAddresses;
+		deleteDuplicateEvents(_allABIEvents, _mergedListDecodes);
 
 		const eventNameTopics: EIP1193DATA[] = [];
 		for (const item of _allABIEvents) {
@@ -255,9 +315,18 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 				continue;
 			}
 			if (_abiEventPerTopic.get(topic0)) {
-				// unreachable: `deleteDuplicateEvents` already collapsed or refused
-				// every shared topic0. Kept because decoding preselects by it.
-				throw new Error(`duplicate topics found for \`${describeEventDeclaration(item)}\``);
+				// A shared topic0 belongs in the fetch filter ONCE, and this is a DEDUPE
+				// rather than a refusal (ADR-0061). It used to be unreachable, because
+				// `deleteDuplicateEvents` collapsed or refused every shared topic0; the
+				// merged list now TOLERATES one whose two shapes live at different
+				// addresses, so this is reached whenever it does.
+				//
+				// Nothing about WHICH EVENTS ARE REQUESTED changes: the topic0 is already
+				// in `eventNameTopics` and already filed under its name (a shared topic0 is
+				// a shared canonical SIGNATURE, so it is a shared name too), and logs are
+				// filtered by ADDRESS as well as by topic. Asking for it twice would just
+				// be the same request written down twice.
+				continue;
 			}
 			_abiEventPerTopic.set(topic0, item);
 			eventNameTopics.push(topic0);
@@ -294,6 +363,8 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 		super(provider, contractAddresses, eventNameTopics, fetcherConfig, requestableRangesPerTopic(contractsData));
 		this.allABIEvents = _allABIEvents;
 		this.abiPerAddress = _abiPerAddress;
+		// the SAME value the refusal above was decided on, never a second reading of it
+		this.mergedListDecodes = _mergedListDecodes;
 
 		// ONCE, from the lists decoding actually uses, and after they have been
 		// de-duplicated -- so what is preselected is what the whole-ABI search would
@@ -427,7 +498,9 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	 * same member with the same decoder.
 	 */
 	private decodeOnto(event: NumberifiedLog): void {
-		const useAllABIEvents = this.abiPerAddress.size === 0 || this.parseConfig?.parseAllEventsIrrespectiveOfAddresses;
+		// the predicate the CONSTRUCTOR refused on, not a second reading of the same
+		// question: the merged list is only unambiguous where this is true (ADR-0061)
+		const useAllABIEvents = this.mergedListDecodes;
 		const correspondingABI: AbiEvent[] | undefined = useAllABIEvents
 			? this.allABIEvents
 			: this.abiPerAddress.get(event.address);
@@ -438,7 +511,9 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 		// deliberately NOT on the address-agnostic route: ADR-0031 is that
 		// `parseAllEventsIrrespectiveOfAddresses` decides which ABI decodes a log and
 		// must never decide which events exist, so it keeps the one list it has
-		// rather than growing a second index keyed on something else
+		// rather than growing a second index keyed on something else. It is also why
+		// the merged list must be UNAMBIGUOUS whenever this branch is live, which is
+		// the condition ADR-0061 makes the global refusal follow.
 		const preselected = useAllABIEvents
 			? undefined
 			: this.abiEventPerAddressAndTopic.get(preselectionKey(event.address, event.topics[0]));

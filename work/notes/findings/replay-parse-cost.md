@@ -61,8 +61,9 @@ re-processing itself. The ratios, not the absolute laptop numbers, are the findi
 **Incidentally confirmed:** all 31,330 re-captured events decode to the same `args`/`eventName` the
 2026-08-22 capture recorded — no decoder drift between d635f39 and HEAD.
 
-**A finding the capture itself surfaced, recorded separately:** the merged three-contract
-conformance source can no longer construct a production `LogEventFetcher` at all (see
-`work/notes/observations/the-conformance-workloads-merged-source-cannot-construct-a-fetcher.md`),
-which is why the spike captures per contract and routes decode by address — the same per-event
-decision the merged fetcher would make.
+**A finding the capture itself surfaced, since resolved:** at capture time the merged three-contract
+conformance source could not construct a production `LogEventFetcher` at all, which is why the spike
+captures per contract and routes decode by address, the same per-event decision the merged fetcher
+would make. That refusal was over-broad and is gone: ADR-0061 makes the merged-list refusal follow
+the decode path, so the merged source constructs. The spike's per-contract routing is therefore a
+fact about how the measurement was taken, not a constraint that still binds.

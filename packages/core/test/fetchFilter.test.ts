@@ -553,17 +553,18 @@ describe('a genuinely ambiguous ABI is refused, loudly, on every path', () => {
 	// One topic0 meaning two things cannot be resolved by anything on the wire, and
 	// no block boundary helps either: the upgrade tx sits mid-block, so both
 	// meanings share a block.
+	//
+	// Every arrangement here puts the two declarations where NOTHING resolves
+	// between them: at ONE address, or in a merged ABI that names no address at
+	// all. The cross-ADDRESS arrangement is a different case and is no longer
+	// here: `decodeOnto` resolves the ABI by the log's address, so there the wire
+	// DOES tell the two apart, and ADR-0061 tolerates it (and refuses it again
+	// under `parseAllEventsIrrespectiveOfAddresses`, where the address is
+	// ignored). See `sharedTopic0AtDifferentAddresses.test.ts`.
 	const arrangements: {label: string; contractsData: any}[] = [
 		{
 			label: 'one contract declaring both',
 			contractsData: [{address: A, abi: [transferV1, transferV1Colliding] as unknown as Abi}],
-		},
-		{
-			label: 'two contracts declaring one each',
-			contractsData: [
-				{address: A, abi: [transferV1] as unknown as Abi},
-				{address: B, abi: [transferV1Colliding] as unknown as Abi},
-			],
 		},
 		{
 			label: 'the same address twice',
@@ -602,6 +603,36 @@ describe('a genuinely ambiguous ABI is refused, loudly, on every path', () => {
 			});
 		}
 	}
+
+	it('and a shared topic0 at TWO addresses is tolerated per-address, refused address-agnostically', () => {
+		// the one arrangement whose verdict is CONDITIONAL, kept here so the boundary
+		// of the refusal is readable from the file that owns it (ADR-0061)
+		const acrossAddresses = [
+			{address: A, abi: [transferV1] as unknown as Abi},
+			{address: B, abi: [transferV1Colliding] as unknown as Abi},
+		];
+		const provider = {request: async () => undefined} as any;
+
+		expect(() => new LogEventFetcher(provider, acrossAddresses as any, {}, BOTH_PATHS[0].parse)).not.toThrow();
+		expect(() => new LogEventFetcher(provider, acrossAddresses as any, {}, BOTH_PATHS[1].parse)).toThrow(
+			/ambiguous ABI/,
+		);
+	});
+
+	it('still asks for the shared topic0, exactly once, when it is tolerated', async () => {
+		// the event SET is what ADR-0031 protects and it is untouched: a tolerated
+		// collision is still requested, and a request written down twice is not a
+		// second event
+		const acrossAddresses = [
+			{address: A, abi: [transferV1] as unknown as Abi},
+			{address: B, abi: [transferV1Colliding, transferV2] as unknown as Abi},
+		];
+
+		const requests = await requestsMade(acrossAddresses, {});
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0].topics?.[0]).toEqual([TRANSFER_V1, TRANSFER_V2]);
+	});
 });
 
 describe('the legitimate de-duplication still works', () => {

@@ -391,10 +391,10 @@ map cannot be ambiguous. That should be asserted in the test rather than trusted
   server replay.
 - `sqlite` is `:memory:` libSQL. A disk or D1 process term would be higher, which pushes decode's
   share down further and weakens option B further, so the direction of the error is known.
-- The decode measurement routes events to per-contract fetchers by address, because the merged
-  three-contract source cannot construct a fetcher at all
-  (`work/notes/observations/the-conformance-workloads-merged-source-cannot-construct-a-fetcher.md`,
-  still open). The per-event decode decision is the same one `decodeOnto` makes.
+- The decode measurement routes events to per-contract fetchers by address, because at the time it
+  ran the merged three-contract source could not construct a fetcher at all (relaxed since, by
+  ADR-0061: the merged-list refusal now follows the decode path). The per-event decode decision is
+  the same one `decodeOnto` makes, so the measurement stands as taken.
 - `guard.ts`'s candidate digest rolls up the 32-bit per-entry `hash` values for measurement
   convenience. A real implementation must not; see §4.
 - The golden-state check passes on 31,330 events against a golden computed from 31,332: the two
