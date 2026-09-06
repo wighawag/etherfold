@@ -253,6 +253,14 @@ export function world() {
 		};
 	}
 
+	/**
+	 * EVERY REORG ANY FOLD IN THIS WORLD CONCLUDED, in the order it was counted.
+	 *
+	 * The counters are per NAMED INDEXER and shared across its generations (ADR-0050),
+	 * so this is the one place a double count would show up.
+	 */
+	const reorgs: {blockNumber: number}[] = [];
+
 	/** A CONTAINER over this world: a new object graph every time, over the same durable rows. */
 	function open(version: string, weight: number): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
 		return openReceivingIndexer<TestABI, string[], MemoryStore>({
@@ -261,6 +269,9 @@ export function world() {
 			stream: {finality: FINALITY},
 			appendEmissions: (write) => stream.append(write),
 			replay: stream.source(),
+			recordReorg: async (reorg) => {
+				reorgs.push({blockNumber: reorg.blockNumber});
+			},
 			generation: specFor(version, weight),
 		});
 	}
@@ -271,6 +282,7 @@ export function world() {
 		stores,
 		specFor,
 		open,
+		reorgs,
 		rowsIn: (version: string, streamDigest: string) =>
 			storeFor(generationDigestOf({stream: streamDigest, processor: version})).rows,
 	};

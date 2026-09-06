@@ -37,7 +37,21 @@ export {forkPoint, groupByBlock} from '@etherfold/processor-entities';
  * Setting a window bounds what this state ANSWERS immediately; bounding what it
  * HOLDS is `prune`, which the deployment schedules.
  */
-export type VersionedStateProcessorOptions = Pick<VersionedStateStoreOptions, 'retention' | 'finalityDepth'>;
+/**
+ * What this convenience class passes through to the store it builds for you.
+ *
+ * `tableNamespace` is here because a generation's state IS a table-name namespace
+ * inside one database (ADR-0053), so WITHOUT it two generations built through this
+ * class over one handle land on the same tables -- which is the single failure the
+ * namespace exists to prevent, and it would fail silently. The `Pick` predates the
+ * namespace; the entity-path assembly (`VersionedStateStore` + `EntityEventProcessor`,
+ * which is what the CLI folds through) always took it, so this closes the gap
+ * between the two ways of building the same thing rather than adding an axis.
+ */
+export type VersionedStateProcessorOptions = Pick<
+	VersionedStateStoreOptions,
+	'retention' | 'finalityDepth' | 'tableNamespace'
+>;
 
 /**
  * The SQLite flavour of `EntityEventProcessor`: build the store from a

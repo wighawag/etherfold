@@ -18,6 +18,7 @@ import {
 	applySchema,
 	generationRegistryPortOnSQL,
 	openGenerationRegistryOnSQL,
+	readStreamCoverage,
 } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -281,6 +282,61 @@ describe('the rules the other substrates pass, over SQL', () => {
 		expect(await emissionCount(db, OTHER_INDEXER, STREAM_B)).toBe(1);
 	});
 });
+
+/**
+ * A STREAM LIVES IN TWO TABLES, SO A REAP HAS TO TAKE BOTH.
+ *
+ * PRESENCE is the COVERAGE CLAIM and never "there are rows" (ADR-0035/ADR-0055),
+ * which is what lets a stream that has been scanned and found nothing read as
+ * present-and-empty instead of absent. That rule is what makes a SURVIVING claim
+ * so much worse than no claim at all: a reap that took the emissions and left the
+ * claim leaves a stream reading as PRESENT AND COMPLETE with nothing in it, and
+ * the generation folding it is told it re-folded the whole history and may resume
+ * at the old tip -- with empty state, durably, and with no error anywhere.
+ */
+describe('reaping a stream takes its COVERAGE CLAIM with its rows', () => {
+	it('leaves no claim behind, so the reaped stream reads ABSENT and not empty-but-complete', async () => {
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, PROC_A));
+		const onOwnStream = await registry.create(idOf(STREAM_B, PROC_B));
+		await writeStream(db, INDEXER, STREAM_A);
+		await writeStream(db, INDEXER, STREAM_B);
+		await writeStream(db, OTHER_INDEXER, STREAM_B);
+		// the claim is there before the reap, or this asserts nothing
+		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_B})).toBeDefined();
+
+		await registry.deleteGeneration(onOwnStream);
+
+		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_B})).toBeUndefined();
+		// the OTHER named indexer's claim under the SAME digest is untouched, exactly as
+		// its rows are: both statements carry both discriminators
+		expect(await readStreamCoverage(db, {indexer: OTHER_INDEXER, stream: STREAM_B})).toBeDefined();
+		// and the live stream keeps its own
+		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_A})).toBeDefined();
+	});
+
+	it('takes the claim on the unregistered-subtree SWEEP too, which is the reachable path', async () => {
+		const db = await freshDB();
+		// a database written BEFORE this runtime held generations: rows and a claim that
+		// no registered generation names, which the first registry open sweeps
+		await writeStream(db, INDEXER, STREAM_A);
+		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_A})).toBeDefined();
+
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+
+		expect(registry.swept).toEqual([STREAM_A]);
+		expect(await emissionCount(db, INDEXER, STREAM_A)).toBe(0);
+		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_A})).toBeUndefined();
+	});
+});
+
+// The other half of this pin lives in `storedStreamRefold.test.ts` ("is what
+// PRESENCE is: rows with no claim are not a stream anything may fold"): together
+// they say a reap removes the claim, and a stream with no claim reads ABSENT. The
+// digests here are fabricated rather than derived from a source, so the reader
+// itself -- which resolves a stream by hashing the source it is asked about --
+// cannot be driven from this file.
 
 describe('a second handle on the same database', () => {
 	it('sees the same generations and the same canonical generation', async () => {

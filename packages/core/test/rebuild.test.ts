@@ -95,6 +95,49 @@ describe('a successor on a SHARED stream is a FOLLOWER, determined and never con
 	});
 });
 
+/**
+ * THE REORG COUNTERS ARE THE CHAIN'S RECORD, NOT EVERY FOLD'S.
+ *
+ * `recordReorg` writes counters that are per NAMED INDEXER and shared across its
+ * generations (ADR-0050), while the emission append has a one-writer rule that
+ * bounds it to a single generation (ADR-0052). Those two facts together are why
+ * this needs pinning: a successor re-folding a stream that CONTAINS retractions
+ * replays every one of them, and if that path could reach the recorder it would
+ * add reverts on top of the ones the incumbent already counted -- `/status` would
+ * report a contradiction rate no chain activity produced.
+ *
+ * It cannot, and the reason is structural rather than a guard: a successor on a
+ * shared stream is a FOLLOWER, a follower is advanced by `GenerationRebuild`, and
+ * the rebuild is a replay that concludes no reorgs of its own -- it honours the
+ * verdicts the stream already carries (ADR-0042). Only a RECEIVER concludes a
+ * reorg, and only the wire feeds a receiver.
+ */
+describe('a re-folding successor does not re-count the reverts the stream carries', () => {
+	it('leaves the shared counters exactly where the incumbent left them', async () => {
+		const {world: w, incumbent} = await anIncumbentThatHasFolded();
+		// the fixture holds ONE contradiction: 104 came back with a different hash
+		expect(w.reorgs).toEqual([{blockNumber: 104}]);
+
+		const successor = await incumbent.add(w.specFor('v2', 10));
+		let done = false;
+		while (!done) {
+			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			done = !!report?.complete;
+		}
+
+		// the successor really did replay the retraction -- it is on the live branch, not
+		// the dead one -- so this is not passing because nothing was re-folded
+		expect(await canonicalAnswers(w, incumbent)).toEqual([
+			`${idOf(AT_101)}x10`,
+			`${idOf(REORGED_104)}x10`,
+			`${idOf(AT_106)}x10`,
+		]);
+		expect(successor.record.processor).toBe('v2');
+		// ...and the count is still ONE. The chain contradicted itself once.
+		expect(w.reorgs).toEqual([{blockNumber: 104}]);
+	});
+});
+
 describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished', () => {
 	it('does bounded work per call and says `complete` only when the stream is folded', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();

@@ -383,6 +383,53 @@ describe('one container, SEVERAL live wire contexts', () => {
 			successor.streamDigest,
 		]);
 	});
+
+	/**
+	 * WHICH GENERATION ANSWERS is the REGISTRY's answer, including when it has none.
+	 *
+	 * The container used to fall back to the fold it opened with, which made a host
+	 * holding an engine answer reads from a generation the pointer does not name while
+	 * a read tier over the same rows refused (ADR-0058). One database must not have two
+	 * answers depending on who is asking.
+	 */
+	it('answers NONE where the registry names none, rather than falling back to its opening fold', async () => {
+		const world = substrate();
+		/**
+		 * A substrate whose POINTER names a generation the RECORDS do not have.
+		 *
+		 * `openGenerationRegistry.canonical()` resolves the pointer against the records,
+		 * so this is what it means for it to answer nothing while generations exist. It
+		 * is simulated at the PORT because the registry itself refuses to produce it --
+		 * deleting the canonical generation is refused by its own rules -- so the only
+		 * way in is out of band: another process, or a half-written substrate. That is
+		 * exactly the case the old fallback quietly served a read for.
+		 */
+		let detachPointer = false;
+		const port: GenerationRegistryPort = {
+			...world.port,
+			read: async () => {
+				const state = await world.port.read();
+				return detachPointer ? {...state, canonical: {stream: 'gone', processor: 'gone'}} : state;
+			},
+		};
+		const incumbent = await openReceivingIndexer({
+			port,
+			source: SOURCE,
+			stream: {finality: FINALITY},
+			generation: world.specFor('v1', 'own'),
+		});
+		expect(await incumbent.canonicalGeneration()).toEqual(incumbent.generation);
+
+		detachPointer = true;
+
+		expect(await incumbent.canonicalGeneration()).toBeUndefined();
+		// and specifically NOT the opening fold, which is what the fallback answered:
+		// a generation the pointer does not name, served as though it did
+		expect(await incumbent.canonicalGeneration()).not.toEqual(incumbent.generation);
+		// the container still HOLDS its fold. This says which generation ANSWERS, not
+		// which ones exist, so nothing stops folding.
+		expect(incumbent.held().length).toBe(1);
+	});
 });
 
 describe('a receiver built WITHOUT a container', () => {

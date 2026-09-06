@@ -14,6 +14,7 @@ import {GenerationRebuild, type RebuildReport, type ReplaySource} from './genera
 import {
 	openGenerationRegistry,
 	sameGeneration,
+	writerOf,
 	type GenerationCaps,
 	type GenerationId,
 	type GenerationRecord,
@@ -310,8 +311,41 @@ export type HeldFold<ABI extends Abi, ProcessResultType = unknown, State = unkno
 	 * `false` means the emission appender was NOT handed to this receiver, so this
 	 * fold stores nothing: the stream it folds is already stored by an older
 	 * generation, and every generation re-folds that ONE history.
+	 *
+	 * **It can CHANGE while this fold is held**, and that is the engine half of
+	 * ADR-0044's succession rule: the writer is the oldest SURVIVING generation, so
+	 * deleting a writer makes the next-oldest one the answer, and this container
+	 * moves the wire to it (`ReceivingIndexer.liveIngestions`). It is still never
+	 * SET by a caller -- it is re-derived from the records whenever they are read.
 	 */
 	readonly writesStream: boolean;
+};
+
+/**
+ * The same fold, writable, for the ONE thing that legitimately re-derives it:
+ * WRITER SUCCESSION (ADR-0044).
+ *
+ * `HeldFold` is readonly because none of it is a caller's to choose. The container
+ * itself must be able to move a fold between the two shapes -- follower with a
+ * rebuild, writer with a receiver -- because which one it is is a function of
+ * records that change underneath it.
+ */
+type MutableHeldFold<ABI extends Abi, ProcessResultType> = {
+	-readonly [K in keyof HeldFold<ABI, ProcessResultType, unknown>]: HeldFold<ABI, ProcessResultType, unknown>[K];
+};
+
+/**
+ * What a fold needs REMEMBERED so its engine half can be rebuilt later.
+ *
+ * The source and the stream config it was added with, because succession builds a
+ * receiver for a fold that did not have one; and whether its rebuild has reported
+ * LEVEL, because a fold that is still catching up must not be handed the wire (see
+ * `reconcileWriters`).
+ */
+type FoldOrigin<ABI extends Abi> = {
+	readonly source: IndexingSource<ABI>;
+	readonly provided: ProvidedStreamConfig | undefined;
+	level: boolean;
 };
 
 /**
@@ -484,6 +518,12 @@ export class ReceivingIndexer<
 	 */
 	private readonly records = new Map<string, GenerationRecord>();
 
+	/**
+	 * What each held fold was BUILT FROM, so its engine half can be rebuilt when the
+	 * records say it is now the writer of its stream. See `FoldOrigin`.
+	 */
+	private readonly origins = new WeakMap<HeldFold<ABI, ProcessResultType, unknown>, FoldOrigin<ABI>>();
+
 	constructor(registry: GenerationRegistry, options: ReceivingIndexerOptions<ABI, ProcessResultType, State>) {
 		this.registry = registry;
 		this.options = options;
@@ -593,18 +633,45 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * WHICH GENERATION ANSWERS READS, as an identity a host can report.
+	 * WHICH GENERATION ANSWERS READS, as an identity a host can report -- or NOTHING,
+	 * which is a real answer and never an empty one.
 	 *
-	 * The narrow, never-absent form of `canonical` above, and the one a serving
-	 * host asks for: both halves in ONE read, so a response can never pair one
-	 * generation's stream with another's fold. Any registry a generation has been
-	 * created in has a canonical pointer (the FIRST one registered takes it, which
-	 * is the registry's own rule), so the fallback to the opening fold is for a
-	 * substrate that answered nothing rather than a case a host has to handle.
+	 * The narrow form of `canonical` above, and the one a serving host asks for: both
+	 * halves in ONE read, so a response can never pair one generation's stream with
+	 * another's fold.
+	 *
+	 * ## Why `undefined` is PASSED THROUGH and not covered over
+	 *
+	 * This used to fall back to the OPENING FOLD, on the reasoning that any registry a
+	 * generation has been created in has a pointer (the first one registered takes it,
+	 * which is the registry's own rule), so nothing could ever ask. That reasoning
+	 * predates the answer being expressible at all: `openGenerationRegistry.canonical()`
+	 * resolves the pointer AGAINST THE RECORDS, so it answers nothing when the pointer
+	 * names a generation whose record has gone -- another process deleting it, or a
+	 * half-written substrate.
+	 *
+	 * In that case the opening fold is NOT the generation the pointer named, so the
+	 * fallback served reads from a generation nobody asked for, silently, where a read
+	 * tier over the same rows refuses (`503 no-canonical-generation`, ADR-0058). One
+	 * database, two answers, decided by which process happened to be asking. Passing
+	 * the registry's answer through makes every host agree, and the refusal an operator
+	 * sees is then a fact about the DATABASE rather than about the reader.
+	 *
+	 * A host holding folds still holds them and still folds: this says which generation
+	 * ANSWERS, and "none of them, yet" is a state the read surface already knows how to
+	 * report.
 	 */
-	async canonicalGeneration(): Promise<GenerationId> {
+	async canonicalGeneration(): Promise<GenerationId | undefined> {
 		const canonical = await this.registry.canonical();
-		return canonical ? {stream: canonical.stream, processor: canonical.processor} : this.generation;
+		if (!canonical) {
+			namedLogger.info(
+				`the registry names no canonical generation, so this container answers NONE rather than falling back to the ` +
+					`fold it opened with ({stream: ${this.generation.stream}, processor: ${this.generation.processor}}). A read ` +
+					`is refused rather than served from a generation the pointer does not name (ADR-0058).`,
+			);
+			return undefined;
+		}
+		return {stream: canonical.stream, processor: canonical.processor};
 	}
 
 	/**
@@ -627,9 +694,109 @@ export class ReceivingIndexer<
 	 */
 	async liveIngestions(): Promise<readonly LogIngestion[]> {
 		const registered = await this.registry.list();
+		// BEFORE the list is answered, because the answer is what the wire routes on:
+		// deleting a stream's writer makes the next-oldest generation the writer, and a
+		// batch arriving after that must reach the fold that now holds the duty.
+		await this.reconcileWriters(registered);
 		return this.folds
 			.filter((fold) => !!fold.ingestion && registered.some((record) => sameGeneration(record, fold.record)))
 			.map((fold) => fold.ingestion as StreamBuilder<ABI, ProcessResultType>);
+	}
+
+	/**
+	 * WRITER SUCCESSION, the engine half: move the wire to the generation the records
+	 * now say writes each stream.
+	 *
+	 * ADR-0044 says the writer of a stream is the OLDEST SURVIVING generation held on
+	 * it, and that succession is atomic with a delete BECAUSE IT IS STORED NOWHERE --
+	 * the commit that removes the record is already the commit that makes the
+	 * next-oldest generation the answer. That is the DURABLE half, and it has been
+	 * true since the registry landed. This is the other half: in a running process,
+	 * the surviving generation must actually be handed the engine, or the records say
+	 * one thing while the host does another and the stream quietly stops being fed.
+	 *
+	 * Without this, deleting a writer removed the only RECEIVER its stream had: the
+	 * context stopped being live, an incoming batch resolved to nothing, and `/status`
+	 * went on looking healthy while the cursor stopped -- the exact silent stall the
+	 * amendment was written to close.
+	 *
+	 * It is a RECONCILIATION and not an event handler, for the reason everything else
+	 * here is derived: a generation can be deleted by another process, so there is no
+	 * moment this host is told about. It runs where the records are already being read
+	 * and costs nothing when nothing moved.
+	 *
+	 * ## Why a fold that is still CATCHING UP does not take the wire
+	 *
+	 * A receiver answers `expectedFromBlock` from ITS OWN fold position, and under
+	 * ADR-0052 a re-sent batch is APPENDED AGAIN. So handing the wire to a follower
+	 * that is still mid-rebuild would make it ask for everything back to its own
+	 * cursor and store a second copy of that whole range -- indistinguishable
+	 * afterwards from real emissions, which is the corruption ADR-0055's coverage
+	 * claim exists to prevent. A fold that is LEVEL asks for at most the one batch the
+	 * stream may already be ahead by, which is the duplicate ADR-0052 already accepts
+	 * and bounds.
+	 *
+	 * So succession WAITS for the survivor to catch up. That is not a stall: the
+	 * follower's rebuild is still advancing it (nothing about a deleted writer stops
+	 * the stored stream being re-foldable), so the next reconciliation hands over the
+	 * wire. The stream is unfed in the meantime, which is visible and recoverable,
+	 * where a duplicated range is neither.
+	 */
+	private async reconcileWriters(registered: readonly GenerationRecord[]): Promise<void> {
+		for (const fold of this.folds) {
+			if (!registered.some((record) => sameGeneration(record, fold.record))) continue;
+			const writer = writerOf(registered, fold.streamDigest);
+			const shouldWrite = !!writer && sameGeneration(writer, fold.record);
+			if (shouldWrite === fold.writesStream) continue;
+
+			const origin = this.origins.get(fold);
+			if (!origin) continue;
+			if (shouldWrite && !origin.level) {
+				namedLogger.info(
+					`the fold {stream: ${fold.record.stream}, processor: ${fold.record.processor}} is now the oldest surviving ` +
+						`generation on its stream and so its WRITER, but it has not finished re-folding that stream yet. The wire ` +
+						`is NOT handed over: a receiver asks from its own position, and under ADR-0052 the re-sent range would be ` +
+						`APPENDED A SECOND TIME. Its rebuild keeps advancing it; it takes the wire once it is level.`,
+				);
+				continue;
+			}
+			this.handOverTheWire(fold as MutableHeldFold<ABI, ProcessResultType>, origin, shouldWrite);
+		}
+	}
+
+	/**
+	 * Give this fold the engine half the records say it should have, and take away
+	 * the one it should not.
+	 *
+	 * A fold is one of exactly two shapes (`HeldFold.ingestion` / `HeldFold.rebuild`),
+	 * and succession moves it between them: a FOLLOWER that inherits the duty stops
+	 * following and gets a receiver with the appender; a fold that already had a
+	 * receiver but not the appender is rebuilt with it. The processor and the state
+	 * are untouched, so nothing re-reads and nothing re-folds -- a `StreamBuilder`
+	 * holds no position of its own, it reads the fold's persisted cursor, so a fresh
+	 * one resumes exactly where the old one was.
+	 */
+	private handOverTheWire(
+		fold: MutableHeldFold<ABI, ProcessResultType>,
+		origin: FoldOrigin<ABI>,
+		writesStream: boolean,
+	): void {
+		const was = fold.follows ? 'a FOLLOWER' : 'a receiver that did not write';
+		fold.writesStream = writesStream;
+		fold.follows = false;
+		fold.rebuild = undefined;
+		fold.ingestion = new StreamBuilder<ABI, ProcessResultType>(fold.processor, origin.source, {
+			...(origin.provided ? {stream: origin.provided} : {}),
+			...(this.options.recordReorg ? {recordReorg: this.options.recordReorg} : {}),
+			...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
+			container: this,
+		});
+		namedLogger.info(
+			`WRITER SUCCESSION on the stream ${fold.streamDigest}: {stream: ${fold.record.stream}, processor: ` +
+				`${fold.record.processor}} was ${was} and is now its writer, because it is the oldest generation still ` +
+				`registered on it (ADR-0044). It has been given the receiver and the emission appender, so the stream goes ` +
+				`on being fed and on being stored.`,
+		);
 	}
 
 	/** Every FOLLOWER held: the folds a rebuild advances rather than the wire. */
@@ -736,6 +903,16 @@ export class ReceivingIndexer<
 					}),
 		};
 		this.folds.push(fold as HeldFold<ABI, ProcessResultType, unknown>);
+		// REMEMBERED for succession: a follower that later becomes its stream's writer
+		// needs a receiver built from the same source and stream config it was added
+		// with. `level` starts false for a follower, which is what stops a fold that has
+		// not caught up from being handed the wire (see `reconcileWriters`), and true for
+		// a fold that already has a receiver, because the wire is what feeds it.
+		this.origins.set(fold as HeldFold<ABI, ProcessResultType, unknown>, {
+			source,
+			provided,
+			level: !follows,
+		});
 		if (canonicalOnAdd) {
 			this.everCanonical.add(fold as HeldFold<ABI, ProcessResultType, unknown>);
 		}
@@ -774,8 +951,16 @@ export class ReceivingIndexer<
 			// folding into it would be writing into nothing -- the same rule
 			// `liveIngestions` applies to a receiver.
 			if (!registered.some((record) => sameGeneration(record, fold.record))) continue;
-			reports.push(await fold.rebuild.more(options));
+			const report = await fold.rebuild.more(options);
+			// LEVEL is what lets this fold take the wire if it inherits its stream's write
+			// duty; see `reconcileWriters` for why a fold that is behind must not.
+			const origin = this.origins.get(fold);
+			if (origin) origin.level = report.complete;
+			reports.push(report);
 		}
+		// AFTER the chunks, so a follower that became level in this very call can inherit
+		// a vacant write duty now rather than a call later.
+		await this.reconcileWriters(registered);
 		await this.settlePromotion();
 		return reports;
 	}

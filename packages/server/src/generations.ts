@@ -10,7 +10,7 @@ import {
 } from '@etherfold/core';
 import {logs} from 'named-logs';
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
-import {EMISSION_STREAM_TABLE} from './emissions.js';
+import {EMISSION_STREAM_TABLE, STREAM_COVERAGE_TABLE} from './emissions.js';
 
 const logger = logs('@etherfold/server');
 
@@ -254,6 +254,22 @@ export function generationRegistryPortOnSQL(
 		 * Both statements carry BOTH discriminators. A delete that could omit one
 		 * would cross into another named indexer's rows, which is exactly the isolation
 		 * ADR-0036 makes structural.
+		 *
+		 * ## SUBTREE means the stream's WHOLE physical footprint, not just its rows
+		 *
+		 * A stream lives in TWO tables on this runtime: its emissions, and the COVERAGE
+		 * CLAIM that says how far they reach and under which filter they were fetched
+		 * (`_stream_coverage`, ADR-0055). They are written in one batch and they are
+		 * deleted in one batch, because PRESENCE is the claim and never the rows: a reap
+		 * that took the rows and left the claim would leave a stream that reads as
+		 * PRESENT AND COMPLETE with nothing in it, and a generation folding it would be
+		 * told it had re-folded the entire history and could resume at the old tip with
+		 * EMPTY state. That is the whole-history form of the hazard `startBlock` exists
+		 * to prevent -- silent, permanent, self-consistent and durable across a reload.
+		 *
+		 * The count reported stays the EMISSION count: it is what the sweep's log line
+		 * means by "rows", and the claim is one row of bookkeeping about them rather
+		 * than a row of the stream.
 		 */
 		async dropStreamSubtree(digest) {
 			const [counted] = await db.batch<{records: number}>([
@@ -261,6 +277,9 @@ export function generationRegistryPortOnSQL(
 					.prepare(`SELECT COUNT(*) AS records FROM ${EMISSION_STREAM_TABLE} WHERE indexer = ?1 AND stream = ?2`)
 					.bind(indexer, digest),
 				db.prepare(`DELETE FROM ${EMISSION_STREAM_TABLE} WHERE indexer = ?1 AND stream = ?2`).bind(indexer, digest),
+				// the claim goes with the rows it covers, in the SAME batch: see the note
+				// above on why a surviving claim is worse than no claim at all
+				db.prepare(`DELETE FROM ${STREAM_COVERAGE_TABLE} WHERE indexer = ?1 AND stream = ?2`).bind(indexer, digest),
 			]);
 			return Number(counted?.results[0]?.records ?? 0);
 		},
