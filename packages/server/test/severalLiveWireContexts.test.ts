@@ -14,7 +14,13 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {beforeEach, describe, expect, it} from 'vitest';
-import {applySchema, createServer, emissionAppenderFor, generationRegistryPortOnSQL} from '../src/index.js';
+import {
+	applySchema,
+	createServer,
+	emissionAppenderFor,
+	generationRegistryPortOnSQL,
+	indexerEntryOn,
+} from '../src/index.js';
 import {
 	ALICE,
 	BOB,
@@ -124,9 +130,10 @@ async function deploy(): Promise<Deployment> {
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),
-		// the container IS the entry: it answers `liveIngestions` and
-		// `canonicalGeneration`, which is the whole of what the routes ask a name for
-		getIndexer: (_c, name) => (name === NAME ? indexer : undefined),
+		// the container answers `liveIngestions` and `canonicalGeneration`, which is
+		// what the routes ASK a name for; what a host adds is the DATABASE that name
+		// owns (ADR-0053), which `@etherfold/core` deliberately knows nothing about
+		getIndexer: (_c, name) => (name === NAME ? indexerEntryOn(db, indexer) : undefined),
 	});
 
 	return {

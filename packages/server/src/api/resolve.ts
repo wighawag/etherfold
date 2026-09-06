@@ -72,6 +72,9 @@ export function resolveIndexer<CustomEnv extends Env>(
 	}
 	// the NAME travels back beside the entry, because it is not merely how the entry
 	// was found: it is a DISCRIMINATOR every read and write keys on, and this
-	// request's segment is the one source of its value
+	// request's segment is the one source of its value. The OTHER half of that
+	// discriminator is on the entry itself (`entry.db`, ADR-0053): a named indexer
+	// is a database, so a route acting on one reads through the handle that name
+	// owns and never through the host's `getDB`
 	return {ok: true, entry, name};
 }

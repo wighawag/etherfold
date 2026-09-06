@@ -2,7 +2,7 @@ import {serve} from '@hono/node-server';
 import {createClient} from '@libsql/client';
 import {StreamBuilder, type Abi, type IndexingSource} from '@etherfold/core';
 import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/processor-sqlite';
-import {createServer, indexerRegistry} from '@etherfold/server';
+import {createServer, indexerRegistry, singleContextEntry} from '@etherfold/server';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 
@@ -156,7 +156,7 @@ export async function startReceiver(): Promise<RunningReceiver> {
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),
-		getIndexer: indexerRegistry({[INDEXER]: builder}),
+		getIndexer: indexerRegistry({[INDEXER]: singleContextEntry(db, builder)}),
 	});
 	await app.request('/admin/setup', {method: 'POST'});
 	// the processor's own tables, which a real host gets when the first batch lands.

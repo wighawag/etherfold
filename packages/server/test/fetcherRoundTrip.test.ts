@@ -15,7 +15,7 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {beforeAll, describe, expect, it} from 'vitest';
-import {createServer, indexerRegistry} from '../src/index.js';
+import {createServer, indexerRegistry, singleContextEntry} from '../src/index.js';
 import {clearLastError} from '../src/api/status.js';
 import {hostRecorderFor} from './utils/hostRecorder.js';
 
@@ -214,8 +214,9 @@ async function deployReceiver(): Promise<Deployment> {
 	const app = createServer<TestEnv>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),
-		// the registry a host is built with: one name here, and every other refused
-		getIndexer: indexerRegistry({[INDEXER]: builder}),
+		// the registry a host is built with: one name here, over the database that
+		// name owns, and every other name refused
+		getIndexer: indexerRegistry({[INDEXER]: singleContextEntry(db, builder)}),
 	});
 	await app.request('/admin/setup', {method: 'POST'});
 	return {app, builder, processor};

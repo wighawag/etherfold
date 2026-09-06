@@ -397,11 +397,14 @@ function noteSuccessor(canonicalBefore: GenerationRecord | undefined, record: Ge
  * over a bare `StreamBuilder` and which of the chain-facing container's rules
  * deliberately do not come over.
  *
- * It is also, structurally, what the indexer-server's registry resolves a name
- * to (`IndexerRegistryEntry`, `@etherfold/server`): `liveIngestions` and
+ * It also ANSWERS what the indexer-server's registry asks a name
+ * (`IndexerRegistryEntry`, `@etherfold/server`): `liveIngestions` and
  * `canonicalGeneration` are exactly the two questions the ingest routes and the
- * feed ask of an entry, so a host that holds one of these registers it directly
- * rather than through an adapter that could answer them differently.
+ * feed put to an entry, so a host registers this container itself rather than an
+ * adapter that could answer them differently. What a host must add beside it is
+ * the DATABASE that name owns (ADR-0053, `indexerEntryOn`), which is not
+ * expressible here: this package knows no database, which is why the state a
+ * generation folds into is a type parameter.
  */
 export class ReceivingIndexer<
 	ABI extends Abi,

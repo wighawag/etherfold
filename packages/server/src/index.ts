@@ -10,7 +10,7 @@ import {getFeedAPI} from './api/feed.js';
 
 export type {Env, ServerOptions};
 export type {CursorReporter} from './types.js';
-export {indexerRegistry, singleContextEntry} from './registry.js';
+export {indexerEntryOn, indexerRegistry, singleContextEntry} from './registry.js';
 export type {IndexerRegistryEntry, IndexerResolver} from './registry.js';
 export type {CursorReport, StatusCursor} from './cursor.js';
 export {SCHEMA_VERSION, applySchema, readSchemaState} from './schema.js';

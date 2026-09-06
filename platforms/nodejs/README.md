@@ -42,7 +42,7 @@ await running.close();
 Pass a handle rather than a URL when this process also folds into that database:
 
 ```ts
-import {indexerRegistry} from '@etherfold/server';
+import {indexerRegistry, singleContextEntry} from '@etherfold/server';
 import {createNodeDB, startServer} from '@etherfold/platform-nodejs';
 
 const db = createNodeDB('file:./etherfold.db');
@@ -50,8 +50,10 @@ const db = createNodeDB('file:./etherfold.db');
 const running = await startServer({
 	db,
 	port: 2000,
-	// the NAMED INDEXERS this process hosts, addressed as `/{indexer}/ingest`
-	getIndexer: indexerRegistry({alpha: streamBuilder}),
+	// the NAMED INDEXERS this process hosts, addressed as `/{indexer}/ingest`. A
+	// named indexer IS a database (ADR-0053), and this process holds one name over
+	// the one handle it folds into
+	getIndexer: indexerRegistry({alpha: singleContextEntry(db, streamBuilder)}),
 	getCursorReport: () => report,
 });
 ```

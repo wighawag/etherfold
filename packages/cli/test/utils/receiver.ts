@@ -1,6 +1,6 @@
 import {StreamBuilder, type FetchLike} from '@etherfold/core';
 import {EntityEventProcessor} from '@etherfold/processor-entities';
-import {createServer, emissionAppenderFor, indexerRegistry} from '@etherfold/server';
+import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry} from '@etherfold/server';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {createClient} from '@libsql/client';
 import type {RemoteSQL} from 'remote-sql';
@@ -63,7 +63,7 @@ export async function startReceiver(): Promise<RunningReceiver> {
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),
-		getIndexer: indexerRegistry({[INDEXER]: builder}),
+		getIndexer: indexerRegistry({[INDEXER]: singleContextEntry(db, builder)}),
 	});
 	await app.request('/admin/setup', {method: 'POST'});
 	// the processor's own tables, which a real host gets when the first batch

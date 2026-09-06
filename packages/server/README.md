@@ -13,21 +13,29 @@ To simply RUN a read tier on Node, use [`etherfold serve`](https://github.com/wi
 ## What a host supplies
 
 ```ts
-import {createServer, indexerRegistry} from '@etherfold/server';
+import {createServer, indexerRegistry, singleContextEntry} from '@etherfold/server';
 
 export const app = createServer<MyEnv>({
-	getDB: (c) => myRemoteSQL(c.env), // resolved PER REQUEST: a Worker's binding arrives on `env`
+	// the HOST-LEVEL handle: what `/status` reports on and `/admin/setup` migrates.
+	// Resolved PER REQUEST: a Worker's binding arrives on `env`
+	getDB: (c) => myRemoteSQL(c.env),
 	getEnv: (c) => c.env,
-	// OPTIONAL: the NAMED INDEXERS this deployment hosts, resolved by name
-	getIndexer: indexerRegistry({alpha: myStreamBuilder, beta: myOtherStreamBuilder}),
+	// OPTIONAL: the NAMED INDEXERS this deployment hosts, resolved by name -- each to
+	// what it holds AND to the DATABASE it holds it in
+	getIndexer: indexerRegistry({
+		alpha: singleContextEntry(alphaDB, myStreamBuilder),
+		beta: singleContextEntry(betaDB, myOtherStreamBuilder),
+	}),
 	// OPTIONAL: where this deployment's pipeline has got to, if it owns a store
 	getCursorReport: async (c) => ({lastToBlock: await myStore.howFar()}),
 });
 ```
 
-`getIndexer` is the NAME-KEYED REGISTRY of the named indexers this host was built with. A **named indexer** is the multi-tenancy unit: one indexed answer set over one chain, fully isolated from every other (ADR-0036). It resolves an ENTRY, and an entry holds SEVERAL LIVE WIRE CONTEXTS: it answers `liveIngestions()` (one receiver per live context) and `canonicalGeneration()` (which generation answers reads). The route segment selects the INDEXER and the batch's own `{source, config}` selects WHICH receiver inside it, so a filter-change successor on a new stream is fed while the incumbent keeps being fed and keeps answering.
+`getIndexer` is the NAME-KEYED REGISTRY of the named indexers this host was built with. A **named indexer** is the multi-tenancy unit: one indexed answer set over one chain, fully isolated from every other (ADR-0036). It resolves an ENTRY, and an entry is a DATABASE (`db`) plus SEVERAL LIVE WIRE CONTEXTS: it answers `liveIngestions()` (one receiver per live context) and `canonicalGeneration()` (which generation answers reads). The route segment selects the INDEXER and the batch's own `{source, config}` selects WHICH receiver inside it, so a filter-change successor on a new stream is fed while the incumbent keeps being fed and keeps answering.
 
-Both are asked rather than read, because only the generation registry can answer them honestly: a generation deleted elsewhere stops being live, and the canonical pointer moves, without this host being told. `indexerRegistry` builds a registry of ONE-CONTEXT entries from a plain record (`singleContextEntry` is that entry on its own); a `ReceivingIndexer` (`@etherfold/core`) answers both questions itself and is registered as the entry directly; a host whose names depend on the request writes the resolver itself.
+**A named indexer IS a database** (ADR-0053), so the handle is part of what the name resolves to and every route acting on ONE named indexer reads through it. `getDB` is the host's own handle and knows no name, which is right for `/status` and `/admin/setup` -- facts about the deployment -- and wrong for anything keyed on a tenant. A host with ONE name ordinarily passes the same handle in both places (`etherfold run` and `etherfold index` do); a host with several gives each name its own, and deleting one is then a complete, cheap operation with no filter to forget. Colocating two names in one database is still expressible -- the rows carry the name -- and is a decision made where it can be read rather than one that happens by default.
+
+The two questions are asked rather than read, because only the generation registry can answer them honestly: a generation deleted elsewhere stops being live, and the canonical pointer moves, without this host being told. `indexerRegistry` builds a registry from a plain record of entries; `singleContextEntry(db, ingestion)` is the entry for a host holding one receiver per name; `indexerEntryOn(db, container)` is the entry for a host holding a `ReceivingIndexer` (`@etherfold/core`), which answers both questions itself and knows no database; and a host whose names depend on the request writes the resolver itself.
 
 It is optional because an indexer-server is useful before it ingests anything: `/status` and `/admin/setup` answer on a server with no processor at all. When it is absent the ingestion routes answer `501` under every name, which says "this server does not do that" rather than pretending the route is missing. That is deliberately a different answer from a registry that does not hold the name asked for, which is a `404`: one is a capability this host lacks, the other is a tenant it was not built with.
 

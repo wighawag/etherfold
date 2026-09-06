@@ -242,6 +242,12 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			getIndexer: (_c, name) =>
 				name === config.wire.indexer
 					? {
+							// THE DATABASE THIS NAME OWNS (ADR-0053), which on this command is the
+							// same handle the store folds into and the server answers over: one
+							// process, one named indexer, one database. A host registering several
+							// gives each name its own, and that is a registry with more entries in
+							// it rather than a change to this route.
+							db,
 							liveIngestions: async () => [streamBuilder],
 							// DERIVED on the call: `generation` reads the processor's version hash
 							// at the moment it is asked, and a captured value can stop being true

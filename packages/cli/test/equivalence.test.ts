@@ -10,6 +10,7 @@ import {
 	createServer,
 	indexerRegistry,
 	readReorgCounters,
+	singleContextEntry,
 	readSchemaState,
 	type IndexerResolver,
 } from '@etherfold/server';
@@ -660,7 +661,9 @@ describe('both feed views answer over a database `run` folded', () => {
 			// the one thing the table cannot answer: WHICH stream this name serves now.
 			// It is the combined process's own receiver, so the digest the feed validates
 			// cursors against is the digest its rows were stored under
-			getIndexer: indexerRegistry({[INDEXER]: combined.streamBuilder}) as IndexerResolver<{INGEST_TOKEN?: string}>,
+			getIndexer: indexerRegistry({
+				[INDEXER]: singleContextEntry(db, combined.streamBuilder),
+			}) as IndexerResolver<{INGEST_TOKEN?: string}>,
 		});
 
 		// THE RETRACTION-AWARE VIEW: seq order, retractions INCLUDED
