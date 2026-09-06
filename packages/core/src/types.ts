@@ -356,11 +356,6 @@ export type StreamSaver<ABI extends Abi> = (
 ) => Promise<void | StreamSaveDeclined>;
 export type StreamClearer<ABI extends Abi> = (source: IndexingSource<ABI>) => Promise<void>;
 
-type OptionsFlags<Type> = {
-	[Property in keyof Type]: boolean;
-};
-type LogValuesFlags = OptionsFlags<NumberifiedLog>;
-
 export type UsedStreamConfig = ProvidedStreamConfig & {
 	finality: number;
 };
@@ -449,7 +444,6 @@ export type ExistingStream<ABI extends Abi> = {
 
 export type LogParseConfig = {
 	parseAllEventsIrrespectiveOfAddresses?: boolean;
-	logValues?: LogValuesFlags;
 	filters?: {
 		// for each event name we can specify a list of filter
 		// each filter is an array of (topic or topic[])
