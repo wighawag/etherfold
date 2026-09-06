@@ -82,6 +82,12 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * operator's own next call resolves. It is deliberately not worth a combined read
 			 * here, unlike the FEED, where pairing one generation's stream with another's
 			 * fold would be a wrong ANSWER rather than a stale listing.
+			 *
+			 * An indexer with NO canonical generation is REPORTED here rather than refused,
+			 * which is the opposite of what a READ does with the same answer and is the right
+			 * way round: a read served from nothing would be a wrong answer, while "nothing
+			 * answers reads yet, and here is what is registered" is precisely the state an
+			 * operator opened this route to see.
 			 */
 			.get('/:indexer/admin/canonical-generation', async (c) => {
 				const held = await resolveHeld(options, c as never);
@@ -92,11 +98,11 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				return c.json({
 					success: true,
 					indexer: held.name,
-					canonical: reported(canonical),
+					canonical: canonical ? reported(canonical) : undefined,
 					generations: generations.map((record) => ({
 						...reported(record),
 						createdAt: record.createdAt,
-						canonical: record.stream === canonical.stream && record.processor === canonical.processor,
+						canonical: !!canonical && record.stream === canonical.stream && record.processor === canonical.processor,
 					})),
 				} as const);
 			})
@@ -176,14 +182,17 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				const moved = await held.promote(target);
 				logger.info(
 					`admin: the canonical pointer of ${JSON.stringify(held.name)} now names {stream: ${moved.stream}, ` +
-						`processor: ${moved.processor}} (it named {stream: ${previous.stream}, processor: ${previous.processor}})`,
+						`processor: ${moved.processor}} (it named ` +
+						`${previous ? `{stream: ${previous.stream}, processor: ${previous.processor}}` : 'nothing'})`,
 				);
 				return c.json({
 					success: true,
 					indexer: held.name,
 					// what answered reads BEFORE this call, so an operator undoing a mistake
-					// has the value to send back without reading anything else
-					previous: reported(previous),
+					// has the value to send back without reading anything else. ABSENT when this
+					// move is the FIRST thing to answer reads here, because there is nothing to
+					// undo back to.
+					previous: previous ? reported(previous) : undefined,
 					canonical: reported(moved),
 				} as const);
 			})

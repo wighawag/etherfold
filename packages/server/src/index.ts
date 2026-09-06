@@ -19,7 +19,14 @@ export type {Env, ServerOptions};
 export type {CursorReporter} from './types.js';
 export {indexerEntryOn, indexerRegistry, singleContextEntry} from './registry.js';
 export type {IndexerRegistryEntry, IndexerResolver} from './registry.js';
-export type {CursorReport, StatusCursor} from './cursor.js';
+/**
+ * THE `/status` CURSOR ENVELOPE and what a host's reporter fills it with
+ * (ADR-0047): the value the server carries VERBATIM, and the per-generation
+ * dimension that grew INSIDE the field rather than beside it, so that a rebuild
+ * in progress is distinguishable from an empty result on the page an operator
+ * already watches.
+ */
+export type {CursorReport, GenerationReport, ReportedGeneration, StatusCursor, StatusReport} from './cursor.js';
 export {SCHEMA_VERSION, applySchema, readSchemaState} from './schema.js';
 export type {SchemaState} from './schema.js';
 export type {Config} from './setup.js';

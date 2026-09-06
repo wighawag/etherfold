@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import type {Context} from 'hono';
-import {generationDigestOf} from '@etherfold/core';
 import {logs} from 'named-logs';
 import type {Env} from '../env.js';
 import {readStreamHighWaterMark} from '../emissions.js';
@@ -20,7 +19,7 @@ import {
 	type CanonicalPosition,
 } from '../feed/canonical.js';
 import {FEED_START_POSITION, readStreamFeed} from '../feed/stream.js';
-import {resolveIndexer} from './resolve.js';
+import {resolveCanonicalGeneration, resolveIndexer} from './resolve.js';
 import {setup} from '../setup.js';
 import type {ServerOptions} from '../types.js';
 
@@ -102,6 +101,11 @@ const MAX_PAGE_SIZE = 1000;
  * with the stream served now and a cursor at its start, which is explicitly not
  * a rewind.
  *
+ * And an indexer with NO canonical generation yet REFUSES rather than answering
+ * the empty page it would otherwise produce -- `resolveCanonicalGeneration`,
+ * which both views resolve through, so there is ONE place a read decides which
+ * generation answers it and one answer when none does.
+ *
  * ## Every response says WHICH GENERATION answered it
  *
  * `generation` is on every answer both views give, page and refusal alike, and
@@ -136,12 +140,11 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 				const {name, entry} = resolved;
 				// THE CANONICAL GENERATION, in ONE read: its STREAM is what this response is
 				// keyed on and what the cursor is validated against, and its FOLD is what the
-				// response advertises. An entry can hold several live wire contexts, so the two
-				// halves must come from one answer -- read separately, a response could pair one
-				// generation's stream with another's fold.
-				const canonical = await resolved.entry.canonicalGeneration();
-				const stream = canonical.stream;
-				const generation = generationDigestOf(canonical);
+				// response advertises -- or the refusal, when this indexer holds no generation
+				// that answers reads yet.
+				const answering = await resolveCanonicalGeneration(c as never, resolved, 'feed');
+				if (!answering.ok) return answering.response;
+				const {stream, generation} = answering;
 				const served = {
 					indexer: name,
 					stream,
@@ -231,10 +234,11 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 				if (!resolved.ok) return resolved.response;
 				// see the other view: the handle is the NAME's, never the host's
 				const {name, entry} = resolved;
-				// ONE read, both halves: see the other view.
-				const canonical = await resolved.entry.canonicalGeneration();
-				const stream = canonical.stream;
-				const generation = generationDigestOf(canonical);
+				// ONE read, both halves, and the same refusal when there is no generation to
+				// read from: see the other view.
+				const answering = await resolveCanonicalGeneration(c as never, resolved, 'canonical');
+				if (!answering.ok) return answering.response;
+				const {stream, generation} = answering;
 				const served = {
 					indexer: name,
 					stream,

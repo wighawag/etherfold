@@ -5,7 +5,7 @@ import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
 import type {StateStore} from '@etherfold/processor-entities';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
-import {readCursorReport} from './cursorReport.js';
+import {readStatusReport} from './cursorReport.js';
 import {prepareIndexing, type IndexingDependencies} from './index.js';
 import type {Options} from './types.js';
 
@@ -142,7 +142,17 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// in-process direct wire and its HTTP ingestion routes are a capability it
 			// does not have. It registers NO named indexer either, which is why they
 			// answer `501` under every name rather than `404` under all but one.
-			getCursorReport: () => readCursorReport(prepared.store),
+			//
+			// ONE fold, reported as the ONE GENERATION this process holds -- which is
+			// the same field a host mid-upgrade fills with two entries, so the shape of
+			// `/status` does not depend on how many a deployment happens to hold.
+			// Driving the container that holds several is
+			// `the-cli-and-the-server-hold-generations-the-same-way`.
+			getCursorReport: () =>
+				readStatusReport({
+					folds: [{generation: prepared.streamBuilder.generation, store: prepared.store}],
+					canonical: prepared.streamBuilder.generation,
+				}),
 		});
 
 		const close = async () => {

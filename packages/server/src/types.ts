@@ -1,7 +1,7 @@
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
-import type {CursorReport} from './cursor.js';
+import type {StatusReport} from './cursor.js';
 import type {IndexerResolver} from './registry.js';
 
 /**
@@ -9,11 +9,11 @@ import type {IndexerResolver} from './registry.js';
  *
  * Async because reading a cursor is a STORE read (`StateStore.readCursor`),
  * unlike `getDB` / `getEnv` / `getIndexer`, which hand back handles a host
- * already holds.
+ * already holds -- and a host holding GENERATIONS reads one per generation.
  */
 export type CursorReporter<Env extends Bindings = Bindings> = (
 	c: Context<{Bindings: Env}>,
-) => CursorReport | undefined | Promise<CursorReport | undefined>;
+) => StatusReport | undefined | Promise<StatusReport | undefined>;
 
 export type ServerOptions<Env extends Bindings = Bindings> = {
 	/**
@@ -79,7 +79,10 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 * handed it over whole would put an unbounded blob on the one page an operator
 	 * refreshes while something is wrong. The constraint has to live here, on the
 	 * seam, because `/status` reports what this returns VERBATIM: the server does
-	 * not parse it, so it cannot bound it afterwards either.
+	 * not parse it, so it cannot bound it afterwards either. That obligation is
+	 * owed ONCE PER GENERATION as well: `StatusReport.generations` fixes every
+	 * field of an entry except its `value`, precisely so a per-generation entry
+	 * cannot grow into a dump of an unconfirmed window.
 	 *
 	 * Failing is safe and is the reporter's own business: a reporter that throws,
 	 * rejects, or returns `undefined` because it cannot read right now yields a

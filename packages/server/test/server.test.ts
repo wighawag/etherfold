@@ -107,7 +107,7 @@ describe('/status reports the cursor a host injects, and nothing when none is', 
 
 	it('reports what the reporter returned, verbatim and inside an object', async () => {
 		const report = {lastToBlock: 4242, latestBlock: 4250, unconfirmedBlocks: 3};
-		const app = await migratedServer(() => report);
+		const app = await migratedServer(() => ({value: report}));
 
 		const res = await app.request('/status');
 		expect(res.status).toBe(200);
@@ -119,18 +119,23 @@ describe('/status reports the cursor a host injects, and nothing when none is', 
 	it('passes a nested report through untouched, because the server does not parse it', async () => {
 		// deliberately a shape this package knows nothing about: only the processor
 		// knows what a cursor means (ADR-0027), so the server may not normalise it
+		// note the `generations` key INSIDE the value: the envelope carries one of its
+		// own beside `value`, and a host is still free to use the word in a report the
+		// server does not parse. The two never meet, which is why the reporter names
+		// the two slots explicitly rather than being sniffed for which it meant.
 		const report = {
 			generations: [{id: 'a', lastToBlock: 10, context: {source: {chainId: '1'}}}],
 			nested: {deep: [1, 'two', true, null]},
 		};
-		const app = await migratedServer(() => report);
+		const app = await migratedServer(() => ({value: report}));
 
 		const body = await (await app.request('/status')).json();
 		expect(body.cursor.value).toEqual(report);
+		expect('generations' in body.cursor).toBe(false);
 	});
 
 	it('awaits a reporter that reads asynchronously, which is what reading a store is', async () => {
-		const app = await migratedServer(async () => ({lastToBlock: 7}));
+		const app = await migratedServer(async () => ({value: {lastToBlock: 7}}));
 
 		const body = await (await app.request('/status')).json();
 		expect(body.cursor).toEqual({reported: true, value: {lastToBlock: 7}});
@@ -184,7 +189,7 @@ describe('/status reports the cursor a host injects, and nothing when none is', 
 		// a bigint does not compile against the option's type, and a host can still
 		// build one at runtime; `/status` is the page an operator watches while
 		// something is wrong, so it must survive that
-		const app = await migratedServer(() => ({lastToBlock: 10n}) as never);
+		const app = await migratedServer(() => ({value: {lastToBlock: 10n}}) as never);
 
 		const res = await app.request('/status');
 		expect(res.status).toBe(200);
@@ -194,7 +199,7 @@ describe('/status reports the cursor a host injects, and nothing when none is', 
 	});
 
 	it('does not flip healthy or the status code on an unhealthy server either', async () => {
-		const app = serverOn(freshDB(), () => ({lastToBlock: 1}));
+		const app = serverOn(freshDB(), () => ({value: {lastToBlock: 1}}));
 
 		const res = await app.request('/status');
 		expect(res.status).toBe(503); // unmigrated, exactly as before

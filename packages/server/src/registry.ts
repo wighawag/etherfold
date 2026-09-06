@@ -107,8 +107,17 @@ export type IndexerRegistryEntry = {
 	 * The feed keys its read on the STREAM and advertises the FOLD, and it must not
 	 * pair one with the other's neighbour, which is why this is one call rather
 	 * than two fields to read one after the other.
+	 *
+	 * `undefined` is a real answer and not an error: NO GENERATION ANSWERS READS
+	 * HERE YET. A host holding a fold always has one (the first generation
+	 * registered takes the pointer), but a READ TIER resolves the pointer from the
+	 * durable rows of a database somebody else is writing, and a first build has not
+	 * necessarily got as far as registering anything. Every read that resolves this
+	 * REFUSES on that answer rather than serving the empty page it would otherwise
+	 * produce (`resolveCanonicalGeneration`, ADR-0015): "nothing here yet" and "this
+	 * is still being built" must not arrive in the same shape.
 	 */
-	canonicalGeneration(): Promise<GenerationId>;
+	canonicalGeneration(): Promise<GenerationId | undefined>;
 	/**
 	 * EVERY generation this name holds, oldest first -- what there is to point AT.
 	 *

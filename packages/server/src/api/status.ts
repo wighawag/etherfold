@@ -74,6 +74,13 @@ export function getStatusAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 			// is the processor's (ADR-0027). So it arrives as an injected reporter and is
 			// reported VERBATIM inside an envelope (ADR-0047).
 			//
+			// It is also where a REBUILD IN PROGRESS becomes visible, and deliberately
+			// not on an endpoint of its own: a host that holds several generations reports
+			// one entry per generation INSIDE this envelope, so an operator watches a
+			// successor catch up on the page they already have open. Which generations a
+			// host holds is the host's question too -- this route reports on the
+			// DEPLOYMENT and knows no named indexer to enumerate.
+			//
 			// Asked even when the database is unreachable: a reporter is the HOST's, not
 			// this route's `db`, and it degrades on its own. Absent entirely -- not
 			// `null`, not an empty object -- on a host that injected none, because

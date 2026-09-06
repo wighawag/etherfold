@@ -28,7 +28,7 @@ import type {BuildConfig, ConfigFor, Options, RunConfig, SourceOrigin} from './t
 
 export * from './config.js';
 export * from './types.js';
-export {readCursorReport, type StoreCursorReport} from './cursorReport.js';
+export {readCursorReport, readStatusReport, type ReportedFold, type StoreCursorReport} from './cursorReport.js';
 export {buildProcessor, openExplicitSource, streamConfigFor} from './folding.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
 export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch.js';
