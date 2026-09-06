@@ -41,6 +41,7 @@ import {
 } from './internal/engine/utils.js';
 import {sourceHashesOf} from './internal/engine/eventRanges.js';
 import {CancellablePromiseCancelled, CancelOperations, createAction} from './internal/utils/promises.js';
+import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
 import {InvalidBatchError, isOutOfSpace} from './errors.js';
 
 const namedLogger = logs('@etherfold/core');
@@ -1362,9 +1363,32 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		}
 
 		const toWrite = this.streamRemainderOf(eventStream);
+		// THE STRIP, and it happens HERE rather than in a keeper. `ExistingStream` is
+		// third-party-implementable and has several implementations already, so a rule
+		// each of them had to remember would drift; what a keeper is handed is the raw
+		// log plus the reorg verdict, and the decoded half is re-derived on read
+		// (ADR-0034). Both halves of what the saver takes are stripped: the batch, and
+		// the cursor's unconfirmed window, whose stored copy is read back for its block
+		// numbers and its context and never as events. Neither strip mutates -- the
+		// events are the ones `process` is about to fold, and this very `lastSync`
+		// object is handed to the STATE keeper on the same tick.
+		const toStore = storedStreamOf(toWrite);
+		const lastSyncToStore = storedLastSyncOf(lastSync);
 		let saved: void | 'declined';
 		try {
-			saved = await keepStream.saveNewEvents(source, {eventStream: toWrite, lastSync});
+			// TEMPORARY, and removed by `the-stream-seam-takes-only-the-stored-event`:
+			// the seam still DECLARES decoded events on both the batch and the window's
+			// blocks, and a stripped object satisfies neither by construction -- that
+			// refusal is what `StoredLogEvent` was minted for (the compiler says so itself:
+			// a direct conversion is refused as insufficiently overlapping, which is why it
+			// goes through `unknown`). So the lie is confined to this ONE boundary, over the
+			// whole argument the saver takes, while the strip's own locals and return types
+			// say STORED. That task narrows the seam and moves every implementation and fake
+			// at once; doing half of it here would leave the repo red in between.
+			saved = await keepStream.saveNewEvents(source, {eventStream: toStore, lastSync: lastSyncToStore} as unknown as {
+				eventStream: LogEvent<ABI>[];
+				lastSync: LastSync<ABI>;
+			});
 		} catch (e) {
 			return this.onStreamWriteFailed(e, source);
 		}
