@@ -1,11 +1,13 @@
 import {createClient} from '@libsql/client';
 import {
 	StreamBuilder,
+	sameWireContext,
 	serializeWireBatch,
 	type Abi,
 	type IndexingSource,
 	type LogEvent,
 	type WireBatch,
+	type WireContext,
 } from '@etherfold/core';
 import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/processor-sqlite';
 import {RemoteLibSQL} from 'remote-sql-libsql';
@@ -195,6 +197,23 @@ async function expectedFromBlock(deployment: Deployment, name = NAME): Promise<R
 	});
 }
 
+/**
+ * Where the next batch must start FOR ONE CONTEXT, out of the list the route
+ * answers with.
+ *
+ * The answer is one `{context, expectedFromBlock}` per LIVE WIRE CONTEXT, so a
+ * caller finds its own entry rather than reading a single pair -- which is what
+ * a sender does too, and the reason these tests match on the identity instead of
+ * taking the first entry.
+ */
+async function expectedFor(deployment: Deployment, name = NAME, context?: WireContext): Promise<number | undefined> {
+	const body = (await (await expectedFromBlock(deployment, name)).json()) as {
+		contexts?: {context: WireContext; expectedFromBlock: number}[];
+	};
+	const mine = context ?? (deployment.hosted[name] as Hosted).builder.context;
+	return body.contexts?.find((entry) => sameWireContext(entry.context, mine))?.expectedFromBlock;
+}
+
 function batchOf(
 	deployment: Deployment,
 	fromBlock: number,
@@ -237,10 +256,12 @@ describe('the full ingestion sequence: apply, re-send, gap, mismatch, reorg', ()
 	it('tells a sender where to start before anything has been indexed', async () => {
 		const res = await expectedFromBlock(deployment);
 		expect(res.status).toBe(200);
+		// ONE PAIR PER LIVE WIRE CONTEXT. This host holds one fold, so the list holds
+		// one entry -- and a sender finds itself in it by its own `{source, config}`
+		// rather than by trusting a single pair to be its own.
 		expect(await res.json()).toEqual({
 			success: true,
-			expectedFromBlock: START_BLOCK,
-			context: deployment.builder.context,
+			contexts: [{context: deployment.builder.context, expectedFromBlock: START_BLOCK}],
 		});
 	});
 
@@ -301,6 +322,9 @@ describe('the full ingestion sequence: apply, re-send, gap, mismatch, reorg', ()
 		expect(res.status).toBe(400);
 		const body = await res.json();
 		expect(body.error).toBe('context-mismatch');
+		// and it NAMES every live context under the name rather than picking one to
+		// call "expected", exactly as a cap refusal names every deletable generation
+		expect(body.expected).toEqual([deployment.builder.context]);
 		// NOT the 409 a sender auto-recovers from: no block number makes this right
 		expect(body.expectedFromBlock).toBeUndefined();
 		expect(await ownerOf(deployment, '9')).toBeUndefined();
@@ -360,8 +384,7 @@ describe('the full ingestion sequence: apply, re-send, gap, mismatch, reorg', ()
 	});
 
 	it('ends with the cursor the last accepted batch left, and no other', async () => {
-		const res = await expectedFromBlock(deployment);
-		expect((await res.json()).expectedFromBlock).toBe(105);
+		expect(await expectedFor(deployment)).toBe(105);
 	});
 });
 
@@ -378,8 +401,7 @@ describe('several named indexers on one host', () => {
 			expect(res.status).toBe(200);
 			expect(await res.json()).toEqual({
 				success: true,
-				expectedFromBlock: START_BLOCK,
-				context: (deployment.hosted[name] as Hosted).builder.context,
+				contexts: [{context: (deployment.hosted[name] as Hosted).builder.context, expectedFromBlock: START_BLOCK}],
 			});
 		}
 	});
@@ -390,7 +412,7 @@ describe('several named indexers on one host', () => {
 		// they start before anything is pushed: that is also the baseline the assertions
 		// below are against
 		for (const name of ['alpha', 'beta']) {
-			expect((await (await expectedFromBlock(deployment, name)).json()).expectedFromBlock).toBe(START_BLOCK);
+			expect(await expectedFor(deployment, name)).toBe(START_BLOCK);
 		}
 
 		const pushed = await post(
@@ -405,14 +427,15 @@ describe('several named indexers on one host', () => {
 		expect(await ownerOf(deployment, '1', 'beta')).toBeUndefined();
 		expect(await transferCount(deployment, 'beta')).toBe(0);
 		// and the cursor, which is the thing a sender steers by, moved for one only
-		expect((await (await expectedFromBlock(deployment, 'alpha')).json()).expectedFromBlock).toBe(102);
-		expect((await (await expectedFromBlock(deployment, 'beta')).json()).expectedFromBlock).toBe(START_BLOCK);
+		expect(await expectedFor(deployment, 'alpha')).toBe(102);
+		expect(await expectedFor(deployment, 'beta')).toBe(START_BLOCK);
 	});
 
 	it('routes on the SEGMENT and never on the envelope, so a misdirected batch is refused', async () => {
-		// the same `{source, config}` a sibling accepts, posted to the wrong name. It
-		// reaches BETA's receiver -- the route chose it -- and beta refuses it exactly as
-		// it refuses any foreign context. Nothing in the payload could have redirected it.
+		// the same `{source, config}` a sibling accepts, posted to the wrong name. The
+		// SEGMENT chose beta, and no live wire context beta holds claims this payload, so
+		// it is refused as a foreign context. Nothing in the payload could have
+		// redirected it to the name that would have taken it.
 		const deployment = await deploy({INGEST_TOKEN: TOKEN}, ['alpha', 'beta']);
 		const forBeta = new StreamBuilder<TestABI, unknown>((deployment.hosted['beta'] as Hosted).processor, SOURCE, {
 			stream: {finality: FINALITY + 1},
@@ -429,7 +452,7 @@ describe('several named indexers on one host', () => {
 
 	it('refuses a name this host was not built with, rather than defaulting to one it was', async () => {
 		const deployment = await deploy({INGEST_TOKEN: TOKEN}, ['alpha', 'beta']);
-		expect((await (await expectedFromBlock(deployment, 'alpha')).json()).expectedFromBlock).toBe(START_BLOCK);
+		expect(await expectedFor(deployment, 'alpha')).toBe(START_BLOCK);
 
 		const asked = await expectedFromBlock(deployment, 'gamma');
 		expect(asked.status).toBe(404);

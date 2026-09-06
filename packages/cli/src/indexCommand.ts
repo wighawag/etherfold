@@ -232,10 +232,22 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// NAME -- is a deployment's choice and not an HTTP app's. Without it the same
 			// routes answer `501`; with it, they answer for this one name and refuse every
 			// other with a `404`.
-			// Written out rather than built with `indexerRegistry` (`@etherfold/server`)
-			// for the same reason the server is imported LAZILY below: this module's
-			// assembly must not pull hono into a process that only folds.
-			getIndexer: (_c, name) => (name === config.wire.indexer ? {ingestion: streamBuilder} : undefined),
+			// Written out rather than built with `indexerRegistry` / `singleContextEntry`
+			// (`@etherfold/server`) for the same reason the server is imported LAZILY
+			// below: this module's assembly must not pull hono into a process that only
+			// folds. ONE live wire context, because this command holds one fold: a name
+			// holds several once a filter-change successor is created beside the
+			// incumbent, which is the generation container's to hand over
+			// (`the-cli-and-the-server-hold-generations-the-same-way`).
+			getIndexer: (_c, name) =>
+				name === config.wire.indexer
+					? {
+							liveIngestions: async () => [streamBuilder],
+							// DERIVED on the call: `generation` reads the processor's version hash
+							// at the moment it is asked, and a captured value can stop being true
+							canonicalGeneration: async () => streamBuilder.generation,
+						}
+					: undefined,
 			// ...and this is what makes a split deployment observable: `index` owns the
 			// store, so it is the half that can say where the fold has got to. A read
 			// tier owns none and is given none.

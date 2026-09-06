@@ -32,14 +32,16 @@ const TOKEN = 'a-shared-secret';
 const INDEXER = 'alpha';
 
 /**
- * The ingestion inside the registry entry this adapter passes through, as the
- * adapter sees it.
+ * One of the LIVE WIRE CONTEXTS inside the registry entry this adapter passes
+ * through, as the adapter sees it.
  *
  * Spelled through `StartOptions` rather than imported from `@etherfold/core`,
  * because this package depends on no engine and no store and the test must not
  * be the thing that adds one.
  */
-type Ingestion = NonNullable<ReturnType<NonNullable<StartOptions['getIndexer']>>>['ingestion'];
+type Ingestion = Awaited<
+	ReturnType<NonNullable<ReturnType<NonNullable<StartOptions['getIndexer']>>>['liveIngestions']>
+>[number];
 
 /** A stand-in for a stream-builder: it records what reached it and nothing else. */
 function fakeIngestion(expected: number) {
@@ -173,7 +175,10 @@ describe('the adapter carries the host-supplied capabilities through to the app'
 			env: {INGEST_TOKEN: TOKEN},
 			// the registry this host was built with: ONE named indexer, resolved per
 			// request and refusing every other name
-			getIndexer: (_c, name) => (name === INDEXER ? {ingestion} : undefined),
+			getIndexer: (_c, name) =>
+				name === INDEXER
+					? {liveIngestions: async () => [ingestion], canonicalGeneration: async () => ingestion.generation}
+					: undefined,
 		});
 
 		const asked = await fetch(`${running.url}/${INDEXER}/ingest/expected-from-block`, {
@@ -181,7 +186,12 @@ describe('the adapter carries the host-supplied capabilities through to the app'
 			headers: {Authorization: `Bearer ${TOKEN}`},
 		});
 		expect(asked.status).toBe(200);
-		expect(((await asked.json()) as {expectedFromBlock: number}).expectedFromBlock).toBe(105);
+		// ONE PAIR PER LIVE WIRE CONTEXT: this adapter passes one through, so the list
+		// has one entry in it
+		expect((await asked.json()) as unknown).toEqual({
+			success: true,
+			contexts: [{context: ingestion.context, expectedFromBlock: 105}],
+		});
 
 		const pushed = await fetch(`${running.url}/${INDEXER}/ingest`, {
 			method: 'POST',

@@ -1,8 +1,9 @@
 import type {Abi} from 'abitype';
 import {IngestionRefusedError, IngestionUnavailableError} from './errors.js';
+import {sameWireContext} from './internal/engine/utils.js';
 import type {IngestionResponse, IngestionTarget} from './logFetcher.js';
 import {serializeWireBatch} from './streamBuilder.js';
-import type {WireBatch} from './types.js';
+import type {WireBatch, WireContext} from './types.js';
 
 /**
  * Just enough of `fetch` to post a batch.
@@ -144,20 +145,55 @@ export function createHttpIngestion(options: HttpIngestionOptions): IngestionTar
 	}
 
 	return {
-		async expectedFromBlock() {
+		/**
+		 * Where THIS sender's next batch must start.
+		 *
+		 * The receiver answers with one `{context, expectedFromBlock}` per LIVE WIRE
+		 * CONTEXT it holds under the name, because one named indexer can be building a
+		 * successor on a new stream while the incumbent keeps being fed, and a single
+		 * pair could only have named one of them. So the ASK NAMES THE ASKER and this
+		 * client picks its own entry out of the list; a fetcher pushing one context is
+		 * unaffected, because the list it gets back has its entry in it.
+		 *
+		 * A list with no entry for this sender is a MISCONFIGURATION and is refused as
+		 * one, immediately and without retrying: it is the same fact as the `400` a
+		 * batch for a foreign `{source, config}` earns, learned one round trip earlier
+		 * and before a single log is fetched.
+		 */
+		async expectedFromBlock(asked: WireContext) {
 			const path = `${prefix}/ingest/expected-from-block`;
 			const {status, body, text} = await post(path);
 			if (status !== 200) {
 				throw refusalFor(status, body, text, path);
 			}
-			if (typeof body?.expectedFromBlock !== 'number') {
+			if (!Array.isArray(body?.contexts)) {
 				throw new IngestionRefusedError(
 					status,
 					'malformed-answer',
-					`${base}${path} answered 200 without an expectedFromBlock number. Is this an etherfold indexer-server?`,
+					`${base}${path} answered 200 without a contexts list. Is this an etherfold indexer-server?`,
 				);
 			}
-			return {expectedFromBlock: body.expectedFromBlock, context: body.context};
+			const served = body.contexts as {context?: WireContext; expectedFromBlock?: unknown}[];
+			const mine = served.find((entry) => sameWireContext(entry?.context, asked));
+			if (!mine) {
+				throw new IngestionRefusedError(
+					status,
+					'context-mismatch',
+					`the named indexer ${JSON.stringify(options.indexer)} serves ${served.length} live wire context(s) and none ` +
+						`of them is this fetcher's ${JSON.stringify(asked)}. No block number makes that right: either this ` +
+						`fetcher's source or stream config differs from the one the receiver folds, or it is pointed at the ` +
+						`wrong named indexer. Served: ${JSON.stringify(served.map((entry) => entry?.context))}`,
+				);
+			}
+			if (typeof mine.expectedFromBlock !== 'number') {
+				throw new IngestionRefusedError(
+					status,
+					'malformed-answer',
+					`${base}${path} answered 200 without an expectedFromBlock number for this context. Is this an etherfold ` +
+						`indexer-server?`,
+				);
+			}
+			return {expectedFromBlock: mine.expectedFromBlock, context: mine.context};
 		},
 
 		async send(batch: WireBatch<Abi>): Promise<IngestionResponse> {

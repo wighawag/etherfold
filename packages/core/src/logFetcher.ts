@@ -69,14 +69,21 @@ export type IngestionResponse = IngestionAcknowledgement | CursorCorrection;
  */
 export type IngestionTarget = {
 	/**
-	 * Ask where the next batch must start.
+	 * Ask where the next batch must start, NAMING THE ASKER.
 	 *
-	 * The `context` is optional because not every transport can report one, but
-	 * when it is there the fetcher checks it BEFORE fetching anything: finding out
-	 * you are pointed at another indexer's server costs one round-trip that way,
-	 * and a full range fetch plus a `400` the other way.
+	 * The argument is the `{source, config}` this sender pushes. It is there
+	 * because one named indexer can hold SEVERAL live wire contexts at once -- a
+	 * filter-change successor being built beside the incumbent that is still being
+	 * fed -- so "where does the next batch start" has one answer per context and
+	 * only the sender knows which of them it is. A transport holding a single
+	 * receiver may ignore it; the HTTP one selects with it.
+	 *
+	 * The `context` coming BACK is optional because not every transport can report
+	 * one, but when it is there the fetcher checks it BEFORE fetching anything:
+	 * finding out you are pointed at another indexer's server costs one round-trip
+	 * that way, and a full range fetch plus a `400` the other way.
 	 */
-	expectedFromBlock(): Promise<{expectedFromBlock: number; context?: WireContext}>;
+	expectedFromBlock(context: WireContext): Promise<{expectedFromBlock: number; context?: WireContext}>;
 	send(batch: WireBatch<Abi>): Promise<IngestionResponse>;
 };
 
@@ -366,7 +373,12 @@ export class LogFetcher<ABI extends Abi> {
 	 * receiver's and this side merely caches it.
 	 */
 	private async askWhereToStart(): Promise<number> {
-		const answer = await this.withRetries(() => this.target.expectedFromBlock(), 'asking the receiver where to start');
+		const answer = await this.withRetries(
+			// NAMING THE ASKER: a receiver may hold several live wire contexts, and only
+			// this side knows which of them this fetcher pushes
+			() => this.target.expectedFromBlock(this.context),
+			'asking the receiver where to start',
+		);
 		if (answer.context && !sameWireContext(answer.context, this.context)) {
 			// Caught here rather than on the first `400`, so a misconfigured deployment
 			// fails before it fetches a single log, naming both identities.

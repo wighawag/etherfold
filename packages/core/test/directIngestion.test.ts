@@ -299,7 +299,9 @@ describe('a cursor refusal', () => {
 		chain.serve(BRANCH_A, 110);
 		const target = createDirectIngestion(builder);
 
-		const answer = await target.expectedFromBlock();
+		// the asker names itself, as it does on the wire; in this shape there is one
+		// receiver, so there is nothing to select between and the answer is its own
+		const answer = await target.expectedFromBlock(builder.context);
 		expect(answer).toEqual({expectedFromBlock: START_BLOCK, context: builder.context});
 
 		const response = await target.send({
