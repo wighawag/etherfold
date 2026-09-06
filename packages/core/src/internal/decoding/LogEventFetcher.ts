@@ -125,8 +125,45 @@ export type ParsedLogsPromise<ABI extends Abi> = Promise<ParsedLogsResult<ABI>> 
 type OneABI<ABI extends Abi> = {readonly abi: ABI};
 type ContractList<ABI extends Abi> = readonly {readonly address: `0x${string}`; readonly abi: ABI}[];
 
+/**
+ * The key preselection is done on: WHICH ABI applies (the address) and WHICH
+ * member of it the log names (its `topic0`), which are exactly the two things
+ * `decodeOnto` decides.
+ *
+ * A string key rather than a nested map because the pair is looked up together,
+ * once per log, and never enumerated per address.
+ */
+function preselectionKey(address: `0x${string}`, topic0: `0x${string}` | undefined): string {
+	return `${address}:${topic0}`;
+}
+
 export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
-	private abiEventPerTopic: Map<`0x${string}`, AbiEvent>;
+	/**
+	 * The event a log names, preselected by ADDRESS and `topic0`, built ONCE.
+	 *
+	 * `decodeEventLog` finds the member a log names by walking the ABI it is
+	 * handed and re-deriving each candidate's event selector -- a keccak per
+	 * candidate, per CALL, memoised by nothing. Over a replay that search, and not
+	 * the decoding, is where most of the decode time goes: 57 us/event against 18
+	 * us/event preselected, for a map that costs 0.24 ms to build
+	 * (`work/notes/findings/decoding-is-3x-faster-with-a-memoised-topic0-map.md`).
+	 *
+	 * It is a memoised LOOKUP and not a cache of a derivation: nothing is stored,
+	 * it is rebuilt from the source on every construction, and there is no
+	 * identity to guard.
+	 *
+	 * Built from the SAME de-duplicated per-address lists `decodeOnto` decodes
+	 * against, which is what makes a hit interchangeable with the whole-ABI
+	 * search: ADR-0031 collapses two declarations of one `topic0` that decode
+	 * identically and REFUSES a genuine collision at construction, so no address
+	 * can hold two members answering to one `topic0`.
+	 *
+	 * ANONYMOUS members are absent, because they have no `topic0` to key: their
+	 * logs carry an indexed ARGUMENT in `topics[0]`. They miss and fall back, which
+	 * is the only correct answer -- the whole-ABI search is also what would find
+	 * them, if it found them.
+	 */
+	private abiEventPerAddressAndTopic: Map<string, AbiEvent>;
 	private abiPerAddress: Map<`0x${string}`, AbiEvent[]>;
 	private allABIEvents: AbiEvent[];
 
@@ -192,7 +229,7 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 			}
 			if (_abiEventPerTopic.get(topic0)) {
 				// unreachable: `deleteDuplicateEvents` already collapsed or refused
-				// every shared topic0. Kept because the map below decodes by it.
+				// every shared topic0. Kept because decoding preselects by it.
 				throw new Error(`duplicate topics found for \`${describeEventDeclaration(item)}\``);
 			}
 			_abiEventPerTopic.set(topic0, item);
@@ -230,7 +267,22 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 		super(provider, contractAddresses, eventNameTopics, fetcherConfig, requestableRangesPerTopic(contractsData));
 		this.allABIEvents = _allABIEvents;
 		this.abiPerAddress = _abiPerAddress;
-		this.abiEventPerTopic = _abiEventPerTopic;
+
+		// ONCE, from the lists decoding actually uses, and after they have been
+		// de-duplicated -- so what is preselected is what the whole-ABI search would
+		// have found, member for member
+		const _abiEventPerAddressAndTopic: Map<string, AbiEvent> = new Map();
+		for (const [address, abiAtAddress] of _abiPerAddress) {
+			for (const event of abiAtAddress) {
+				const topic0 = topic0Of(event);
+				if (!topic0) {
+					// anonymous: nothing to key it by, so it stays on the whole-ABI route
+					continue;
+				}
+				_abiEventPerAddressAndTopic.set(preselectionKey(address, topic0), event);
+			}
+		}
+		this.abiEventPerAddressAndTopic = _abiEventPerAddressAndTopic;
 	}
 
 	async getLogEvents(
@@ -335,6 +387,14 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	 * the same rule rather than through two copies of it: which ABI applies at an
 	 * address, the `topic0` keying of ADR-0031, and how a failure is recorded are
 	 * all decisions this must make identically wherever the log came from.
+	 *
+	 * The member is PRESELECTED by `topic0` where one can be
+	 * (`abiEventPerAddressAndTopic`), and the lookup FALLS BACK to the whole ABI
+	 * where it cannot: an anonymous event has no `topic0`, and a log naming an
+	 * event this address does not declare has one that is in no map. The fallback
+	 * is what keeps this a pure optimisation rather than a behaviour change --
+	 * every input still reaches a call that existed before, and a hit reaches the
+	 * same member with the same decoder.
 	 */
 	private decodeOnto(event: NumberifiedLog): void {
 		const useAllABIEvents = this.abiPerAddress.size === 0 || this.parseConfig?.parseAllEventsIrrespectiveOfAddresses;
@@ -345,10 +405,17 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 			(event as LogEventWithParsingFailure).decodeError = `event triggered at a different address`;
 			return;
 		}
+		// deliberately NOT on the address-agnostic route: ADR-0031 is that
+		// `parseAllEventsIrrespectiveOfAddresses` decides which ABI decodes a log and
+		// must never decide which events exist, so it keeps the one list it has
+		// rather than growing a second index keyed on something else
+		const preselected = useAllABIEvents
+			? undefined
+			: this.abiEventPerAddressAndTopic.get(preselectionKey(event.address, event.topics[0]));
 		let parsed: DecodeEventLogReturnType<AbiEvent[]> | null = null;
 		try {
 			parsed = decodeEventLog({
-				abi: correspondingABI,
+				abi: preselected ? [preselected] : correspondingABI,
 				data: event.data,
 				topics: event.topics as [signature: `0x${string}`, ...args: `0x${string}`[]],
 			});

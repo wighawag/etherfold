@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-05T18:30:49.675Z",
-  "commit": "2efd858e91e941cf2ffb5d9faf0a897092fe44cc",
+  "measuredAt": "2026-09-06T07:55:43.508Z",
+  "commit": "0a53b9859c30553684097efe7b29a644ae24d879",
   "runtime": {
     "node": "v24.13.1",
     "cpu": "AMD Ryzen 7 PRO 6850U with Radeon Graphics",
@@ -8,51 +8,63 @@
   },
   "events": 31330,
   "correctness": {
-    "allThreeAgree": true,
+    "allVariantsAgree": true,
     "unknownTopic0": 0
   },
   "timingsMs": {
     "production": {
-      "label": "production reparse (whole-abi, via LogEventFetcher)",
+      "label": "production reparse (preselected, via LogEventFetcher)",
       "runs": [
-        1783.9178880000009,
-        1800.3978669999997,
-        1786.5281910000012,
-        1807.6430539999983,
-        1790.7268300000014
+        572.9798719999999,
+        575.8100599999998,
+        569.3833350000004,
+        586.1417270000002,
+        629.9923120000003
       ],
-      "medianMs": 1790.7268300000014
+      "medianMs": 575.8100599999998
+    },
+    "productionWholeAbi": {
+      "label": "production reparse, unpreselected route (the pre-change algorithm)",
+      "runs": [
+        1844.7340480000003,
+        1795.077326999999,
+        1824.4843659999988,
+        1813.5437319999983,
+        1839.6651439999987
+      ],
+      "medianMs": 1824.4843659999988
     },
     "wholeAbi": {
       "label": "viem decodeEventLog, whole address ABI per call",
       "runs": [
-        1759.4739179999997,
-        1761.6445609999973,
-        1772.5646080000006,
-        1768.875884000001,
-        1773.574686
+        1814.3849340000015,
+        1777.757884999999,
+        1797.4664470000025,
+        1787.3975399999981,
+        1768.1006549999984
       ],
-      "medianMs": 1768.875884000001
+      "medianMs": 1787.3975399999981
     },
     "preselected": {
       "label": "viem decodeEventLog, ONE-member abi preselected by topic0",
       "runs": [
-        570.835744,
-        559.0830349999997,
-        564.1076940000021,
-        556.726799,
-        566.418743000002
+        575.787054000004,
+        557.4016969999939,
+        581.1627549999976,
+        583.1751479999948,
+        593.013503999995
       ],
-      "medianMs": 564.1076940000021
+      "medianMs": 581.1627549999976
     },
-    "mapBuildMs": 0.2388619999983348
+    "mapBuildMs": 0.24036400000477443
   },
   "perEventUs": {
-    "production": 57.15693680178747,
-    "wholeAbi": 56.45949198850945,
-    "preselected": 18.005352505585765
+    "production": 18.378872007660384,
+    "productionWholeAbi": 58.234419597829515,
+    "wholeAbi": 57.05067156080428,
+    "preselected": 18.549720874561046
   },
-  "speedup": 3.174441421463744,
+  "speedup": 3.1685524320294083,
   "abiSizes": {
     "0x5ab6d5bb8012fc60ab3653e025be4a59b4406ff2": 14,
     "0xb2d822732347e3dc60258dcf6cf0d4c7a432b678": 4,
