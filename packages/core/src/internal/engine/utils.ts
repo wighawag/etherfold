@@ -3,17 +3,21 @@ import {logs} from 'named-logs';
 import {InvalidBatchError, UnexpectedFromBlockError} from '../../errors.js';
 import type {
 	AllContractData,
+	ArgumentFilter,
 	ContextIdentifier,
 	EventBlock,
+	FilterRule,
 	IndexingSource,
 	LastSync,
 	LogEvent,
+	LogParseConfig,
 	ProvidedStreamConfig,
 	SourceHashEntry,
 	UsedStreamConfig,
 	WireContext,
 } from '../../types.js';
-import {simple_hash} from '../../utils/hash.js';
+import {canonical_form, simple_hash} from '../../utils/hash.js';
+import {normalizeAddress} from '../utils/address.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -908,6 +912,89 @@ export function streamMatches(
  * halves of one deployment would compute different `config` hashes and every
  * batch would be refused with a digest neither side can read.
  */
+/**
+ * ONE argument-filter entry in canonical form: trailing wildcards dropped, and
+ * each slot's OR list sorted and de-duplicated.
+ *
+ * Trailing `null`s constrain nothing, so `[me, null]` and `[me]` are the same
+ * question; an OR list within a slot is a SET, so its order is not information.
+ */
+function canonicalArgumentFilter(match: ArgumentFilter): ArgumentFilter {
+	let end = match.length;
+	while (end > 0 && match[end - 1] === null) {
+		end--;
+	}
+	return match.slice(0, end).map((slot) => (Array.isArray(slot) ? [...new Set(slot)].sort() : slot));
+}
+
+/**
+ * The argument-filter rules in CANONICAL form, so two authored spellings of one
+ * meaning are ONE STREAM.
+ *
+ * A stream is identified by its fetch filter, and `parse` is hashed into that
+ * identity on the strength of these rules. So the rules have to be normalised
+ * before they are hashed, exactly as `finality` is defaulted before it is
+ * hashed, or reordering two rules or two `match` entries -- neither of which
+ * changes a single request -- would fork a new stream and re-fetch the whole
+ * history.
+ *
+ * What is canonicalised: the `contracts` addresses (through `normalizeAddress`,
+ * then sorted and de-duplicated, since a scope is a SET), each `match` entry
+ * (trailing wildcards trimmed, OR lists sorted), the `match` entries themselves
+ * (sorted and de-duplicated, since the OR across them is a set too), and the
+ * rules (sorted and de-duplicated for the same reason).
+ *
+ * What deliberately is NOT: `event` is left exactly as written, so a NAME and
+ * the canonical SIGNATURE it happens to cover today stay two streams. Resolving
+ * one into the other needs the SOURCE, which a config normalisation does not
+ * have, and the two are different intents anyway -- a name follows an upgrade
+ * onto a second `topic0` and a signature does not.
+ */
+function canonicalFilterRules(rules: readonly FilterRule[]): FilterRule[] {
+	const canonical = rules.map((rule) => ({
+		event: rule.event,
+		...(rule.contracts === undefined
+			? {}
+			: {contracts: [...new Set(rule.contracts.map((address) => normalizeAddress(address)))].sort()}),
+		match: dedupeSorted(rule.match.map(canonicalArgumentFilter)),
+	}));
+	return dedupeSorted(canonical);
+}
+
+/** Sort by canonical bytes and drop repeats, which is what makes a list a SET. */
+function dedupeSorted<T>(values: readonly T[]): T[] {
+	const seen = new Map<string, T>();
+	for (const value of values) {
+		const key = canonical_form(value);
+		if (!seen.has(key)) {
+			seen.set(key, value);
+		}
+	}
+	return [...seen.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, value]) => value);
+}
+
+/**
+ * `parse` with its rules canonicalised, and the SAME OBJECT back when there are
+ * none.
+ *
+ * Returning the input untouched where `filters` is absent is not an
+ * optimisation, it is the guarantee that a deployment which does not use
+ * argument filters hashes to exactly the digest it hashed to before rules
+ * existed, so nothing it holds is re-fetched.
+ */
+function resolveParseConfig(parse: LogParseConfig | undefined): LogParseConfig | undefined {
+	if (!parse || !parse.filters) {
+		return parse;
+	}
+	if (parse.filters.length === 0) {
+		// an empty rule list constrains nothing, which is what NO rule list means, so
+		// the key goes rather than hashing as a third spelling of the same stream
+		const {filters: _dropped, ...rest} = parse;
+		return rest;
+	}
+	return {...parse, filters: canonicalFilterRules(parse.filters)};
+}
+
 export function resolveStreamConfig(stream: ProvidedStreamConfig | undefined): UsedStreamConfig {
 	// An explicit `undefined` is an ABSENT KEY, not a value. A plain spread would
 	// let `{finality: undefined}` overwrite the default back to nothing: every
@@ -928,7 +1015,14 @@ export function resolveStreamConfig(stream: ProvidedStreamConfig | undefined): U
 			provided[key] = value;
 		}
 	}
-	return {finality: 17, ...(provided as ProvidedStreamConfig)};
+	const resolved = {finality: 17, ...(provided as ProvidedStreamConfig)};
+	// The argument filters are canonicalised HERE, for the same reason `finality`
+	// is defaulted here: this object is what gets HASHED into the stream identity,
+	// so two spellings of one filter must become one value before anything reads
+	// it. It is idempotent, so a caller holding an already-resolved config reaches
+	// the same bytes and no stored digest moves.
+	const parse = resolveParseConfig(resolved.parse);
+	return parse === resolved.parse ? resolved : {...resolved, parse};
 }
 
 /**

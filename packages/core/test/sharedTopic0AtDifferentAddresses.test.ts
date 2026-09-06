@@ -386,46 +386,54 @@ describe('what makes tolerating SAFE, asserted structurally', () => {
 	});
 });
 
-describe('a name-keyed argument filter over a tolerated shared topic0', () => {
-	// `LogParseConfig.filters` is keyed by event NAME (ADR-0031), and a tolerated
-	// collision gives that name exactly ONE topic0 covering TWO indexed layouts.
-	// So a filter written for one layout is applied to both, and there is no second
-	// topic0 to key the other one off. This is recorded rather than repaired: it is
-	// the pre-existing name-keying rule meeting a source that could not construct
-	// before, and narrowing it is a different decision from this one.
+describe('an argument filter over a tolerated shared topic0', () => {
+	// The hazard ADR-0061 recorded and deliberately did not repair: a tolerated
+	// collision gives ONE topic0 covering TWO indexed layouts, so a POSITIONAL
+	// filter written for one layout meant something else at the other address.
+	// ADR-0062 repairs it, and the repair is a REFUSAL with a remedy rather than a
+	// guess: say WHICH contracts the rule is for, and the other address is left
+	// alone in the leftover request.
 
-	it('applies the filter to BOTH addresses under the one shared topic0', async () => {
+	it('REFUSES an unscoped rule, naming both shapes and their addresses', () => {
 		const holder = addressTopic(ALICE);
+		const build = () =>
+			new LogEventFetcher(quietProvider, MIXED_STANDARDS as any, {}, {
+				filters: [{event: 'Transfer', match: [[holder]]}],
+			} as LogParseConfig);
 
-		const requests = await requestsMade(MIXED_STANDARDS, {filters: {Transfer: [[holder]]}});
-
-		const filtered = requests.filter((request) => request.topics?.[0] === TRANSFER);
-		expect(filtered).toHaveLength(1);
-		// one request, one topic0, and both contracts in its address list
-		expect(filtered[0].topics).toEqual([TRANSFER, holder]);
-		expect(filtered[0].address).toEqual([NFT, TOKEN]);
+		expect(build).toThrow(/2 different decoding shapes answer to/);
+		// the remedy, and enough to act on it: which shapes, and where they are
+		expect(build).toThrow(/Add `contracts` to scope this rule to one of them/);
+		expect(build).toThrow(new RegExp(NFT));
+		expect(build).toThrow(new RegExp(TOKEN));
 	});
 
-	it('CANNOT match the ERC-20 logs when the filter constrains an ERC-721-only indexed position', async () => {
-		// the honest edge: ERC-721 `Transfer` indexes three arguments and ERC-20
-		// indexes two, so a filter on the third position is a `topics[3]` constraint
-		// no ERC-20 `Transfer` log can satisfy -- and it reaches the ERC-20 address
-		// too, because the name covers one topic0 for both
+	it('SCOPED to the NFT, filters the NFT and leaves the ERC-20 Transfers requested and unfiltered', async () => {
+		// the case that was inexpressible: an ERC-721 `Transfer` indexes three
+		// arguments and an ERC-20 one indexes two, so a token-id filter is a
+		// `topics[3]` constraint no ERC-20 log can satisfy. Scoped, it never reaches
+		// the ERC-20 -- whose Transfers are still asked for, in the leftover request.
 		const tokenId = `0x${word(7)}` as `0x${string}`;
 
 		const {requests, topic0s} = await requestsAndTopic0s(MIXED_STANDARDS, {
-			filters: {Transfer: [[addressTopic(ALICE), addressTopic(BOB), tokenId]]},
+			filters: [{event: 'Transfer', contracts: [NFT], match: [[addressTopic(ALICE), addressTopic(BOB), tokenId]]}],
 		});
 
 		const filtered = requests.filter((request) => request.topics?.[0] === TRANSFER);
-		expect(filtered[0].topics).toHaveLength(4);
-		expect(filtered[0].address).toContain(TOKEN);
-		// stated plainly, so a reader meets it here rather than in a quiet result:
-		// filter `Transfer` by name on a mixed-standards source and the ERC-20 half
-		// goes unrequested. `Approval` is unfiltered and unaffected -- and it is read
-		// through the whole topics array, because an unfiltered topic0 rides NESTED in
-		// slot 0 of the shared request and never as a positional slot of its own.
-		expect(topic0s).toContain(APPROVAL);
+		expect(filtered).toHaveLength(1);
+		expect(filtered[0].topics).toEqual([TRANSFER, addressTopic(ALICE), addressTopic(BOB), tokenId]);
+		expect(filtered[0].address).toEqual([NFT]);
+
+		// AN ADDRESS NOBODY FILTERED IS NOT FILTERED: the ERC-20's Transfers are
+		// requested, unfiltered, at the ERC-20 alone
+		const leftoverTransfer = requests.find(
+			(request) => Array.isArray(request.topics?.[0]) && request.topics[0].indexOf(TRANSFER) !== -1,
+		);
+		expect(leftoverTransfer?.address).toEqual([TOKEN]);
+		expect(leftoverTransfer?.topics).toHaveLength(1);
+
+		// and every topic0 the source declares is still asked for, filter or not
+		expect([...new Set(topic0s)].sort()).toEqual([TRANSFER, APPROVAL, APPROVAL_FOR_ALL].sort());
 	});
 });
 

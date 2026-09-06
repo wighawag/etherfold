@@ -1,9 +1,11 @@
 ---
-status: superseded in part by ADR-0061
+status: superseded in part by ADR-0061 and ADR-0062
 ---
 
 # Duplicate events are keyed on `topic0`, and only a `topic0` collision is refused
 
+> **SUPERSEDED IN PART by ADR-0062, on the ARGUMENT-FILTER clause.** The exact clause replaced is the last sentence of `## Consequences` below: "because a filter list in `LogParseConfig.filters` is keyed by event NAME, it applies to every `topic0` that name covers". Filters are no longer keyed by name, and a filter no longer applies to a `topic0` at all: a rule restricts a (contract, `topic0`) pair, its `event` may be a NAME or a canonical SIGNATURE, and every address no rule reached is still asked for, unfiltered. Nothing else here moves, and the rule this ADR is NAMED for is untouched: de-duplication and the refusal are keyed on `topic0` and never on the name, which is exactly why the filter surface could not stay keyed on one.
+>
 > **SUPERSEDED IN PART by ADR-0061, on WHERE the refusal is evaluated.** The key is still `topic0` and never the NAME, identical declarations are still collapsed, the per-address refusal is unchanged, and a parse-config flag still may not decide WHICH EVENTS EXIST. What ADR-0061 replaces is "the same rule on every list": the refusal on the MERGED list is now conditional on that list being what DECODES a log, because `decodeOnto` resolves the ABI by the log's ADDRESS. The one clause below that is WITHDRAWN is "the verdict must not depend on `parseAllEventsIrrespectiveOfAddresses`" -- the REFUSAL verdict now may, and does; the EVENT SET still may not, which is what that clause was defending.
 
 `LogEventFetcher` de-duplicates its ABI list on the canonical event SIGNATURE (so on `topic0`, which is its hash) rather than on the event NAME, and the same rule runs on every list it builds: two events with different `topic0`s are BOTH kept and both requested; two declarations of one `topic0` are collapsed if they decode identically and REFUSED at construction if they do not. What a log carries is `topic0`, so the name was never the thing that made two events the same or different, and the verdict must not depend on `parseAllEventsIrrespectiveOfAddresses`, which decides which ABI decodes a log and must never decide which events exist.

@@ -3,7 +3,7 @@ import {logs} from 'named-logs';
 import {IncludedEIP1193Log} from '../../types.js';
 import {UnlessCancelledFunction} from '../utils/promises.js';
 import {canOccurIn, type TopicBlockRanges} from './eventRanges.js';
-import {ExtraFilters, getLogs, getLogsWithVariousFilters} from './ethereum.js';
+import {ExtraFilters, getLogsWithVariousFilters} from './ethereum.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -136,26 +136,23 @@ export class RangeLogFetcher {
 			if (narrowedTopics && narrowedTopics.length === 0) {
 				// No DECLARED event is live anywhere in this range, so there is nothing to
 				// ask for -- and asking with an empty topic list would ask for EVERY log,
-				// since a node reads an empty position as a wildcard.
+				// since a node reads an empty position as a wildcard. This branch must
+				// survive every refactor of the planner below it: it is the ONE case where
+				// the right number of calls is zero.
 				logs = [];
-			} else if (this.conf.filters) {
+			} else {
+				// ONE path, filters or not. The planner decides how many requests that is,
+				// and with nothing filtered it is the single call it has always been.
 				logs = await getLogsWithVariousFilters(
 					this.provider,
 					this.contractAddresses,
 					topicsToRequest,
-					this.conf.filters,
+					this.conf.filters || null,
 					{
 						fromBlock,
 						toBlock,
 					},
 					unlessCancelled,
-				);
-			} else {
-				logs = await unlessCancelled(
-					getLogs(this.provider, this.contractAddresses, topicsToRequest ? [topicsToRequest] : null, {
-						fromBlock,
-						toBlock,
-					}),
 				);
 			}
 		} catch (err: any) {

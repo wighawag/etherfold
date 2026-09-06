@@ -582,13 +582,82 @@ export type ExistingStream<ABI extends Abi> = {
 	setStreamConfig?: (streamConfig: UsedStreamConfig) => void;
 };
 
+/**
+ * ONE conjunction of INDEXED-ARGUMENT constraints, positionally, starting at
+ * `topics[1]`.
+ *
+ * Slot `i` of this array constrains the log's `topics[i + 1]`, which is the
+ * `i`-th INDEXED argument of the event. A single topic must equal it, an array
+ * is an OR list within that slot, and `null` is the WILDCARD `eth_getLogs`
+ * defines: match anything here. The wildcard is not decoration, it is the only
+ * way to constrain the second or later indexed argument at all, so "Transfers TO
+ * me" is `[null, meAsATopic]` and is inexpressible without it.
+ *
+ * Positional and never named, deliberately: argument NAMES are not canonical
+ * across real ABIs (WETH9, the most deployed ERC-20 there is, declares
+ * `Transfer(address indexed src, address indexed dst, uint wad)`), and a name is
+ * exactly the part of an ABI a recompilation can move without moving `topic0`.
+ * See ADR-0062.
+ *
+ * A value is a 32-byte topic word, so an address must be left-padded to 32 bytes
+ * before it goes in here; this type does not do that for you.
+ */
+export type ArgumentFilter = (`0x${string}` | `0x${string}`[] | null)[];
+
+/**
+ * ONE argument filter, and WHAT it restricts: a (contract, `topic0`) pair rather
+ * than a `topic0`.
+ *
+ * The rule that makes the shape work is that AN ADDRESS NOBODY FILTERED IS NOT
+ * FILTERED. A filtered `topic0` used to be removed from the shared request
+ * outright, so filtering one contract's `Transfer` silently unfiltered nobody
+ * and unrequested everybody else's; now the addresses a rule does not reach are
+ * collected into a LEFTOVER request that asks for that `topic0` unfiltered. See
+ * ADR-0062.
+ */
+export type FilterRule = {
+	/**
+	 * WHICH event, as a NAME or as a canonical SIGNATURE.
+	 *
+	 * ONE field for both, discriminated on `(`: a Solidity event name is an
+	 * identifier and can never contain one, and a canonical signature always does.
+	 * A NAME covers every `topic0` it declares (both sides of an upgrade); a
+	 * SIGNATURE covers exactly one. The signature comparison is STRICT byte
+	 * equality with viem's `toEventSignature`, which writes no spaces and no
+	 * aliases: `Transfer(address,address,uint256)` and nothing else. A near miss is
+	 * REFUSED at construction, naming the canonical signatures that do exist.
+	 */
+	event: string;
+	/**
+	 * WHICH contracts this rule applies to. OMITTED means every contract in the
+	 * source that declares the event.
+	 *
+	 * This is what makes "filter the NFT's Transfers and leave the ERC-20's alone"
+	 * expressible. It is REFUSED on an address-less source (the single merged
+	 * `{abi}` form), where there is no address to scope by.
+	 */
+	contracts?: `0x${string}`[];
+	/**
+	 * OR across the entries, AND within one entry's slots. Slots start at
+	 * `topics[1]`.
+	 *
+	 * Each entry becomes its own `eth_getLogs` call, and the results are unioned
+	 * and de-duplicated, so "anything involving me" is `[[me, null], [null, me]]`.
+	 * An empty `match`, an empty entry and an all-null entry are all REFUSED:
+	 * each of them means "no constraint", which is not a filter.
+	 */
+	match: ArgumentFilter[];
+};
+
 export type LogParseConfig = {
 	parseAllEventsIrrespectiveOfAddresses?: boolean;
-	filters?: {
-		// for each event name we can specify a list of filter
-		// each filter is an array of (topic or topic[])
-		// so this is an array of array of (topic | topic[])
-		[eventName: string]: (`0x${string}` | `0x${string}`[])[][];
-		// Note we do not provide type arg here (could have done it via abitype) because multiple event could share the same order
-	};
+	/**
+	 * The argument filters, as a LIST of rules.
+	 *
+	 * A list rather than a map keyed by event name, because a name is not what a
+	 * filter is about: two rules can target one event, one rule can target one
+	 * contract's version of it, and one `topic0` can carry two decoding shapes at
+	 * two addresses (ADR-0061). A map keyed by name could express none of that.
+	 */
+	filters?: FilterRule[];
 };

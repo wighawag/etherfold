@@ -40,6 +40,10 @@ export type {
 	LoadingState,
 	LogEvent,
 	LogParseConfig,
+	// What an ARGUMENT FILTER is written in: a caller that cannot name a rule
+	// cannot annotate one (ADR-0062).
+	FilterRule,
+	ArgumentFilter,
 	ExistingStream,
 	// What the KEEPER seam speaks, both halves of it: a browser keeper is written
 	// against these, and a caller that cannot name them cannot annotate one.

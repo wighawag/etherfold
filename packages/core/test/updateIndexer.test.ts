@@ -213,7 +213,7 @@ describe('a reconfigure whose stream config GENUINELY moved', () => {
 	for (const [what, streamConfig] of [
 		['alwaysFetchTimestamps', {alwaysFetchTimestamps: true}],
 		['alwaysFetchTransactions', {alwaysFetchTransactions: true}],
-		['parse.filters', {parse: {filters: {Transfer: [[ADDRESS as `0x${string}`]]}}}],
+		['parse.filters', {parse: {filters: [{event: 'Transfer', match: [[ADDRESS as `0x${string}`]]}]}}],
 		['an explicitly different finality', {finality: 5}],
 	] as [string, ProvidedStreamConfig][]) {
 		it(`still invalidates BOTH halves from block 0 (${what})`, async () => {

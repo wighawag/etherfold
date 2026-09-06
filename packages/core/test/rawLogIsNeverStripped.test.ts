@@ -129,7 +129,10 @@ const PARSE_CONFIGS: {name: string; parseConfig?: LogParseConfig}[] = [
 	{name: 'no parse config at all', parseConfig: undefined},
 	{name: 'an empty parse config', parseConfig: {}},
 	{name: 'parsing every event irrespective of addresses', parseConfig: {parseAllEventsIrrespectiveOfAddresses: true}},
-	{name: 'an argument filter', parseConfig: {filters: {Transfer: [[addressTopic(ADDRESS) as `0x${string}`]]}}},
+	{
+		name: 'an argument filter',
+		parseConfig: {filters: [{event: 'Transfer', match: [[addressTopic(ADDRESS) as `0x${string}`]]}]},
+	},
 ];
 
 describe('what `parse` keeps', () => {

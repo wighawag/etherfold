@@ -1,9 +1,4 @@
-import {
-	createBrowserStateStore,
-	createIndexerState,
-	type GenerationContext,
-	type LogParseConfig,
-} from '@etherfold/browser';
+import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
 import {fromEntityProcessor} from '@etherfold/processor-entities';
 import {createConnection} from '@etherplay/connect';
 // Uncomment together with the ONE LINE marked below to run on the light store.
@@ -257,18 +252,12 @@ async function start() {
 			stream: {
 				parse: {
 					parseAllEventsIrrespectiveOfAddresses: true,
-					// two filter sets, OR'd: transfers OUT of the account and transfers
-					// INTO it. `null` matches any `from`, which is what `eth_getLogs` means
-					// by a null topic and what the fetcher passes straight through.
-					//
-					// The cast is not decoration: `LogParseConfig['filters']` is typed
-					// `(0x${string} | 0x${string}[])[][]`, with no `null` in it, so the
-					// wildcard the JSON-RPC method defines cannot be written without one.
-					// Left as a cast rather than widened in the package, deliberately --
-					// see work/notes/findings/topic-filters-cannot-express-the-null-wildcard.md.
-					filters: {Transfer: [[asTopic(account)], [null, asTopic(account)]]} as unknown as NonNullable<
-						LogParseConfig['filters']
-					>,
+					// ONE rule, two `match` entries OR'd: transfers OUT of the account and
+					// transfers INTO it. `null` is the wildcard `eth_getLogs` defines, and
+					// it is the only way to constrain the SECOND indexed argument, which is
+					// what "transfers to me" is. No `contracts`, because this source names
+					// no addresses at all: an account's tokens can be in any collection.
+					filters: [{event: 'Transfer', match: [[asTopic(account)], [null, asTopic(account)]]}],
 				},
 			},
 		},

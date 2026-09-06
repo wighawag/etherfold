@@ -278,7 +278,7 @@ describe('an event is never silently dropped from the fetch filter', () => {
 		const contracts = [{address: A, abi: [transferV1, transferV2] as unknown as Abi}];
 		const holder = `0x${'11'.repeat(20)}`.padEnd(66, '0') as `0x${string}`;
 
-		const topics = await topicsRequested(contracts, {filters: {Transfer: [[holder]]}});
+		const topics = await topicsRequested(contracts, {filters: [{event: 'Transfer', match: [[holder]]}]});
 
 		expect(topics.sort()).toEqual([TRANSFER_V1, TRANSFER_V2].sort());
 	});
@@ -294,7 +294,7 @@ describe('an event is never silently dropped from the fetch filter', () => {
 		const nft = [{address: A, abi: [transferV1, approval, approvalForAll] as unknown as Abi}];
 		const holder = `0x${'11'.repeat(20)}`.padEnd(66, '0') as `0x${string}`;
 
-		const requests = await requestsMade(nft, {filters: {Transfer: [[holder]]}});
+		const requests = await requestsMade(nft, {filters: [{event: 'Transfer', match: [[holder]]}]});
 
 		// the SHARED request comes first and is ONE slot holding an OR list, exactly
 		// the shape the no-filter path emits
@@ -312,7 +312,7 @@ describe('an event is never silently dropped from the fetch filter', () => {
 		const holder = `0x${'11'.repeat(20)}`.padEnd(66, '0') as `0x${string}`;
 
 		const unfiltered = await topicsRequested(nft, {});
-		const filtered = await topicsRequested(nft, {filters: {Transfer: [[holder]]}});
+		const filtered = await topicsRequested(nft, {filters: [{event: 'Transfer', match: [[holder]]}]});
 
 		expect(filtered.sort()).toEqual(unfiltered.sort());
 		expect(unfiltered.sort()).toEqual([TRANSFER_V1, APPROVAL, APPROVAL_FOR_ALL].sort());
@@ -472,7 +472,7 @@ describe('a block range requests only the events that can occur in it', () => {
 
 	/** One holder, so `Transfer` carries an argument filter and the shape splits per topic. */
 	const holder = `0x${'11'.repeat(20)}`.padEnd(66, '0') as `0x${string}`;
-	const FILTERED: LogParseConfig = {filters: {Transfer: [[holder]]}};
+	const FILTERED: LogParseConfig = {filters: [{event: 'Transfer', match: [[holder]]}]};
 
 	for (const {label, parse} of BOTH_PATHS) {
 		it(`does not carry a topic below its firstBlock (${label})`, async () => {

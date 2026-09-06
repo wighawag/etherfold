@@ -1,6 +1,6 @@
 import {EIP1193Account, EIP1193DATA, EIP1193ProviderWithoutEvents} from 'eip-1193';
-import {ExtraFilters} from '../engine/ethereum.js';
 import {RangeLogFetcher, LogFetcherConfig} from '../engine/RangeLogFetcher.js';
+import {resolveFilterRules, type SourceDeclaration} from './filterRules.js';
 import {requestableRangesPerTopic} from '../engine/eventRanges.js';
 import type {Abi, AbiEvent} from 'abitype';
 import type {DecodeEventLogReturnType} from 'viem';
@@ -251,12 +251,7 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 		private readonly parseConfig?: LogParseConfig,
 	) {
 		const _abiEventPerTopic: Map<`0x${string}`, AbiEvent> = new Map();
-		// a NAME can cover several topic0s (two versions of one event, or two
-		// contracts declaring the same name differently), and the filter config is
-		// keyed by name, so this is a list and not a single topic
-		const _topicsPerEventName: Map<string, `0x${string}`[]> = new Map();
 		const _abiPerAddress: Map<`0x${string}`, AbiEvent[]> = new Map();
-		const _eventNameToContractAddresses: Map<string, `0x${string}`[]> = new Map();
 		const _allABIEvents: AbiEvent[] = [];
 		let contractAddresses: EIP1193Account[] | null = null;
 		if (Array.isArray(contractsData)) {
@@ -272,16 +267,6 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 					abiAtThatAddress.push(...contractEventsABI);
 				}
 				_allABIEvents.push(...contractEventsABI);
-
-				for (const event of contractEventsABI) {
-					const list = _eventNameToContractAddresses.get(event.name) || [];
-					if (list.length === 0) {
-						_eventNameToContractAddresses.set(event.name, list);
-					}
-					if (list.indexOf(contractAddress) === -1) {
-						list.push(contractAddress);
-					}
-				}
 			}
 		} else {
 			const allContractsData = contractsData as {readonly abi: ABI};
@@ -330,30 +315,19 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 			}
 			_abiEventPerTopic.set(topic0, item);
 			eventNameTopics.push(topic0);
-			const topicsForThatName = _topicsPerEventName.get(item.name);
-			if (topicsForThatName) {
-				topicsForThatName.push(topic0);
-			} else {
-				_topicsPerEventName.set(item.name, [topic0]);
-			}
 		}
 
-		if (parseConfig?.filters) {
-			const filters: ExtraFilters = {};
-			for (const eventName of Object.keys(parseConfig.filters)) {
-				const filterList = parseConfig.filters[eventName];
-				// a filter is configured by NAME, so it applies to EVERY topic0 that
-				// name covers. Applying it to one of them would leave the others in
-				// the shared, unfiltered request -- the same argument filter meaning
-				// two different things for two versions of one event
-				for (const signatureTopic of _topicsPerEventName.get(eventName) || []) {
-					filters[signatureTopic] = {
-						list: filterList,
-						contractAddresses: _eventNameToContractAddresses.get(eventName),
-					};
-				}
-			}
-			fetcherConfig = {...fetcherConfig, filters};
+		if (parseConfig?.filters && parseConfig.filters.length > 0) {
+			// EVERY declaration in the source, at its address, which is what a rule is
+			// resolved against: which `topic0`s a name covers, which addresses declare
+			// each of them, and how deep a positional filter may go. The per-address
+			// lists are already de-duplicated, so a declaration appears once per
+			// address it is really at.
+			const declarations: SourceDeclaration[] =
+				_abiPerAddress.size === 0
+					? _allABIEvents.map((event) => ({address: null, event}))
+					: [..._abiPerAddress].flatMap(([address, events]) => events.map((event) => ({address, event})));
+			fetcherConfig = {...fetcherConfig, filters: resolveFilterRules(parseConfig.filters, declarations)};
 		}
 
 		// A BLOCK RANGE REQUESTS ONLY THE EVENTS THAT CAN OCCUR IN IT. Declared

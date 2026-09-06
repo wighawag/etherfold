@@ -165,7 +165,7 @@ describe('the digest ALSO covers the STREAM CONFIG', () => {
 		expect(digestOf(SOURCE, {alwaysFetchTransactions: true})).not.toBe(digestOf(SOURCE));
 		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true})).not.toBe(digestOf(SOURCE, {alwaysFetchTransactions: true}));
 		// `parse.filters` narrows which events are parsed and kept at all
-		expect(digestOf(SOURCE, {parse: {filters: {Transfer: [[A]]}}})).not.toBe(digestOf(SOURCE));
+		expect(digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A]]}]}})).not.toBe(digestOf(SOURCE));
 		expect(digestOf(SOURCE, {finality: 5})).not.toBe(digestOf(SOURCE));
 	});
 
@@ -175,6 +175,45 @@ describe('the digest ALSO covers the STREAM CONFIG', () => {
 		// make `{}` and `{finality: 17}` two streams the rest of the system calls
 		// one.
 		expect(digestOf(SOURCE, {})).toBe(digestOf(SOURCE, resolveStreamConfig(undefined)));
+	});
+
+	it('does NOT MOVE for a config that sets no `filters`, which is what the rule redesign owed everyone else', () => {
+		// A LITERAL, and it has to be one: the argument-filter surface changed shape
+		// (ADR-0062) and the rules are now CANONICALISED before they are hashed, so
+		// the only way to state "nobody who does not use filters re-fetches anything"
+		// is to pin the bytes. This value was computed BEFORE that change landed.
+		// It moving is a full re-index for every deployment on this shape, so it is
+		// never to be updated to match a new answer.
+		expect(digestOf(SOURCE)).toBe('7862e817c01771a7b3b21739b916856c');
+		expect(digestOf(SOURCE, {})).toBe('7862e817c01771a7b3b21739b916856c');
+		expect(digestOf(SOURCE, {parse: {}})).toBe(digestOf(SOURCE, {parse: {filters: []}}));
+	});
+
+	it('does not move when a rule is written a DIFFERENT WAY with the same meaning', () => {
+		// the rules are canonicalised into the resolved config exactly as `finality`
+		// is defaulted into it, so reordering two rules -- which changes not one
+		// request -- is the same stream and not a re-fetch of the whole history
+		const rules = {
+			parse: {
+				filters: [
+					{event: 'Transfer', match: [[A]]},
+					{event: 'Approval', match: [[B]]},
+				],
+			},
+		};
+		const reordered = {
+			parse: {
+				filters: [
+					{event: 'Approval', match: [[B]]},
+					{event: 'Transfer', match: [[A]]},
+				],
+			},
+		};
+		expect(digestOf(SOURCE, reordered)).toBe(digestOf(SOURCE, rules));
+		// and a trailing wildcard constrains nothing, so it is the same stream too
+		expect(digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A, null]]}]}})).toBe(
+			digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A]]}]}}),
+		);
 	});
 
 	it('does not depend on key ORDER or on an explicit `undefined`', () => {
