@@ -154,7 +154,7 @@ describe('the adapter starts on a database handle its caller built', () => {
 describe('the adapter carries the host-supplied capabilities through to the app', () => {
 	it('reports the cursor a supplied reporter returns, verbatim', async () => {
 		const report = {lastToBlock: 4242, latestBlock: 4250};
-		running = await startServer({db: ':memory:', port: 0, getCursorReport: () => report});
+		running = await startServer({db: ':memory:', port: 0, getCursorReport: () => ({value: report})});
 
 		const body = (await (await fetch(`${running.url}/status`)).json()) as {cursor: unknown};
 		expect(body.cursor).toEqual({reported: true, value: report});

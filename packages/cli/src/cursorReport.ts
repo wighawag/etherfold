@@ -1,4 +1,9 @@
+import {generationDigestOf, sameGeneration, type GenerationId} from '@etherfold/core';
 import {parseStoredCursor, SYNC_CURSOR_KEY, type StateStore} from '@etherfold/processor-entities';
+import type {GenerationReport, StatusReport} from '@etherfold/server';
+import {logs} from 'named-logs';
+
+const logger = logs('etherfold');
 
 /**
  * What a command that OWNS a store tells `/status` about where its pipeline has
@@ -55,4 +60,91 @@ export async function readCursorReport(store: StateStore): Promise<StoreCursorRe
 		latestBlock: lastSync.latestBlock,
 		unconfirmedBlocks: lastSync.unconfirmedBlocks.length,
 	};
+}
+
+/**
+ * ONE FOLD this host holds, as the reporter reads it.
+ *
+ * A LIST of these is what a host hands over, even where the list has one entry,
+ * because the shape of `/status` must not depend on how many generations a
+ * deployment happens to hold: a `run` holding one and a host mid-upgrade holding
+ * two report the same field with a different number of entries in it.
+ */
+export type ReportedFold = {
+	/**
+	 * WHICH generation this fold is, read at the moment of asking.
+	 *
+	 * Derived on the call and never captured, exactly as the registry entry derives
+	 * `canonicalGeneration`: a processor's version hash is read when it is asked for,
+	 * and a value captured at start-up can stop being true.
+	 */
+	generation: GenerationId;
+	/** The store it folds into -- its own table namespace (ADR-0053) -- where its cursor lives. */
+	store: StateStore;
+	/**
+	 * Whether it is a FOLLOWER: advanced by a REBUILD over the stored stream rather
+	 * than by the wire (ADR-0044). Absent means no, which is every fold a host holds
+	 * until a successor is created beside one.
+	 */
+	follows?: boolean;
+};
+
+/**
+ * WHAT THIS HOST CAN SAY ABOUT WHERE IT HAS GOT TO: the canonical generation's
+ * cursor, and one entry per generation held.
+ *
+ * The reporter `/status` is injected with (ADR-0047). It fills the envelope's two
+ * slots from the SAME reads: every fold's cursor is read once, the canonical
+ * one's answer is also the top-level `value`, and nothing is computed on demand
+ * -- a reporter runs on every `/status`, so it stays one cursor read per
+ * generation and the generation caps bound how many that is.
+ *
+ * ## Why a fold that cannot be read is still an ENTRY
+ *
+ * A generation reports NO `value` rather than dropping out of the list when its
+ * cursor cannot be read, and the ordinary reason is the one this whole task
+ * exists for: a successor at the start of its rebuild has committed nothing, so
+ * its namespace may not have a row -- or a table -- to read yet. Reporting a zero
+ * would read as "synced to block 0" and dropping the entry would hide the very
+ * generation an operator opened the page to watch, so the honest answer is "this
+ * one is here, and it has not got anywhere yet".
+ *
+ * A read that FAILS is treated the same way and said out loud in the log,
+ * deliberately: one generation's unreadable store must not cost an operator the
+ * other entries, on the page they are looking at because something is wrong.
+ */
+export async function readStatusReport(held: {
+	/** Every fold this host holds, oldest first -- the order the registry lists them in. */
+	folds: readonly ReportedFold[];
+	/** WHICH generation answers reads, or nothing on a host that holds no pointer. */
+	canonical?: GenerationId;
+}): Promise<StatusReport> {
+	const generations: GenerationReport[] = [];
+	let value: StoreCursorReport | undefined;
+	for (const fold of held.folds) {
+		const canonical = !!held.canonical && sameGeneration(fold.generation, held.canonical);
+		const report = await progressOf(fold);
+		if (canonical) value = report;
+		generations.push({
+			generation: generationDigestOf(fold.generation),
+			canonical,
+			follows: !!fold.follows,
+			...(report === undefined ? {} : {value: report}),
+		});
+	}
+	return {...(value === undefined ? {} : {value}), generations};
+}
+
+/** How far one fold has got, or nothing at all -- never a failure the page pays for. */
+async function progressOf(fold: ReportedFold): Promise<StoreCursorReport | undefined> {
+	try {
+		return await readCursorReport(fold.store);
+	} catch (err) {
+		logger.error(
+			`status: the cursor of the generation ${generationDigestOf(fold.generation)} could not be read, so it is ` +
+				`reported with no progress rather than left out of the listing`,
+			err,
+		);
+		return undefined;
+	}
 }

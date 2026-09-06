@@ -7,7 +7,7 @@ import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {readCursorReport} from './cursorReport.js';
+import {readStatusReport} from './cursorReport.js';
 import {buildProcessor, openExplicitSource, streamConfigFor} from './folding.js';
 import type {IndexConfig, Options} from './types.js';
 
@@ -256,8 +256,14 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 					: undefined,
 			// ...and this is what makes a split deployment observable: `index` owns the
 			// store, so it is the half that can say where the fold has got to. A read
-			// tier owns none and is given none.
-			getCursorReport: () => readCursorReport(store),
+			// tier owns none and is given none. ONE fold, reported as the ONE GENERATION
+			// this process holds, in the same field a host holding several fills with
+			// several entries.
+			getCursorReport: () =>
+				readStatusReport({
+					folds: [{generation: streamBuilder.generation, store}],
+					canonical: streamBuilder.generation,
+				}),
 		});
 
 		const close = async () => {
