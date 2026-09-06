@@ -9,8 +9,9 @@ import type {ExistingStream, StreamFetcher, UsedStreamConfig} from '../types.js'
  * other half of the stream's IDENTITY (`ExistingStream.setStreamConfig`): a
  * keeper that ADDRESSES a stream has to be told which one, and a reader that
  * swallowed it would read a different subtree from the one it was pointed at.
- * A reader that addresses nothing (a captured fixture) has no use for it, which
- * is why it stays optional.
+ * A reader that addresses nothing -- one holding exactly ONE stream, which it
+ * serves whatever it is asked for -- has no use for it, which is why it stays
+ * optional.
  */
 export type StreamReader<ABI extends Abi> = {
 	fetchFrom: StreamFetcher<ABI>;
@@ -50,11 +51,20 @@ export type StreamReader<ABI extends Abi> = {
  * generation is still indexing into. A view that passed `clear` through would
  * delete the live generation's history from underneath it.
  *
- * ## One view, two callers
+ * ## One view, over KEEPERS
  *
- * `replayStream` (a captured fixture) was already exactly this shape and is now
- * built out of it, so there is ONE definition of what read-only means on this
- * seam rather than two that can drift apart.
+ * What this wraps is always a keeper of the stream, so that there is ONE
+ * definition of what read-only means on this seam rather than several that can
+ * drift apart: a follower is handed one over the keeper the writing generation
+ * owns (`container.ts`), and `storedEmissionStream` (`@etherfold/server`) is one
+ * over the emission table read back.
+ *
+ * NOT a caller: `replayStream`, a captured fixture. It was built out of this
+ * until the keeper seam narrowed to what the NODE said, which a fixture's
+ * deliberately DECODED events are not; it now has its own reader type with no
+ * write half at all (`fixture.ts`, ADR-0059). That is a fixture leaving this
+ * seam rather than a second read-only implementation of it -- the rule below is
+ * untouched.
  *
  * The rule this serves, and the options weighed against it, are ADR-0044.
  */

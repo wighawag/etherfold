@@ -43,8 +43,10 @@ stable reference; the contract is now THREE.
 window should not be stored by a stream keeper AT ALL.** The property was a careful rule for managing
 data that nothing reads. Evidence already in the repo settles it: `captureStream` persists
 `unconfirmedBlocks: []` and `replayStream` returns `[]` (`packages/core/src/stream/capture.ts`,
-`stream/fixture.ts`) — a shipped, tested third implementation of this same `ExistingStream` seam that
-stores no window and works. The window has two homes that ARE read (`KeepState.save` takes
+`stream/fixture.ts`) — a shipped, tested capture-and-replay path that stores no window and works. (It
+was a third implementation of this same `ExistingStream` seam when this was written; the fixture has
+since LEFT the seam for a reader type of its own, ADR-0059, which changes what it is an example OF and
+not what it evidences: an empty window loses nothing.) The window has two homes that ARE read (`KeepState.save` takes
 `{state, lastSync}`; the entity path's `serializeLastSync` is `JSON.stringify` of the whole
 `LastSync`, written in the block's transaction per ADR-0027), while the stream's copy is read by
 nobody: `promiseToFeed` takes only the three block numbers and `generateStreamToAppend` rebuilds the

@@ -94,10 +94,10 @@ import {abi, processor, timestampOf, type TestABI} from './utils/fixtures.js';
 // two chain reads rather than two deployments. `@etherfold/core`'s stream
 // fixture is that: the chain is captured once, serialized once, and every run
 // below re-parses the same text and replays it. `replayStream` itself is not
-// used, because it builds an `ExistingStream` -- the kept-stream cache that sits
-// in FRONT of a fetch -- and only the single-process shape has one; the split
-// shape's fetcher needs a chain to fetch FROM. So the fixture is replayed one
-// level lower, as the provider both shapes' chain-facing half talks to.
+// used, because it serves the capture ABOVE the fetch, where only the
+// single-process shape reads -- the split shape's fetcher needs a chain to fetch
+// FROM. So the fixture is replayed one level lower, as the provider both shapes'
+// chain-facing half talks to.
 // ---------------------------------------------------------------------------
 
 /**

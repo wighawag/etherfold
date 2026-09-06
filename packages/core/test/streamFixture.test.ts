@@ -10,7 +10,14 @@ import {
 	STREAM_FIXTURE_FORMAT,
 	type StreamFixture,
 } from '../src/stream/fixture.js';
-import type {EventProcessor, IndexingSource, LastSync, LogEvent, UsedStreamConfig} from '../src/types.js';
+import type {
+	EventProcessor,
+	ExistingStream,
+	IndexingSource,
+	LastSync,
+	LogEvent,
+	UsedStreamConfig,
+} from '../src/types.js';
 
 const ERC20_ABI = [
 	{
@@ -196,20 +203,90 @@ describe('a serialized fixture', () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// A FIXTURE READER IS NOT A STREAM KEEPER.
+// ---------------------------------------------------------------------------
+// `replayStream` used to declare the keeper seam (`ExistingStream`) and get its
+// no-op write half from `readOnlyStream`, so "a fixture is immutable" was a
+// SWALLOWED write. It is now its own reader type with no write half at all: the
+// same guarantee, moved from behaviour into the type, which is what lets the
+// keeper seam narrow to a stored (raw-only) event while a fixture goes on
+// serving the DECODED events it was captured with.
+// ---------------------------------------------------------------------------
+
 describe('replayStream', () => {
 	it('serves the captured events from a block, and refuses another chain', async () => {
 		const {provider} = makeProvider([rawLog(100, 0, 1n), rawLog(105, 0, 2n), rawLog(110, 0, 3n)]);
 		const fixture = await captureStream(provider, SOURCE, {toBlock: 110});
 
-		const stream = replayStream(fixture);
-		const fromTip = await stream.fetchFrom(SOURCE, 105);
-		expect(fromTip?.eventStream.map((event) => event.blockNumber)).toEqual([105, 110]);
+		const reader = replayStream(fixture);
+		const fromTip = await reader.fetchFrom(SOURCE, 105);
+		expect(fromTip.eventStream.map((event) => event.blockNumber)).toEqual([105, 110]);
 
-		// A fixture is a snapshot: writing through it must not change what it serves.
-		await stream.saveNewEvents(SOURCE, {lastSync: fixture.lastSync, eventStream: []});
-		expect((await stream.fetchFrom(SOURCE, 0))?.eventStream.length).toBe(3);
+		await expect(reader.fetchFrom({...SOURCE, chainId: '1'}, 0)).rejects.toThrow(/chain/);
+	});
 
-		await expect(stream.fetchFrom({...SOURCE, chainId: '1'}, 0)).rejects.toThrow(/chain/);
+	it('serves the same events however often it is asked: a fixture is a snapshot', async () => {
+		const {provider} = makeProvider([rawLog(100, 0, 1n), rawLog(105, 0, 2n), rawLog(110, 0, 3n)]);
+		const fixture = await captureStream(provider, SOURCE, {toBlock: 110});
+
+		const reader = replayStream(fixture);
+		const first = await reader.fetchFrom(SOURCE, 0);
+		const second = await reader.fetchFrom(SOURCE, 0);
+
+		expect(first.eventStream.length).toBe(3);
+		expect(second.eventStream.map((event) => event.blockNumber)).toEqual(
+			first.eventStream.map((event) => event.blockNumber),
+		);
+		expect(second.lastSync).toEqual(first.lastSync);
+	});
+
+	it('reports an EMPTY unconfirmed window, like every other thing that stores a stream (ADR-0035)', async () => {
+		const {provider} = makeProvider([rawLog(100, 0, 1n)]);
+		const fixture = await captureStream(provider, SOURCE, {toBlock: 110});
+
+		expect((await replayStream(fixture).fetchFrom(SOURCE, 0)).lastSync.unconfirmedBlocks).toEqual([]);
+	});
+
+	it('hands back the DECODED events it was captured with', async () => {
+		const {provider} = makeProvider([rawLog(100, 0, 7n)]);
+		const fixture = await captureStream(provider, SOURCE, {toBlock: 110});
+
+		const [event] = (await replayStream(fixture).fetchFrom(SOURCE, 0)).eventStream;
+
+		// decoded ONCE, at capture, so a replay does not re-run the decoder -- which is
+		// exactly why a fixture cannot be a keeper of what the node said
+		expect((event as any).eventName).toBe('Transfer');
+		expect((event as any).args.value).toBe(7n);
+	});
+
+	it('offers NO write at all, so "writing through a fixture changes nothing" is a type fact', async () => {
+		const {provider} = makeProvider([rawLog(100, 0, 1n)]);
+		const fixture = await captureStream(provider, SOURCE, {toBlock: 110});
+
+		const reader = replayStream(fixture);
+
+		// it was a no-op `saveNewEvents`/`clear` borrowed from the keeper seam; there
+		// is now nothing to call, at runtime or at compile time
+		expect((reader as any).saveNewEvents).toBeUndefined();
+		expect((reader as any).clear).toBeUndefined();
+
+		/**
+		 * `pnpm typecheck` is what runs this, not vitest: each `@ts-expect-error`
+		 * FAILS the typecheck if the line it guards starts compiling. Deliberately
+		 * never CALLED -- vitest strips types, so running the body proves nothing.
+		 */
+		function refusals() {
+			// @ts-expect-error a fixture reader has no write half to swallow a write
+			void reader.saveNewEvents(SOURCE, {lastSync: fixture.lastSync, eventStream: []});
+			// @ts-expect-error nor a `clear`: a snapshot is not anybody's to delete
+			void reader.clear(SOURCE);
+			// @ts-expect-error and it is NOT the keeper seam: a fixture serves decoded events, a keeper stores what the node said
+			const asKeeper: ExistingStream<typeof ERC20_ABI> = reader;
+			return asKeeper;
+		}
+
+		expect(typeof refusals).toBe('function');
 	});
 });
 
