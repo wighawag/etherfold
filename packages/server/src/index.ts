@@ -7,6 +7,13 @@ import type {Env} from './env.js';
 import {getStatusAPI, recordError} from './api/status.js';
 import {getIngestAPI} from './api/ingest.js';
 import {getFeedAPI} from './api/feed.js';
+/**
+ * The OPERATOR's surface on one named indexer: which generation answers reads,
+ * and moving that pointer -- forwards to promote, BACK to revert (ADR-0057).
+ * Guarded by `ADMIN_TOKEN`, which fails closed and is deliberately not the
+ * ingest credential; see `api/admin.ts`.
+ */
+import {getAdminAPI} from './api/admin.js';
 
 export type {Env, ServerOptions};
 export type {CursorReporter} from './types.js';
@@ -156,6 +163,7 @@ export function createServer<CustomEnv extends Env>(options: ServerOptions<Custo
 		.route('/', getStatusAPI(options))
 		.route('/', getIngestAPI(options))
 		.route('/', getFeedAPI(options))
+		.route('/', getAdminAPI(options))
 		.onError((err, c) => {
 			const env = c.get('config')?.env || {};
 			recordError(err);

@@ -1,4 +1,4 @@
-import type {GenerationId, LogIngestion} from '@etherfold/core';
+import type {GenerationId, GenerationRecord, LogIngestion} from '@etherfold/core';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
@@ -109,6 +109,37 @@ export type IndexerRegistryEntry = {
 	 * than two fields to read one after the other.
 	 */
 	canonicalGeneration(): Promise<GenerationId>;
+	/**
+	 * EVERY generation this name holds, oldest first -- what there is to point AT.
+	 *
+	 * OPTIONAL, because a host that holds ONE fold and no registry has no such list
+	 * to give (`singleContextEntry`), and inventing one from the single generation it
+	 * folds would answer "here is what you may revert to" with the one generation a
+	 * revert cannot mean. Absent is a CAPABILITY statement and the admin surface says
+	 * so with a `501`, exactly as the ingest routes do for a host with no registry at
+	 * all.
+	 *
+	 * It is what makes the pointer move USABLE rather than a guess: a feed response
+	 * advertises its generation as an OPAQUE digest (compared, never parsed), so an
+	 * operator matches that value against this listing instead of taking it apart.
+	 */
+	generations?(): Promise<readonly GenerationRecord[]>;
+	/**
+	 * MOVE THE CANONICAL POINTER to one of them: forwards it promotes, BACKWARDS it
+	 * reverts, and it is the same one small write either way.
+	 *
+	 * OPTIONAL for the same reason `generations` is, and paired with it: a host with
+	 * no registry has no pointer to move. `ReceivingIndexer` (`@etherfold/core`)
+	 * answers both, so a host that holds one registers the container itself and adds
+	 * only the database (`indexerEntryOn`).
+	 *
+	 * It REFUSES a generation this name does not hold (`UnknownGenerationError`) and
+	 * deliberately does not require the host to hold a FOLD for the target: reads on
+	 * this runtime resolve the pointer to a table NAMESPACE (ADR-0053), so the
+	 * generation an operator reverts to answers with no engine at all -- which is the
+	 * ordinary case on a host redeployed with the new processor alone.
+	 */
+	promote?(id: GenerationId): Promise<GenerationRecord>;
 };
 
 /**
@@ -169,15 +200,22 @@ export function singleContextEntry(db: RemoteSQL, ingestion: LogIngestion): Inde
  * it deliberately knows no database, so what a host adds here is the handle it
  * opened for this name and nothing else.
  *
- * The two questions are FORWARDED rather than spread, because they are methods
- * on an object that reads its own state: copying them off a class instance would
- * unbind them.
+ * The questions are FORWARDED rather than spread, because they are methods on an
+ * object that reads its own state: copying them off a class instance would
+ * unbind them. The two OPTIONAL ones are forwarded only where what was handed
+ * over answers them, so an entry never claims a capability its holder lacks.
  */
 export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 'db'>): IndexerRegistryEntry {
 	return {
 		db,
 		liveIngestions: () => holds.liveIngestions(),
 		canonicalGeneration: () => holds.canonicalGeneration(),
+		...(holds.generations
+			? {generations: () => (holds.generations as () => Promise<readonly GenerationRecord[]>)()}
+			: {}),
+		...(holds.promote
+			? {promote: (id: GenerationId) => (holds.promote as (id: GenerationId) => Promise<GenerationRecord>)(id)}
+			: {}),
 	};
 }
 

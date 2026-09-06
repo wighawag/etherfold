@@ -454,6 +454,27 @@ export class ReceivingIndexer<
 	private readonly candidates = new Set<HeldFold<ABI, ProcessResultType, unknown>>();
 
 	/**
+	 * WHICH held folds the canonical pointer has EVER named, which is how a REVERT
+	 * is told from a PROMOTION.
+	 *
+	 * The chain-facing container's `everCanonical` flag, kept here as a set for the
+	 * same reason the candidates are: what a container is DOING with a generation is
+	 * not what the registry records it IS. A move to a generation the pointer has
+	 * named before is going BACK to it, and a backwards move must drop NOTHING --
+	 * dropping what it moved away from would delete the very generation a second
+	 * move forward wants (ADR-0046, and `Indexer.arrangeDrop` says the same).
+	 *
+	 * It is deliberately not `createdAt`: two generations registered in the same
+	 * millisecond compare equal, which is a fine total order for a listing and no
+	 * basis at all for deciding whether to DELETE one.
+	 *
+	 * In memory, so it does not survive a restart -- and the direction that costs is
+	 * the safe one, because a fold this process has not seen the pointer on is
+	 * treated as a revert and nothing is dropped.
+	 */
+	private readonly everCanonical = new Set<HeldFold<ABI, ProcessResultType, unknown>>();
+
+	/**
 	 * What `resolveGeneration` has already answered, so a per-batch cursor read
 	 * costs nothing after the first.
 	 *
@@ -665,6 +686,11 @@ export class ReceivingIndexer<
 		const record = await this.registry.create({stream: context.stream, processor: processor.getVersionHash()});
 		noteSuccessor(canonicalBefore, record);
 		this.records.set(keyOf(record), record);
+		// WHETHER THIS FOLD IS THE ONE THE POINTER NAMES, derived rather than re-read:
+		// `create` leaves the pointer where it was, and takes it only when there was
+		// none. It is recorded because a later move BACK to it must be readable as a
+		// revert -- including the opening fold of a host that comes up already canonical.
+		const canonicalOnAdd = !canonicalBefore || sameGeneration(canonicalBefore, record);
 		// AFTER the record exists, because the rule reads the records: only the WRITER
 		// of a stream may append to it (ADR-0052/ADR-0044), and a generation registered
 		// beside an older one on the same stream is not it.
@@ -710,6 +736,9 @@ export class ReceivingIndexer<
 					}),
 		};
 		this.folds.push(fold as HeldFold<ABI, ProcessResultType, unknown>);
+		if (canonicalOnAdd) {
+			this.everCanonical.add(fold as HeldFold<ABI, ProcessResultType, unknown>);
+		}
 		await this.applyPolicyTo(fold as HeldFold<ABI, ProcessResultType, unknown>);
 		return fold;
 	}
@@ -752,23 +781,35 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * Move the canonical pointer to a generation this container holds.
+	 * MOVE THE CANONICAL POINTER: one small write, forwards or BACKWARDS.
 	 *
 	 * The verb, ungated by the policy under every value: `manual` means "only when
-	 * asked" rather than "never", and moving the pointer BACK is the same call at a
-	 * different target (`the-canonical-pointer-moves-back-without-re-ingesting`
-	 * owns the operator-facing affordance for that).
+	 * asked" rather than "never", and moving the pointer BACK is the SAME call at a
+	 * different target -- promotion and revert are one mechanism and this is it (the
+	 * operator-facing affordance over it is `POST /{indexer}/admin/canonical-generation`,
+	 * `@etherfold/server`).
+	 *
+	 * ## It does NOT require this container to hold a FOLD for the target
+	 *
+	 * That is the whole of what makes the way back real on this runtime, and it is
+	 * rule 1 of the module JSDoc applied to the WRITE side: reads here resolve the
+	 * pointer to a table NAMESPACE (ADR-0053), so the canonical generation answers
+	 * with no engine at all. The ORDINARY revert is exactly that case -- a host
+	 * redeployed with the new processor holds only the new fold, and the generation
+	 * an operator wants back is in the durable registry with its state in its own
+	 * namespace -- so refusing here would mean the revert could only be performed by
+	 * a process that had first been rebuilt with the old processor, which is the
+	 * re-index this design exists to remove.
+	 *
+	 * The refusal is therefore the REGISTRY's (`UnknownGenerationError`): a
+	 * generation nothing registered is refused rather than reported as a silent
+	 * success, and that is the one question worth asking here.
 	 */
 	async promote(id: GenerationId): Promise<GenerationRecord> {
-		const fold = this.folds.find((held) => sameGeneration(held.record, id));
-		if (!fold) {
-			throw new Error(
-				`this indexer holds no fold for the generation {stream: ${id.stream}, processor: ${id.processor}}, so it ` +
-					`cannot promote it. It holds ` +
-					`${this.folds.map((held) => `{stream: ${held.record.stream}, processor: ${held.record.processor}}`).join(', ')}.`,
-			);
-		}
-		return this.movePointerTo(fold);
+		return this.movePointer(
+			id,
+			this.folds.find((held) => sameGeneration(held.record, id)),
+		);
 	}
 
 	/**
@@ -786,7 +827,7 @@ export class ReceivingIndexer<
 		if (canonical && sameGeneration(canonical, fold.record)) return;
 		switch (promotionOnAdd(this.promotionConfig.policy)) {
 			case 'promote':
-				await this.movePointerTo(fold);
+				await this.movePointer(fold.record, fold);
 				return;
 			case 'arm':
 				this.candidates.add(fold);
@@ -831,7 +872,7 @@ export class ReceivingIndexer<
 			cursorOf: (fold) => cursors.get(fold),
 		});
 		if (ready) {
-			await this.movePointerTo(ready);
+			await this.movePointer(ready.record, ready);
 		}
 	}
 
@@ -863,23 +904,48 @@ export class ReceivingIndexer<
 	 * follows (ADR-0046): that would leave the follower folding a stream nothing
 	 * appends to. On the ordinary processor upgrade the superseded generation IS
 	 * that writer, so the drop is declined and said out loud.
+	 *
+	 * The FOLD is optional, and its absence is a case rather than a refusal. A held
+	 * fold is what the in-memory bookkeeping hangs off -- disarming it as a candidate,
+	 * and reading whether the pointer has EVER named it -- and there is none for a
+	 * generation this process was not built with, which is the ordinary
+	 * post-redeploy revert (see `promote`).
 	 */
-	private async movePointerTo(fold: HeldFold<ABI, ProcessResultType, unknown>): Promise<GenerationRecord> {
+	private async movePointer(
+		id: GenerationId,
+		fold: HeldFold<ABI, ProcessResultType, unknown> | undefined,
+	): Promise<GenerationRecord> {
 		const supersededRecord = await this.registry.canonical();
-		const record = await this.registry.moveCanonicalTo(fold.record);
-		// It is canonical: it is no longer waiting to become so, and a REVERT past it
-		// later must not re-promote it on the next chunk.
-		this.candidates.delete(fold);
+		/**
+		 * Read BEFORE the move applies, because that is what makes it readable at all:
+		 * a generation the pointer has named before is one this is going BACK to. A
+		 * target this container holds NO fold for is treated as a revert too, which is
+		 * the safe direction -- it is what an operator naming an older generation after
+		 * a redeploy is doing, and the only consequence is that nothing is dropped.
+		 */
+		const wasRevert = !fold || this.everCanonical.has(fold);
+		const record = await this.registry.moveCanonicalTo(id);
+		if (fold) {
+			// It is canonical: it is no longer waiting to become so, and a REVERT past it
+			// later must not re-promote it on the next chunk.
+			this.candidates.delete(fold);
+			this.everCanonical.add(fold);
+		}
 		if (!supersededRecord || sameGeneration(supersededRecord, record)) {
 			return record;
 		}
 		namedLogger.info(
-			`the canonical pointer moved to {stream: ${record.stream}, processor: ${record.processor}}. The generation ` +
-				`{stream: ${supersededRecord.stream}, processor: ${supersededRecord.processor}} is RETAINED: it keeps its ` +
-				`own state, keeps folding, and is what the pointer moves BACK to.`,
+			`the canonical pointer moved ${wasRevert ? 'BACK ' : ''}to {stream: ${record.stream}, processor: ` +
+				`${record.processor}}. The generation {stream: ${supersededRecord.stream}, processor: ` +
+				`${supersededRecord.processor}} is RETAINED: it keeps its own state, keeps folding, and is what the pointer ` +
+				`moves BACK to.`,
 		);
 		const superseded = this.folds.find((held) => sameGeneration(held.record, supersededRecord));
-		if (this.promotionConfig.dropOnPromotion && superseded) {
+		// A BACKWARDS MOVE DROPS NOTHING, which is the chain-facing container's rule
+		// (`arrangeDrop`) and ADR-0046's: drop-on-promotion discards a generation a
+		// promotion SUPERSEDED, and a revert supersedes nothing -- it moves away from a
+		// generation that is exactly what a second move forward would want back.
+		if (this.promotionConfig.dropOnPromotion && superseded && fold && !wasRevert) {
 			await this.dropSuperseded(superseded, fold);
 		}
 		return record;

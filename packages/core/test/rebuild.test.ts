@@ -1,13 +1,22 @@
-import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
-import type {EmissionWrite, StreamCoverage} from '../src/emissionStream.js';
-import {generationDigestOf} from '../src/generation/identity.js';
-import {createMemoryGenerationRegistryPort} from '../src/generation/memory.js';
-import {DEFAULT_MAX_EMISSIONS_PER_CHUNK, type ReplayChunk, type ReplaySource} from '../src/generation/rebuild.js';
-import type {GenerationRegistryPort} from '../src/generation/registry.js';
-import {openReceivingIndexer, type ReceivingIndexer} from '../src/receivingContainer.js';
-import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
-import {taggedBnReplacer, taggedBnReviver} from '../src/utils/bigint.js';
+import {DEFAULT_MAX_EMISSIONS_PER_CHUNK} from '../src/generation/rebuild.js';
+import {openReceivingIndexer} from '../src/receivingContainer.js';
+import type {MemoryStore, TestABI} from './utils/receivingWorld.js';
+import {
+	AT_101,
+	AT_106,
+	DEAD_104,
+	FINALITY,
+	REORGED_104,
+	SOURCE,
+	START_BLOCK,
+	anIncumbentThatHasFolded,
+	batch,
+	canonicalAnswers,
+	idOf,
+	transfer,
+	world,
+} from './utils/receivingWorld.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE REBUILD REPLAYS THE LOCAL STREAM IN BOUNDED CHUNKS, AND THE POINTER MOVES AT THE END
@@ -29,311 +38,11 @@ import {taggedBnReplacer, taggedBnReviver} from '../src/utils/bigint.js';
 //  - the POINTER, which moves ONCE, at the end, with the retired generation
 //    RETAINED and still answering.
 //
-// The stored stream here is written by a REAL `StreamBuilder` fed real batches,
-// including a REORG and a QUIET range, so what is re-folded is what a deployment
-// actually stores rather than a fixture written to suit the reader. What the SQL
-// substrate adds -- rows, the coverage claim, the bounded read's block-boundary
-// cut -- is asserted in `packages/server/test/rebuildInBoundedChunks.test.ts`.
-// ---------------------------------------------------------------------------------------------------
-
-const abi = [
-	{
-		type: 'event',
-		name: 'Transfer',
-		anonymous: false,
-		inputs: [
-			{indexed: true, name: 'from', type: 'address'},
-			{indexed: true, name: 'to', type: 'address'},
-			{indexed: false, name: 'id', type: 'uint256'},
-		],
-	},
-] as const satisfies Abi;
-
-type TestABI = typeof abi;
-
-const CONTRACT = '0x0000000000000000000000000000000000000099' as const;
-const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' as const;
-const START_BLOCK = 100;
-const FINALITY = 3;
-
-const SOURCE: IndexingSource<TestABI> = {
-	chainId: '1',
-	contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
-};
-
-let logCounter = 0;
-
-/** A REAL raw log with real topics, so `reparse` decodes it rather than recording a decode error. */
-function transfer(blockNumber: number, blockHash: string, id: bigint, logIndex = 0): LogEvent<TestABI> {
-	logCounter++;
-	return {
-		blockNumber,
-		blockHash,
-		transactionIndex: 0,
-		removed: false,
-		address: CONTRACT,
-		data: `0x${id.toString(16).padStart(64, '0')}`,
-		topics: [TRANSFER_TOPIC0, pad(CONTRACT), pad(CONTRACT)],
-		transactionHash: `0x${logCounter.toString(16).padStart(64, '0')}`,
-		logIndex,
-		extra: undefined,
-	} as unknown as LogEvent<TestABI>;
-}
-
-function pad(address: string): string {
-	return `0x${address.slice(2).padStart(64, '0')}`;
-}
-
-/** What ONE emission is, for comparing a fold against a re-fold. */
-function idOf(event: {blockNumber: number; blockHash: string; logIndex: number}): string {
-	return `${event.blockNumber}:${event.blockHash}:${event.logIndex}`;
-}
-
-// ---------------------------------------------------------------------------------------------------
-// THE STORED STREAM, in memory, with the two things the real one has
-// ---------------------------------------------------------------------------------------------------
-
-type StoredRow = {seq: number; log: EmittedLog};
-
-/**
- * The emission stream of one named indexer, as ADR-0006's table holds it: rows
- * in `seq` order with retractions INCLUDED, plus the COVERAGE CLAIM beside them,
- * which is the only thing that can say how far a quiet range carried the stream.
- *
- * Only the RAW log is kept, exactly as the columns do: `args` and `eventName`
- * are what SOME ABI made of those bytes (ADR-0034) and a replay decodes again.
- */
-function storedStream() {
-	const rows: StoredRow[] = [];
-	let coverage: (StreamCoverage & {startBlock: number}) | undefined;
-	let seq = 0;
-
-	return {
-		get rows() {
-			return rows;
-		},
-		/** A byte comparison, so "the re-fold wrote nothing" is not a row count. */
-		snapshot: () => JSON.stringify({rows, coverage}),
-		append(write: EmissionWrite): void {
-			coverage = coverage
-				? {...write.coverage, startBlock: coverage.startBlock}
-				: {...write.coverage, startBlock: write.coverage.lastFromBlock};
-			for (const emission of write.emissions) {
-				seq++;
-				const {blockNumber, blockHash, logIndex, transactionHash, transactionIndex, address, topics, data, removed} =
-					emission as EmittedLog & {removed?: boolean};
-				rows.push({
-					seq,
-					log: {
-						blockNumber,
-						blockHash,
-						logIndex,
-						transactionHash,
-						transactionIndex,
-						address,
-						topics,
-						data,
-						removed: removed ? true : false,
-					} as unknown as EmittedLog,
-				});
-			}
-		},
-		/**
-		 * The BOUNDED read, in the shape `@etherfold/server` implements over SQL: a
-		 * budget in emissions, cut on a BLOCK boundary (a block is the indivisible unit
-		 * of a `seq`-ordered stream carrying reorgs) and never at or below what the fold
-		 * already covers (or a fold inside the reorg window would never advance).
-		 */
-		source(): ReplaySource<TestABI> {
-			return {
-				async readChunk({fromBlock, foldedThrough, maxEmissions}): Promise<ReplayChunk<TestABI> | undefined> {
-					if (!coverage || coverage.startBlock > fromBlock) return undefined;
-					const highWater = rows.length === 0 ? 0 : (rows[rows.length - 1] as StoredRow).seq;
-					const above = rows
-						.filter((row) => blockOf(row) >= fromBlock)
-						.sort((a, b) => blockOf(a) - blockOf(b) || a.seq - b.seq);
-					const floor = Math.max(foldedThrough + 1, fromBlock);
-					const budgetCut =
-						above.length > maxEmissions ? blockOf(above[maxEmissions] as StoredRow) - 1 : coverage.lastToBlock;
-					const lastToBlock = Math.min(coverage.lastToBlock, Math.max(budgetCut, floor));
-					return {
-						eventStream: eventsOf(above.filter((row) => blockOf(row) <= lastToBlock)),
-						lastFromBlock: fromBlock,
-						lastToBlock,
-						latestBlock: coverage.latestBlock,
-						truncated: lastToBlock < coverage.lastToBlock,
-						highWater,
-					};
-				},
-			};
-		},
-	};
-}
-
-function blockOf(row: StoredRow): number {
-	return (row.log as unknown as {blockNumber: number}).blockNumber;
-}
-
-function eventsOf(rows: readonly StoredRow[]): LogEvent<TestABI>[] {
-	return [...rows].sort((a, b) => a.seq - b.seq).map((row) => ({...row.log}) as unknown as LogEvent<TestABI>);
-}
-
-// ---------------------------------------------------------------------------------------------------
-// THE SUBSTRATE: one named indexer's records, and a state store per NAMESPACE
-// ---------------------------------------------------------------------------------------------------
-
-type MemoryStore = {rows: string[]; lastSync?: LastSync<TestABI>};
-
-/**
- * A fold whose state is a list of emission ids and whose REVERT IS EXACT, so
- * "the re-fold reproduces the original state" is a real claim rather than one an
- * approximate revert could pass by luck.
- *
- * It persists its cursor WITH its state, which is the whole of the checkpoint:
- * the driver keeps no position of its own, and a store that wrote one without
- * the other is exactly what ADR-0027 puts behind the storage seam to prevent.
- */
-function foldingProcessor(version: string, store: MemoryStore, weight: number): EventProcessor<TestABI, string[]> {
-	return {
-		getVersionHash: () => version,
-		getCodeFingerprint: () => undefined,
-		load: async () => (store.lastSync ? {state: store.rows, lastSync: clone(store.lastSync)} : undefined),
-		process: async (eventStream, lastSync) => {
-			for (const event of eventStream) {
-				const mark = `${idOf(event)}x${weight}`;
-				if (event.removed) {
-					const at = store.rows.lastIndexOf(mark);
-					if (at >= 0) store.rows.splice(at, 1);
-				} else {
-					store.rows.push(mark);
-				}
-			}
-			// the state and the CHECKPOINT, together, which is what makes a kill between
-			// two chunks resume rather than re-apply or skip
-			store.lastSync = clone(lastSync);
-			return store.rows;
-		},
-		reset: async () => {
-			store.rows.length = 0;
-			store.lastSync = undefined;
-		},
-		clear: async () => {
-			store.rows.length = 0;
-			store.lastSync = undefined;
-		},
-	};
-}
-
-/**
- * Through the repo's own codec, because a replayed window holds DECODED events
- * and every `uint256` in them is a BigInt that `JSON.stringify` throws on.
- */
-function clone(lastSync: LastSync<TestABI>): LastSync<TestABI> {
-	return JSON.parse(JSON.stringify(lastSync, taggedBnReplacer), taggedBnReviver) as LastSync<TestABI>;
-}
-
-/** One named indexer's DURABLE world: the registry records, the stream, and a store per namespace. */
-function world() {
-	const port: GenerationRegistryPort = createMemoryGenerationRegistryPort();
-	const stream = storedStream();
-	const stores = new Map<string, MemoryStore>();
-
-	function storeFor(namespace: string): MemoryStore {
-		let store = stores.get(namespace);
-		if (!store) {
-			store = {rows: []};
-			stores.set(namespace, store);
-		}
-		return store;
-	}
-
-	/** A fold, as the container builds one: the state FIRST, then the processor over it (ADR-0043). */
-	function specFor(version: string, weight: number) {
-		return {
-			createState: (context: {stream: string}) =>
-				storeFor(generationDigestOf({stream: context.stream, processor: version})),
-			createProcessor: (state: MemoryStore) => foldingProcessor(version, state, weight),
-		};
-	}
-
-	/** A CONTAINER over this world: a new object graph every time, over the same durable rows. */
-	function open(version: string, weight: number): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
-		return openReceivingIndexer<TestABI, string[], MemoryStore>({
-			port,
-			source: SOURCE,
-			stream: {finality: FINALITY},
-			appendEmissions: (write) => stream.append(write),
-			replay: stream.source(),
-			generation: specFor(version, weight),
-		});
-	}
-
-	return {
-		port,
-		stream,
-		stores,
-		specFor,
-		open,
-		rowsIn: (version: string, streamDigest: string) =>
-			storeFor(generationDigestOf({stream: streamDigest, processor: version})).rows,
-	};
-}
-
-type World = ReturnType<typeof world>;
-
-function batch(
-	indexer: ReceivingIndexer<TestABI, string[], MemoryStore>,
-	over: {toBlock: number; latestBlock: number; logs: LogEvent<TestABI>[]},
-	fromBlock: number,
-): WireBatch<TestABI> {
-	return {
-		context: indexer.ingestion.context,
-		fromBlock,
-		toBlock: over.toBlock,
-		latestBlock: over.latestBlock,
-		logs: over.logs.map((event) => ({...event})),
-	};
-}
-
-// The fixture: a history, a REORG that retracts a block and replaces it, and a
-// QUIET range that carries no logs at all and still moves the coverage claim.
-const AT_101 = transfer(101, '0xa101', 1n);
-const DEAD_104 = transfer(104, '0xa104', 2n);
-const REORGED_104 = transfer(104, '0xb104', 3n);
-const AT_106 = transfer(106, '0xa106', 4n);
-
-/** A world whose incumbent has folded the fixture and stored its emission stream. */
-async function anIncumbentThatHasFolded(): Promise<{
-	world: World;
-	incumbent: ReceivingIndexer<TestABI, string[], MemoryStore>;
-}> {
-	const w = world();
-	const incumbent = await w.open('v1', 1);
-	const push = async (over: {toBlock: number; latestBlock: number; logs: LogEvent<TestABI>[]}) => {
-		const fromBlock = await incumbent.ingestion.expectedFromBlock();
-		await incumbent.ingestion.receive(batch(incumbent, over, fromBlock));
-	};
-	// [100, 105]: the history
-	await push({toBlock: 105, latestBlock: 105, logs: [AT_101, DEAD_104]});
-	// [102, 106]: 104 comes back with a different hash -- a contradiction, so the dead
-	// block is retracted and the replacement applied
-	await push({toBlock: 106, latestBlock: 106, logs: [REORGED_104, AT_106]});
-	// [103, 110]: the window re-delivered unchanged and nothing new. The cursor moves
-	// to 110 and the stream gains no row.
-	await push({toBlock: 110, latestBlock: 110, logs: [REORGED_104, AT_106]});
-	return {world: w, incumbent};
-}
-
-/** The state the CANONICAL generation answers from, resolved through the pointer (ADR-0053). */
-async function canonicalAnswers(
-	w: World,
-	indexer: ReceivingIndexer<TestABI, string[], MemoryStore>,
-): Promise<string[]> {
-	const canonical = await indexer.canonical();
-	if (!canonical) throw new Error('no canonical generation');
-	return [...w.rowsIn(canonical.processor, canonical.stream)];
-}
-
+// The WORLD these run in -- the stored stream with its coverage claim, the
+// registry substrate, a state store per generation namespace -- is
+// `test/utils/receivingWorld.ts`, shared with the suite that asserts the way
+// BACK (`theCanonicalPointerMovesBack.test.ts`). What the SQL substrate adds is
+// asserted in `packages/server/test/rebuildInBoundedChunks.test.ts`.
 // ---------------------------------------------------------------------------------------------------
 
 describe('a successor on a SHARED stream is a FOLLOWER, determined and never configured', () => {
