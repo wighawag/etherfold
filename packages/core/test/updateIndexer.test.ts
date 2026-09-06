@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
 import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig, streamConfigHashOf, wireContextOf} from '../src/internal/engine/utils.js';
-import type {IndexingSource, LogEvent, ProvidedStreamConfig} from '../src/types.js';
+import type {IndexingSource, ProvidedStreamConfig, StoredLogEvent} from '../src/types.js';
 import {simple_hash} from '../src/utils/hash.js';
 import {
 	ADDRESS,
@@ -79,10 +79,10 @@ const SOURCE_PLUS_VIEW = sourceWith([transfer, balanceOf]);
 const TIP = 1000;
 
 /** Timestamps ride on the logs, so `alwaysFetchTimestamps` costs the fake chain no call. */
-const LOGS: LogEvent<Abi>[] = [makeLog(100, '0xa100'), makeLog(200, '0xa200'), makeLog(900, '0xa900')].map((log) => ({
+const LOGS: StoredLogEvent[] = [makeLog(100, '0xa100'), makeLog(200, '0xa200'), makeLog(900, '0xa900')].map((log) => ({
 	...log,
 	blockTimestamp: log.blockNumber,
-})) as LogEvent<Abi>[];
+}));
 
 /**
  * `reinit` builds a fresh `LogEventFetcher`, and a reconfigure goes through it,

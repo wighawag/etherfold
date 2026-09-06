@@ -8,7 +8,15 @@ import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
 import {streamDigestOf} from '../src/stream/identity.js';
 import {checkTxInclusion} from '../src/utils/txInclusion.js';
-import type {EventProcessor, ExistingStream, IndexingSource, LastSync, LogEvent} from '../src/types.js';
+import type {
+	EventProcessor,
+	ExistingStream,
+	IndexingSource,
+	LastSync,
+	LogEvent,
+	StoredLastSync,
+	StoredLogEvent,
+} from '../src/types.js';
 import {
 	ADDRESS,
 	BRANCH_A,
@@ -95,11 +103,11 @@ function markedFold(name: string) {
 }
 
 /** What generation `name` would have folded, had it folded these logs. */
-const foldedBy = (name: string, logs: LogEvent<Abi>[]) => logs.map((log) => `${name}:${idOf(log)}`);
+const foldedBy = (name: string, logs: StoredLogEvent[]) => logs.map((log) => `${name}:${idOf(log)}`);
 
 /** A keeper that ADDRESSES by stream digest, so two filters land in two keyspaces. */
 function keyedStream() {
-	type Stored = {lastSync: LastSync<Abi>; eventStream: LogEvent<Abi>[]};
+	type Stored = {lastSync: StoredLastSync; eventStream: StoredLogEvent[]};
 	const stored = new Map<string, Stored>();
 	let streamConfig = resolveStreamConfig(undefined);
 	const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -161,7 +169,7 @@ async function openWorld(options?: {
 	generations?: GenerationWanted[];
 	caps?: {maxGenerations: number; maxStreams: number};
 }) {
-	const chain = {logs: {[ADDRESS]: [...BRANCH_A], [ADDRESS_B]: [...BRANCH_C]} as Record<string, LogEvent<Abi>[]>};
+	const chain = {logs: {[ADDRESS]: [...BRANCH_A], [ADDRESS_B]: [...BRANCH_C]} as Record<string, StoredLogEvent[]>};
 	let tip = BRANCH_A_TIP;
 	const stream = keyedStream();
 	const folds = new Map<string, ReturnType<typeof markedFold>>();
@@ -221,7 +229,7 @@ async function openWorld(options?: {
 						toBlockUsed: served,
 					};
 				},
-				reparse: (events: LogEvent<Abi>[]) => events.map((event) => ({...event})),
+				reparse: (events: StoredLogEvent[]) => events.map((event) => ({...event})),
 			};
 			return generation;
 		},
@@ -238,7 +246,7 @@ async function openWorld(options?: {
 		canonicalName: () => indexer.canonical.record.processor.replace('proc-', ''),
 		/** Build a generation BESIDE the ones already held: what a reconfigure does. */
 		add: (wanted: GenerationWanted) => indexer.add(specFor(wanted)),
-		serve(address: string, logs: LogEvent<Abi>[], newTip: number) {
+		serve(address: string, logs: StoredLogEvent[], newTip: number) {
 			chain.logs[address] = logs;
 			tip = newTip;
 		},

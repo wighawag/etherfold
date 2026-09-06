@@ -11,6 +11,7 @@ import {
 	type IndexingSource,
 	type LastSync,
 	type LogEvent,
+	type StoredLogEvent,
 	type WireBatch,
 } from '@etherfold/core';
 import {RemoteLibSQL} from 'remote-sql-libsql';
@@ -106,6 +107,11 @@ function log(
 		logIndex: options.logIndex ?? 0,
 		extra: undefined,
 	} as unknown as LogEvent<TestABI>;
+}
+
+/** The same log as the STREAM SEAM speaks it: the raw half, with no decode on it. */
+function storedLog(blockNumber: number, blockHash: string): StoredLogEvent {
+	return log(blockNumber, blockHash) as unknown as StoredLogEvent;
 }
 
 function pad(address: string): `0x${string}` {
@@ -375,7 +381,9 @@ describe('the re-fold is READ-ONLY: it appends nothing and deletes nothing', () 
 		const before = await tableSnapshot(db);
 
 		await viewOn(db, 'alpha').saveNewEvents(SOURCE, {
-			eventStream: [log(199, '0xdead')],
+			// STORED and not decoded, because that is what the seam takes now: a keeper is
+			// handed the raw log plus the reorg verdict and nothing an ABI made of it
+			eventStream: [storedLog(199, '0xdead')],
 			lastSync: {
 				context: {source: [], config: 'c', processor: 'p'},
 				latestBlock: 200,

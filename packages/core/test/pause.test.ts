@@ -9,7 +9,7 @@ import {
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {getFromBlock} from '../src/internal/engine/utils.js';
-import type {EventProcessor, LastSync, LogEvent} from '../src/types.js';
+import type {EventProcessor, LastSync, LogEvent, StoredLogEvent} from '../src/types.js';
 import {
 	BRANCH_A,
 	BRANCH_A_TIP,
@@ -52,7 +52,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** A chain that also COUNTS the head polls, which is what "light polling" is made of. */
-function countedChain(logs: LogEvent<Abi>[], tip: number) {
+function countedChain(logs: StoredLogEvent[], tip: number) {
 	const chain = fakeChain(logs, tip);
 	const calls = {blockNumber: 0};
 	const inner = chain.provider;
@@ -109,7 +109,7 @@ async function pausedAtTheTip() {
 	const rangesAtPause = chain.ranges.length;
 	indexer.pause();
 
-	let served: LogEvent<Abi>[] = [...BRANCH_A];
+	let served: StoredLogEvent[] = [...BRANCH_A];
 	return {
 		chain,
 		stream,
@@ -120,7 +120,7 @@ async function pausedAtTheTip() {
 		/** What the node has been asked for SINCE the pause. */
 		rangesSincePause: () => chain.ranges.slice(rangesAtPause),
 		/** The chain moves on by one block, then ONE poll: this is the drain, cycle by cycle. */
-		round: async (logs?: LogEvent<Abi>[]): Promise<LastSync<Abi>> => {
+		round: async (logs?: StoredLogEvent[]): Promise<LastSync<Abi>> => {
 			served = logs ?? served;
 			chain.serve(served, chain.tip + 1);
 			return indexer.indexMore();
@@ -356,7 +356,7 @@ async function openWorld() {
 					fetches.push({by, from: range.fromBlock, to: range.toBlock});
 					return chain.fetcher.getLogEvents(range);
 				},
-				reparse: (events: LogEvent<Abi>[]) => chain.fetcher.reparse(events),
+				reparse: (events: StoredLogEvent[]) => chain.fetcher.reparse(events),
 			};
 			return generation;
 		},
@@ -377,7 +377,7 @@ async function openWorld() {
 		heldOf: (label: string) =>
 			indexer.generations.find((entry) => entry.record.processor === `proc-${label}`) ?? undefined,
 		fetchesBy: (label: string) => fetches.filter((call) => call.by === `proc-${label}`),
-		round: async (logs?: LogEvent<Abi>[]) => {
+		round: async (logs?: StoredLogEvent[]) => {
 			chain.serve(logs ?? [...BRANCH_A], chain.tip + 1);
 			return indexer.indexMore();
 		},

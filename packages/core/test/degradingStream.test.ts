@@ -1,7 +1,7 @@
 import {describe, expect, it, vi} from 'vitest';
 import type {Abi} from 'abitype';
 import {degradingStream} from '../src/stream/degrading.js';
-import type {ExistingStream, IndexingSource, LastSync, LogEvent, UsedStreamConfig} from '../src/types.js';
+import type {ExistingStream, IndexingSource, StoredLastSync, StoredLogEvent, UsedStreamConfig} from '../src/types.js';
 
 /**
  * A STREAM THAT CANNOT BE READ COSTS A RE-INDEX, NEVER THE INDEXER.
@@ -21,18 +21,18 @@ import type {ExistingStream, IndexingSource, LastSync, LogEvent, UsedStreamConfi
 
 const SOURCE: IndexingSource<Abi> = {chainId: '1', contracts: []};
 
-function cursor(lastFromBlock: number, lastToBlock: number): LastSync<Abi> {
+function cursor(lastFromBlock: number, lastToBlock: number): StoredLastSync {
 	return {
 		context: {source: [{startBlock: 0, hash: 'src'}], config: 'cfg', processor: 'proc'},
 		latestBlock: lastToBlock,
 		lastFromBlock,
 		lastToBlock,
 		unconfirmedBlocks: [],
-	} as unknown as LastSync<Abi>;
+	} as unknown as StoredLastSync;
 }
 
-function event(blockNumber: number): LogEvent<Abi> {
-	return {blockNumber, logIndex: 0, removed: false} as unknown as LogEvent<Abi>;
+function event(blockNumber: number): StoredLogEvent {
+	return {blockNumber, logIndex: 0, removed: false} as unknown as StoredLogEvent;
 }
 
 /** The `named-logs` channel this package logs on, silenced and recorded. */

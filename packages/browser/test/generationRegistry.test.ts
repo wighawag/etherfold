@@ -8,7 +8,8 @@ import {
 	resolveStreamConfig,
 	streamDigestOf,
 	type GenerationId,
-	type LastSync,
+	type StoredLastSync,
+	type StoredLogEvent,
 } from '@etherfold/core';
 import type {EntityDeclaration, Mutation} from '@etherfold/state-store';
 import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
@@ -51,24 +52,24 @@ const TOKEN: EntityDeclaration = {name: 'token', id: ['id'], fields: {owner: 'te
 const owns = (id: string, owner: string): Mutation => ({type: 'upsert', entity: 'token', id: {id}, values: {owner}});
 const block = (number: number) => ({number, hash: `0x${number.toString(16)}`, timestamp: 1_700_000_000 + number * 12});
 
-function event(blockNumber: number, logIndex = 0) {
+function event(blockNumber: number, logIndex = 0): StoredLogEvent {
 	return {
 		blockNumber,
 		logIndex,
 		removed: false,
 		blockHash: `0x${blockNumber.toString(16)}`,
 		transactionHash: `0x${blockNumber.toString(16)}-${logIndex}`,
-	} as never;
+	} as unknown as StoredLogEvent;
 }
 
-function cursorAt(lastFromBlock: number, lastToBlock: number): LastSync<TestABI> {
+function cursorAt(lastFromBlock: number, lastToBlock: number): StoredLastSync {
 	return {
 		context: {source: [{startBlock: 0, hash: 'src'}], config: 'cfg', processor: 'proc'},
 		latestBlock: lastToBlock,
 		lastFromBlock,
 		lastToBlock,
 		unconfirmedBlocks: [],
-	} as unknown as LastSync<TestABI>;
+	} as unknown as StoredLastSync;
 }
 
 /** Every stream key under one indexer name, whatever stream it belongs to. */

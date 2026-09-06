@@ -1,40 +1,5 @@
 import type {Abi} from 'abitype';
-import type {ContextIdentifier, LastSync, LogEvent, StoredLogEvent} from '../../types.js';
-
-/**
- * ONE BLOCK OF THE UNCONFIRMED WINDOW, as it goes INTO a stream keeper: the
- * block's identity plus the events the node reported in it, raw.
- *
- * `EventBlock` with its events narrowed, and with no ABI type parameter left:
- * the ABI is what the decoded half was made under, so a shape that carries none
- * needs none.
- */
-export type StoredEventBlock = {
-	number: number;
-	hash: string;
-	events: StoredLogEvent[];
-};
-
-/**
- * A `LastSync` as it goes INTO a stream keeper: the same cursor numbers and the
- * same context, with the reorg window's events stripped to what the node said.
- *
- * Deliberately a SEPARATE type rather than a narrowing of `LastSync`, which the
- * processor seam, the load path and the wire all speak: what the stream is
- * HANDED is the only place the window is raw, and re-meaning the shared cursor
- * type for everybody would be a much larger claim than this one. It lives here,
- * unexported from the package, for the same reason -- how the keeper SEAM
- * declares its window is decided by
- * `work/tasks/ready/the-stream-seam-takes-only-the-stored-event.md`, which owns
- * that choice; this module only has to be able to SAY what it built.
- */
-export type StoredLastSync = {
-	context: ContextIdentifier;
-	latestBlock: number;
-	lastFromBlock: number;
-	lastToBlock: number;
-	unconfirmedBlocks: StoredEventBlock[];
-};
+import type {LastSync, LogEvent, StoredLastSync, StoredLogEvent} from '../../types.js';
 
 /**
  * ONE EVENT, stripped of its decoded half.

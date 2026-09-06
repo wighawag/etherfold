@@ -10,9 +10,9 @@ import type {
 	EventProcessor,
 	ExistingStream,
 	IndexingSource,
-	LastSync,
-	LogEvent,
 	ProvidedIndexerConfig,
+	StoredLastSync,
+	StoredLogEvent,
 	UsedStreamConfig,
 } from '../src/types.js';
 import {
@@ -78,9 +78,9 @@ function addressOf(source: IndexingSource<Abi>): string {
  * which is what "the two streams never share entries" is asserted against.
  */
 function keyedStream() {
-	type Stored = {lastSync: LastSync<Abi>; eventStream: LogEvent<Abi>[]};
+	type Stored = {lastSync: StoredLastSync; eventStream: StoredLogEvent[]};
 	const stored = new Map<string, Stored>();
-	const writes: {digest: string; events: LogEvent<Abi>[]}[] = [];
+	const writes: {digest: string; events: StoredLogEvent[]}[] = [];
 	let clears = 0;
 	let streamConfig = resolveStreamConfig(undefined);
 	const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -136,7 +136,7 @@ function keyedStream() {
  * generation's calls, and a shared counter cannot make it.
  */
 async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) {
-	const chain = {logs: {[ADDRESS]: [...BRANCH_A], [ADDRESS_B]: [...BRANCH_C]} as Record<string, LogEvent<Abi>[]>};
+	const chain = {logs: {[ADDRESS]: [...BRANCH_A], [ADDRESS_B]: [...BRANCH_C]} as Record<string, StoredLogEvent[]>};
 	let tip = BRANCH_A_TIP;
 	const stream = keyedStream();
 	const folds = new Map<string, ReturnType<typeof fakeProcessor>>();
@@ -191,7 +191,7 @@ async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) 
 						toBlockUsed: toBlock,
 					};
 				},
-				reparse: (events: LogEvent<Abi>[]) => {
+				reparse: (events: StoredLogEvent[]) => {
 					reparses.push(by);
 					return events.map((event) => ({...event}));
 				},
@@ -207,12 +207,12 @@ async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) 
 		configs,
 		fetches,
 		registry,
-		serve(address: string, logs: LogEvent<Abi>[], newTip: number) {
+		serve(address: string, logs: StoredLogEvent[], newTip: number) {
 			chain.logs[address] = logs;
 			tip = newTip;
 		},
 		/** The chain moves on by one block, then ONE cycle: every generation steps once. */
-		round: async (logs?: LogEvent<Abi>[]) => {
+		round: async (logs?: StoredLogEvent[]) => {
 			if (logs) {
 				chain.logs[ADDRESS] = logs;
 			}
@@ -270,7 +270,7 @@ async function refoldStoredStream(stream: ReturnType<typeof keyedStream>, source
 		getLogEvents: async () => {
 			throw new Error('a re-fold must not fetch');
 		},
-		reparse: (events: LogEvent<Abi>[]) => events.map((event) => ({...event})),
+		reparse: (events: StoredLogEvent[]) => events.map((event) => ({...event})),
 	};
 	await generation.load();
 	return fold.state;
@@ -618,12 +618,12 @@ describe('DIFFERENT streams: the successor fetches its own history', () => {
 
 /** Exposes the two protected members that ARE the shortcut, so it can be pinned directly. */
 class FollowerUnderTest extends IndexerGeneration<Abi> {
-	setFolded(events: LogEvent<Abi>[] | undefined) {
+	setFolded(events: StoredLogEvent[] | undefined) {
 		this.followedEmissions = events?.map(
 			(event) => `${event.blockHash}:${event.logIndex}:${event.removed ? 'R' : 'A'}`,
 		);
 	}
-	alreadyFolded(events: LogEvent<Abi>[]): boolean {
+	alreadyFolded(events: StoredLogEvent[]): boolean {
 		return this.hasAlreadyFolded(events);
 	}
 }
@@ -660,7 +660,7 @@ describe('the follower decides on the emissions themselves', () => {
 		// the application/retraction bit for exactly this
 		const f = follower();
 		f.setFolded([makeLog(101, '0xa101')]);
-		const retracted = {...makeLog(101, '0xa101'), removed: true} as LogEvent<Abi>;
+		const retracted: StoredLogEvent = {...makeLog(101, '0xa101'), removed: true};
 		expect(f.alreadyFolded([retracted])).toBe(false);
 	});
 
@@ -696,7 +696,7 @@ describe('the follower decides on the emissions themselves', () => {
 
 describe('a provider that changes chain mid-cycle', () => {
 	/** A chain whose `eth_chainId` answer can be moved, including from inside the fetch. */
-	function movableChain(logs: LogEvent<Abi>[], tip: number) {
+	function movableChain(logs: StoredLogEvent[], tip: number) {
 		const base = fakeChain(logs, tip);
 		let chainId = '0x1';
 		let flipDuringFetch: string | undefined;

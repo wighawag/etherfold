@@ -1,6 +1,13 @@
 import type {Abi} from 'abitype';
 import {IndexerGeneration} from '../../src/indexer.js';
-import type {ExistingStream, IndexingSource, LastSync, LogEvent} from '../../src/types.js';
+import type {
+	ExistingStream,
+	IndexingSource,
+	LastSync,
+	LogEvent,
+	StoredLastSync,
+	StoredLogEvent,
+} from '../../src/types.js';
 
 /**
  * The world the stream-cache tests drive: a fake chain, a stream keeper with the
@@ -22,8 +29,16 @@ export const SOURCE: IndexingSource<Abi> = {
 	contracts: [{abi: [] as unknown as Abi, address: ADDRESS, startBlock: START_BLOCK}],
 };
 
-/** A log, as the fake chain serves it and as the stream stores it. */
-export function makeLog(blockNumber: number, blockHash: string, logIndex = 0): LogEvent<Abi> {
+/**
+ * A log, as the fake chain serves it and as the stream stores it: the RAW half
+ * and nothing else, which is why it is typed as what a keeper takes.
+ *
+ * These engine tests replace the log fetcher and decode nothing, so a served log
+ * and a stored one are the same object here. The tests where the DECODED half is
+ * the subject put one on deliberately (`savedStreamIsRawOnly.test.ts`), which is
+ * also the only place the difference between the two shapes is observable.
+ */
+export function makeLog(blockNumber: number, blockHash: string, logIndex = 0): StoredLogEvent {
 	return {
 		blockNumber,
 		blockHash,
@@ -35,13 +50,19 @@ export function makeLog(blockNumber: number, blockHash: string, logIndex = 0): L
 		transactionHash: `0x${`${blockHash}${logIndex}`.replace(/[^0-9a-f]/g, '').padStart(64, '0')}`,
 		logIndex,
 		extra: undefined,
-	} as unknown as LogEvent<Abi>;
+	} as unknown as StoredLogEvent;
 }
 
-/** What an event IS, for an assertion that has to tell two copies of one apart. */
-export const idOf = (event: LogEvent<Abi>) => `${event.blockHash}:${event.logIndex}`;
+/**
+ * What an event IS, for an assertion that has to tell two copies of one apart.
+ *
+ * Takes EITHER shape, like the engine's own `emissionMarkOf`, because it reads
+ * the raw half alone and is asked about both: what the processor folded is
+ * decoded, and what the keeper was handed is not.
+ */
+export const idOf = (event: LogEvent<Abi> | StoredLogEvent) => `${event.blockHash}:${event.logIndex}`;
 /** The same, saying whether it arrived as an application or as a retraction. */
-export const shapeOf = (event: LogEvent<Abi>) => `${event.removed ? 'R' : 'A'}:${idOf(event)}`;
+export const shapeOf = (event: LogEvent<Abi> | StoredLogEvent) => `${event.removed ? 'R' : 'A'}:${idOf(event)}`;
 
 /**
  * A chain that serves one branch at a time and records what it was asked for.
@@ -53,7 +74,7 @@ export const shapeOf = (event: LogEvent<Abi>) => `${event.removed ? 'R' : 'A'}:$
  * about what the node was asked for, and nothing in the resulting state can
  * answer it.
  */
-export function fakeChain(logs: LogEvent<Abi>[] = [], tip = 105) {
+export function fakeChain(logs: (LogEvent<Abi> | StoredLogEvent)[] = [], tip = 105) {
 	const ranges: {from: number; to: number}[] = [];
 	let served = logs;
 	let latest = tip;
@@ -62,7 +83,7 @@ export function fakeChain(logs: LogEvent<Abi>[] = [], tip = 105) {
 		get tip() {
 			return latest;
 		},
-		serve(newLogs: LogEvent<Abi>[], newTip: number) {
+		serve(newLogs: (LogEvent<Abi> | StoredLogEvent)[], newTip: number) {
 			served = newLogs;
 			latest = newTip;
 		},
@@ -86,7 +107,7 @@ export function fakeChain(logs: LogEvent<Abi>[] = [], tip = 105) {
 					toBlockUsed: toBlock,
 				};
 			},
-			reparse: (events: LogEvent<Abi>[]) => events.map((event) => ({...event})),
+			reparse: (events: (LogEvent<Abi> | StoredLogEvent)[]) => events.map((event) => ({...event})),
 		},
 	};
 }
@@ -102,10 +123,10 @@ export function fakeChain(logs: LogEvent<Abi>[] = [], tip = 105) {
  * shapes through the real keeper on `fake-indexeddb`, and the segmentation rules
  * themselves are pinned in `streamSegments.test.ts`.
  */
-export function memoryStream(initial?: {lastSync: LastSync<Abi>; eventStream: LogEvent<Abi>[]}) {
+export function memoryStream(initial?: {lastSync: StoredLastSync; eventStream: StoredLogEvent[]}) {
 	let stored = initial ? (JSON.parse(JSON.stringify(initial)) as typeof initial) : undefined;
 	let failWith: (() => Error | undefined) | undefined;
-	const writes: {events: LogEvent<Abi>[]; lastSync: LastSync<Abi>}[] = [];
+	const writes: {events: StoredLogEvent[]; lastSync: StoredLastSync}[] = [];
 	let clears = 0;
 	const keeper: ExistingStream<Abi> = {
 		fetchFrom: async (_source, fromBlock) =>

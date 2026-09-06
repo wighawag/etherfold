@@ -1,6 +1,6 @@
 import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
-import type {LogEvent} from '../src/types.js';
+import type {LogEvent, StoredLogEvent} from '../src/types.js';
 import {
 	BRANCH_A,
 	BRANCH_A_TIP,
@@ -58,7 +58,7 @@ function decodedKeysOf(event: object): string[] {
  * is put on deliberately. It stays JSON-safe (no bigint) because the fakes
  * round-trip a cursor through `JSON.stringify` exactly as a real keeper does.
  */
-function decoded(log: LogEvent<Abi>): LogEvent<Abi> {
+function decoded(log: StoredLogEvent): LogEvent<Abi> {
 	return {
 		...log,
 		eventName: 'Transfer',
@@ -67,7 +67,7 @@ function decoded(log: LogEvent<Abi>): LogEvent<Abi> {
 }
 
 /** What the node said, and only that: the comparison the strip must preserve. */
-function rawHalfOf(event: LogEvent<Abi>) {
+function rawHalfOf(event: LogEvent<Abi> | StoredLogEvent) {
 	return {
 		blockNumber: event.blockNumber,
 		blockHash: event.blockHash,

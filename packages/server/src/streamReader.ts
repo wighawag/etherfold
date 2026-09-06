@@ -10,6 +10,7 @@ import {
 	type ReplayChunk,
 	type ReplayChunkQuery,
 	type ReplaySource,
+	type StoredLogEvent,
 	type UsedStreamConfig,
 } from '@etherfold/core';
 import {logs} from 'named-logs';
@@ -135,7 +136,7 @@ export function storedEmissionStream<ABI extends Abi>(db: RemoteSQL, indexer: st
 				}
 
 				return {
-					eventStream: await readStoredStream<ABI>(db, {indexer, stream, fromBlock}),
+					eventStream: await readStoredStream(db, {indexer, stream, fromBlock}),
 					lastSync: {
 						context: {
 							source: coverage.source,
@@ -171,10 +172,10 @@ export function storedEmissionStream<ABI extends Abi>(db: RemoteSQL, indexer: st
  * retraction of something below the cut goes with the thing it retracts rather
  * than arriving to revert a block this fold never applied.
  */
-async function readStoredStream<ABI extends Abi>(
+async function readStoredStream(
 	db: RemoteSQL,
 	query: {indexer: string; stream: string; fromBlock: number},
-): Promise<LogEvent<ABI>[]> {
+): Promise<StoredLogEvent[]> {
 	const rows = (
 		await db
 			.prepare(
@@ -186,7 +187,7 @@ async function readStoredStream<ABI extends Abi>(
 			.bind(query.indexer, query.stream, query.fromBlock)
 			.all<EmissionRow>()
 	).results;
-	return rows.map(storedLogOf<ABI>);
+	return rows.map(storedLogOf);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -357,7 +358,12 @@ async function readRange<ABI extends Abi>(
 			.bind(query.indexer, query.stream, query.fromBlock, query.toBlock)
 			.all<EmissionRow>()
 	).results;
-	return rows.map(storedLogOf<ABI>);
+	// The BOUNDED replay port is a DIFFERENT seam and still declares decoded events
+	// (`ReplayChunk`, ADR-0056), so the same raw rows are widened on the way out to
+	// it. Nothing is added or lost by that: `GenerationRebuild` re-derives the
+	// decoded half with `reparse` before it replays a chunk, exactly as the load
+	// path does with what the KEEPER seam hands back.
+	return rows.map(storedLogOf) as unknown as LogEvent<ABI>[];
 }
 
 /**
@@ -374,8 +380,12 @@ async function readRange<ABI extends Abi>(
  *
  * The cast is one cast, here, and it is honest about what it is: a row read back
  * out of SQLite carries no proof that its `address` is `0x`-prefixed, and a
- * runtime re-validation of bytes this server itself wrote would be ceremony.
+ * runtime re-validation of bytes this server itself wrote would be ceremony. It
+ * is the ASSERTION a keeper is allowed at its own storage-readback boundary, and
+ * it lands on the STORED type -- never on `LogEvent`, which would claim a decoded
+ * half these rows have never held, and never on `EmittedLog`, which is the
+ * emission-APPEND path's shape and refuses nothing.
  */
-function storedLogOf<ABI extends Abi>(row: EmissionRow): LogEvent<ABI> {
-	return {...entryOf(row), removed: row.removed === 1} as unknown as LogEvent<ABI>;
+function storedLogOf(row: EmissionRow): StoredLogEvent {
+	return {...entryOf(row), removed: row.removed === 1} as unknown as StoredLogEvent;
 }
