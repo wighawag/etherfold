@@ -211,8 +211,6 @@ export type ReconfigureOutcome = {
 // but we could still have filter capabilties managed by another pass/process or has part of the indexer config
 // and this one would slim down the event stream
 
-// TODO add types for logValues to get better type safety when logValues setting is set
-// ExpectedEventValues extends OptionsFlags<NumberifiedLog> = DefaultExpectedValues,
 /**
  * ONE GENERATION: one stream, one processor, one state.
  *
@@ -1063,8 +1061,10 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 						// source running now, before a single event reaches the processor.
 						const replayable = this.logEventFetcher.reparse(eventsFetched);
 						if (!replayable) {
-							// a `logValues` projection dropped the raw log, so this stream cannot be
-							// re-read and must not be replayed on trust
+							// An event with no raw log left to decode, which nothing written by this
+							// version can be: it is a stream an OLDER version wrote, back when a parse
+							// config could project `topics` or `data` away. So this stream cannot be
+							// re-read and must not be replayed on trust (ADR-0034).
 							await this.config.keepStream.clear(this.source);
 							this.forgetStoredStream();
 						} else {

@@ -98,7 +98,7 @@ Per ADR-0006 the stream is stored in **emission form**: append-only, one row per
 Two schema requirements land here, and both are cheap now and expensive later:
 
 - **`address` and `topic0..topic3` are columns, not a JSON blob**, with a composite index on `(address, topic0, blockNumber)`; `topic1..3` stay unindexed and are filtered after the range scan. This is what makes `work/specs/proposed/node-log-api.md` (an `eth_getLogs` API over the indexed subset) possible without a migration over the whole log table.
-- **Raw `data` and `topics` must be retained.** This is mutually exclusive with the root `TODO.md` idea of trimming log fields via stream config.
+- **Raw `data` and `topics` must be retained.** That was mutually exclusive with the idea of trimming log fields via stream config, and the conflict is settled: the `logValues` knob is DELETED (`work/specs/tasked/the-stream-stores-only-what-the-node-said.md`), so retention of the raw log is structural and no configuration can trim it.
 
 Retention: pair-compaction (dropping a dead original together with its retraction, once far below finality) is a **config, off by default**, because a from-genesis stream is what makes processor upgrades possible.
 

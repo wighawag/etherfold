@@ -339,21 +339,10 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 				...(blockTimestamp === undefined ? {} : {blockTimestamp}),
 			};
 			this.decodeOnto(event);
-
-			if (this.parseConfig?.logValues) {
-				const eventWithFilteredValues: LogEvent<ABI> = {} as LogEvent<ABI>;
-				if ((event as any).args) {
-					(eventWithFilteredValues as any).args = (event as any).args;
-				}
-				for (const key of Object.keys(this.parseConfig.logValues)) {
-					if (typeof (event as any)[key] !== 'undefined') {
-						(eventWithFilteredValues as any)[key] = (event as any)[key];
-					}
-				}
-				events.push(eventWithFilteredValues);
-			} else {
-				events.push(event as LogEvent<ABI>);
-			}
+			// the WHOLE raw log the node reported, always: no configuration projects a
+			// field out of it, so an event can never reach storage or the wire with
+			// nothing left to decode from
+			events.push(event as LogEvent<ABI>);
 		}
 		return events;
 	}
@@ -376,9 +365,15 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	 * event decoded under the current ABI" is not a question it can answer per
 	 * event. Decoding is what the fetch path pays anyway.
 	 *
-	 * `undefined` when an event carries no raw log to decode -- which only a
-	 * `logValues` projection that dropped `topics` or `data` can cause. The caller
-	 * then has a stream it cannot re-read and must not replay on trust.
+	 * `undefined` when an event carries no raw log to decode. Nothing this version
+	 * writes can be in that state -- `parse` keeps the whole raw log and no
+	 * configuration can project it away -- so what it guards is a stream ALREADY ON
+	 * DISK, written by an OLDER version whose parse config could strip `topics` or
+	 * `data`. The caller then has a stream it cannot re-read and must not replay on
+	 * trust (ADR-0034).
+	 *
+	 * Pinned by `test/rawLogIsNeverStripped.test.ts`, both halves: unreachable for
+	 * anything written now, still reachable for those bytes.
 	 */
 	reparse(events: readonly LogEvent<ABI>[]): LogEvent<ABI>[] | undefined {
 		const reparsed: LogEvent<ABI>[] = [];

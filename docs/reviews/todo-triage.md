@@ -8,6 +8,12 @@ rather than scattered, and to flag which feed the design plans vs. which are sta
 
 ## Root `TODO.md`
 
+> **CLOSED BY DELETION, and the file with it.** Both entries below (this one and the `logValues`
+> typing cleanup under "Standalone / minor") were answered by DECIDING NOT TO BUILD the feature:
+> `work/specs/tasked/the-stream-stores-only-what-the-node-said.md` deletes the `logValues` knob
+> outright, so the stream always keeps the whole raw log and no configuration can trim it. The root
+> `TODO.md` held only this item and is gone. Left below as the dated record of what was triaged.
+
 - `NumberifiedLog / LogEvent could have fields removed, configuration on config.stream` — i.e. allow
   trimming log fields via stream config (there is already a `logValues` flag stub for this; see the
   related `indexer.ts:63` TODO about typing `logValues`). Minor feature, not urgent.
@@ -80,7 +86,8 @@ should define proper batch + transactional + upsert semantics).
   reorg-detection loop (cosmetic; logic is correct — has a test).
 - `ethereum-indexer/src/internal/engine/ethereum.ts:158` — optimise/combine filter topics (perf).
 - `ethereum-indexer/src/internal/decoding/LogEventFetcher.ts:105` — `as any // TODO types?`.
-- `indexer.ts:63` — type `logValues` for better safety (ties to root TODO.md).
+- `indexer.ts:63` — type `logValues` for better safety (ties to root TODO.md). **Closed by deletion:
+  the knob, its type and this TODO are gone (see the note under "Root `TODO.md`" above).**
 - `indexer.ts:122,219` — `handle history (in reverse order)` (the `ContractData.history` field is
   declared in types but not yet wired through — partial feature).
 - `indexer.ts:231` — remove the chainId courtesy-check in `updateIndexer` (dev responsibility).
