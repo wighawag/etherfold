@@ -25,7 +25,9 @@ export const app = createServer<MyEnv>({
 });
 ```
 
-`getIndexer` is the NAME-KEYED REGISTRY of the named indexers this host was built with. A **named indexer** is the multi-tenancy unit: one indexed answer set over one chain, fully isolated from every other (ADR-0036). It resolves an ENTRY OBJECT (`{ingestion}`) rather than a bare `LogIngestion`, so that what a name holds can grow -- a later generation model gives one entry several live wire contexts -- without every host's resolver changing shape. `indexerRegistry` builds one from a plain record; a host whose names depend on the request writes the function itself.
+`getIndexer` is the NAME-KEYED REGISTRY of the named indexers this host was built with. A **named indexer** is the multi-tenancy unit: one indexed answer set over one chain, fully isolated from every other (ADR-0036). It resolves an ENTRY, and an entry holds SEVERAL LIVE WIRE CONTEXTS: it answers `liveIngestions()` (one receiver per live context) and `canonicalGeneration()` (which generation answers reads). The route segment selects the INDEXER and the batch's own `{source, config}` selects WHICH receiver inside it, so a filter-change successor on a new stream is fed while the incumbent keeps being fed and keeps answering.
+
+Both are asked rather than read, because only the generation registry can answer them honestly: a generation deleted elsewhere stops being live, and the canonical pointer moves, without this host being told. `indexerRegistry` builds a registry of ONE-CONTEXT entries from a plain record (`singleContextEntry` is that entry on its own); a `ReceivingIndexer` (`@etherfold/core`) answers both questions itself and is registered as the entry directly; a host whose names depend on the request writes the resolver itself.
 
 It is optional because an indexer-server is useful before it ingests anything: `/status` and `/admin/setup` answer on a server with no processor at all. When it is absent the ingestion routes answer `501` under every name, which says "this server does not do that" rather than pretending the route is missing. That is deliberately a different answer from a registry that does not hold the name asked for, which is a `404`: one is a capability this host lacks, the other is a tenant it was not built with.
 
@@ -40,7 +42,7 @@ It is optional because an indexer-server is useful before it ingests anything: `
 | `GET /status` | health, database reachability, the fixed-schema version against the one this build expects, the reorg counters, the injected cursor report and the last error this PROCESS saw. `503` when the database is unreachable or the schema is not the expected version |
 | `POST /admin/setup` | apply the fixed-table schema |
 | `POST /{indexer}/ingest` | a `WireBatch` from a log-fetcher (ADR-0004), for ONE named indexer |
-| `POST /{indexer}/ingest/expected-from-block` | where that named indexer's next batch must start |
+| `POST /{indexer}/ingest/expected-from-block` | where the next batch must start, as one `{context, expectedFromBlock}` per LIVE wire context that named indexer holds |
 | `GET /{indexer}/feed` | the RETRACTION-AWARE view over the stored emission stream: `seq`-ordered, `removed` entries included, resumed from an opaque `cursor` the caller holds, `limit` entries at a time |
 | `GET /{indexer}/canonical` | the CANONICAL view over the same stream: live entries only, ordered by `(blockNumber, logIndex)`, at or below the caller's REQUIRED `gate`, resumed from an opaque `cursor` whose block hash the server validates |
 
@@ -48,7 +50,9 @@ It is optional because an indexer-server is useful before it ingests anything: `
 
 **The ingest routes are the fetcher's private API and are guarded on the PATH**, read included. Authentication is `Authorization: Bearer <INGEST_TOKEN>`, compared without leaking where two secrets first differ, and it FAILS CLOSED: with no `INGEST_TOKEN` configured the server can authenticate nobody, so every ingestion call is refused with `401`.
 
-**The status codes are the interesting part of the contract.** `409` is the one and only RESUMABLE refusal: it carries `expectedFromBlock`, and a sender's whole recovery is to re-send from there. `400` is a sender that is wrong in a way no block number fixes (a foreign `{source, config}`, a malformed range, a payload that is not the range it claims). Collapsing the two would make a misconfigured fetcher retry forever against a server that will never accept it.
+**The status codes are the interesting part of the contract.** `409` is the one and only RESUMABLE refusal: it carries `expectedFromBlock`, and a sender's whole recovery is to re-send from there. `400` is a sender that is wrong in a way no block number fixes (a `{source, config}` no live receiver under this name holds, a malformed range, a payload that is not the range it claims). Collapsing the two would make a misconfigured fetcher retry forever against a server that will never accept it.
+
+**`expected-from-block` answers one `{context, expectedFromBlock}` per LIVE wire context**, in a `contexts` list, and never a single pair: a name can hold several at once, and one pair could only have named one of them, silently. A sender finds its own entry by its own `{source, config}` -- `createHttpIngestion` does exactly that, and refuses immediately (non-retryably) when the list holds no entry for it, which is the same fact as the `400` a foreign batch earns, learned before a single log is fetched. A `400 context-mismatch` names EVERY live context as `expected`, rather than picking one.
 
 **There is no idempotency key and no dedupe table: the cursor IS the key.** A batch re-sent after a lost acknowledgement fails the `expectedFromBlock` check and is corrected, so at-least-once on the wire is exactly-once in effect.
 
@@ -100,7 +104,9 @@ The value is OPAQUE: compare it against the last one you saw, never take it apar
 
 **The feed is a PUBLIC read**, unlike the ingest routes: `INGEST_TOKEN` is the fetcher's deployment secret and it guards the routes that can WRITE, so putting the feed behind it would mean handing every consumer the credential that moves the cursor. A deployment that needs the feed private puts it behind its own edge.
 
-It does need `getIndexer`, because validating a cursor's stream means knowing WHICH stream is served, and the only thing that knows is the receiver registered under the name. The table cannot answer it: one indexer's rows may span several streams over its life, nothing in them says which is current, and picking one by a heuristic is the plausible wrong answer this design refuses. So a host with no registry answers `501` here for the same reason it does on ingest, and `etherfold serve`, the read tier, does not serve the feed today.
+**Both views answer from the CANONICAL generation and only it.** Its stream and its fold are read TOGETHER, once per request, so a response can never pair one generation's stream with another's fold -- and a filter-change successor being fed under the same name is invisible here until the canonical pointer moves. When it does, a cursor for the old stream meets the `400 stream-mismatch` below, which is explicitly not a rewind.
+
+It does need `getIndexer`, because validating a cursor's stream means knowing WHICH stream is served, and the only thing that knows is what the name resolves to. The table cannot answer it: one indexer's rows may span several streams over its life, nothing in them says which is current, and picking one by a heuristic is the plausible wrong answer this design refuses. So a host with no registry answers `501` here for the same reason it does on ingest, and `etherfold serve`, the read tier, does not serve the feed today.
 
 ## The canonical view
 

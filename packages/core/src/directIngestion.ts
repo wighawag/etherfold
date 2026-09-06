@@ -44,8 +44,12 @@ import type {UntypedWireBatch, WireBatch} from './types.js';
 export function createDirectIngestion(ingestion: LogIngestion): IngestionTarget {
 	return {
 		async expectedFromBlock() {
-			// the context is handed over as well, so a combined deployment that wired the
-			// wrong source together still fails at the ask instead of after a fetch
+			// The asker's own context is deliberately IGNORED here: there is exactly one
+			// receiver in this shape, so there is nothing to select between, and answering
+			// from anything but it would be inventing a second address in a process that
+			// has one. The context is handed BACK as well, so a combined deployment that
+			// wired the wrong source together still fails at the ask instead of after a
+			// fetch -- which is the same check, made by the same side, as on the wire.
 			return {expectedFromBlock: await ingestion.expectedFromBlock(), context: ingestion.context};
 		},
 

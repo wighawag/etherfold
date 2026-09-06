@@ -72,6 +72,19 @@ export {resolveStreamConfig} from './internal/engine/utils.js';
  */
 export {streamConfigHashOf} from './internal/engine/utils.js';
 /**
+ * Exported because a RECEIVING HOST now has to answer "which of the receivers I
+ * hold is this batch addressed to".
+ *
+ * One named indexer can hold SEVERAL live wire contexts at once (a filter-change
+ * successor beside the incumbent), the route segment selects the indexer and the
+ * batch's own `{source, config}` selects the receiver within it. That comparison
+ * is the same rule `StreamBuilder.assertContext` applies, and a host writing its
+ * own would be a second rule that can disagree with the one that refuses -- so a
+ * batch could select a receiver that then refuses it, or select none where one
+ * would have accepted it.
+ */
+export {sameWireContext} from './internal/engine/utils.js';
+/**
  * Exported because NARROWING A CURSOR IS ONE RULE and must have one
  * implementation. The engine narrows per batch; a processor writing a cursor per
  * BLOCK needs the identical truncation, and the way to get it wrong is to lower

@@ -711,11 +711,49 @@ describe('the HTTP transport, on the answers a server should not give', () => {
 	});
 
 	it('asks the POST route, not a GET, because answering it can write', async () => {
-		const {target, calls} = clientOver({status: 200, body: {expectedFromBlock: 100}});
-		await target.expectedFromBlock();
+		const {target, calls} = clientOver({
+			status: 200,
+			body: {success: true, contexts: [{context: CONTEXT, expectedFromBlock: 100}]},
+		});
+		await target.expectedFromBlock(CONTEXT);
 		// namespaced on the indexer NAME, and the trailing slash on the endpoint did
 		// not become a double slash
 		expect(calls).toEqual(['http://indexer.test/alpha/ingest/expected-from-block']);
+	});
+
+	it('picks ITS OWN entry out of the contexts a name serves, and refuses one that holds none', async () => {
+		// a receiver holding SEVERAL live wire contexts answers one pair per context;
+		// the sender knows which of them it is and takes that one
+		const another: WireContext = {source: CONTEXT.source, config: 'someone-elses'};
+		const {target} = clientOver({
+			status: 200,
+			body: {
+				success: true,
+				contexts: [
+					{context: another, expectedFromBlock: 900},
+					{context: CONTEXT, expectedFromBlock: 100},
+				],
+			},
+		});
+		await expect(target.expectedFromBlock(CONTEXT)).resolves.toEqual({expectedFromBlock: 100, context: CONTEXT});
+
+		// and a list with no entry for this sender is a MISCONFIGURATION, refused at
+		// once rather than retried: no block number makes it right
+		const {target: elsewhere} = clientOver({
+			status: 200,
+			body: {success: true, contexts: [{context: another, expectedFromBlock: 900}]},
+		});
+		const refusal = await elsewhere.expectedFromBlock(CONTEXT).catch((err) => err);
+		expect(refusal).toBeInstanceOf(IngestionRefusedError);
+		expect(refusal.retryable).toBe(false);
+		expect(refusal.code).toBe('context-mismatch');
+	});
+
+	it('refuses an answer that carries no contexts list at all', async () => {
+		// the shape a pre-widening server answered with. Taken unchecked, `undefined`
+		// would be cached as this sender's whole idea of where it is next time
+		const {target} = clientOver({status: 200, body: {success: true, expectedFromBlock: 100}});
+		await expect(target.expectedFromBlock(CONTEXT)).rejects.toBeInstanceOf(IngestionRefusedError);
 	});
 
 	it('refuses to be built without a name, rather than posting to a path that addresses nobody', () => {
@@ -740,10 +778,12 @@ describe('the HTTP transport, on the answers a server should not give', () => {
 			token: 'the-secret',
 			fetch: (url) => {
 				calls.push(url);
-				return new Response(JSON.stringify({expectedFromBlock: 100}), {status: 200});
+				return new Response(JSON.stringify({success: true, contexts: [{context: CONTEXT, expectedFromBlock: 100}]}), {
+					status: 200,
+				});
 			},
 		});
-		await target.expectedFromBlock();
+		await target.expectedFromBlock(CONTEXT);
 		expect(calls).toEqual(['http://indexer.test/a%20name%2Fwith%20a%20slash/ingest/expected-from-block']);
 	});
 });

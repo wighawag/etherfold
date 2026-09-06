@@ -180,12 +180,12 @@ describe('the receiver runs, folds what is pushed to it, and keeps running', () 
 		});
 
 		expect(asked.status).toBe(200);
-		const answer = (await asked.json()) as {expectedFromBlock: number; context: unknown};
-		// nothing has been folded, so the answer is the earliest block this source can
-		// have anything to say about -- and it came from a stream-builder this server
-		// HOSTS, which is the difference between `index` and every other command
-		expect(answer.expectedFromBlock).toBe(START_BLOCK);
-		expect(answer.context).toEqual(running.streamBuilder.context);
+		const answer = (await asked.json()) as {contexts: {expectedFromBlock: number; context: unknown}[]};
+		// ONE PAIR PER LIVE WIRE CONTEXT, and this command holds one fold. Nothing has
+		// been folded, so the answer is the earliest block this source can have
+		// anything to say about -- and it came from a stream-builder this server HOSTS,
+		// which is the difference between `index` and every other command
+		expect(answer.contexts).toEqual([{expectedFromBlock: START_BLOCK, context: running.streamBuilder.context}]);
 	});
 
 	it('registers exactly the NAME it was given, and refuses every other rather than defaulting', async () => {

@@ -72,13 +72,25 @@ const MAX_PAGE_SIZE = 1000;
  * ## Why this route needs the REGISTRY
  *
  * To validate a cursor's stream it must know WHICH stream is being served, and
- * the only thing that knows is the receiver registered under the name
- * (`LogIngestion.streamDigest`). The table cannot answer it: one indexer's rows
- * may span several streams over its life, nothing in them says which is current,
- * and picking one by a heuristic is the plausible wrong answer this whole design
- * refuses. So a host built with no registry answers `501` here for the same
- * reason it does on ingest -- it was built with no named indexers at all -- and
- * `etherfold serve`, the read tier, therefore does not serve this feed today.
+ * the only thing that knows is what the name resolves to
+ * (`IndexerRegistryEntry.canonicalGeneration`). The table cannot answer it: one
+ * indexer's rows may span several streams over its life, nothing in them says
+ * which is current, and picking one by a heuristic is the plausible wrong answer
+ * this whole design refuses. So a host built with no registry answers `501` here
+ * for the same reason it does on ingest -- it was built with no named indexers at
+ * all -- and `etherfold serve`, the read tier, therefore does not serve this feed
+ * today.
+ *
+ * ## The feed follows the CANONICAL GENERATION, and only it
+ *
+ * An entry can hold SEVERAL live wire contexts at once -- a filter-change
+ * successor being fed beside the incumbent -- and a feed consumer must see none
+ * of that: it is served the generation the canonical pointer names, whose stream
+ * and fold are read TOGETHER, once per request. A successor being built is
+ * therefore invisible here until the pointer moves, and when it does the cursor
+ * refusals already say what happens: a cursor for the old stream is answered
+ * with the stream served now and a cursor at its start, which is explicitly not
+ * a rewind.
  *
  * ## Every response says WHICH GENERATION answered it
  *
@@ -110,12 +122,14 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 				const resolved = resolveIndexer(options, c as never, 'feed');
 				if (!resolved.ok) return resolved.response;
 				const {name} = resolved;
-				// WHICH stream this name serves right now. Read once and used both to
-				// validate the cursor and to key the read, so the two cannot disagree.
-				const stream = resolved.entry.ingestion.streamDigest;
-				// WHICH FOLD is answering, read at the same moment as the stream so that one
-				// response never pairs one of them with the other's neighbour
-				const generation = generationDigestOf(resolved.entry.ingestion.generation);
+				// THE CANONICAL GENERATION, in ONE read: its STREAM is what this response is
+				// keyed on and what the cursor is validated against, and its FOLD is what the
+				// response advertises. An entry can hold several live wire contexts, so the two
+				// halves must come from one answer -- read separately, a response could pair one
+				// generation's stream with another's fold.
+				const canonical = await resolved.entry.canonicalGeneration();
+				const stream = canonical.stream;
+				const generation = generationDigestOf(canonical);
 				const served = {
 					indexer: name,
 					stream,
@@ -204,8 +218,10 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 				const resolved = resolveIndexer(options, c as never, 'canonical');
 				if (!resolved.ok) return resolved.response;
 				const {name} = resolved;
-				const stream = resolved.entry.ingestion.streamDigest;
-				const generation = generationDigestOf(resolved.entry.ingestion.generation);
+				// ONE read, both halves: see the other view.
+				const canonical = await resolved.entry.canonicalGeneration();
+				const stream = canonical.stream;
+				const generation = generationDigestOf(canonical);
 				const served = {
 					indexer: name,
 					stream,

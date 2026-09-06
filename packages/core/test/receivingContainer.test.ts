@@ -310,6 +310,75 @@ describe('the generation caps, on the runtime that supplies them', () => {
 	});
 });
 
+describe('one container, SEVERAL live wire contexts', () => {
+	/** A DIFFERENT fetch filter, so `streamDigestOf` moves: a new stream, not a fork. */
+	const OTHER_SOURCE: IndexingSource<TestABI> = {
+		chainId: '1',
+		contracts: [{abi, address: '0x0000000000000000000000000000000000000077', startBlock: START_BLOCK}],
+	};
+
+	it('gives a fold on a NEW stream its own receiver, at its own address, writing its own stream', async () => {
+		const world = substrate();
+		const incumbent = await anIndexerThatHasFolded(world);
+
+		const successor = await incumbent.add({source: OTHER_SOURCE, ...world.specFor('v1', 'own')});
+
+		// a filter change is a new STREAM, so it is a new ADDRESS on the wire: the two
+		// receivers cannot be reached by each other's batches
+		expect(successor.streamDigest).not.toBe(incumbent.streamDigest);
+		expect(successor.ingestion.context).not.toEqual(incumbent.ingestion.context);
+		// and it is the only generation on its stream, so it is that stream's WRITER
+		// (ADR-0044) -- unlike a processor-change successor, which re-folds one already
+		// stored
+		expect(successor.writesStream).toBe(true);
+		// two generations, on two streams (the listing's order ties on `createdAt`
+		// within one millisecond, so what is asserted is the SET)
+		expect((await incumbent.generations()).map((record) => record.stream).sort()).toEqual(
+			[incumbent.streamDigest, successor.streamDigest].sort(),
+		);
+	});
+
+	it('REFUSES a second receiver on a stream it already holds, because a stream is ONE address', async () => {
+		const world = substrate();
+		const incumbent = await anIndexerThatHasFolded(world);
+
+		// the same source and config, another fold: a PROCESSOR change, which asserts
+		// the very same `{source, config}`. A second receiver there would be reachable
+		// only by iteration order, and what such a generation actually needs is to
+		// re-fold the stored stream (ADR-0044).
+		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/ONE address on the wire/);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1']);
+	});
+
+	it('reports as LIVE exactly the folds whose generation is still registered', async () => {
+		const world = substrate();
+		const incumbent = await anIndexerThatHasFolded(world);
+		const successor = await incumbent.add({source: OTHER_SOURCE, ...world.specFor('v1', 'own')});
+
+		expect((await incumbent.liveIngestions()).map((receiver) => receiver.streamDigest)).toEqual([
+			incumbent.streamDigest,
+			successor.streamDigest,
+		]);
+
+		// the pointer MOVING does not retire a context: a superseded generation is
+		// retained under the caps, so what happens to its context is a policy input
+		// rather than something this routing decides
+		await incumbent.registry.moveCanonicalTo(successor.record);
+		expect((await incumbent.liveIngestions()).length).toBe(2);
+		expect(await incumbent.canonicalGeneration()).toEqual({
+			stream: successor.record.stream,
+			processor: successor.record.processor,
+		});
+
+		// DELETING one does: its state is gone, so folding into it would be writing
+		// into nothing
+		await incumbent.registry.deleteGeneration(incumbent.generation);
+		expect((await incumbent.liveIngestions()).map((receiver) => receiver.streamDigest)).toEqual([
+			successor.streamDigest,
+		]);
+	});
+});
+
 describe('a receiver built WITHOUT a container', () => {
 	it('still discards a persisted cursor written by another fold, exactly as before', async () => {
 		const world = substrate();

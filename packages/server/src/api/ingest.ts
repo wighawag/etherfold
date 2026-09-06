@@ -3,7 +3,10 @@ import {
 	UnexpectedFromBlockError,
 	WireContextMismatchError,
 	parseWireBatch,
+	sameWireContext,
+	type LogIngestion,
 	type UntypedWireBatch,
+	type WireContext,
 } from '@etherfold/core';
 import {Hono} from 'hono';
 import type {Context} from 'hono';
@@ -57,16 +60,24 @@ function authorized(c: Context<{Bindings: Env}>): {ok: true} | {ok: false; messa
  * The log ingestion endpoint: where raw logs enter the server, and the half of
  * the wire contract that makes losing an event structurally difficult.
  *
- * ## The NAME is a ROUTE SEGMENT
+ * ## The NAME is a ROUTE SEGMENT, and the CONTEXT selects within it
  *
  * Every route here hangs off `/{indexer}`, the NAMED INDEXER a host was built
- * with (ADR-0036), and the segment is the ONLY thing that selects which receiver
+ * with (ADR-0036), and the segment is the ONLY thing that selects which INDEXER
  * a batch reaches. Carrying the name in the ADR-0004 envelope instead was
  * considered and rejected: it would make the wire FORMAT carry tenancy, and it
  * would turn a misdirected batch into a payload error rather than a routing one.
  * So the envelope and its refusal families are untouched, and one more refusal
  * exists beside them -- a name this host was not built with, which is a `404` and
  * never a batch that quietly landed somewhere plausible.
+ *
+ * One name can hold SEVERAL LIVE WIRE CONTEXTS -- a filter-change successor being
+ * built beside the incumbent that is still being fed -- so the batch's OWN
+ * `{source, config}` selects which receiver inside the entry gets it. That is a
+ * second selection and not a second routing rule: nothing in the payload can
+ * reach another NAME, and a context that matches no live receiver here is the
+ * same `400` a single receiver has always answered, still deliberately not
+ * resumable.
  *
  * ## What this layer decides, and what it only reports
  *
@@ -161,9 +172,12 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 			 * ## Why this is a POST for a question
 			 *
 			 * Answering it can WRITE. Reading the cursor reconciles one belonging to a
-			 * different source, config or processor version by calling
-			 * `processor.clear()`, exactly as `load()` does in the single-process shape --
-			 * the alternative being to answer from state the next batch is about to wipe,
+			 * different source, config or processor version, and WHICH write that is
+			 * depends on the receiver: with a generation container above it the running
+			 * fold is resolved-or-created as a GENERATION (a registry write, nothing
+			 * discarded), and without one the stale state is cleared (`processor.clear()`,
+			 * exactly as `load()` does in the single-process shape). Either way the
+			 * alternative would be answering from state the next batch is about to change,
 			 * so the read and the write disagree.
 			 *
 			 * A `GET` that writes is a trap whatever its justification: proxies, browser
@@ -172,22 +186,37 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 			 * method matches what it does. The cost is one un-RESTful-looking POST for a
 			 * question; the alternative was an endpoint whose safety depended on nobody
 			 * ever pointing a crawler at it.
+			 *
+			 * ## ONE PAIR PER LIVE WIRE CONTEXT
+			 *
+			 * The answer is a LIST of `{context, expectedFromBlock}` and never a single
+			 * pair, because a named indexer can hold several live contexts at once and a
+			 * single pair could only have named one of them -- silently, with the sender
+			 * unable to tell that the number it got belongs to somebody else's stream. It
+			 * is a WIDENING of what this route already did: it returned its `context`
+			 * beside the number precisely so a sender could tell which receiver it had
+			 * reached, and now it does that for each of them. A sender pushing one context
+			 * finds its own entry in the list; a fetcher host running one loop per context
+			 * is what the list makes possible, and is not built here.
+			 *
+			 * Each entry is asked in turn rather than concurrently: answering can WRITE
+			 * (above), and a registry commit that lost its guard to a sibling in the same
+			 * request would be this route racing itself.
 			 */
 			.post('/:indexer/ingest/expected-from-block', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'ingest');
 				if (!resolved.ok) return resolved.response;
-				const {ingestion} = resolved.entry;
 
-				return c.json({
-					success: true,
-					expectedFromBlock: await ingestion.expectedFromBlock(),
-					context: ingestion.context,
-				} as const);
+				const contexts: {context: WireContext; expectedFromBlock: number}[] = [];
+				for (const ingestion of await resolved.entry.liveIngestions()) {
+					contexts.push({context: ingestion.context, expectedFromBlock: await ingestion.expectedFromBlock()});
+				}
+
+				return c.json({success: true, contexts} as const);
 			})
 			.post('/:indexer/ingest', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'ingest');
 				if (!resolved.ok) return resolved.response;
-				const {ingestion} = resolved.entry;
 
 				let batch: UntypedWireBatch;
 				try {
@@ -205,6 +234,14 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 						400,
 					);
 				}
+
+				// WHICH receiver: the route segment chose the indexer, and the batch's own
+				// `{source, config}` chooses within it. The comparison is `@etherfold/core`'s
+				// own (`sameWireContext`), which is the rule the receiver would apply to refuse
+				// it -- a copy here could select a receiver that then refused the batch.
+				const live = await resolved.entry.liveIngestions();
+				const ingestion = live.find((receiver) => sameWireContext(receiver.context, batch.context));
+				if (!ingestion) return noReceiverFor(c as never, live, batch.context);
 
 				try {
 					// ONE call, and everything a batch costs durably happens inside it: the
@@ -234,6 +271,45 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 }
 
 /**
+ * A batch whose `{source, config}` addresses no LIVE receiver under this name.
+ *
+ * The `400` of ADR-0004's second family, unchanged in code and in meaning: no
+ * block number makes it right, so a sender must not retry it. What is new is
+ * only that `expected` NAMES EVERY live context rather than the single one a
+ * one-receiver entry had -- the same choice `GenerationCapReachedError` makes
+ * when it names every deletable generation instead of picking one, because
+ * naming them all is information and picking one is a policy this has no basis
+ * for.
+ *
+ * An EMPTY list is the honest answer for a name whose every context has stopped
+ * being live (its generation deleted, its stream reaped): the batch is refused
+ * because nothing here folds that stream any more, which is a fact about this
+ * host and not about the payload -- but it is still the same refusal, because
+ * the sender's move is the same one, and inventing a status for it would give a
+ * fetcher a fourth case to classify.
+ */
+function noReceiverFor(c: Context<{Bindings: Env}>, live: readonly LogIngestion[], received: WireContext | undefined) {
+	logger.error(
+		`ingest: a batch arrived for a {source, config} no LIVE receiver under this name holds ` +
+			`(${live.length} live context(s))`,
+	);
+	return c.json(
+		{
+			success: false,
+			error: 'context-mismatch',
+			expected: live.map((receiver) => receiver.context),
+			received,
+			message:
+				`this batch is for a {source, config} this named indexer does not fold. It holds ${live.length} live wire ` +
+				`context(s), listed as \`expected\`, and a batch reaches one of them by carrying its identity. No block ` +
+				`number makes this right: either the sender's source or stream config differs from the receiver's, or it ` +
+				`is pointed at the wrong named indexer.`,
+		} as const,
+		400,
+	);
+}
+
+/**
  * Map a refusal onto the status code a sender steers by.
  *
  * Anything not recognised is re-thrown to the app's error handler, which is a
@@ -256,13 +332,18 @@ function refusal(c: Context<{Bindings: Env}>, err: unknown) {
 			409,
 		);
 	}
+	// The receiver's OWN assertion, mapped even though this route now selects on the
+	// same rule and should never reach it. It is kept because the rule belongs to the
+	// receiver and this route is a CALLER of it: if the two ever disagreed, the
+	// honest answer is the receiver's refusal with its own single `expected`, not a
+	// `500` that reads like a server fault.
 	if (err instanceof WireContextMismatchError) {
 		logger.error(`ingest: a batch arrived for another {source, config}: ${err.message}`);
 		return c.json(
 			{
 				success: false,
 				error: 'context-mismatch',
-				expected: err.expected,
+				expected: [err.expected],
 				received: err.received,
 				message: err.message,
 			} as const,

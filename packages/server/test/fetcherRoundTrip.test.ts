@@ -237,7 +237,9 @@ function ingestionFor(deployment: Deployment, spy?: {batches: WireBatch<Abi>[]})
 	});
 	if (!spy) return http;
 	return {
-		expectedFromBlock: () => http.expectedFromBlock(),
+		// the asker's own context travels through, because the receiver may hold
+		// several live ones and only the sender knows which of them it is
+		expectedFromBlock: (context) => http.expectedFromBlock(context),
 		async send(batch): Promise<IngestionResponse> {
 			spy.batches.push(batch);
 			return http.send(batch);
@@ -395,7 +397,15 @@ describe('a misconfigured fetcher', () => {
 			retry: {wait: async () => {}},
 		});
 
-		await expect(foreign.fetchAndPush()).rejects.toThrow(/another \{source, config\}|for another/);
+		// It never gets as far as a batch: the ASK names the asker, the receiver
+		// answers with the live wire contexts it holds under the name, and this
+		// fetcher's is not among them. Same refusal FAMILY as the `400` a foreign
+		// batch earns -- not retryable, no block number makes it right -- learned one
+		// round trip earlier and before a single log is fetched.
+		const failure = await foreign.fetchAndPush().catch((err) => err);
+		expect(failure).toBeInstanceOf(IngestionRefusedError);
+		expect(failure.retryable).toBe(false);
+		expect(failure.code).toBe('context-mismatch');
 		expect(await transferCount(deployment)).toBe(0);
 	});
 
