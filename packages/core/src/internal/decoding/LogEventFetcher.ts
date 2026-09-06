@@ -137,6 +137,31 @@ function preselectionKey(address: `0x${string}`, topic0: `0x${string}` | undefin
 	return `${address}:${topic0}`;
 }
 
+/**
+ * A decode failure, as the ONE LINE that says which failure it was.
+ *
+ * `decodeError` is STORED on the event (`LogEventWithParsingFailure`), so what
+ * goes in it is persisted rather than logged once. A stringified viem error is
+ * several lines carrying a docs URL and `Version: viem@x.y.z`, which would put a
+ * dependency's version number into stored data and churn it on every bump -- so
+ * the first line is taken, which is exactly `<ErrorName>: <what went wrong>` and
+ * is the half that identifies the fault:
+ *
+ * - `AbiEventSignatureNotFoundError` -- this ABI declares no member with that
+ *   `topic0` (an anonymous event lands here too: its `topics[0]` is an indexed
+ *   ARGUMENT, so it names no member);
+ * - `DecodeLogDataMismatch` / `DecodeLogTopicsMismatch` -- the member was found
+ *   and the log's data or topics do not fit it;
+ * - `AbiEventSignatureEmptyTopicsError` -- the log carries no topics at all.
+ *
+ * Those are three different faults with three different fixes, which is the whole
+ * reason not to collapse them into one constant.
+ */
+function decodeErrorOf(err: unknown): string {
+	const [firstLine] = String(err).split('\n');
+	return `decoding error: ${firstLine}`;
+}
+
 export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	/**
 	 * The event a log names, preselected by ADDRESS and `topic0`, built ONCE.
@@ -420,14 +445,26 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 				topics: event.topics as [signature: `0x${string}`, ...args: `0x${string}`[]],
 			});
 		} catch (err) {
-			parsed = null;
-			(event as LogEventWithParsingFailure).decodeError = `decoding error: ${err}`;
+			// The REAL reason, and it RETURNS rather than falling through.
+			//
+			// This used to assign the error and then fall into the block below, whose
+			// `else` overwrote it with a constant because `parsed` was null -- so the
+			// informative branch was unreachable in the OUTPUT and every failure recorded
+			// the same uninformative string. A `topic0` this ABI does not declare, data
+			// that does not match the member its `topic0` names, and a log with no topics
+			// at all are three different faults with three different fixes, and an
+			// operator reading a stored `decodeError` could tell none of them apart.
+			(event as LogEventWithParsingFailure).decodeError = decodeErrorOf(err);
+			return;
 		}
 
 		if (parsed) {
 			(event as ParsedLogEvent<ABI>).args = parsed.args as any;
 			(event as ParsedLogEvent<ABI>).eventName = parsed.eventName as ParsedLogEvent<ABI>['eventName'];
 		} else {
+			// Only reachable if the decoder RETURNS something falsy without throwing,
+			// which it does not do today. Kept as the honest answer for a decoder that
+			// someday does, rather than deleted and rediscovered as an `undefined` args.
 			(event as LogEventWithParsingFailure).decodeError = `parsing did not return any results`;
 		}
 	}

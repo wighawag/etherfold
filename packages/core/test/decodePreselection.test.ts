@@ -197,10 +197,27 @@ const STORED_LOGS = [
  * `args` with the same entries in a different order are not the same answer,
  * and `toEqual` would not notice.
  */
+/**
+ * A decode failure reduced to WHICH failure it was, so a golden pins the FAULT
+ * and not viem's prose.
+ *
+ * `decodeError` now carries the real error's first line (`<ErrorName>: <what went
+ * wrong>`) instead of one constant for every failure. The error NAME is the part
+ * that identifies the fault and is the part worth pinning; the sentence after it
+ * is a dependency's wording, and pinning that would redden this suite on a viem
+ * patch that reworded a message without changing any behaviour.
+ */
+const faultOf = (decodeError: unknown): unknown => {
+	if (typeof decodeError !== 'string') return decodeError;
+	// not `\w+Error`: viem names some of them `DecodeLogDataMismatch`, with no suffix
+	const match = /^decoding error: ([A-Za-z][A-Za-z0-9]*):/.exec(decodeError);
+	return match ? `decoding error: ${match[1]}` : decodeError;
+};
+
 const decodedHalfOf = (events: readonly unknown[]): string[] =>
 	events.map((event) => {
 		const {eventName, args, decodeError} = event as Record<string, unknown>;
-		return JSON.stringify({eventName, args, decodeError}, taggedBnReplacer);
+		return JSON.stringify({eventName, args, decodeError: faultOf(decodeError)}, taggedBnReplacer);
 	});
 
 /** The same canonicalisation over a hand-written expectation, so the two are compared identically. */
@@ -242,8 +259,11 @@ function decodedTheWholeAbiWay(
 		try {
 			const parsed = decodeEventLog({abi, data: log.data as `0x${string}`, topics: log.topics as any});
 			return JSON.stringify({eventName: parsed.eventName, args: parsed.args}, taggedBnReplacer);
-		} catch {
-			return JSON.stringify({decodeError: `parsing did not return any results`}, taggedBnReplacer);
+		} catch (err) {
+			// the same reduction the production path makes: the real error, first line,
+			// then narrowed to the fault by `faultOf` when the two are compared
+			const [firstLine] = String(err).split('\n');
+			return JSON.stringify({decodeError: faultOf(`decoding error: ${firstLine}`)}, taggedBnReplacer);
 		}
 	});
 }
@@ -265,11 +285,14 @@ describe('reparse decodes byte-identically, whichever route decodeOnto takes', (
 				// against a computed selector, and an anonymous event's topics[0] is an
 				// argument, so no member is found and the log records the failure. The
 				// pin is that this ANSWER does not move, whatever route it takes.
-				{decodeError: 'parsing did not return any results'},
-				// a MISS: the topic0 belongs to the other address's ABI
-				{decodeError: 'parsing did not return any results'},
-				// a HIT whose data does not decode against the member its topic0 names
-				{decodeError: 'parsing did not return any results'},
+				{decodeError: 'decoding error: AbiEventSignatureNotFoundError'},
+				// a MISS: the topic0 belongs to the other address's ABI -- the SAME fault as
+				// the anonymous one, and it reads as the same fault rather than as the same
+				// sentence every failure used to share
+				{decodeError: 'decoding error: AbiEventSignatureNotFoundError'},
+				// a HIT whose data does not decode against the member its topic0 names: a
+				// DIFFERENT fault, and now distinguishable from the two above
+				{decodeError: 'decoding error: DecodeLogDataMismatch'},
 				{eventName: 'Transfer', args: {to: A, amount: 11n}},
 				// declared (id, to, memo), decoded (to, id, memo): indexed arguments first
 				{eventName: 'Minted', args: {to: A, id: 9n, memo: '0xbeef'}},
@@ -311,7 +334,8 @@ describe('reparse decodes byte-identically, whichever route decodeOnto takes', (
 		// a miss: `Transfer(address,uint256)` is declared at B and not at A, so
 		// nothing can be preselected and the call made is the one made before
 		expect(miss.eventName).toBeUndefined();
-		expect(miss.decodeError).toBe('parsing did not return any results');
+		// and it now says WHICH failure: this ABI declares no member with that topic0
+		expect(miss.decodeError).toMatch(/^decoding error: AbiEventSignatureNotFoundError:/);
 	});
 
 	it('keeps an ANONYMOUS event on the whole-ABI route, since it carries no topic0 to preselect by', () => {
@@ -345,6 +369,61 @@ describe('reparse decodes byte-identically, whichever route decodeOnto takes', (
 	});
 });
 
+/**
+ * A DECODE FAILURE SAYS WHICH FAILURE IT WAS.
+ *
+ * `decodeOnto` used to assign the real error and then fall through to a block
+ * whose `else` overwrote it with a constant, because `parsed` was null on exactly
+ * the path that had just set it. So the informative branch was unreachable in the
+ * OUTPUT and every failure recorded one uninformative sentence -- and
+ * `decodeError` is STORED on the event, so that sentence is what an operator
+ * reads back off a stream months later.
+ *
+ * The faults are genuinely different and have different fixes: a `topic0` this
+ * ABI does not declare is a wiring or version problem; data that does not fit the
+ * member its `topic0` names is an ABI that has drifted from the contract. Telling
+ * them apart is the whole point.
+ */
+describe('a decode failure records the REAL error, not a constant', () => {
+	it('distinguishes an undeclared topic0 from data that does not fit its member', () => {
+		const fetcher = new LogEventFetcher(provider, CONTRACTS as any);
+
+		// STORED_LOGS[3] is B's Transfer arriving at A: A's ABI declares no such topic0.
+		// STORED_LOGS[4] is a HIT whose data is too short for the member it names.
+		const [undeclared, illFitting] = fetcher.reparse([STORED_LOGS[3], STORED_LOGS[4]] as any) as any[];
+
+		expect(undeclared.decodeError).toMatch(/^decoding error: AbiEventSignatureNotFoundError:/);
+		expect(illFitting.decodeError).toMatch(/^decoding error: DecodeLogDataMismatch:/);
+		// the point: two different faults, two different answers
+		expect(undeclared.decodeError).not.toBe(illFitting.decodeError);
+	});
+
+	it('keeps the message to ONE line, so a stored error carries no docs URL or dependency version', () => {
+		const fetcher = new LogEventFetcher(provider, CONTRACTS as any);
+
+		const [failed] = fetcher.reparse([STORED_LOGS[3]] as any) as any[];
+
+		// a stringified viem error is several lines ending in `Version: viem@x.y.z`;
+		// persisting that would put a dependency's version into stored data and churn
+		// it on every bump
+		expect(failed.decodeError).not.toContain('\n');
+		expect(failed.decodeError).not.toMatch(/Version: viem@/);
+		expect(failed.decodeError).not.toMatch(/https?:\/\//);
+		// and it still names the fault
+		expect(failed.decodeError).toContain('AbiEventSignatureNotFoundError');
+	});
+
+	it('still reports an address this fetcher watches no ABI for, which never reached the decoder', () => {
+		const fetcher = new LogEventFetcher(provider, CONTRACTS as any);
+
+		const [offAddress] = fetcher.reparse([STORED_LOGS[7]] as any) as any[];
+
+		// unchanged: this one is refused BEFORE decoding, so it is not a decoder error
+		// and must not be dressed as one
+		expect(offAddress.decodeError).toBe('event triggered at a different address');
+	});
+});
+
 describe('parseAllEventsIrrespectiveOfAddresses keeps its whole-ABI route', () => {
 	// ADR-0031: the flag decides which ABI DECODES a log and must never decide
 	// which events exist. It is deliberately NOT given a map of its own.
@@ -361,7 +440,7 @@ describe('parseAllEventsIrrespectiveOfAddresses keeps its whole-ABI route', () =
 
 		expect(viaFlag.eventName).toBe('Transfer');
 		expect(viaFlag.args).toEqual({to: A, amount: 11n});
-		expect(viaAddress.decodeError).toBe('parsing did not return any results');
+		expect(viaAddress.decodeError).toMatch(/^decoding error: AbiEventSignatureNotFoundError:/);
 	});
 
 	it('decodes every log exactly as the whole-ABI route does under the flag', () => {
