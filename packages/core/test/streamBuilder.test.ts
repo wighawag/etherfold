@@ -4,6 +4,7 @@ import {IndexerGeneration} from '../src/indexer.js';
 import {InvalidBatchError, UnexpectedFromBlockError, WireContextMismatchError} from '../src/errors.js';
 import {StreamBuilder, parseWireBatch, serializeWireBatch} from '../src/streamBuilder.js';
 import type {ReorgDetection} from '../src/index.js';
+import type {EmissionWrite} from '../src/emissionStream.js';
 import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
 
 // ---------------------------------------------------------------------------
@@ -474,11 +475,11 @@ describe('the stream is written before the state advances', () => {
 	/** An appender that records what it was handed, in the order the fold called it. */
 	function journal() {
 		const order: string[] = [];
-		const appended: {stream: string; emissions: readonly EmittedLog[]}[] = [];
+		const appended: EmissionWrite[] = [];
 		return {
 			order,
 			appended,
-			append: async (write: {stream: string; emissions: readonly EmittedLog[]}) => {
+			append: async (write: EmissionWrite) => {
 				order.push(`append:${write.emissions.length}`);
 				appended.push(write);
 			},
@@ -521,8 +522,21 @@ describe('the stream is written before the state advances', () => {
 		// hole
 		expect(writes.order).toEqual(['append:2', 'process:2']);
 		// the SAME emissions the outcome reports, so a host cannot store a second
-		// opinion of what the fold concluded
-		expect(writes.appended).toEqual([{stream: builder.streamDigest, emissions: result.emissions}]);
+		// opinion of what the fold concluded -- and the COVERAGE this batch leaves the
+		// stream at, which the rows alone could never say (ADR-0055)
+		expect(writes.appended).toEqual([
+			{
+				stream: builder.streamDigest,
+				coverage: {
+					source: builder.context.source,
+					config: builder.context.config,
+					latestBlock: 105,
+					lastFromBlock: 100,
+					lastToBlock: 105,
+				},
+				emissions: result.emissions,
+			},
+		]);
 	});
 
 	it('appends the RETRACTIONS with the applications, in one write per batch', async () => {
@@ -617,7 +631,7 @@ describe('the stream is written before the state advances', () => {
 		expect(target.lastSync?.lastToBlock).toBe(105);
 	});
 
-	it('appends nothing for a batch that emitted nothing, so an empty cycle costs no write', async () => {
+	it('hands over a batch that emitted nothing too, because the COVERAGE still moved', async () => {
 		const writes = journal();
 		const target = recordingProcessor();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
@@ -627,9 +641,15 @@ describe('the stream is written before the state advances', () => {
 
 		await builder.receive(batch(builder, {fromBlock: 100, toBlock: 105, latestBlock: 105, logs: []}));
 
-		// the fold still advanced (the cursor moves on an empty range), and the stream
-		// has nothing to say about it
-		expect(writes.appended).toEqual([]);
+		// This used to assert the opposite, on the reasoning that "the stream has
+		// nothing to say about it". It has one thing to say and only it can: a range
+		// that carried no logs is exactly where `MAX(blockNumber)` under-claims, so a
+		// store told nothing about it can never report its own coverage honestly
+		// (ADR-0055). It stays an EMPTY write -- no emission, one small claim -- which is
+		// the shape ADR-0035's empty save already has on the segment keeper.
+		expect(writes.appended).toHaveLength(1);
+		expect((writes.appended[0] as EmissionWrite).emissions).toEqual([]);
+		expect((writes.appended[0] as EmissionWrite).coverage).toMatchObject({lastToBlock: 105, latestBlock: 105});
 		expect(target.lastSync?.lastToBlock).toBe(105);
 	});
 
@@ -655,7 +675,7 @@ describe('the stream is written before the state advances', () => {
 			events.map((e) => `${e.removed ? '-' : '+'}${e.blockNumber}:${e.blockHash}`);
 		expect(identity(blind.flat())).toEqual(identity(storing.flat()));
 		// ...and only one of them could be replayed afterwards
-		expect(writes.appended).toHaveLength(2);
+		expect(writes.appended.filter((write) => write.emissions.length > 0)).toHaveLength(2);
 	});
 
 	it('hashes no appender into the wire identity: where a stream is stored is not what a sender asserts', () => {

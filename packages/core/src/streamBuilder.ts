@@ -314,7 +314,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 		// re-derived delta is appended again. The stream may be ahead of the state or
 		// level with it, never behind (ADR-0038), so that is the survivable side of the
 		// trade and a hole is not.
-		await this.storeEmissions(eventStream);
+		await this.storeStream(eventStream, newLastSync);
 
 		await this.processor.process(eventStream, newLastSync);
 
@@ -343,8 +343,8 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	// -- internals -----------------------------------------------------------
 
 	/**
-	 * Hand this batch's emissions to whoever stores the stream, and let a refusal
-	 * through.
+	 * Hand this batch to whoever stores the stream -- what it emitted AND how far
+	 * the stream now reaches -- and let a refusal through.
 	 *
 	 * The one write in this class that is NOT best-effort. It is called before
 	 * `processor.process` and it catches nothing, so a store that cannot take the
@@ -353,12 +353,33 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	 * is corrected to is the one it already had), and in a combined process the
 	 * fetcher's cycle fails and is retried, re-deriving the same delta.
 	 *
-	 * An EMPTY batch writes nothing: a cycle that emitted no logs still advances the
-	 * cursor, and there is nothing about it for a stream to hold.
+	 * An EMPTY batch is still handed over, and that is a deliberate change from the
+	 * earlier shape, which skipped it because "there is nothing about it for a
+	 * stream to hold". There is: the `coverage` claim. A range that carried no logs
+	 * moves the stream's reach without adding a row, so a store told nothing about
+	 * it can only under-claim -- and the whole reason coverage is stored rather
+	 * than derived is that under-claiming turns a promotion into duplicate rows
+	 * (see `StreamCoverage`). It stays cheap: one small upsert, nothing
+	 * proportional to the history, which is exactly what an empty save costs the
+	 * segment keeper (ADR-0035).
+	 *
+	 * The identity written beside the rows is THIS receiver's own `context` rather
+	 * than the cursor's, so that the coverage row and the `streamDigest` it is
+	 * filed under cannot describe two different filters.
 	 */
-	private async storeEmissions(emissions: EmittedLog[]): Promise<void> {
-		if (!this.appendEmissions || emissions.length === 0) return;
-		await this.appendEmissions({stream: this.streamDigest, emissions});
+	private async storeStream(emissions: EmittedLog[], newLastSync: LastSync<ABI>): Promise<void> {
+		if (!this.appendEmissions) return;
+		await this.appendEmissions({
+			stream: this.streamDigest,
+			coverage: {
+				source: this.context.source,
+				config: this.context.config,
+				latestBlock: newLastSync.latestBlock,
+				lastFromBlock: newLastSync.lastFromBlock,
+				lastToBlock: newLastSync.lastToBlock,
+			},
+			emissions,
+		});
 	}
 
 	/**

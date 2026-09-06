@@ -36,8 +36,29 @@ export type {RecordedReorg, ReorgCounters} from './reorgs.js';
  * `StreamBuilder`, which appends every batch it folds BEFORE it folds it
  * (ADR-0052). The ingest route is a caller of that path and writes nothing.
  */
-export {appendEmissions, emissionAppenderFor, EMISSION_STREAM_TABLE} from './emissions.js';
-export type {EmissionAppend} from './emissions.js';
+export {
+	appendEmissions,
+	emissionAppenderFor,
+	readStreamCoverage,
+	EMISSION_STREAM_TABLE,
+	STREAM_COVERAGE_TABLE,
+} from './emissions.js';
+export type {EmissionAppend, StoredStreamCoverage} from './emissions.js';
+/**
+ * THE STORED EMISSION STREAM AS A STREAM A GENERATION CAN RE-FOLD (ADR-0055).
+ *
+ * The read counterpart of the appender above, and the reason ADR-0006's table is
+ * worth keeping at all: a successor that shares a STREAM with the incumbent
+ * folds THIS instead of going back to the chain, so a processor-only upgrade
+ * costs a local scan. It is an `ExistingStream` and not a view, because that is
+ * the seam a generation folds through.
+ *
+ * It comes out READ-ONLY (`readOnlyStream`, ADR-0044), which is what makes the
+ * one-writer rule structural rather than conventional: only the generation that
+ * indexes a stream appends to it, and everything else re-folding it is handed a
+ * view whose writes go nowhere.
+ */
+export {storedEmissionStream} from './streamReader.js';
 /**
  * THE GENERATION REGISTRY AS ROWS (ADR-0053): which generations this named
  * indexer holds, and which one is CANONICAL, so a restart comes back holding

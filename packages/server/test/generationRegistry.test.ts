@@ -111,6 +111,16 @@ async function writeStream(db: RemoteSQL, indexer: string, stream: string, block
 	await appendEmissions(db, {
 		indexer,
 		stream,
+		// a real append carries the stream's coverage claim beside its rows; the
+		// registry does not read it, so the shape is what matters here and not the
+		// numbers
+		coverage: {
+			source: [],
+			config: 'config',
+			latestBlock: blockNumber,
+			lastFromBlock: blockNumber,
+			lastToBlock: blockNumber,
+		},
 		emissions: [
 			{
 				blockNumber,
