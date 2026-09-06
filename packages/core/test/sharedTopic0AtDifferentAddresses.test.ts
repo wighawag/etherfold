@@ -158,28 +158,65 @@ function recordingProvider() {
 	return {provider: provider as any, requests};
 }
 
-/** Every `eth_getLogs` the fetcher issued for one range, in order. */
+/**
+ * The topic0s ONE request asks for, read from the WHOLE topics array and
+ * REFUSING a request that is not well formed.
+ *
+ * An `eth_getLogs` topics array is POSITIONAL: slot 0 is the event selector and
+ * every later slot constrains an INDEXED ARGUMENT, so several topic0s belong
+ * NESTED in slot 0 and never spread across slots. This file inherited a helper
+ * that read slot 0 and nothing else, which made a flattened conjunction --
+ * `{topics: [t0a, t0b]}`, a request no log can satisfy -- indistinguishable from
+ * one topic0 under an argument filter. See `fetchFilter.test.ts`, which owns
+ * that regression.
+ */
+function topic0sOf(request: {topics?: (string | string[] | null)[]}, declaredTopic0s: ReadonlySet<string>): string[] {
+	const topics = request.topics || [];
+	for (let slot = 1; slot < topics.length; slot++) {
+		const constraint = topics[slot];
+		const values = Array.isArray(constraint) ? constraint : constraint === null ? [] : [constraint];
+		for (const value of values) {
+			if (declaredTopic0s.has(value)) {
+				throw new Error(
+					`malformed eth_getLogs request: the event selector ${value} sits at topics[${slot}], where an ` +
+						`INDEXED ARGUMENT goes. Several topic0s belong NESTED in slot 0. Got ${JSON.stringify(topics)}`,
+				);
+			}
+		}
+	}
+	const slot0 = topics[0];
+	return Array.isArray(slot0) ? slot0 : slot0 ? [slot0] : [];
+}
+
+/** Every `eth_getLogs` the fetcher issued for one range, in order, each one CHECKED for that shape. */
 async function requestsMade(
 	contractsData: any,
 	parseConfig?: LogParseConfig,
 ): Promise<{address?: string[]; topics?: (string | string[])[]}[]> {
+	const {requests} = await requestsAndTopic0s(contractsData, parseConfig);
+	return requests;
+}
+
+async function requestsAndTopic0s(
+	contractsData: any,
+	parseConfig?: LogParseConfig,
+): Promise<{requests: {address?: string[]; topics?: (string | string[])[]}[]; topic0s: string[]}> {
 	const {provider, requests} = recordingProvider();
 	const fetcher = new LogEventFetcher(provider, contractsData, {numBlocksToFetchAtStart: 100_000}, parseConfig);
 	await fetcher.getLogEvents({fromBlock: 100, toBlock: 110, retry: 0}, passThrough);
-	return requests;
+	const declaredTopic0s = new Set(
+		((fetcher as unknown as {eventNameTopics: string[] | null}).eventNameTopics || []) as string[],
+	);
+	const topic0s: string[] = [];
+	for (const request of requests) {
+		topic0s.push(...topic0sOf(request, declaredTopic0s));
+	}
+	return {requests, topic0s};
 }
 
 /** Every topic0 the fetcher put in front of the node, WITH its multiplicity: a dedupe is a claim about counts. */
 async function topic0sRequested(contractsData: any, parseConfig?: LogParseConfig): Promise<string[]> {
-	const requests = await requestsMade(contractsData, parseConfig);
-	const topics: string[] = [];
-	for (const request of requests) {
-		const topic0 = request.topics?.[0];
-		for (const topic of Array.isArray(topic0) ? topic0 : topic0 ? [topic0] : []) {
-			topics.push(topic);
-		}
-	}
-	return topics;
+	return (await requestsAndTopic0s(contractsData, parseConfig)).topic0s;
 }
 
 /** The private merged list and the private verdict about whether anything decodes against it. */
@@ -376,7 +413,7 @@ describe('a name-keyed argument filter over a tolerated shared topic0', () => {
 		// too, because the name covers one topic0 for both
 		const tokenId = `0x${word(7)}` as `0x${string}`;
 
-		const requests = await requestsMade(MIXED_STANDARDS, {
+		const {requests, topic0s} = await requestsAndTopic0s(MIXED_STANDARDS, {
 			filters: {Transfer: [[addressTopic(ALICE), addressTopic(BOB), tokenId]]},
 		});
 
@@ -385,8 +422,10 @@ describe('a name-keyed argument filter over a tolerated shared topic0', () => {
 		expect(filtered[0].address).toContain(TOKEN);
 		// stated plainly, so a reader meets it here rather than in a quiet result:
 		// filter `Transfer` by name on a mixed-standards source and the ERC-20 half
-		// goes unrequested. `Approval` is unfiltered and unaffected.
-		expect(requests.some((request) => request.topics?.[0] === APPROVAL)).toBe(true);
+		// goes unrequested. `Approval` is unfiltered and unaffected -- and it is read
+		// through the whole topics array, because an unfiltered topic0 rides NESTED in
+		// slot 0 of the shared request and never as a positional slot of its own.
+		expect(topic0s).toContain(APPROVAL);
 	});
 });
 

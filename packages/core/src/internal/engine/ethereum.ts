@@ -130,6 +130,26 @@ export async function getTransactionDataFromMultipleHashes(
 }
 
 type LogRequest = {topics: (`0x${string}` | `0x${string}`[])[]; contractAddresses: `0x${string}`[] | null};
+/**
+ * The `eth_getLogs` calls that together cover every topic0, filtered and
+ * unfiltered.
+ *
+ * ## A topics array is POSITIONAL, so slot 0 is the only place a topic0 goes
+ *
+ * `topics[i]` constrains the log's `topics[i]`: slot 0 is the event selector and
+ * every later slot is an INDEXED ARGUMENT. Within a slot an array is an OR list;
+ * ACROSS slots it is a conjunction. So several topic0s are expressed as ONE
+ * nested slot (`[[t0a, t0b]]`) and never as several slots (`[t0a, t0b]`), which
+ * asks instead for a log whose FIRST INDEXED ARGUMENT equals another event's
+ * selector. Nothing satisfies that, so such a request returns nothing, quietly,
+ * for ever.
+ *
+ * That is exactly what the shared request used to be built as: the topic0s with
+ * no argument filter were pushed FLAT into one array, so configuring a filter on
+ * ONE event silently unrequested every other event whenever two or more of them
+ * were left over. With a single leftover topic0 the flat form is accidentally
+ * identical to the nested one, which is part of why it survived.
+ */
 export function generateLogRequestForTopicsAndFiltersCombinations(
 	contractAddresses: `0x${string}`[] | null,
 	eventNameTopics: EIP1193DATA[],
@@ -140,7 +160,9 @@ export function generateLogRequestForTopicsAndFiltersCombinations(
 	if (!filters) {
 		return [{topics: [eventNameTopics], contractAddresses}];
 	} else {
-		const sharedRequest: LogRequest = {topics: [], contractAddresses};
+		// the topic0s NOBODY filtered, which belong in ONE slot as an OR list -- the
+		// same shape the no-filter path above emits, and for the same reason
+		const sharedTopic0s: EIP1193DATA[] = [];
 		const moreRequests: LogRequest[] = [];
 		for (const eventNameTopic of eventNameTopics) {
 			const filtersPerEventTopic = filters[eventNameTopic];
@@ -152,12 +174,12 @@ export function generateLogRequestForTopicsAndFiltersCombinations(
 					});
 				}
 			} else {
-				sharedRequest.topics.push(eventNameTopic);
+				sharedTopic0s.push(eventNameTopic);
 			}
 		}
 		// TODO optimise further and combine eventNameTopic's filters who share the same filter
-		if (sharedRequest.topics.length > 0) {
-			return [sharedRequest, ...moreRequests];
+		if (sharedTopic0s.length > 0) {
+			return [{topics: [sharedTopic0s], contractAddresses}, ...moreRequests];
 		} else {
 			return moreRequests;
 		}

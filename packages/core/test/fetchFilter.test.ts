@@ -35,6 +35,7 @@ const TRANSFER_V1 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df
 const TRANSFER_V2 = '0xe19260aff97b920c7df27010903aeb9c8d2be5d310a2c67824cf3f15396e4c16'; // Transfer(address,address,uint256,bytes)
 const TRANSFER_OTHER = '0x69ca02dd4edd7bf0a4abb9ed3b7af3f14778db5d61921c7dc7cd545266326de2'; // Transfer(address,uint256)
 const APPROVAL = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925'; // Approval(address,address,uint256)
+const APPROVAL_FOR_ALL = '0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31'; // ApprovalForAll(address,address,bool)
 
 /** `Transfer(address,address,uint256)` -- the pre-upgrade signature. */
 const transferV1 = {
@@ -70,6 +71,18 @@ const approval = {
 		{indexed: true, name: 'owner', type: 'address'},
 		{indexed: true, name: 'spender', type: 'address'},
 		{indexed: false, name: 'value', type: 'uint256'},
+	],
+} as const;
+
+/** The third event of an ordinary ERC-721, so a filtered source has TWO topic0s left over. */
+const approvalForAll = {
+	type: 'event',
+	name: 'ApprovalForAll',
+	anonymous: false,
+	inputs: [
+		{indexed: true, name: 'owner', type: 'address'},
+		{indexed: true, name: 'operator', type: 'address'},
+		{indexed: false, name: 'approved', type: 'bool'},
 	],
 } as const;
 
@@ -121,7 +134,46 @@ function recordingProvider() {
 }
 
 /**
- * Every `eth_getLogs` call the fetcher made for one block range, in order.
+ * The topic0s ONE request asks for, read from the WHOLE topics array rather than
+ * from slot 0 alone, and REFUSING a request that is not well formed.
+ *
+ * Reading `request.topics?.[0]` and stopping there is what let a real defect live
+ * in this file's blind spot for as long as it did. An `eth_getLogs` topics array
+ * is POSITIONAL: slot 0 is the event selector, every later slot constrains an
+ * INDEXED ARGUMENT, an array WITHIN a slot is an OR list and the slots are ANDed.
+ * The shared request used to be built by pushing the unfiltered topic0s FLAT into
+ * one array, so `{topics: [t0a, t0b]}` asked for "selector t0a AND first indexed
+ * argument t0b" -- unsatisfiable, so both events were silently never fetched.
+ * Read through slot 0 alone, that malformed request looks exactly like one topic0
+ * with an argument filter, and every assertion in this file passed over it.
+ *
+ * So the check is that no DECLARED event selector ever appears below slot 0. The
+ * planner only ever writes caller-supplied argument values there, and a test's
+ * argument values are never event selectors, so a hit means a topic0 escaped into
+ * a positional slot -- which is the failure this file is named after.
+ */
+function topic0sOf(request: {topics?: (string | string[] | null)[]}, declaredTopic0s: ReadonlySet<string>): string[] {
+	const topics = request.topics || [];
+	for (let slot = 1; slot < topics.length; slot++) {
+		const constraint = topics[slot];
+		const values = Array.isArray(constraint) ? constraint : constraint === null ? [] : [constraint];
+		for (const value of values) {
+			if (declaredTopic0s.has(value)) {
+				throw new Error(
+					`malformed eth_getLogs request: the event selector ${value} sits at topics[${slot}], where an ` +
+						`INDEXED ARGUMENT goes. A topics array is positional, so that is a conjunction and not an OR list, ` +
+						`and no log can satisfy it. Several topic0s belong NESTED in slot 0. Got ${JSON.stringify(topics)}`,
+				);
+			}
+		}
+	}
+	const slot0 = topics[0];
+	return Array.isArray(slot0) ? slot0 : slot0 ? [slot0] : [];
+}
+
+/**
+ * Every `eth_getLogs` call the fetcher made for one block range, in order, each
+ * one CHECKED for the positional-shape defect above.
  *
  * The COUNT is an assertion of its own: with argument filters configured the
  * fetcher issues one request per (topic x filter), sequentially, so a topic that
@@ -136,6 +188,14 @@ async function requestsMade(
 	const {provider, requests} = recordingProvider();
 	const fetcher = new LogEventFetcher(provider, contractsData, fetcherConfig, parseConfig);
 	await fetcher.getLogEvents({...range, retry: 0}, passThrough);
+	// the topic0s this fetcher was BUILT to request (`RangeLogFetcher`'s own list),
+	// which is what makes "a selector escaped into an argument slot" checkable
+	const declaredTopic0s = new Set(
+		((fetcher as unknown as {eventNameTopics: string[] | null}).eventNameTopics || []) as string[],
+	);
+	for (const request of requests) {
+		topic0sOf(request, declaredTopic0s);
+	}
 	return requests;
 }
 
@@ -149,11 +209,15 @@ async function topicsRequested(
 	range: {fromBlock: number; toBlock: number} = {fromBlock: 100, toBlock: 110},
 	fetcherConfig: LogFetcherConfig = {},
 ): Promise<string[]> {
-	const requests = await requestsMade(contractsData, parseConfig, range, fetcherConfig);
+	const {provider, requests} = recordingProvider();
+	const fetcher = new LogEventFetcher(provider, contractsData, fetcherConfig, parseConfig);
+	await fetcher.getLogEvents({...range, retry: 0}, passThrough);
+	const declaredTopic0s = new Set(
+		((fetcher as unknown as {eventNameTopics: string[] | null}).eventNameTopics || []) as string[],
+	);
 	const topics: string[] = [];
 	for (const request of requests) {
-		const topic0 = request.topics?.[0];
-		for (const topic of Array.isArray(topic0) ? topic0 : topic0 ? [topic0] : []) {
+		for (const topic of topic0sOf(request, declaredTopic0s)) {
 			if (topics.indexOf(topic) === -1) topics.push(topic);
 		}
 	}
@@ -217,6 +281,41 @@ describe('an event is never silently dropped from the fetch filter', () => {
 		const topics = await topicsRequested(contracts, {filters: {Transfer: [[holder]]}});
 
 		expect(topics.sort()).toEqual([TRANSFER_V1, TRANSFER_V2].sort());
+	});
+
+	it('REGRESSION: the topic0s NOBODY filtered are OR-ed in slot 0, not ANDed across slots', async () => {
+		// One ordinary ERC-721 and a filter on `Transfer` alone. The shared request
+		// carried its leftover topic0s FLAT (`{topics: [APPROVAL, APPROVAL_FOR_ALL]}`),
+		// which a node reads as "selector Approval AND first indexed argument
+		// ApprovalForAll": unsatisfiable, so BOTH events were silently never fetched.
+		// The trigger is any filter at all plus two or more leftover topic0s -- with
+		// exactly one left over the flat form is accidentally correct, which is why
+		// this survived.
+		const nft = [{address: A, abi: [transferV1, approval, approvalForAll] as unknown as Abi}];
+		const holder = `0x${'11'.repeat(20)}`.padEnd(66, '0') as `0x${string}`;
+
+		const requests = await requestsMade(nft, {filters: {Transfer: [[holder]]}});
+
+		// the SHARED request comes first and is ONE slot holding an OR list, exactly
+		// the shape the no-filter path emits
+		expect(requests[0].topics).toEqual([[APPROVAL, APPROVAL_FOR_ALL]]);
+		expect(requests[0].topics).toHaveLength(1);
+		// and the filtered one is the only request with a positional argument slot
+		expect(requests[1].topics).toEqual([TRANSFER_V1, holder]);
+		expect(requests).toHaveLength(2);
+	});
+
+	it('asks for exactly the same topic0s whether or not another event is filtered', async () => {
+		// the property the shape above exists for: a filter narrows the event it names
+		// and NOTHING else, so the set of topic0s reaching the node is invariant
+		const nft = [{address: A, abi: [transferV1, approval, approvalForAll] as unknown as Abi}];
+		const holder = `0x${'11'.repeat(20)}`.padEnd(66, '0') as `0x${string}`;
+
+		const unfiltered = await topicsRequested(nft, {});
+		const filtered = await topicsRequested(nft, {filters: {Transfer: [[holder]]}});
+
+		expect(filtered.sort()).toEqual(unfiltered.sort());
+		expect(unfiltered.sort()).toEqual([TRANSFER_V1, APPROVAL, APPROVAL_FOR_ALL].sort());
 	});
 });
 
