@@ -1,6 +1,7 @@
 import type {GenerationId, LogIngestion} from '@etherfold/core';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
+import type {RemoteSQL} from 'remote-sql';
 
 /**
  * ONE named indexer this host was built with, as the routes see it.
@@ -41,10 +42,49 @@ import type {Bindings} from 'hono/types';
  * way. A record of receivers captured when the host booted could express neither,
  * and would go on feeding a fold whose state has been dropped.
  *
- * `ReceivingIndexer` (`@etherfold/core`) implements exactly these two, so a host
- * holding one registers it as the entry itself.
+ * ## ONE ENTRY, ONE DATABASE
+ *
+ * A NAMED INDEXER **is** a database (ADR-0053), so which database this name's
+ * rows live in is part of what the name resolves to, and not a handle the whole
+ * host shares. `getDB` answers per REQUEST and knows no name, which is exactly
+ * right for the host-level surfaces (`/status`, `/admin/setup`, which report on
+ * the deployment rather than on a tenant) and wrong for anything keyed on one --
+ * so every route that acts on ONE named indexer reads through the handle THAT
+ * NAME owns and never through the host's.
+ *
+ * `ReceivingIndexer` (`@etherfold/core`) answers the two QUESTIONS below and
+ * cannot carry this: that package knows no database, and its state is a type
+ * parameter precisely so it does not. `indexerEntryOn` is the one line that
+ * pairs a container with the handle its host opened for it.
  */
 export type IndexerRegistryEntry = {
+	/**
+	 * THE DATABASE THIS NAME OWNS: where its stored stream, its coverage claims,
+	 * its generation registry, its canonical pointer and its counters live.
+	 *
+	 * REQUIRED, and that is the isolation being STRUCTURAL rather than remembered:
+	 * a host registering a second named indexer cannot leave this out and silently
+	 * inherit the first one's rows, because there is nothing to leave out. The two
+	 * levels ADR-0053 decides meet here -- a generation is a table NAMESPACE inside
+	 * one of these, and a named indexer is the DATABASE -- which is what makes
+	 * deleting a named indexer a complete, cheap operation with no filter for a
+	 * later read to forget.
+	 *
+	 * Two names MAY be given one handle (`_emissions.indexer` and the registry's own
+	 * name column keep them apart, which is why those columns are kept even though
+	 * they are redundant on every shape this repo builds today). That is
+	 * COLOCATION, it is what a future serverless deployment would need in one D1
+	 * database, and it is a host's decision to make explicitly rather than one this
+	 * type makes for it by defaulting.
+	 *
+	 * A FIELD rather than a question, unlike the two below: a host already holds
+	 * this handle when it resolves the name, exactly as it holds the one `getDB`
+	 * returns, and on Cloudflare a per-request resolver reads it off the request's
+	 * `env` -- so N static bindings express the N named indexers a host was built
+	 * with (ADR-0053), while what a name currently HOLDS is durable state that has
+	 * to be read.
+	 */
+	db: RemoteSQL;
 	/**
 	 * The receivers this name holds RIGHT NOW: one per LIVE WIRE CONTEXT.
 	 *
@@ -102,10 +142,17 @@ export type IndexerResolver<Env extends Bindings = Bindings> = (
  * receiver's own, and the generation that answers reads is the one that receiver
  * folds -- which is exactly what the feed advertised before an entry could hold
  * more than one, so nothing about such a deployment changes.
+ *
+ * The DATABASE is the one that receiver folds INTO, and saying so is the whole
+ * of what a single-name host has to get right: `run` and `index` hold one handle
+ * that the store, the emission appender and the server all share, so they pass
+ * that one. A host that passed a different handle here than the one its fold
+ * writes would be serving a feed over a database nothing appends to.
  */
-export function singleContextEntry(ingestion: LogIngestion): IndexerRegistryEntry {
+export function singleContextEntry(db: RemoteSQL, ingestion: LogIngestion): IndexerRegistryEntry {
 	const live = [ingestion] as const;
 	return {
+		db,
 		liveIngestions: async () => live,
 		// DERIVED on the call and never captured: `generation` reads the processor's
 		// version hash at the moment it is asked, and `configure()` can move it
@@ -114,20 +161,44 @@ export function singleContextEntry(ingestion: LogIngestion): IndexerRegistryEntr
 }
 
 /**
+ * The entry for a name whose CONTENTS already answer the entry's two questions,
+ * over the DATABASE that name owns.
+ *
+ * The one line a host holding a `ReceivingIndexer` (`@etherfold/core`) writes:
+ * that container answers `liveIngestions` and `canonicalGeneration` itself, and
+ * it deliberately knows no database, so what a host adds here is the handle it
+ * opened for this name and nothing else.
+ *
+ * The two questions are FORWARDED rather than spread, because they are methods
+ * on an object that reads its own state: copying them off a class instance would
+ * unbind them.
+ */
+export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 'db'>): IndexerRegistryEntry {
+	return {
+		db,
+		liveIngestions: () => holds.liveIngestions(),
+		canonicalGeneration: () => holds.canonicalGeneration(),
+	};
+}
+
+/**
  * The registry a host that knows all its named indexers up front can pass
  * straight to `createServer`.
  *
  * Sugar over the resolver and nothing more: a host whose set of names depends on
- * the request (a Worker reading a binding) writes its own function instead, and
- * one holding a generation container passes that container as the entry. The
+ * the request (a Worker reading a binding) writes its own function instead. The
  * lookup is an OWN-PROPERTY read, so a name like `constructor` or `toString`
  * resolves to nothing rather than to something off `Object.prototype`.
+ *
+ * It takes ENTRIES rather than receivers, because a name resolves to what it
+ * holds AND to the database it holds it in: `singleContextEntry(db, ingestion)`
+ * builds one for a host with one receiver per name, `indexerEntryOn(db,
+ * container)` for one holding generations, and a host colocating two names in one
+ * database passes the same handle twice -- deliberately, where it can be read.
  */
 export function indexerRegistry<Env extends Bindings = Bindings>(
-	indexers: Readonly<Record<string, LogIngestion>>,
+	indexers: Readonly<Record<string, IndexerRegistryEntry>>,
 ): IndexerResolver<Env> {
 	return (_c, name) =>
-		Object.prototype.hasOwnProperty.call(indexers, name)
-			? singleContextEntry(indexers[name] as LogIngestion)
-			: undefined;
+		Object.prototype.hasOwnProperty.call(indexers, name) ? (indexers[name] as IndexerRegistryEntry) : undefined;
 }

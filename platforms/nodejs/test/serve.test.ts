@@ -169,15 +169,19 @@ describe('the adapter carries the host-supplied capabilities through to the app'
 
 	it('lets a supplied ingestion receive logs, so a process on Node can host a processor', async () => {
 		const {ingestion, received} = fakeIngestion(105);
+		// the handle is built HERE rather than from a URL, because a named indexer
+		// resolves to the database it owns (ADR-0053) and this host holds one name: the
+		// same handle the adapter answers `/status` over is the one that name owns
+		const db = createNodeDB(':memory:');
 		running = await startServer({
-			db: ':memory:',
+			db,
 			port: 0,
 			env: {INGEST_TOKEN: TOKEN},
 			// the registry this host was built with: ONE named indexer, resolved per
 			// request and refusing every other name
 			getIndexer: (_c, name) =>
 				name === INDEXER
-					? {liveIngestions: async () => [ingestion], canonicalGeneration: async () => ingestion.generation}
+					? {db, liveIngestions: async () => [ingestion], canonicalGeneration: async () => ingestion.generation}
 					: undefined,
 		});
 

@@ -13,7 +13,7 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {beforeEach, describe, expect, it} from 'vitest';
-import {createServer, emissionAppenderFor, indexerRegistry, applySchema} from '../src/index.js';
+import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry, applySchema} from '../src/index.js';
 import {schemaStatements} from '../src/schema.js';
 import {clearLastError} from '../src/api/status.js';
 
@@ -179,7 +179,11 @@ type Deployment = {
 async function deploy(sources: Record<string, IndexingSource<TestABI>>): Promise<Deployment> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
 	const hosted: Record<string, Hosted> = {};
-	const ingestions: Record<string, StreamBuilder<TestABI, unknown>> = {};
+	// COLOCATED DELIBERATELY: every name here resolves to the SAME handle, because
+	// what is under test is the name COLUMN that partitions one shared table.
+	// Giving them a database each (which is what ADR-0053 has a host do, and what
+	// `twoNamedIndexers.test.ts` asserts) would prove nothing about that column.
+	const ingestions: Record<string, ReturnType<typeof singleContextEntry>> = {};
 	for (const [name, source] of Object.entries(sources)) {
 		// each named indexer folds its STATE into its own entity tables; the emission
 		// table is the one they share, which is what the name column partitions
@@ -195,7 +199,7 @@ async function deploy(sources: Record<string, IndexingSource<TestABI>>): Promise
 			appendEmissions: emissionAppenderFor(db, name),
 		});
 		hosted[name] = {builder};
-		ingestions[name] = builder;
+		ingestions[name] = singleContextEntry(db, builder);
 	}
 	const app = createServer<TestEnv>({
 		getDB: () => db,
@@ -425,7 +429,7 @@ describe('the stream column is the WIDE digest, not the wire identity', () => {
 			app: createServer<TestEnv>({
 				getDB: () => before.db,
 				getEnv: () => ({INGEST_TOKEN: TOKEN}),
-				getIndexer: indexerRegistry({alpha: builder}),
+				getIndexer: indexerRegistry({alpha: singleContextEntry(before.db, builder)}),
 			}),
 			db: before.db,
 			hosted: {alpha: {builder}},

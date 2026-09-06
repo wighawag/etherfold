@@ -162,7 +162,13 @@ export type D1StoreOptions = Omit<VersionedStateStoreOptions, 'bounds'> & {
  * 	// under the name it registers that ingestion by (ADR-0052)
  * 	appendEmissions: emissionAppenderFor(db, 'alpha'),
  * });
- * createServer({getDB: () => db, getEnv: (c) => c.env, getIndexer: indexerRegistry({alpha: ingestion})});
+ * // the name resolves to what it holds AND to the database it holds it in: a
+ * // named indexer IS a database (ADR-0053), which on D1 is one static binding each
+ * createServer({
+ * 	getDB: () => db,
+ * 	getEnv: (c) => c.env,
+ * 	getIndexer: indexerRegistry({alpha: singleContextEntry(db, ingestion)}),
+ * });
  * ```
  *
  * and schedules its pruning separately with

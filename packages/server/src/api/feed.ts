@@ -69,6 +69,16 @@ const MAX_PAGE_SIZE = 1000;
  * the feed private puts it behind its own edge, which is where an authorisation
  * model that knows about consumers belongs.
  *
+ * ## Both views read the DATABASE THE NAME OWNS
+ *
+ * A named indexer IS a database (ADR-0053), so the handle these reads go through
+ * is the entry's (`IndexerRegistryEntry.db`) and never the host's `getDB`, which
+ * answers per request, knows no name, and is right only for the surfaces that
+ * report on the DEPLOYMENT (`/status`, `/admin/setup`). Two named indexers can
+ * hold byte-identical streams -- same chain, same contracts, same digest -- so a
+ * read that reached for the host's handle would be answering one tenant from
+ * wherever the host happened to point.
+ *
  * ## Why this route needs the REGISTRY
  *
  * To validate a cursor's stream it must know WHICH stream is being served, and
@@ -121,7 +131,9 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 			.get('/:indexer/feed', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'feed');
 				if (!resolved.ok) return resolved.response;
-				const {name} = resolved;
+				// THE NAME and THE DATABASE THAT NAME OWNS, from one resolution: the two
+				// halves of the discriminator every read below takes (ADR-0036, ADR-0053)
+				const {name, entry} = resolved;
 				// THE CANONICAL GENERATION, in ONE read: its STREAM is what this response is
 				// keyed on and what the cursor is validated against, and its FOLD is what the
 				// response advertises. An entry can hold several live wire contexts, so the two
@@ -166,7 +178,7 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 					after = seq;
 				}
 
-				const page = await readStreamFeed(c.get('config').db, {indexer: name, stream, after, limit: limit.value});
+				const page = await readStreamFeed(entry.db, {indexer: name, stream, after, limit: limit.value});
 
 				return c.json({
 					success: true,
@@ -217,7 +229,8 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 			.get('/:indexer/canonical', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'canonical');
 				if (!resolved.ok) return resolved.response;
-				const {name} = resolved;
+				// see the other view: the handle is the NAME's, never the host's
+				const {name, entry} = resolved;
 				// ONE read, both halves: see the other view.
 				const canonical = await resolved.entry.canonicalGeneration();
 				const stream = canonical.stream;
@@ -229,7 +242,7 @@ export function getFeedAPI<CustomEnv extends Env>(options: ServerOptions<CustomE
 					view: CANONICAL_FEED_VIEW,
 					startAt: positionOf(CANONICAL_START_POSITION, {since: 0}),
 				};
-				const db = c.get('config').db;
+				const db = entry.db;
 
 				const limit = pageSizeOf(c.req.query('limit'));
 				if (!limit.ok) {

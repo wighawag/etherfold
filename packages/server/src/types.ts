@@ -16,6 +16,18 @@ export type CursorReporter<Env extends Bindings = Bindings> = (
 ) => CursorReport | undefined | Promise<CursorReport | undefined>;
 
 export type ServerOptions<Env extends Bindings = Bindings> = {
+	/**
+	 * The HOST-LEVEL database: what `/status` reports on and what `/admin/setup`
+	 * migrates.
+	 *
+	 * It answers per REQUEST and knows no NAME, and that is right for exactly those
+	 * two surfaces, which are facts about this DEPLOYMENT. It is deliberately NOT
+	 * what a route acting on one named indexer reads: a named indexer IS a database
+	 * (ADR-0053), so that handle is part of what its name resolves to
+	 * (`IndexerRegistryEntry.db`). A host holding ONE named indexer ordinarily
+	 * passes the same handle in both places -- `run` and `index` share one -- and a
+	 * host holding several passes each name its own.
+	 */
 	getDB: (c: Context<{Bindings: Env}>) => RemoteSQL;
 	getEnv: (c: Context<{Bindings: Env}>) => Env;
 	/**
@@ -30,7 +42,9 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 *
 	 * It resolves an ENTRY rather than a bare `LogIngestion` so that what a name
 	 * holds can grow without every host's resolver changing shape; see
-	 * `IndexerRegistryEntry`.
+	 * `IndexerRegistryEntry`. What it holds now includes the DATABASE that name
+	 * owns, which is what makes a host with several of them a set of isolated
+	 * tenants rather than a set of labels over one keyspace.
 	 *
 	 * OPTIONAL, because an indexer-server is useful before it ingests anything:
 	 * `/status` and `/admin/setup` answer on a server with no processor at all,

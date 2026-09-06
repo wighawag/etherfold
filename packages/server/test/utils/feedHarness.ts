@@ -13,7 +13,7 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {expect} from 'vitest';
-import {createServer, emissionAppenderFor, indexerRegistry} from '../../src/index.js';
+import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry} from '../../src/index.js';
 
 // ---------------------------------------------------------------------------
 // THE FIXTURE BOTH VIEWS ARE ASSERTED THROUGH
@@ -163,7 +163,10 @@ export async function deploy(
 ): Promise<Deployment> {
 	const database: RemoteSQL = db ?? new RemoteLibSQL(createClient({url: ':memory:'}));
 	const hosted: Record<string, Hosted> = {};
-	const ingestions: Record<string, StreamBuilder<TestABI, unknown>> = {};
+	// COLOCATED DELIBERATELY: one handle for every name, so these suites assert the
+	// name COLUMN doing the partitioning. A database per name is ADR-0053's shape
+	// and is asserted in `twoNamedIndexers.test.ts`.
+	const ingestions: Record<string, ReturnType<typeof singleContextEntry>> = {};
 	for (const [name, source] of Object.entries(sources)) {
 		const processor = new VersionedStateEventProcessor<TestABI>(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
@@ -174,7 +177,7 @@ export async function deploy(
 			appendEmissions: emissionAppenderFor(database, name),
 		});
 		hosted[name] = {builder};
-		ingestions[name] = builder;
+		ingestions[name] = singleContextEntry(database, builder);
 	}
 	const app = createServer<TestEnv>({
 		getDB: () => database,

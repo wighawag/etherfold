@@ -109,6 +109,13 @@ function authorized(c: Context<{Bindings: Env}>): {ok: true} | {ok: false; messa
  * Writing either here as well would double it on the split shape, which both
  * concludes and receives.
  *
+ * That is also why this route names no DATABASE, on a host holding several named
+ * indexers whose databases differ (ADR-0053): the receiver it selects was built
+ * by the host over the handle THAT NAME owns, and so were the two ports that
+ * write inside it, so a batch reaches one tenant's database because of what it
+ * was routed to rather than because this route picked a handle. The feed views,
+ * which read rows themselves, take that handle off the entry.
+ *
  * What this route still decides is what a transport must: who may call it, and
  * which status code each refusal is. A refusal from the STREAM APPEND is not one
  * of them by design: it is not a class the sender can act on, so it falls to the

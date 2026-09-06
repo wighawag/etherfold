@@ -13,7 +13,7 @@ import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/pro
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {beforeAll, describe, expect, it} from 'vitest';
-import {createServer, indexerRegistry} from '../src/index.js';
+import {createServer, indexerRegistry, singleContextEntry} from '../src/index.js';
 import {clearLastError} from '../src/api/status.js';
 import {hostRecorderFor} from './utils/hostRecorder.js';
 
@@ -126,14 +126,14 @@ type Deployment = {
  * injected, which is a different thing from a registry that does not hold the
  * name asked for, and the two answer differently below.
  *
- * Each named indexer gets its OWN database, because this task's isolation is
- * about which receiver a batch reaches: partitioning what they store is the
- * emission table's, and there is no shared table here to partition yet.
+ * Each named indexer gets its OWN database, which is what a name resolves to
+ * (ADR-0053): the entry carries the handle, so the routes that act on one named
+ * indexer read through it and never through the host's `getDB`.
  */
 async function deploy(env: TestEnv = {INGEST_TOKEN: TOKEN}, names: string[] | null = [NAME]): Promise<Deployment> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
 	const hosted: Record<string, Hosted> = {};
-	const ingestions: Record<string, StreamBuilder<TestABI, unknown>> = {};
+	const ingestions: Record<string, ReturnType<typeof singleContextEntry>> = {};
 	(names ?? []).forEach((name, order) => {
 		// the FIRST named indexer folds into the same database the app answers over,
 		// which is the ordinary single-indexer deployment; a second one gets its own
@@ -146,7 +146,7 @@ async function deploy(env: TestEnv = {INGEST_TOKEN: TOKEN}, names: string[] | nu
 			recordReorg: hostRecorderFor(indexerDB),
 		});
 		hosted[name] = {processor, builder};
-		ingestions[name] = builder;
+		ingestions[name] = singleContextEntry(indexerDB, builder);
 	});
 	const app = createServer<TestEnv>({
 		getDB: () => db,

@@ -1,6 +1,6 @@
 import {createClient} from '@libsql/client';
 import {StreamBuilder, type Abi, type FetchLike, type IndexingSource, type WireBatch} from '@etherfold/core';
-import {createServer, indexerRegistry} from '@etherfold/server';
+import {createServer, indexerRegistry, singleContextEntry} from '@etherfold/server';
 import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/processor-sqlite';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
@@ -201,7 +201,7 @@ export async function deployReceiver(): Promise<Receiver> {
 	const app = createServer<TestEnv>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),
-		getIndexer: indexerRegistry({[INDEXER]: builder}),
+		getIndexer: indexerRegistry({[INDEXER]: singleContextEntry(db, builder)}),
 	});
 	await app.request('/admin/setup', {method: 'POST'});
 	const requests: {path: string; status: number}[] = [];
