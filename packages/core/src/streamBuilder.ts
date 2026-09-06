@@ -13,7 +13,7 @@ import {
 	type ReorgDetection,
 } from './internal/engine/utils.js';
 import type {EmissionAppender} from './emissionStream.js';
-import type {GenerationId} from './generation/registry.js';
+import type {GenerationId, GenerationRecord} from './generation/registry.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {streamDigestOf} from './stream/identity.js';
 import type {
@@ -136,6 +136,21 @@ export type LogIngestion = {
  * receiver that hashed either would refuse every batch from a sender configured
  * identically but wired to a different database.
  */
+export type GenerationContainer = {
+	/**
+	 * RESOLVE-OR-CREATE the generation this identity names, and REFUSE at a cap.
+	 *
+	 * Called on EVERY cursor read, so an implementation must be idempotent and
+	 * cheap: creating one already registered RESOLVES it (that is the registry's
+	 * own rule), and `ReceivingIndexer` memoises what it has already been
+	 * answered. A throw propagates -- a cap refusal is a decision, and a
+	 * successor that cannot be recorded must not be folded, because a stream
+	 * subtree no registered generation claims is what the registry's sweep
+	 * collects.
+	 */
+	resolveGeneration(id: GenerationId): Promise<GenerationRecord>;
+};
+
 export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<ABI>, 'stream'> & {
 	/**
 	 * Where a concluded reorg is counted, supplied by whoever owns the store
@@ -153,6 +168,22 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
 	 * nothing is stored and nothing else changes.
 	 */
 	appendEmissions?: EmissionAppender;
+	/**
+	 * THE GENERATION CONTAINER ABOVE THIS RECEIVER, and what turns a changed
+	 * context from a DISCARD into a SUCCESSOR.
+	 *
+	 * With one attached, the fold this receiver runs is a GENERATION: it is
+	 * resolved-or-created before the cursor is read, and a persisted cursor
+	 * carrying another fold is left exactly where it is, so the generation that
+	 * answers reads goes on answering what it answered before (see
+	 * `currentLastSync`).
+	 *
+	 * ABSENT is today's behaviour, unchanged and on purpose: a host with nowhere
+	 * durable to record a generation -- the Worker host, a test, anything built
+	 * before this existed -- still discards a foreign cursor rather than resuming
+	 * on top of state that means something else. This is ADDITIVE.
+	 */
+	container?: GenerationContainer;
 };
 
 /**
@@ -185,8 +216,13 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
  * - `processor` cannot be asserted by the sender at all, so it is checked
  *   against the PERSISTED cursor instead: a cursor written by another processor
  *   version, or for another source, is state that means something else, and it
- *   is discarded (`processor.clear()`) rather than resumed on top of. That is
- *   the hole `docs/reviews/todo-triage.md` found in every persistence layer.
+ *   is not resumed on top of. WHAT HAPPENS TO IT depends on whether there is a
+ *   container above this receiver: with one, the running fold is a GENERATION
+ *   beside the stored one and nothing is discarded; without one, the state is
+ *   discarded (`processor.clear()`), which is the hole
+ *   `docs/reviews/todo-triage.md` found in every persistence layer, closed the
+ *   only way a receiver holding a single store can close it. See
+ *   `currentLastSync` and `receivingContainer.ts`.
  *
  * ## What it deliberately does not do
  *
@@ -236,6 +272,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	private readonly finality: number;
 	private readonly recordReorg: ReorgRecorder | undefined;
 	private readonly appendEmissions: EmissionAppender | undefined;
+	private readonly container: GenerationContainer | undefined;
 
 	constructor(
 		private readonly processor: EventProcessor<ABI, ProcessResultType>,
@@ -244,6 +281,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	) {
 		this.recordReorg = config.recordReorg;
 		this.appendEmissions = config.appendEmissions;
+		this.container = config.container;
 		// The defaults MUST match `IndexerGeneration`'s and the sending `LogFetcher`'s,
 		// because the hash of the resolved config is half the wire identity: a
 		// receiver that defaulted `finality` differently would refuse every batch a
@@ -267,13 +305,15 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	 * reorg is ever detected. A sender that computed this itself would be holding
 	 * the state that makes it stateless.
 	 *
-	 * **Reading this can WRITE**, in one case: a persisted cursor belonging to
-	 * another source, config or processor version is cleared here rather than
-	 * merely ignored (see `currentLastSync`). That is deliberate. The alternative
-	 * is answering with a number derived from state this server is about to wipe,
-	 * so the read and the following write would disagree. Nothing is lost that was
-	 * not already invalid, and the same reconciliation happens on `load()` in the
-	 * single-process shape.
+	 * **Reading this can WRITE**, and WHICH write depends on whether a container is
+	 * attached (see `currentLastSync`). WITHOUT one, a persisted cursor belonging to
+	 * another source, config or processor version is cleared here rather than merely
+	 * ignored: the alternative is answering with a number derived from state this
+	 * server is about to wipe, so the read and the following write would disagree.
+	 * Nothing is lost that was not already invalid, and the same reconciliation
+	 * happens on `load()` in the single-process shape. WITH one, the write is a
+	 * REGISTRY write instead -- the fold this receiver runs is resolved-or-created as
+	 * a generation -- and no state is discarded at all.
 	 */
 	async expectedFromBlock(): Promise<number> {
 		return getFromBlock(await this.currentLastSync(), this.defaultFromBlock, this.finality);
@@ -424,16 +464,42 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	}
 
 	/**
-	 * The persisted cursor if it is ours, a fresh one otherwise.
+	 * The persisted cursor if it is ours, a fresh one otherwise -- and what
+	 * "otherwise" COSTS is the whole of this task.
 	 *
-	 * "Otherwise" is doing real work: a cursor whose context does not match is not
-	 * ignored, it is CLEARED, because the state it points at was computed by a
-	 * different processor or for a different source and would otherwise be indexed
-	 * on top of. This mirrors `IndexerGeneration.promiseToLoad`'s discard branch,
-	 * minus the chain calls that branch is wrapped in.
+	 * A cursor whose context does not match was written by a different fold, or for
+	 * a different source, so it is never resumed on top of. There the two shapes
+	 * part company:
+	 *
+	 * - **WITH a container** the running fold is a GENERATION of its own: it was
+	 *   resolved-or-created above (and a cap refused there, before anything read or
+	 *   wrote), it folds into its own state, and the stored cursor belongs to a
+	 *   generation this one sits BESIDE. So nothing is discarded, and the canonical
+	 *   generation answers exactly what it answered before.
+	 * - **WITHOUT one** it is CLEARED, which is `IndexerGeneration.promiseToLoad`'s
+	 *   discard branch minus the chain calls, and is the only thing a receiver
+	 *   holding a single store can honestly do with state that means something else.
+	 *
+	 * **The container does not make per-generation state STRUCTURAL and cannot**,
+	 * exactly as `GenerationSpec.createState` records for the chain-facing one: a
+	 * caller that hands two folds ONE store still has two folds in one place, and
+	 * that is invisible from here. Reaching this branch WITH a container therefore
+	 * says one of two things, and both are the caller's: either the state really is
+	 * per generation and this is a fresh namespace whose neighbour's cursor was read
+	 * (a pre-generation database, which is the migration case), or the state is
+	 * shared and the caller broke the keying rule. Clearing would be wrong in the
+	 * first case and would not repair the second, so it is said out loud instead.
 	 */
 	private async currentLastSync(): Promise<LastSync<ABI>> {
 		const processorHash = this.processor.getVersionHash();
+		// FIRST, before anything is read and long before anything is written: with a
+		// container above it this fold IS a generation, and a generation is registered
+		// BEFORE anything writes its stream (the registry's own rule -- a stream subtree
+		// no registered generation claims is what the sweep collects). A CAP refuses
+		// here, so the refusal reaches the sender instead of a half-folded batch.
+		if (this.container) {
+			await this.container.resolveGeneration({stream: this.streamDigest, processor: processorHash});
+		}
 		const loaded = await this.processor.load(this.source, this.streamConfig);
 		if (loaded) {
 			const {lastSync} = loaded;
@@ -443,12 +509,20 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 			) {
 				return lastSync;
 			}
-			namedLogger.info(`STATE DISCARDED AS PROCESSOR CHANGED`, {
-				context: this.context,
-				storedContext: lastSync.context,
-				processorHash,
-			});
-			await this.processor.clear();
+			if (this.container) {
+				namedLogger.info(`CONTEXT CHANGED, STATE KEPT: THIS FOLD IS A GENERATION BESIDE THE STORED ONE`, {
+					context: this.context,
+					storedContext: lastSync.context,
+					processorHash,
+				});
+			} else {
+				namedLogger.info(`STATE DISCARDED AS PROCESSOR CHANGED`, {
+					context: this.context,
+					storedContext: lastSync.context,
+					processorHash,
+				});
+				await this.processor.clear();
+			}
 		}
 		return {
 			context: {

@@ -38,6 +38,33 @@ export type EntityEventProcessorOptions = {
 };
 
 /**
+ * THE IDENTITY OF A FOLD, computable BEFORE the fold exists.
+ *
+ * The same value `EntityEventProcessor.getVersionHash()` returns, as a FUNCTION
+ * of the things a host already holds -- the declared version, the entity
+ * declarations and the processor config -- rather than of a constructed
+ * processor over a constructed store.
+ *
+ * It exists because a **generation**'s state is a TABLE-NAME NAMESPACE named
+ * from `{stream digest, processor version hash}` (ADR-0053), and a generation is
+ * built STATE FIRST (ADR-0043), so the state factory has to name the namespace
+ * before the processor it will fold into exists. ADR-0053 records that this is
+ * possible; this is where it is possible FROM.
+ *
+ * It is ONE formula in ONE place, which is the whole point. ADR-0043 rejected
+ * having a caller DECLARE the version hash beside its factory, because a
+ * declaration that can silently disagree with `getVersionHash()` keys a store on
+ * a lie. Calling the owner's own function is not that: `getVersionHash()` is
+ * this, so the two cannot diverge.
+ */
+export function entityProcessorVersionHash<ABI extends Abi, ProcessorConfig = undefined>(
+	processor: EntityProcessor<ABI, ProcessorConfig>,
+	config?: ProcessorConfig,
+): string {
+	return `${processor.version}-${simple_hash({entities: processor.entities, config})}`;
+}
+
+/**
  * The `EventProcessor` that runs an `EntityProcessor` against ANY `StateStore`.
  *
  * This is the runtime the seam was built for and the one thing that was missing
@@ -90,7 +117,6 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	EntityStateView
 > {
 	private readonly view: EntityStateView;
-	private readonly version: string;
 	private config: ProcessorConfig | undefined;
 	/** Kept for the context a future rebuild/upgrade path will need; not read on the hot path. */
 	protected source: IndexingSource<ABI> | undefined;
@@ -105,7 +131,6 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 		// Refused at construction, not at load: a version-less processor's hash is a
 		// constant, and a constant invalidates nothing, ever.
 		assertProcessorVersion(processor, 'EntityEventProcessor');
-		this.version = processor.version;
 		this.view = new EntityStateView(store);
 	}
 
@@ -155,7 +180,11 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	 * hashing the store in would discard state for moving a deployment.
 	 */
 	getVersionHash(): string {
-		return `${this.version}-${simple_hash({entities: this.processor.entities, config: this.config})}`;
+		// through the exported function rather than beside it: a host names this
+		// generation's table namespace from the same value before this object exists
+		// (`entityProcessorVersionHash`, ADR-0053), and two spellings of one formula is
+		// how a namespace comes to be keyed on a hash the fold does not have.
+		return entityProcessorVersionHash(this.processor, this.config);
 	}
 
 	/**
