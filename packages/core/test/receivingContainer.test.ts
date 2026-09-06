@@ -326,7 +326,10 @@ describe('one container, SEVERAL live wire contexts', () => {
 		// a filter change is a new STREAM, so it is a new ADDRESS on the wire: the two
 		// receivers cannot be reached by each other's batches
 		expect(successor.streamDigest).not.toBe(incumbent.streamDigest);
-		expect(successor.ingestion.context).not.toEqual(incumbent.ingestion.context);
+		// it is NOT a follower, so it has a receiver of its own (ADR-0044: determined by
+		// the stream, never configured)
+		expect(successor.follows).toBe(false);
+		expect(successor.ingestion?.context).not.toEqual(incumbent.ingestion.context);
 		// and it is the only generation on its stream, so it is that stream's WRITER
 		// (ADR-0044) -- unlike a processor-change successor, which re-folds one already
 		// stored
@@ -338,15 +341,18 @@ describe('one container, SEVERAL live wire contexts', () => {
 		);
 	});
 
-	it('REFUSES a second receiver on a stream it already holds, because a stream is ONE address', async () => {
+	it('REFUSES a fold on a stream it already holds when it was given no stream to re-fold', async () => {
 		const world = substrate();
 		const incumbent = await anIndexerThatHasFolded(world);
 
 		// the same source and config, another fold: a PROCESSOR change, which asserts
-		// the very same `{source, config}`. A second receiver there would be reachable
-		// only by iteration order, and what such a generation actually needs is to
-		// re-fold the stored stream (ADR-0044).
+		// the very same `{source, config}`. It gets no receiver -- a second one there
+		// would be reachable only by iteration order -- and catches up by re-folding the
+		// stored stream instead (ADR-0044). This container was given no `replay` source,
+		// so there is nothing to re-fold and the successor would never advance.
+		// `packages/core/test/rebuild.test.ts` is the same call with one supplied.
 		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/ONE address on the wire/);
+		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/no `replay` source/);
 		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1']);
 	});
 

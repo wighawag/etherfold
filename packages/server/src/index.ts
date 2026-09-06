@@ -60,6 +60,17 @@ export type {EmissionAppend, StoredStreamCoverage} from './emissions.js';
  */
 export {storedEmissionStream} from './streamReader.js';
 /**
+ * THE SAME ROWS IN BOUNDED SLICES, so a REBUILD fits in an invocation.
+ *
+ * `storedEmissionStream` answers "the whole stream from here", which is what a
+ * load wants and what a serverless rebuild cannot ask for. This implements
+ * `@etherfold/core`'s `ReplaySource`, the port a `ReceivingIndexer` hands to
+ * every FOLLOWER it holds so the catch-up is a call the HOST schedules doing
+ * bounded work (ADR-0022) -- the shape `prune` and `compactEmissionPairs`
+ * already have.
+ */
+export {storedEmissionReplaySource} from './streamReader.js';
+/**
  * THE GENERATION REGISTRY AS ROWS (ADR-0053): which generations this named
  * indexer holds, and which one is CANONICAL, so a restart comes back holding
  * what it held and pointing where it last pointed.
