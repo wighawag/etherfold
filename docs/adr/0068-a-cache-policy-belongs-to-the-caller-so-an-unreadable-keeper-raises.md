@@ -8,7 +8,7 @@ A stream keeper whose substrate cannot be read now raises from `fetchFrom` and `
 
 It is not true of a caller that responds to an absent stream by WRITING. `installStreamSeed` reads emptiness as permission to install (ADR-0067: install only into an EMPTY subtree). Told "empty" about a subtree that was merely unreadable, it appended a seed underneath a stream that was really there, and the keeper's own guards do not catch it: `carryForward` keeps the existing cursor's `startBlock` and `nextOrdinal`, and the seed's first batch sits at or below `lastToBlock + 1`, so it is not declined as a hole.
 
-The measured result, with a VALID seed against a subtree holding a real stream whose reads were failing while its writes worked: `{status: 'installed'}` returned, two segments where there had been one, and the cursor's `lastToBlock` moved BACKWARDS from 600 to 200 while `startBlock` stayed at 500 -- a cursor claiming a stream from 500 through 200 over events at 500 and 110. Reported as SUCCESS, silent, permanent, and re-folded by every later generation.
+The measured result, with a VALID seed against a subtree holding a real stream whose reads were failing while its writes worked: `{status: 'installed'}` returned, two segments where there had been one, and the cursor's `lastToBlock` moved BACKWARDS from 600 to 150 while `startBlock` stayed at 500 -- a cursor claiming a stream from 500 through 150, over events at 500 and 110. Reported as SUCCESS, silent, permanent, and re-folded by every later generation. Those are the numbers of the committed case in `anUnreadableCacheDoesNotWedgeOrCorrupt.test.ts`, which reverting the policy reproduces exactly.
 
 A keeper cannot know which kind of caller it has. So it stops deciding.
 
@@ -32,5 +32,9 @@ The WRITE side is unchanged and still raises through to `promiseToSave`, which c
 Done now because it is nearly free now and permanently expensive later: two implementations of `ExistingStream` and four `fetchFrom` call sites exist, all in this repository, and nothing is published (`CONTEXT.md`). Once `publish-etherfold-and-deprecate-old-names` lands this stops being a refactor and becomes a breaking change to a published seam with implementors outside our control.
 
 ## What this does NOT fix
+
+It also supersedes in part ADR-0055's consequence that the SQL reader "is wrapped in `degradingStream`", which no longer exists: `storedEmissionStream` raises now, and the generation that folds it catches.
+
+It also amends ADR-0055, whose consequence "the reader is wrapped in `degradingStream`" describes a wrapper that no longer exists; `storedEmissionStream` raises now, and the generation folding it catches.
 
 `fetchFrom` still REPAIRS as well as reads: `createSegmentedStream` clears the subtree on four of its five absent branches, and callers cannot have the read without the repair. That is what still forces `installStreamSeed` to probe from `Number.MAX_SAFE_INTEGER` to dodge the clear-on-does-not-reach-back branch, and it is why a follower reading through `readOnlyStream` can still clear the writer's stream (`work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md`). Separating the repair from the read is the same principle applied one level further and is deliberately a separate change.

@@ -1019,11 +1019,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	/** The other half of the rule above: a substrate that cannot be read cannot be emptied either. */
-	protected async clearStoredStream(source: IndexingSource<ABI> = this.source): Promise<void> {
+	protected async clearStoredStream(): Promise<void> {
 		const keepStream = this.config.keepStream;
 		if (!keepStream) return;
 		try {
-			await keepStream.clear(source);
+			await keepStream.clear(this.source);
 		} catch (error) {
 			// `fetchFrom` reporting absent is what MAKES the caller clear, so a raising
 			// `clear` would put the outage back one line further down.

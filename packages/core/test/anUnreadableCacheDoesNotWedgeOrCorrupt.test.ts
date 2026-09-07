@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import type {Abi} from 'abitype';
 import {installStreamSeed} from '../src/stream/seedInstall.js';
 import {serializeStreamSeed, STREAM_SEED_FORMAT, type StreamSeed} from '../src/stream/seed.js';
-import {resolveStreamConfig} from '../src/internal/engine/utils.js';
+import {resolveStreamConfig, streamConfigHashOf} from '../src/internal/engine/utils.js';
 import {sourceHashesOf} from '../src/internal/engine/eventRanges.js';
 import {streamDigestOfSourceHashes} from '../src/stream/identity.js';
 import {gzipSync} from 'node:zlib';
@@ -125,7 +125,11 @@ describe('the LOAD PATH degrades: a generation whose cache cannot be read still 
 
 describe('the INSTALLER refuses: absence it cannot verify is not permission to write', () => {
 	async function seedOffered() {
-		const context = {source: sourceHashesOf(SOURCE), config: 'cfg', processor: ''};
+		// A REAL config hash, not a placeholder. With `'cfg'` here the seed is
+		// INCOHERENT, so the install refuses on that instead -- which is invisible while
+		// the fix is in place (the subtree check runs first) and makes the corruption
+		// case below pass for the wrong reason if the fix is ever reverted.
+		const context = {source: sourceHashesOf(SOURCE), config: streamConfigHashOf(CONFIG), processor: ''};
 		const seed: StreamSeed = {
 			format: STREAM_SEED_FORMAT,
 			producer: {kind: 'capture', name: 'anUnreadableCache.test.ts', at: '2026-09-07T00:00:00.000Z'},
@@ -184,7 +188,7 @@ describe('the INSTALLER refuses: absence it cannot verify is not permission to w
 			ordinal: 0,
 			segment: {events: [makeLog(500, '0xold')]},
 			cursor: {
-				context: {source: sourceHashesOf(SOURCE), config: 'cfg', processor: ''},
+				context: {source: sourceHashesOf(SOURCE), config: streamConfigHashOf(CONFIG), processor: ''},
 				latestBlock: 600,
 				lastFromBlock: 500,
 				lastToBlock: 600,
