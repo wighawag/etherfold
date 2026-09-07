@@ -17,6 +17,7 @@ import {
 	makeLog,
 	SOURCE,
 	START_BLOCK,
+	streamOf,
 } from './utils/streamCacheWorld.js';
 
 // ---------------------------------------------------------------------------
@@ -152,7 +153,7 @@ describe('a segment written before the seam narrowed', () => {
 	it('is SERVED rather than refused, membership, order and raw halves intact', async () => {
 		const {keeper, rows} = await anOldShapeStreamOnDisk();
 
-		const served = await keeper.fetchFrom(SOURCE, START_BLOCK);
+		const served = streamOf(await keeper.fetchFrom(SOURCE, START_BLOCK));
 
 		expect(served).toBeDefined();
 		expect(served!.eventStream.map(idOf)).toEqual(LOGS.map(idOf));

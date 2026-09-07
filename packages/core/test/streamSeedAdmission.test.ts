@@ -15,7 +15,7 @@ import {
 import {installStreamSeed, type NotInstalledReason} from '../src/stream/seedInstall.js';
 import {createSegmentedStream} from '../src/stream/segments.js';
 import type {IndexingSource, StoredLogEvent, UsedStreamConfig} from '../src/types.js';
-import {makeLog, memorySegmentPort, SOURCE, START_BLOCK} from './utils/streamCacheWorld.js';
+import {makeLog, memorySegmentPort, SOURCE, START_BLOCK, streamOf} from './utils/streamCacheWorld.js';
 
 // ---------------------------------------------------------------------------
 // EVERY ADMISSION CHECK A CLIENT CAN MAKE ON ITS OWN, ALL OF THEM BEFORE THE
@@ -532,7 +532,7 @@ describe('a refusal writes nothing and DELETES nothing', () => {
 		expect(outcome).toEqual({status: 'not-installed', reason: 'subtree-not-empty'});
 		expect(snapshotOf(rows)).toBe(before);
 		// segments and cursor still read back as a STREAM, not merely as bytes
-		expect(await keeper.fetchFrom(SOURCE, 200)).toBeDefined();
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 200))).toBeDefined();
 		expect(snapshotOf(rows)).toBe(before);
 		// and nothing was fetched at all: a client that already holds a stream pays
 		// no download to be told it may not install over it

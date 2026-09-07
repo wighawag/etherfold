@@ -13,6 +13,7 @@ import {
 	SOURCE,
 	START_BLOCK,
 	type TestABI,
+	streamOrAbsent,
 } from '../browser/workload.js';
 
 /**
@@ -52,17 +53,18 @@ function failableStream(name: string) {
 			failWith = undefined;
 		},
 		async storedEvents(): Promise<string[]> {
-			// From the source's own first block, not 0: `fetchFrom` REFUSES (and clears)
-			// a stream that does not reach back to what was asked for, so an inspection
-			// asking for a block below the start would destroy what it came to read.
+			// From the source's own first block, not 0: `fetchFrom` reports
+			// `does-not-reach-back` for a stream that starts above what was asked for, so
+			// an inspection asking below the start would read as absent. (It no longer
+			// DESTROYS what it came to read -- ADR-0069 -- but it still would not see it.)
 			// And with the WHOLE source, not a stand-in carrying its `chainId`: the
 			// stream is ADDRESSED by a digest of its filter, so a stand-in reads an
 			// empty subtree rather than the stream under inspection.
-			const stored = await real.fetchFrom(SOURCE, START_BLOCK);
+			const stored = streamOrAbsent(await real.fetchFrom(SOURCE, START_BLOCK));
 			return (stored?.eventStream ?? []).map((event: any) => `${event.blockHash}:${event.logIndex}`);
 		},
 		async storedCursor(): Promise<LastSync<TestABI> | undefined> {
-			const stored = await real.fetchFrom(SOURCE, START_BLOCK);
+			const stored = streamOrAbsent(await real.fetchFrom(SOURCE, START_BLOCK));
 			return stored?.lastSync as LastSync<TestABI> | undefined;
 		},
 	};

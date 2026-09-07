@@ -66,14 +66,16 @@ function cappedKeeper(name: string) {
 	const keeper = {
 		...real,
 		async fetchFrom(source: never, fromBlock: never) {
-			const stored = await real.fetchFrom(source, fromBlock);
-			if (!stored || cap === undefined) {
-				return stored;
+			const read = await real.fetchFrom(source, fromBlock);
+			// every non-`stream` verdict passes through untouched: there is nothing to cap
+			if (read.status !== 'stream' || cap === undefined) {
+				return read;
 			}
 			const capped = cap;
 			return {
-				eventStream: stored.eventStream.filter((event) => event.blockNumber <= capped),
-				lastSync: {...stored.lastSync, lastToBlock: Math.min(stored.lastSync.lastToBlock, capped)},
+				status: 'stream' as const,
+				eventStream: read.eventStream.filter((event) => event.blockNumber <= capped),
+				lastSync: {...read.lastSync, lastToBlock: Math.min(read.lastSync.lastToBlock, capped)},
 			};
 		},
 	};

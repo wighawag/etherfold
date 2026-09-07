@@ -21,7 +21,7 @@ import {
 	streamAddress,
 	streamSubtree,
 } from '../src/index.js';
-import {SOURCE, SOURCE_V2, type TestABI} from '../browser/workload.js';
+import {SOURCE, SOURCE_V2, type TestABI, streamOf} from '../browser/workload.js';
 
 /**
  * THE GENERATION REGISTRY, where it becomes KEYS AND BYTES.
@@ -270,7 +270,7 @@ describe('deleting a generation drops a REAL state store, and reaps the stream w
 		expect(report.reaped).toBeUndefined();
 		expect(world.dropped).toEqual([{stream: DIGEST, processor: PROC_A}]);
 		// the stream the surviving generation folds is untouched, whole
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(1);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(1);
 		expect(await get(generationAddress(name).entry(blue))).toBeUndefined();
 	});
 
@@ -304,7 +304,7 @@ describe('deleting a generation drops a REAL state store, and reaps the stream w
 		// deleting a stream is dropping its keyspace, and that is cheap only
 		// because streams are self-contained
 		expect(await digestsUnder(name)).toEqual([DIGEST]);
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(1);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(1);
 		// and the state store really went: a fresh handle on that database reads
 		// nothing back
 		const reopened = new IndexedDBStateStore([TOKEN], {databaseName: store.databaseName});
@@ -323,7 +323,7 @@ describe('deleting a generation drops a REAL state store, and reaps the stream w
 		await expect(registry.deleteGeneration(blue)).rejects.toThrow(GenerationIsCanonicalError);
 		await expect(registry.deleteStream(DIGEST)).rejects.toThrow(GenerationIsCanonicalError);
 		expect(world.dropped).toEqual([]);
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(1);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(1);
 	});
 });
 
@@ -345,7 +345,7 @@ describe('the unregistered-subtree sweep, on registry OPEN', () => {
 		expect(reopened.swept).toEqual([`chain-${SOURCE.chainId}`]);
 		expect(await digestsUnder(name)).toEqual([DIGEST]);
 		// the live stream is whole: its segments AND its cursor
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(1);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(1);
 		expect(await get(streamAddress(name, SOURCE, DEFAULT_CONFIG).cursor)).toBeDefined();
 	});
 
@@ -395,7 +395,7 @@ describe('the unregistered-subtree sweep, on registry OPEN', () => {
 
 		expect(third.swept).toEqual([]);
 		expect(await digestsUnder(name)).toEqual([DIGEST]);
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(1);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(1);
 	});
 
 	it('leaves the registry\u2019s OWN records alone: they are not a stream subtree', async () => {

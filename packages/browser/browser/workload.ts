@@ -1,4 +1,12 @@
-import type {Abi, IndexingSource, LastSync, RangedAbi} from '@etherfold/core';
+import type {
+	Abi,
+	IndexingSource,
+	LastSync,
+	RangedAbi,
+	StoredLastSync,
+	StoredLogEvent,
+	StreamRead,
+} from '@etherfold/core';
 import {EntityEventProcessor, type EntityProcessor, type EntityStateView} from '@etherfold/processor-entities';
 import type {StateStore} from '@etherfold/state-store';
 import {createIndexerState} from '../src/index.js';
@@ -521,4 +529,27 @@ export async function runWorkload(
 	const state = await readState(indexer.state.$state);
 	indexer.dispose();
 	return {state, lastSync, ranges: chain.ranges, indexer};
+}
+
+/**
+ * The stream a read was expected to hand back, or a failure that SAYS what came
+ * instead.
+ *
+ * `fetchFrom` answers a VERDICT since ADR-0069, so a test wanting the stream has
+ * to narrow. One helper keeps the failure useful -- `expected a stream, got
+ * 'does-not-reach-back'` names the verdict, where a bare `?.` would fail later
+ * and somewhere else.
+ */
+export function streamOf(read: StreamRead): {lastSync: StoredLastSync; eventStream: StoredLogEvent[]} {
+	if (read.status !== 'stream') {
+		throw new Error(`expected a stream, got '${read.status}'`);
+	}
+	return read;
+}
+
+/** The same, for an inspection that TOLERATES there being no stream yet. */
+export function streamOrAbsent(
+	read: StreamRead,
+): {lastSync: StoredLastSync; eventStream: StoredLogEvent[]} | undefined {
+	return read.status === 'stream' ? read : undefined;
 }

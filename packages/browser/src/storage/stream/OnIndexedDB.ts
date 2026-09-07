@@ -262,19 +262,20 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 	 * Anything beside it in the new subtree goes too: the two together are not one
 	 * stream, and half of each is worse than neither.
 	 */
-	async function dropLegacyBlob(source: IndexingSource<ABI>): Promise<boolean> {
-		const address = streamAddress(name, source, streamConfig);
-		const legacy = await get(address.legacy, store);
-		if (legacy === undefined) {
-			return false;
-		}
-		await del(address.legacy, store);
-		await segmented.clear(source);
-		namedLogger.info(
-			`the cached stream at ${address.legacy} is in the old whole-blob format: it has been DELETED rather than ` +
-				`adopted, and the stream will be rebuilt from the chain.`,
-		);
-		return true;
+	/**
+	 * Whether a legacy whole-blob stream is sitting at this address.
+	 *
+	 * It REPORTS and deletes nothing, like every other read on this seam since
+	 * ADR-0069. It used to `del` the blob and `clear` the segmented subtree here,
+	 * inside `fetchFrom` -- which made this keeper the last read that still mutated,
+	 * and left the two holes the rest of that ADR closed: a FOLLOWER reading through
+	 * `readOnlyStream` could still destroy its writer's subtree on this one path,
+	 * and the seed installer's probe could still destroy-then-read-absent-then-
+	 * install. The caller's `clear` removes BOTH the legacy key and the subtree
+	 * (see `clear` below), so nothing about the migration is lost by deferring it.
+	 */
+	async function hasLegacyBlob(source: IndexingSource<ABI>): Promise<boolean> {
+		return (await get(streamAddress(name, source, streamConfig).legacy, store)) !== undefined;
 	}
 
 	/**
@@ -291,8 +292,16 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 	 */
 	const withLegacyBlobProbe: ExistingStream<ABI> = {
 		async fetchFrom(source, fromBlock) {
-			if (await dropLegacyBlob(source)) {
-				return undefined;
+			// A blob this build cannot read is DAMAGE, not absence, and the difference is
+			// load-bearing: an installer reads `absent` as permission to write, and writing
+			// a seed beside an unread legacy blob would leave both. Reported so the caller
+			// clears -- which for a generation rebuilds from the chain exactly as before,
+			// and for a follower is a no-op that leaves its writer's data alone.
+			if (await hasLegacyBlob(source)) {
+				return {
+					status: 'inconsistent',
+					reason: `the cached stream is in the old whole-blob format and cannot be adopted`,
+				};
 			}
 			return segmented.fetchFrom(source, fromBlock);
 		},

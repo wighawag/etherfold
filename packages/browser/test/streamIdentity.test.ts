@@ -25,6 +25,7 @@ import {
 	SOURCE_V2,
 	START_BLOCK,
 	type TestABI,
+	streamOf,
 } from '../browser/workload.js';
 import type {EntityStateView} from '@etherfold/processor-entities';
 
@@ -120,7 +121,7 @@ describe('the real digest occupies the level the placeholder held', () => {
 
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursorAt(100, 100)});
 
-		expect((await keeper.fetchFrom(SOURCE_REDEPLOYED_SAME_ABI, 100))?.eventStream).toHaveLength(1);
+		expect(streamOf(await keeper.fetchFrom(SOURCE_REDEPLOYED_SAME_ABI, 100)).eventStream).toHaveLength(1);
 		expect(await keysUnder(tag)).toHaveLength(2);
 	});
 });
@@ -135,8 +136,8 @@ describe('what moves the address and what does not', () => {
 		// a renamed non-indexed parameter moves every entry's `hash` and no entry's
 		// `streamHash`: the cached logs are still exactly the right logs
 		expect(digestFor(SOURCE_RENAMED_PARAMETER)).toBe(digestFor(SOURCE));
-		const stored = await keeper.fetchFrom(SOURCE_RENAMED_PARAMETER as never, 100);
-		expect(stored?.eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
+		const stored = streamOf(await keeper.fetchFrom(SOURCE_RENAMED_PARAMETER as never, 100));
+		expect(stored.eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
 		expect(await keysUnder(tag)).toHaveLength(2);
 	});
 
@@ -148,11 +149,11 @@ describe('what moves the address and what does not', () => {
 
 		// `SOURCE_V2` adds an event, which GROWS the topic set
 		expect(digestFor(SOURCE_V2)).not.toBe(digestFor(SOURCE));
-		expect(await keeper.fetchFrom(SOURCE_V2 as never, 100)).toBeUndefined();
+		expect(await keeper.fetchFrom(SOURCE_V2 as never, 100)).toEqual({status: 'absent'});
 
 		// nothing migrated and nothing was rewritten: the old stream is still there
 		// and still readable under its own filter
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(2);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(2);
 	});
 
 	it('resolves a STREAM-CONFIG change to a different stream, leaving the old one intact', async () => {
@@ -166,15 +167,15 @@ describe('what moves the address and what does not', () => {
 		// and the only remedy, clearing, destroys what the live generation answers
 		// from
 		keeper.setStreamConfig(WITH_TIMESTAMPS);
-		expect(await keeper.fetchFrom(SOURCE, 100)).toBeUndefined();
+		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(200)], lastSync: cursorAt(200, 200)});
-		expect((await keeper.fetchFrom(SOURCE, 200))?.eventStream.map((e) => e.blockNumber)).toEqual([200]);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 200)).eventStream.map((e) => e.blockNumber)).toEqual([200]);
 
 		// two subtrees under one name, and the first is untouched
 		const digests = new Set((await keysUnder(tag)).map((key) => key[2]));
 		expect(digests).toEqual(new Set([digestFor(SOURCE), digestFor(SOURCE, WITH_TIMESTAMPS)]));
 		keeper.setStreamConfig(DEFAULT_CONFIG);
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
 	});
 
 	it('keeps two indexer NAMES and two CHAINS apart, as the address level always did', async () => {
@@ -196,9 +197,9 @@ describe('what moves the address and what does not', () => {
 		expect(new Set(under.map((key) => key[2]))).toEqual(new Set([digestFor(SOURCE), digestFor(otherChain)]));
 
 		await mine.clear(SOURCE);
-		expect(await mine.fetchFrom(SOURCE, 100)).toBeUndefined();
-		expect((await mine.fetchFrom(otherChain, 500))?.eventStream.map((e) => e.blockNumber)).toEqual([500]);
-		expect((await theirs.fetchFrom(SOURCE, 700))?.eventStream.map((e) => e.blockNumber)).toEqual([700]);
+		expect(await mine.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
+		expect(streamOf(await mine.fetchFrom(otherChain, 500)).eventStream.map((e) => e.blockNumber)).toEqual([500]);
+		expect(streamOf(await theirs.fetchFrom(SOURCE, 700)).eventStream.map((e) => e.blockNumber)).toEqual([700]);
 	});
 });
 
@@ -220,7 +221,7 @@ describe('a placeholder-era subtree', () => {
 		});
 
 		// the stream resolves elsewhere, so it is absent rather than adopted
-		expect(await keeper.fetchFrom(SOURCE, 100)).toBeUndefined();
+		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(300)], lastSync: cursorAt(300, 300)});
 		await keeper.clear(SOURCE);
 
@@ -305,6 +306,9 @@ describe('the start block the stream keeps is unaffected', () => {
 
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(500)], lastSync: cursorAt(500, 500)});
 
-		expect(await keeper.fetchFrom(SOURCE, START_BLOCK)).toBeUndefined();
+		// its OWN verdict since ADR-0069, and no longer a clear: nothing is wrong with
+		// this stream, it simply opens above what was asked for, and the caller decides
+		expect(await keeper.fetchFrom(SOURCE, START_BLOCK)).toEqual({status: 'does-not-reach-back', startBlock: 500});
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 500)).eventStream).toHaveLength(1);
 	});
 });

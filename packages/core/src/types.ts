@@ -431,8 +431,23 @@ export type IndexingSource<ABI extends Abi> = {
 };
 
 /**
- * WHAT A KEEPER HANDS BACK: the stream it holds from `fromBlock` up, plus the
- * cursor that describes it -- or `undefined`, which is ABSENT.
+ * WHAT A KEEPER HANDS BACK: a VERDICT, because there is more than one way for a
+ * read to come back without a stream and they are not the same thing (ADR-0069).
+ *
+ * This was `{lastSync, eventStream} | undefined`, and the `undefined` carried
+ * five meanings across two implementations with OPPOSITE contracts behind it:
+ * nothing stored; damage the keeper had just DESTROYED; a stream that is fine but
+ * does not reach back to the block asked for, also destroyed; and, on the SQL
+ * reader, the same shapes reported with nothing deleted at all. A caller could
+ * not tell "there is nothing here" from "there was something here and it is gone
+ * now", which is exactly what an installer has to know before it writes.
+ *
+ * So a keeper now REPORTS and does not REPAIR. Each variant says what was found
+ * and nothing is cleared on any of them; the caller that wants the repair asks
+ * for it (`IndexerGeneration.readStoredStream` clears and re-indexes, which is
+ * what it always did), and the caller that must not have one does not get it
+ * silently (a FOLLOWER reads through `readOnlyStream`, whose `clear` is a no-op,
+ * so reading a writer's stream can no longer delete it).
  *
  * Both halves are STORED shapes and neither may carry a decoded event. `args` /
  * `eventName` are what SOME ABI made of those bytes and `decodeError` is what
@@ -451,10 +466,30 @@ export type IndexingSource<ABI extends Abi> = {
  *
  * ADR-0060 records what this type governs and why the cursor has a variant here.
  */
-export type StreamFetcher<ABI extends Abi> = (
-	source: IndexingSource<ABI>,
-	fromBlock: number,
-) => Promise<{lastSync: StoredLastSync; eventStream: StoredLogEvent[]} | undefined>;
+export type StreamRead =
+	/** A usable stream from the block asked for, with the cursor that describes it. */
+	| {readonly status: 'stream'; readonly lastSync: StoredLastSync; readonly eventStream: StoredLogEvent[]}
+	/** Nothing is stored here. The ONLY answer an installer may read as permission to write. */
+	| {readonly status: 'absent'}
+	/**
+	 * Something is stored and it does not hold together: a gap in the ordinals, a
+	 * segment that does not parse, segments with no cursor record, a cursor whose
+	 * segment count is wrong. `reason` is the keeper's own words, for the caller to
+	 * log when it decides what to do.
+	 *
+	 * NOT cleared. Repairing it is the caller's call, and the repair is a `clear`.
+	 */
+	| {readonly status: 'inconsistent'; readonly reason: string}
+	/**
+	 * A perfectly good stream that simply starts ABOVE the block asked for.
+	 *
+	 * Deliberately not folded into `inconsistent`: nothing is wrong with it, and a
+	 * caller asking from a higher block would be served. It is separate because the
+	 * whole point of this type is to stop conflating answers that differ.
+	 */
+	| {readonly status: 'does-not-reach-back'; readonly startBlock: number};
+
+export type StreamFetcher<ABI extends Abi> = (source: IndexingSource<ABI>, fromBlock: number) => Promise<StreamRead>;
 /**
  * A keeper that DECLINED the batch: it was not written, and writing it would
  * have left a hole behind a cursor claiming to cover it.

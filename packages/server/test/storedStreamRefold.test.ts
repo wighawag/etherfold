@@ -11,7 +11,9 @@ import {
 	type IndexingSource,
 	type LastSync,
 	type LogEvent,
+	type StoredLastSync,
 	type StoredLogEvent,
+	type StreamRead,
 	type WireBatch,
 } from '@etherfold/core';
 import {RemoteLibSQL} from 'remote-sql-libsql';
@@ -25,6 +27,14 @@ import {
 	EMISSION_STREAM_TABLE,
 	STREAM_COVERAGE_TABLE,
 } from '../src/index.js';
+
+/** The stream a read was expected to hand back, or a failure that says what came instead (ADR-0069). */
+function streamOf(read: StreamRead): {lastSync: StoredLastSync; eventStream: StoredLogEvent[]} {
+	if (read.status !== 'stream') {
+		throw new Error(`expected a stream, got '${read.status}'`);
+	}
+	return read;
+}
 
 // ---------------------------------------------------------------------------
 // THE STORED EMISSION STREAM IS A STREAM A SUCCESSOR CAN RE-FOLD, READ-ONLY
@@ -421,15 +431,15 @@ describe('the reader sees its OWN (indexer, stream) and nothing else', () => {
 		const beta = receiverOn(db, 'beta');
 		await beta.push({toBlock: 105, latestBlock: 105, logs: [log(103, '0xbeta103')]});
 
-		const alphaStream = await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK);
-		expect(alphaStream?.eventStream.map(idOf)).toEqual([
+		const alphaStream = streamOf(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK));
+		expect(alphaStream.eventStream.map(idOf)).toEqual([
 			idOf(AT_101),
 			idOf(DEAD_104),
 			idOf(DEAD_104),
 			idOf(REORGED),
 			idOf(AT_106),
 		]);
-		expect(alphaStream?.eventStream.some((event) => event.blockHash === '0xbeta103')).toBe(false);
+		expect(alphaStream.eventStream.some((event) => event.blockHash === '0xbeta103')).toBe(false);
 
 		// and the fold lands where the writer's did, unmoved by the neighbour
 		expect((await refold(db, 'alpha')).state).toEqual([idOf(AT_101), idOf(REORGED), idOf(AT_106)]);
@@ -447,18 +457,18 @@ describe('the reader sees its OWN (indexer, stream) and nothing else', () => {
 		// two streams under one name, and they are two rows and two claims
 		expect(STREAM_DIGEST).not.toBe(OTHER_STREAM_DIGEST);
 		const view = viewOn(db, 'alpha');
-		const mine = await view.fetchFrom(SOURCE, START_BLOCK);
-		const theirs = await view.fetchFrom(OTHER_SOURCE, START_BLOCK);
+		const mine = streamOf(await view.fetchFrom(SOURCE, START_BLOCK));
+		const theirs = streamOf(await view.fetchFrom(OTHER_SOURCE, START_BLOCK));
 
-		expect(mine?.eventStream.some((event) => event.blockHash === '0xother102')).toBe(false);
-		expect(theirs?.eventStream.map((event) => event.blockHash)).toEqual(['0xother102']);
+		expect(mine.eventStream.some((event) => event.blockHash === '0xother102')).toBe(false);
+		expect(theirs.eventStream.map((event) => event.blockHash)).toEqual(['0xother102']);
 	});
 
 	it('reports ABSENT for a stream nothing has ever been stored under', async () => {
 		await foldTheFixture(db, 'alpha');
 
-		expect(await viewOn(db, 'alpha').fetchFrom(OTHER_SOURCE, START_BLOCK)).toBeUndefined();
-		expect(await viewOn(db, 'gamma').fetchFrom(SOURCE, START_BLOCK)).toBeUndefined();
+		expect(await viewOn(db, 'alpha').fetchFrom(OTHER_SOURCE, START_BLOCK)).toEqual({status: 'absent'});
+		expect(await viewOn(db, 'gamma').fetchFrom(SOURCE, START_BLOCK)).toEqual({status: 'absent'});
 	});
 });
 
@@ -472,9 +482,9 @@ describe('the reader hands back the stream in `seq` order, holes tolerated', () 
 	it('delivers retractions INCLUDED, at their original block, in the order they were appended', async () => {
 		await foldTheFixture(db, 'alpha');
 
-		const read = await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK);
+		const read = streamOf(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK));
 		expect(
-			read?.eventStream.map((event) => `${event.removed ? '-' : '+'}${event.blockNumber}:${event.blockHash}`),
+			read.eventStream.map((event) => `${event.removed ? '-' : '+'}${event.blockNumber}:${event.blockHash}`),
 		).toEqual(['+101:0xa101', '+104:0xa104', '-104:0xa104', '+104:0xb104', '+106:0xa106']);
 	});
 
@@ -484,28 +494,32 @@ describe('the reader hands back the stream in `seq` order, holes tolerated', () 
 		// gone, the surrounding numbers exactly where they were (ADR-0006)
 		await db.prepare(`DELETE FROM ${EMISSION_STREAM_TABLE} WHERE indexer = ?1 AND seq IN (2, 3)`).bind('alpha').all();
 
-		const read = await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK);
-		expect(read?.eventStream.map((event) => event.blockHash)).toEqual(['0xa101', '0xb104', '0xa106']);
+		const read = streamOf(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK));
+		expect(read.eventStream.map((event) => event.blockHash)).toEqual(['0xa101', '0xb104', '0xa106']);
 		// the claim is untouched: a hole is legal and is not damage
-		expect(read?.lastSync.lastToBlock).toBe(110);
+		expect(read.lastSync.lastToBlock).toBe(110);
 	});
 
 	it('serves from the block it is ASKED for, and no lower', async () => {
 		await foldTheFixture(db, 'alpha');
 
-		const read = await viewOn(db, 'alpha').fetchFrom(SOURCE, 104);
-		expect(read?.eventStream.map((event) => event.blockNumber)).toEqual([104, 104, 104, 106]);
+		const read = streamOf(await viewOn(db, 'alpha').fetchFrom(SOURCE, 104));
+		expect(read.eventStream.map((event) => event.blockNumber)).toEqual([104, 104, 104, 106]);
 	});
 
-	it('reports ABSENT rather than replaying a history that does not reach back far enough', async () => {
+	it('reports DOES-NOT-REACH-BACK rather than replaying a history that does not reach back far enough', async () => {
 		const writer = receiverOn(db, 'alpha');
 		await writer.push({toBlock: 105, latestBlock: 105, logs: [AT_101]});
 
 		// asked from BELOW the first block ever stored: replaying this as though it
 		// were the whole history would silently drop everything under it
-		expect(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK - 1)).toBeUndefined();
-		// ...and it deleted nothing in response, unlike the segment keeper's identical
-		// check: these rows belong to the generation still appending to them
+		expect(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK - 1)).toEqual({
+			status: 'does-not-reach-back',
+			startBlock: START_BLOCK,
+		});
+		// ...and it deleted nothing in response. Since ADR-0069 the SEGMENT keeper's
+		// identical check does not delete either, so the two implementations of this
+		// seam finally agree about what a read may do
 		expect(await emissionRows(db, 'alpha')).toHaveLength(1);
 	});
 });
@@ -667,17 +681,17 @@ describe('the coverage claim is the stream\u2019s, written with the rows it cove
 		// the rows are still there, and they cannot say what filter produced them or
 		// how far they reach, so they are reported ABSENT rather than replayed
 		expect((await emissionRows(db, 'alpha')).length).toBeGreaterThan(0);
-		expect(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK)).toBeUndefined();
+		expect(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK)).toEqual({status: 'absent'});
 	});
 
 	it('is PRESENT with no rows at all, which is a stream that has been scanned and found nothing', async () => {
 		const writer = receiverOn(db, 'alpha');
 		await writer.push({toBlock: 105, latestBlock: 105, logs: []});
 
-		const read = await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK);
+		const read = streamOf(await viewOn(db, 'alpha').fetchFrom(SOURCE, START_BLOCK));
 		// NOT absent: reporting absent here would make a deployment whose contracts
 		// have emitted nothing re-scan from its start block on every reload
-		expect(read?.eventStream).toEqual([]);
-		expect(read?.lastSync.lastToBlock).toBe(105);
+		expect(read.eventStream).toEqual([]);
+		expect(read.lastSync.lastToBlock).toBe(105);
 	});
 });
