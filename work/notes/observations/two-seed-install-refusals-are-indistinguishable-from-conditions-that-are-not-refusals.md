@@ -18,3 +18,23 @@ Neither blocks anything today. Recording them because the admission task owns th
 What keeps it narrow is different from what the note claimed: the corrupting window needs `port.readCursor` to FAIL inside `fetchFrom` and then SUCCEED inside `saveNewEvents` — the same call on the same port, moments apart — so a substrate that is broken enough to hide a populated subtree is almost always broken enough to fail the write too. That is a probabilistic argument rather than a structural one, which is worth knowing when deciding whether to close it.
 
 The first half (a corrupt artifact reported as `unreachable`) is unchanged by PR #100 for the fetch/decompress path. Note though that PR #100 moved the INTEGRITY check ahead of the parse, so a corrupted document that still gunzips now reports `integrity-mismatch` when a pin was supplied, which is both accurate and more useful than either of the two reasons discussed above.
+
+## Update, 2026-09-07 (the first half is FIXED; the second is a decision, not a repair)
+
+**The first half is discharged.** `fetchSeedBody` (was `fetchSeedPayload`) now stops at the transport and the INFLATE happens at the call site under its own refusal, so a host that answers `200` with a corrupt or truncated body is reported `unreadable-format` rather than `unreachable`. A reached host serving a broken artifact no longer sends an operator looking at their network. Pinned by `a body that will not DECOMPRESS is an unreadable document, not an unreachable host` in `packages/core/test/streamSeedInstall.test.ts`, which truncates a real gzip so the magic bytes are present and the inflate is what fails.
+
+**The second half is NOT a repair, and should not be fixed by whoever next reads this without a decision being made.** Tracing it properly:
+
+- `subtreeIsEmpty` reads `undefined` from a degraded `fetchFrom` and calls the subtree empty.
+- The install then writes, and `carryForward` (`packages/core/src/stream/segments.ts`) on an existing cursor keeps that cursor's `startBlock` and `nextOrdinal`. The seed's first batch has `lastFromBlock` at the capture's coverage start, which is at or below the stored `lastToBlock + 1`, so it is NOT declined as a hole. It is appended after the existing segments, and the cursor's `lastFromBlock`/`lastToBlock` are overwritten with the seed's, moving them BACKWARDS.
+- So the outcome is duplicated events under a cursor that lies, inherited by every later generation. Not a crash, and nothing detects it.
+
+The window needs `port.readCursor` to throw inside `fetchFrom` and then succeed inside `commitSegmentWithCursor` — the same call on the same port, moments apart. Narrow, and transient IndexedDB failures are exactly that shape.
+
+There are at least three candidate shapes and they trade differently, which is why this is a fork rather than a fix:
+
+1. **Accept and document.** Cheapest. Leaves a silent-corruption path open on a transient fault.
+2. **`clear()` before the first write.** Makes emptiness TRUE instead of assumed, and is a no-op on the ordinary path. But it puts a destructive operation on a path whose whole ADR (ADR-0067) is about not destroying, and on the bad branch it deletes the stream rather than corrupting it — better, but still data loss from a transient read error.
+3. **Let the keeper report an unreadable read distinctly from an absent one.** The honest fix, and the expensive one: `ExistingStream` has one read and third parties implement it, and ADR-0067 already declined to widen this seam for a weaker reason (a presence read for the ordinary case). An optional method degrades gracefully for keepers that do not implement it.
+
+This is the same shape as the `readOnlyStream` self-clear defect (`a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md`), which `a-browser-app-starts-from-a-published-artifact` deliberately kept out of scope on exactly this ground: a design call with several candidate shapes belongs to the seam's own ADR, not to a task that happens to touch it. It probably belongs with ADR-0044/ADR-0067 and with that observation, since both are `degradingStream`/`readOnlyStream` behaving correctly for a READER and wrongly for a WRITER.

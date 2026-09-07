@@ -1,6 +1,6 @@
 # Spike: what does installing a published stream seed cost a browser?
 
-Evidence for [`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`](../../../work/notes/findings/what-a-published-stream-seed-costs-to-install.md), which is where the conclusions and the recommendation live. Task: `measure-what-a-published-stream-costs-to-install-and-pick-its-shape`, from the exploration spec `a-generation-can-be-seeded-from-a-published-artifact`. The install being measured is the one [ADR-0063](../../adr/0063-a-published-stream-seed-arrives-through-its-own-loader-and-installs-through-the-keeper-seam.md) pinned.
+Evidence for [`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md), which is where the conclusions and the recommendation live. Task: `measure-what-a-published-stream-costs-to-install-and-pick-its-shape`, from the exploration spec `a-generation-can-be-seeded-from-a-published-artifact`. The install being measured is the one [ADR-0063](../../adr/0063-a-published-stream-seed-arrives-through-its-own-loader-and-installs-through-the-keeper-seam.md) pinned.
 
 ## The question
 

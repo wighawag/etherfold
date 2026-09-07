@@ -392,14 +392,28 @@ export async function installStreamSeed<ABI extends Abi>(
 	const client = clientIdentityOf(options.source, options.streamConfig);
 
 	for (const location of all) {
-		let payload: Uint8Array;
+		let body: Uint8Array;
 		try {
-			payload = await fetchSeedPayload(get, location);
+			body = await fetchSeedBody(get, location);
 		} catch (error) {
 			// logged and skipped, never thrown: one unreachable location must not
 			// decide whether the app starts.
 			namedLogger.error(`could not fetch a stream seed from ${location}, trying the next location`, error);
 			reasons.add('unreachable');
+			continue;
+		}
+
+		// The INFLATE is its own refusal, and not the fetch's. The host answered, so
+		// it was reached; what arrived is the problem. Reported as `unreadable-format`
+		// alongside a document that parses but is not a seed, because the remedy is the
+		// same one (the artifact at this location is wrong) and it is not the remedy
+		// `unreachable` would send someone looking for.
+		let payload: Uint8Array;
+		try {
+			payload = await streamSeedPayloadFrom(body);
+		} catch (error) {
+			namedLogger.error(`the document at ${location} could not be decompressed, trying the next location`, error);
+			reasons.add('unreadable-format');
 			continue;
 		}
 
@@ -772,13 +786,26 @@ export async function streamSeedPayloadFrom(received: Uint8Array): Promise<Uint8
 	return new Uint8Array(await new Response(inflated).arrayBuffer());
 }
 
-/** One location fetched, down to the octets a seed IS. Raises, and the caller skips the location. */
-async function fetchSeedPayload(get: typeof globalThis.fetch, location: string): Promise<Uint8Array> {
+/**
+ * One location fetched, as the bytes the TRANSPORT delivered. Raises, and the
+ * caller skips the location.
+ *
+ * Deliberately stops at the transport, WITHOUT decompressing. What this can fail
+ * at -- a refused connection, a DNS miss, a `404`, a `503` -- is exactly the set
+ * of things `unreachable` truthfully describes, and decompression is not one of
+ * them: a host that answers `200` with a corrupt or truncated body is REACHED,
+ * and calling that "could not reach it" points an operator at their network
+ * while the artifact is the thing that is broken. So the inflate happens at the
+ * call site, under its own refusal (`unreadable-format`, which already means
+ * "something was fetched and it is not a seed this build reads" -- a body that
+ * will not inflate is precisely that).
+ */
+async function fetchSeedBody(get: typeof globalThis.fetch, location: string): Promise<Uint8Array> {
 	const response = await get(location);
 	if (!response.ok) {
 		throw new Error(`${response.status} ${response.statusText}`);
 	}
-	return streamSeedPayloadFrom(new Uint8Array(await response.arrayBuffer()));
+	return new Uint8Array(await response.arrayBuffer());
 }
 
 /**

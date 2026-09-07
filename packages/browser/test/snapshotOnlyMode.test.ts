@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import {resolveStreamConfig} from '@etherfold/core';
+import {resolveStreamConfig, type LastSync} from '@etherfold/core';
 import {
 	createSnapshot,
 	entityProcessorVersionHash,
@@ -23,6 +23,7 @@ import {
 	FINALITY,
 	indexToTip,
 	SOURCE,
+	START_BLOCK,
 	timestampOf,
 	type TestABI,
 } from '../browser/workload.js';
@@ -79,6 +80,27 @@ const CONFIG = {stream: {finality: FINALITY}};
  */
 const SNAPSHOT_TIP = 102;
 
+/**
+ * The chain tip the PUBLISHER had seen when it took that snapshot.
+ *
+ * ADR-0028's producer rule, made real in the fixture rather than only written
+ * down: a snapshot is taken at least the finality depth behind the tip, because
+ * it carries nothing below its own block and so cannot absorb a reorg reaching
+ * under it. `SNAPSHOT_TIP + FINALITY` is exactly that bound, which is the
+ * shallowest LEGAL publisher and therefore the value that would catch an
+ * off-by-one in the consumer's check.
+ *
+ * It matters that this is a SEPARATE number from `SNAPSHOT_TIP`. An earlier
+ * version of this fixture published a cursor whose `latestBlock` WAS the
+ * snapshot's own block, which is what a run that indexes straight to the tip
+ * produces -- and against that, `insideReorgWindow` is true for any positive
+ * depth, so every case here would have been refused the moment the client
+ * started passing `finalityDepth`. The guard was therefore never exercised, and
+ * the mode this file documents omitted half of ADR-0028's two-sided defence
+ * (`work/notes/observations/the-snapshot-only-mode-test-never-exercises-the-inside-reorg-window-guard.md`).
+ */
+const PUBLISHER_OBSERVED_TIP = SNAPSHOT_TIP + FINALITY;
+
 /** How many of branch A's events are already IN the snapshot rather than indexed. */
 const IN_SNAPSHOT = BRANCH_A.filter((log) => parseInt(log.blockNumber.slice(2), 16) <= SNAPSHOT_TIP).length;
 
@@ -117,6 +139,26 @@ async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<St
 
 	expect(lastSync.lastToBlock).toBe(SNAPSHOT_TIP);
 	expect(rows).toHaveLength(IN_SNAPSHOT);
+	return snapshotOf(definition, lastSync, rows, PUBLISHER_OBSERVED_TIP);
+}
+
+/**
+ * The published document, with the tip its producer says it had SEEN.
+ *
+ * `observedTip` is read off the published CURSOR's `latestBlock`, so that is the
+ * one field a publisher varies to say "I took this behind my own tip". Raising
+ * it here rather than driving the publisher's fake chain higher is deliberate:
+ * `indexToTip` ends with `lastToBlock === latestBlock` by construction, so no
+ * amount of fixture chain-wrangling produces a snapshot that is legally behind
+ * its own tip. A real publisher reads its rows as-of a block below the tip; this
+ * fixture states the same relationship directly, which is what the check reads.
+ */
+function snapshotOf(
+	definition: EntityProcessor<TestABI>,
+	lastSync: LastSync<TestABI>,
+	rows: Mutation[],
+	observedTip: number,
+): StateSnapshot {
 	return createSnapshot<TestABI>({
 		takenAt: {
 			number: lastSync.lastToBlock,
@@ -124,7 +166,7 @@ async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<St
 			timestamp: timestampOf(lastSync.lastToBlock),
 		},
 		rows,
-		lastSync,
+		lastSync: {...lastSync, latestBlock: observedTip},
 		processor: entityProcessorVersionHash(definition),
 	});
 }
@@ -186,7 +228,12 @@ async function seededFromTheSnapshot(options: ClientOptions) {
 	return openAndBootstrap(
 		await createBrowserStateStore(options.definition.entities, {databaseName: options.databaseName}),
 		remote.url,
-		{processor: entityProcessorVersionHash(options.definition), fetch: remote.fetch},
+		// `finalityDepth` is the CONSUMER's half of ADR-0028's two-sided defence, and
+		// it is passed here because a client that omits it silently runs without it:
+		// `insideReorgWindow` is skipped entirely when the option is absent, so a
+		// snapshot taken at its producer's own tip would install. It is the same
+		// finality the indexer runs under, which is what the guide tells an author.
+		{processor: entityProcessorVersionHash(options.definition), fetch: remote.fetch, finalityDepth: FINALITY},
 	);
 }
 
@@ -271,9 +318,15 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		expect(soloApplied).toHaveLength(BRANCH_A.length);
 		expect(soloApplied.map((row) => row.times)).toEqual(soloApplied.map(() => 1));
 		// and it started from the snapshot's cursor rather than from nothing: the first
-		// range is the window that cursor carried, and everything in it was already
-		// accounted for, which is why every row above is applied exactly once
-		expect(soloChain.ranges[0].from).toBe(SNAPSHOT_TIP - FINALITY);
+		// range is the reorg window below the tip that cursor OBSERVED, and everything
+		// in it was already accounted for, which is why every row above is applied
+		// exactly once. It is the observed tip and not the snapshot's own block that
+		// sets this, which is visible here only because the publisher now reports the
+		// two as different numbers, as a legal publisher must.
+		expect(soloChain.ranges[0].from).toBe(PUBLISHER_OBSERVED_TIP - FINALITY);
+		// and the claim that makes that assertion mean something: a run starting from
+		// nothing would have asked from the source's own start block
+		expect(soloChain.ranges[0].from).toBeGreaterThan(START_BLOCK);
 
 		await expectNoStreamWritten(soloName, before);
 	});
@@ -363,5 +416,59 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		expect(continued.map((row) => row.times)).toEqual(continued.map(() => 1));
 
 		await expectNoStreamWritten(soloName, before);
+	});
+
+	it('REFUSES a snapshot its producer took inside the reorg window, and comes up with nothing rather than with a branch that may have lost', async () => {
+		// The guard the cases above rely on, asserted to be LIVE. Without this, every
+		// case here passes just as well with `finalityDepth` omitted -- which is exactly
+		// how this fixture used to be written, and it meant the mode a developer copies
+		// from this file showed only the PRODUCER half of ADR-0028's two-sided defence.
+		//
+		// A snapshot carries nothing below its own block, so one taken too close to the
+		// tip can record a branch that later loses and cannot be reverted out of. The
+		// producer's job is to stay the finality depth behind; the consumer's is to
+		// refuse one that did not, and only the consumer can protect a client from a
+		// publisher that got it wrong.
+		const definition = applyingProcessor();
+		const store = await createBrowserStateStore(definition.entities, {databaseName: freshName()});
+		const indexer = indexerOver(definition, store);
+		await indexer.init({provider: fakeChain(BRANCH_A, SNAPSHOT_TIP).provider, source: SOURCE, config: CONFIG});
+		const lastSync = await indexToTip(indexer as never);
+		const rows = await liveRowsOf(store);
+		indexer.dispose();
+
+		// the one thing that differs from `publishSnapshot`: this publisher reports the
+		// snapshot's OWN block as the tip it had seen, which is what indexing straight
+		// to the tip and publishing produces
+		const atTheTip = snapshotOf(definition, lastSync, rows, SNAPSHOT_TIP);
+		const soloName = freshName();
+		const before = await streamKeyspace();
+
+		const refused = await snapshotOnlyClient({
+			databaseName: soloName,
+			definition,
+			snapshot: atTheTip,
+			name: soloName,
+		});
+
+		expect(refused.outcome).toEqual({status: 'not-bootstrapped', reason: 'inside-reorg-window'});
+		// refused, so NOTHING was installed: the tab comes up empty and indexes from the
+		// start block, which is slow and correct rather than fast and possibly wrong
+		expect(await appliedIn(refused.store)).toEqual([]);
+		expect(refused.store.snapshotOrigin).toBeUndefined();
+		// and the mode's own claim still holds on the refusal path
+		await expectNoStreamWritten(soloName, before);
+
+		// the SAME publisher, one block deeper, is admitted: the refusal is about the
+		// depth and not about anything else in the document
+		const legal = snapshotOf(definition, lastSync, rows, SNAPSHOT_TIP + FINALITY);
+		const admittedName = freshName();
+		const admitted = await snapshotOnlyClient({
+			databaseName: admittedName,
+			definition,
+			snapshot: legal,
+			name: admittedName,
+		});
+		expect(admitted.outcome).toMatchObject({status: 'bootstrapped', at: SNAPSHOT_TIP});
 	});
 });

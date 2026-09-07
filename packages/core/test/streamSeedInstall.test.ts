@@ -286,6 +286,26 @@ describe('what is refused, and what a refusal costs', () => {
 		expect(rows.size).toBe(0);
 	});
 
+	it('a body that will not DECOMPRESS is an unreadable document, not an unreachable host', async () => {
+		// The host answered `200`, so it was REACHED; what it served is the problem.
+		// Reporting this as `unreachable` would point an operator at their network
+		// while the artifact is what is broken -- and the two have different remedies,
+		// which is the whole reason the vocabulary separates them. Truncating a real
+		// gzip is the shape a half-uploaded or half-proxied artifact actually takes:
+		// the magic bytes are there, so the loader commits to inflating, and the
+		// inflate is what fails.
+		const {keeper, rows} = freshKeeper();
+		const whole = servedOpaque(await seedOf());
+		const halfUploaded = whole.slice(0, Math.floor(whole.length / 2));
+		expect([halfUploaded[0], halfUploaded[1]]).toEqual([0x1f, 0x8b]);
+		const {get} = servingFetch({[REMOTE]: halfUploaded});
+
+		expect(
+			await installStreamSeed(keeper, [REMOTE], {source: SOURCE, streamConfig: STREAM_CONFIG, fetch: get}),
+		).toEqual({status: 'not-installed', reason: 'unreadable-format'});
+		expect(rows.size).toBe(0);
+	});
+
 	it('a seed that does not REACH BACK to the block this client reads from is refused', async () => {
 		// Refused rather than ranked lower, which is where a stream's selection
 		// differs from a snapshot's: its coverage start becomes the stream's
