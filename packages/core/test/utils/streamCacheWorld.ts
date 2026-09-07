@@ -1,5 +1,6 @@
 import type {Abi} from 'abitype';
 import {IndexerGeneration} from '../../src/indexer.js';
+import type {StreamCursorRecord, StreamSegmentPort, StoredSegment} from '../../src/stream/segments.js';
 import type {
 	ExistingStream,
 	IndexingSource,
@@ -187,6 +188,89 @@ export function memoryStream(initial?: {lastSync: StoredLastSync; eventStream: S
 		succeed() {
 			failWith = undefined;
 		},
+	};
+}
+
+/**
+ * A SEGMENT PORT over one `Map`, plus a log of every operation.
+ *
+ * `commitSegmentWithCursor` reads the stored cursor and applies the helper's
+ * decision in one step, which is what an IndexedDB `readwrite` transaction and a
+ * SQL transaction both give it for free.
+ *
+ * Deliberately dumb: it records what it was asked to do and in which order,
+ * because "a save allocated its ordinal from the cursor" and "a save scanned the
+ * keyspace to find one" produce the same stored bytes and differ only in the
+ * calls made. It lives here rather than beside one test because the segmentation
+ * rules and the seed INSTALL are both asserted against it, and a second copy
+ * would be a second definition of what a keeper does -- which is the only thing
+ * either suite's claims can be made against. It ignores the `source` it is
+ * handed: one port is one subtree, and the address arithmetic belongs to the
+ * shipped keepers and is asserted in `@etherfold/browser`.
+ */
+export function memorySegmentPort() {
+	const rows = new Map<string, unknown>();
+	const calls: {op: string; detail?: unknown}[] = [];
+	const port: StreamSegmentPort<Abi> = {
+		async readCursor() {
+			calls.push({op: 'readCursor'});
+			return rows.get('cursor') as StreamCursorRecord<Abi> | undefined;
+		},
+		async readSegments() {
+			calls.push({op: 'readSegments'});
+			const stored: StoredSegment[] = [];
+			for (const [key, value] of rows) {
+				if (key === 'cursor') continue;
+				stored.push({ordinal: Number(key), value});
+			}
+			return stored.sort((a, b) => a.ordinal - b.ordinal);
+		},
+		async commitSegmentWithCursor(_source, allocate) {
+			const commit = allocate(rows.get('cursor') as StreamCursorRecord<Abi> | undefined);
+			calls.push({op: 'commitSegmentWithCursor', detail: commit && commit.ordinal});
+			if (!commit) return;
+			rows.set(String(commit.ordinal), commit.segment);
+			rows.set('cursor', commit.cursor);
+		},
+		async writeCursorOnly(_source, next) {
+			const record = next(rows.get('cursor') as StreamCursorRecord<Abi> | undefined);
+			calls.push({op: 'writeCursorOnly', detail: record !== undefined});
+			if (!record) return;
+			rows.set('cursor', record);
+		},
+		async clearSubtree() {
+			const removed = rows.size;
+			calls.push({op: 'clearSubtree', detail: removed});
+			rows.clear();
+			return removed;
+		},
+	};
+	return {port, rows, calls};
+}
+
+/**
+ * A provider that answers the ONE call a `load()` legitimately makes and THROWS
+ * on every other, recording what it was asked.
+ *
+ * Enforcing "no node in the loop" this way rather than counting calls afterwards
+ * is the technique the seam spike used, and it is better for the reason it is
+ * used here: a call that should not happen fails AT the call, naming the method,
+ * instead of showing up as a number at the end of a test that has already done
+ * the wrong thing.
+ */
+export function nodeRefusingProvider(chainId = '1') {
+	const calls: string[] = [];
+	return {
+		calls,
+		provider: {
+			async request({method}: {method: string; params?: unknown}): Promise<unknown> {
+				calls.push(method);
+				if (method === 'eth_chainId') {
+					return `0x${Number(chainId).toString(16)}`;
+				}
+				throw new Error(`THE NODE WAS CALLED: ${method}`);
+			},
+		} as any,
 	};
 }
 

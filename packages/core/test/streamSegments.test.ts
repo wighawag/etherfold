@@ -1,12 +1,8 @@
 import {describe, expect, it, vi} from 'vitest';
 import type {Abi} from 'abitype';
-import {
-	createSegmentedStream,
-	type StreamCursorRecord,
-	type StreamSegmentPort,
-	type StoredSegment,
-} from '../src/stream/segments.js';
+import {createSegmentedStream, type StreamCursorRecord, type StreamSegmentPort} from '../src/stream/segments.js';
 import type {IndexingSource, LastSync, StoredLastSync, StoredLogEvent} from '../src/types.js';
+import {memorySegmentPort as memoryPort} from './utils/streamCacheWorld.js';
 
 // ---------------------------------------------------------------------------
 // THE SEGMENTATION HELPER, against a memory port.
@@ -44,54 +40,9 @@ function cursor(lastFromBlock: number, lastToBlock: number, latestBlock = lastTo
 	} as unknown as StoredLastSync;
 }
 
-type Call = {op: string; detail?: unknown};
-
-/**
- * A port over one `Map`, plus a log of every operation.
- *
- * `commitSegmentWithCursor` reads the stored cursor and applies the helper's
- * decision in one step, which is what an IndexedDB `readwrite` transaction and a
- * SQL transaction both give it for free.
- */
-function memoryPort() {
-	const rows = new Map<string, unknown>();
-	const calls: Call[] = [];
-	const port: StreamSegmentPort<Abi> = {
-		async readCursor() {
-			calls.push({op: 'readCursor'});
-			return rows.get('cursor') as StreamCursorRecord<Abi> | undefined;
-		},
-		async readSegments() {
-			calls.push({op: 'readSegments'});
-			const stored: StoredSegment[] = [];
-			for (const [key, value] of rows) {
-				if (key === 'cursor') continue;
-				stored.push({ordinal: Number(key), value});
-			}
-			return stored.sort((a, b) => a.ordinal - b.ordinal);
-		},
-		async commitSegmentWithCursor(_source, allocate) {
-			const commit = allocate(rows.get('cursor') as StreamCursorRecord<Abi> | undefined);
-			calls.push({op: 'commitSegmentWithCursor', detail: commit && commit.ordinal});
-			if (!commit) return;
-			rows.set(String(commit.ordinal), commit.segment);
-			rows.set('cursor', commit.cursor);
-		},
-		async writeCursorOnly(_source, next) {
-			const record = next(rows.get('cursor') as StreamCursorRecord<Abi> | undefined);
-			calls.push({op: 'writeCursorOnly', detail: record !== undefined});
-			if (!record) return;
-			rows.set('cursor', record);
-		},
-		async clearSubtree() {
-			const removed = rows.size;
-			calls.push({op: 'clearSubtree', detail: removed});
-			rows.clear();
-			return removed;
-		},
-	};
-	return {port, rows, calls};
-}
+// The port itself lives in `utils/streamCacheWorld.ts`, because the seed INSTALL
+// is asserted against the same one and a second copy would be a second
+// definition of what a keeper does.
 
 /** The `named-logs` channel this package logs on, silenced and recorded. */
 async function captureLogs() {
