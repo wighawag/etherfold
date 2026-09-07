@@ -174,6 +174,31 @@ export * from './stream/segments.js';
  * raises through; see the JSDoc for why swallowing it would make a HOLE.
  */
 export * from './stream/degrading.js';
+/**
+ * THE STRIP, published because something OUTSIDE this package has to apply the
+ * SAME one.
+ *
+ * The keeper seam takes only what the node said (ADR-0060), and the decoded half
+ * is a cache re-derived on read, so every writer of a stream reduces a decoded
+ * event to a stored one -- and that rule must have ONE implementation. The
+ * engine's own writes reach it internally; what could not was a seed PRODUCER or
+ * an installer written outside core, and the evidence is committed:
+ * `docs/spikes/pin-the-seam-a-published-stream-arrives-through/install.mjs` had
+ * to COPY the three-key destructure to write through `saveNewEvents`, which is
+ * the duplication ADR-0060 exists to prevent (ADR-0063 names publishing these as
+ * a build item).
+ *
+ * Deliberately NOT justified by the seed LOADER, which lives inside this package
+ * and reaches the module directly -- and deliberately only these two. The cursor
+ * strip (`storedLastSyncOf`) stays internal: an installer builds the cursor it
+ * writes, window and all, rather than stripping the engine's live one, so
+ * publishing it would offer an outside caller a tool for a job it does not have.
+ *
+ * Pinned from a consumer's suite (`@etherfold/browser`'s
+ * `storedStripIsPublished.test.ts`), because reachability THROUGH THE ENTRY is
+ * not something a test beside the function can see.
+ */
+export {storedEventOf, storedStreamOf} from './internal/stream/strip.js';
 
 export type {
 	Abi,
