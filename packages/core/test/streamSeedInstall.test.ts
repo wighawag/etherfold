@@ -390,6 +390,30 @@ describe('the three block rules, asserted through what they cause', () => {
 		expect(cursorRecord(rows).startBlock).toBe(START_BLOCK);
 	});
 
+	it('takes that block from the COVERAGE and not from the first EVENT, on a capture where the two differ', async () => {
+		// The case above cannot tell the two apart: its coverage starts at the block
+		// its first event sits in, so an install writing `eventStream[0].blockNumber`
+		// passes it. That is the whole of ADR-0063's first block rule, and getting it
+		// wrong is not a cosmetic slip -- the value becomes the stream's `startBlock`,
+		// and a stream starting ABOVE the block the client asks from is CLEARED by
+		// `fetchFrom` on the first load, so the seed silently deletes itself. A capture
+		// whose range opens on a quiet stretch is the ordinary shape that exposes it.
+		const quietAtTheStart = SEED_EVENTS.map((event) => ({...event, blockNumber: event.blockNumber + 6}));
+		const seed = await seedOf({coverage: {fromBlock: START_BLOCK, toBlock: COVERAGE_TO}, eventStream: quietAtTheStart});
+		expect(quietAtTheStart[0].blockNumber).toBeGreaterThan(START_BLOCK);
+		const {keeper, rows} = freshKeeper();
+		const {get} = servingFetch({[REMOTE]: servedOpaque(seed)});
+
+		await installStreamSeed(keeper, [REMOTE], {source: SOURCE, streamConfig: STREAM_CONFIG, fetch: get});
+
+		// the coverage start, NOT 106
+		expect(cursorRecord(rows).startBlock).toBe(START_BLOCK);
+		// and the consequence that makes it matter: the block a fresh generation's
+		// `load()` asks from is served rather than answered by wiping the subtree
+		expect(await keeper.fetchFrom(SOURCE, START_BLOCK)).toBeDefined();
+		expect(rows.size).toBeGreaterThan(0);
+	});
+
 	it('claims the coverage END, above the last event-bearing block', async () => {
 		const seed = await seedOf();
 		const {keeper, rows} = freshKeeper();
@@ -576,6 +600,25 @@ describe('a subtree that is not EMPTY is refused, whatever it holds', () => {
 		expect(await keeper.fetchFrom(SOURCE, startBlock)).toBeDefined();
 		// nothing was even downloaded: the client already has a stream
 		expect(asked).toEqual([]);
+	});
+
+	it('would have DESTROYED that stream had the probe asked from the seed`s own coverage start', async () => {
+		// The negative control for the case above, and the reason `PROBE_FROM_BLOCK` is
+		// `Number.MAX_SAFE_INTEGER` rather than the number the seed puts in front of
+		// you. Without it the emptiness check reads as a design preference; with it the
+		// naive probe is on record as a stream-deleting operation. This drives
+		// `fetchFrom` directly, because the point is what the SEAM does to a caller who
+		// asks the obvious question the obvious way -- the install itself never asks it.
+		const {rows, keeper, startBlock} = await locallyIndexedAbove();
+		expect(startBlock).toBeGreaterThan(START_BLOCK);
+		expect(rows.size).toBeGreaterThan(0);
+
+		// exactly what a probe asking from the seed's coverage start would do
+		const answer = await keeper.fetchFrom(SOURCE, START_BLOCK);
+
+		// it answers "nothing here" AND makes that true on the way past
+		expect(answer).toBeUndefined();
+		expect(rows.size).toBe(0);
 	});
 
 	it('refuses a FOREIGN stream by the same bare test, with no discriminator', async () => {
