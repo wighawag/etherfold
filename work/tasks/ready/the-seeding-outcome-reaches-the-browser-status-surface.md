@@ -2,23 +2,39 @@
 title: 'The seeding outcome reaches the browser status surface an app already subscribes to'
 slug: the-seeding-outcome-reaches-the-browser-status-surface
 spec: a-browser-app-starts-from-a-published-artifact
-needsAnswers: true
 blockedBy: [a-seed-that-is-not-for-this-build-is-refused-before-any-write]
 covers: [10]
 ---
 
-<!-- open-questions -->
+## The two wiring questions, ANSWERED
 
-## Open questions
+Both were asked by the tasking loop and are now decided by the human. Build to these; do not re-open them.
 
-The STORY is committed and its surface is settled: the outcome lands on the EXISTING browser status surface (the one that already carries `error` and `nonCanonicalGenerations`), and this is explicitly not licence to implement the reactive-envelope redesign in `work/notes/ideas/the-reactive-update-is-an-envelope-not-a-handle.md`. What is not settled is the WIRING, and each of these changes what the task builds, so they are asked rather than guessed.
+### 1. BOTH paths exist, and the hook-driven one is the documented default
 
-1. **Who drives the install?** Does the browser hook (`createIndexerState`) take the seed locations, the optional pinned content hash and the caller's same-origin statement as options and run the install itself before the generation loads, publishing progress and outcome as it goes? Or does the application call the core loader itself and hand the resulting outcome to the hook to publish? The first is what makes "installing" renderable at all and what guarantees the install happens while the subtree is still EMPTY (the loader refuses a non-empty one); the second keeps the hook thinner and leaves the trust statement in the app's own code. Nothing in ADR-0063, ADR-0064 or ADR-0065 decides it: ADR-0064 names the surface as a build-plan item and the spec settles only WHICH surface.
-2. **What does the surface carry?** A refusal is a normal condition and not an `error` (an app still starts and still indexes forward from a state snapshot), so does the status gain its own field with a small discriminated state (installing, seeded at block N, refused with a reason and, where present, a direction), or is one of the existing fields reused? If it is a new field, is progress DURING the install reported (bytes, batches, blocks) or only the terminal states?
+The core loader is callable directly, so an application may drive the install itself; AND `createIndexerState` takes an optional `seed` (the locations, the optional pinned content hash, and the caller's same-origin statement) and runs the install itself at the right moment. The hook path is what the docs show.
 
-Only these two are open. A third question, what happens to the app on a refusal, is NOT open and is recorded here so nobody re-asks it: ADR-0064 settles it under 'What a refusal actually costs the user' -- a refused seed does not stop an application, state still bootstraps from the published state snapshot and indexes forward from the tip, and what is lost is the stream underneath (the generation is a leaf). So a refusal is reported alongside an otherwise-normal boot and never gates it. Build to that.
+**The deciding argument is a SILENT failure mode, and it is worth understanding before you build either path.** The window for an install is after the generation is built and before it loads, and the boot path already provides one: `init()` builds the container, and the `IndexerGeneration` constructor's `reinit` calls `keepStream.setStreamConfig(resolvedConfig)` -- which is the moment the keeper learns which stream address it is writing to. `init()` does NOT load; `indexer.load()` happens later, inside `setupIndexing()`, driven by the first `indexMore()` or `startAutoIndexing()`. So the correct window is between those two, and it is comfortable.
 
-<!-- /open-questions -->
+Missing it fails in two very different ways:
+
+- **TOO LATE** (after indexing has started): the subtree is not empty, the loader refuses, the app renders a refusal. Loud, and nothing is corrupted.
+- **TOO EARLY** (before `init()`): the keeper still holds its DEFAULT stream config, so `streamDigestOf` resolves a different digest and the seed installs at an address nothing will ever read. **Silent**, and it is exactly the "installs under a key nothing reads" waste ADR-0064 exists to forbid, arriving through ordering instead of identity.
+
+The hook option exists to make that second case unreachable for the common path: only the hook knows when the address has been configured. The direct path stays supported because it is symmetric with how the state SNAPSHOT is already bootstrapped today (the app calls `bootstrapFromSnapshot` itself and hands the store to the hook through `createState`; `createIndexerState` knows nothing about it), and because an app may prefer to keep the trust statement in its own code beside its build pin.
+
+So: the hook's `seed` option is a convenience that encodes the ordering rule, not a new owner of the trust decision. Document the ordering constraint for the direct path.
+
+### 2. A dedicated `seed` field, plus a phase value; NO byte progress in v1
+
+- **A new field on the syncing store**, a small discriminated state: `installing`, `seeded` (naming the block the stream reached), `refused` (with the reason and, where the reason carries one, the direction), and the absent case. Additive, so no existing subscriber changes.
+- **`error` is NOT reused.** ADR-0064 makes a refusal a NORMAL condition -- the app still starts and still indexes forward -- so an app treating `error` as a fault would render a crash for an ordinary outcome, and `error`'s `acknowledgeError()` semantics do not fit.
+- **Add a seeding value to the status phase enum** (beside `Loading`, `FetchingEventStream` and the rest), because that enum is where applications already switch to choose what to render, so the boot phase becomes visible without every app learning a new field.
+- **No byte-level progress during the install**, and the reason is measured rather than assumed: in the recommended single-document shape the whole install takes about **1 second on a Pixel 8a** and ~300 ms on desktop (`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`), which a spinner covers. The variable part is the DOWNLOAD, not the install, so if a progress signal is ever wanted it belongs on the fetch as an optional loader callback, and adding one later is additive and needs no change to this surface.
+
+### What was never open
+
+What happens to the app on a refusal is settled by ADR-0064 ('What a refusal actually costs the user'): a refused seed does not stop an application, state still bootstraps from the published state snapshot and indexes forward from the tip, and what is lost is the stream underneath (the generation is a leaf). A refusal is reported alongside an otherwise-normal boot and never gates it.
 
 ## What to build
 
@@ -30,7 +46,11 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 
 ## Acceptance criteria
 
-- [ ] The seeding outcome is observable through the browser package's existing subscribable status surface, with no new reactive mechanism introduced.
+- [ ] The seeding outcome is observable through the browser package's existing subscribable status surface, with no new reactive mechanism introduced, as a DEDICATED field carrying `installing` / `seeded` / `refused` / absent, plus a seeding value in the status phase enum.
+- [ ] `error` is not reused for a refusal, and no existing field changes meaning.
+- [ ] `createIndexerState` accepts an optional `seed` and runs the install AFTER the generation is built (so the keeper's stream config is set) and BEFORE it loads, publishing `installing` and then the terminal outcome.
+- [ ] Driving the install DIRECTLY from an application still works and is documented, including the ordering constraint: installing before `init()` lands the seed at the wrong stream address SILENTLY, because the keeper still holds its default stream config.
+- [ ] No byte-level progress is reported during the install; the terminal states plus `installing` are the whole surface.
 - [ ] A refusal reaches the surface WITH its reason and, where the reason carries one, its direction, so an app can render something true rather than "loading".
 - [ ] Nothing in the library infers or renders "you are out of date": the direction is reported as data.
 - [ ] A refused seed does not stop the app: state still comes up from a published snapshot and indexes forward, and the refusal is reported alongside it, never gating the boot (ADR-0064, 'What a refusal actually costs the user').
@@ -48,7 +68,7 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 
 > Surface the stream-seeding outcome on the browser status store an application already subscribes to.
 >
-> FIRST, answer the two open questions at the top of this file (or have them answered): they decide who drives the install and what the surface carries, and building before they are settled means guessing at an API that ships. What happens to the app on a refusal is NOT open: ADR-0064 says it carries on from the state snapshot and the refusal is reported alongside it. Then check this task against current reality (it is a launch snapshot and may have DRIFTED): read the loader, its outcome type and its refusal vocabulary as they actually landed in `@etherfold/core`, not as this file describes them.
+> FIRST read "The two wiring questions, ANSWERED" at the top of this file: who drives the install and what the surface carries are DECIDED, including the silent failure mode that decided the first one, and they are not to be re-opened. What happens to the app on a refusal is likewise settled: ADR-0064 says it carries on from the state snapshot and the refusal is reported alongside it. Then check this task against current reality (it is a launch snapshot and may have DRIFTED): read the loader, its outcome type and its refusal vocabulary as they actually landed in `@etherfold/core`, not as this file describes them.
 >
 > Vocabulary (`CONTEXT.md`): the browser package wraps the engine in observable stores (state, syncing, status); its syncing store already carries an `error` and the non-canonical **generation** progress list, which is the precedent for how this library REPORTS rather than decides ("only the developer knows whether their reconfigure made the old answers WRONG or merely INCOMPLETE"). **Seeding** is creating a generation from a published artifact; a refusal is DATA with a reason and, for an identity mismatch, a DIRECTION.
 >
@@ -65,5 +85,4 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 The set-wide blocking issue the tasking loop raised (ADR-0065 pinned trust to a build-named content hash
 without fixing the byte domain, which over a gzipped artifact breaks every correctly pinned install) is
 resolved at the source: ADR-0065 carries a 2026-09-07 amendment fixing SHA-256 over the PUBLISHED BYTES,
-served opaque and never with `Content-Encoding: gzip`. It does not touch this task's own two questions,
-which remain open and are the reason `needsAnswers` is still set here.
+served opaque and never with `Content-Encoding: gzip`.
