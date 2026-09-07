@@ -1,5 +1,5 @@
 ---
-title: 'A seed that is not for this build, not pinned, or not coherent is refused before anything is written'
+title: 'A seed that is not for this stream, not intact, or not coherent is refused before anything is written'
 slug: a-seed-that-is-not-for-this-build-is-refused-before-any-write
 spec: a-browser-app-starts-from-a-published-artifact
 blockedBy: [a-published-stream-seed-installs-through-the-keeper-seam]
@@ -24,7 +24,7 @@ The residue this leaves is the uncomfortable half and belongs in the JSDoc rathe
 
 **A refusal must not be destructive, and this task multiplies the refusals.** Every reason added here is a new path that ends without installing, and the previous task established why that matters: the keeper's only read (`fetchFrom`) CLEARS the subtree in some branches, so a refusal path that inspects the stream before giving up can delete the very history it declined to replace. Inherit the non-destructive probe that task built rather than adding a second inspection, and assert the property on the checks landed here too: refusing on a digest mismatch, a bad pin, incoherence or capture depth leaves an EXISTING stream exactly as it was. A refusal test that starts from an empty subtree cannot see this, so at least one case must start from a populated one.
 
-**What is deliberately NOT built**: chain anchoring and bloom consistency (specified in ADR-0065, their value concentrates in adopting an unpinned third-party seed, which the pin rule refuses outright), and OMISSION detection, which is impossible within the premise rather than deferred and is precisely why the pin is mandatory. Do not add either.
+**What is deliberately NOT built**: chain anchoring and bloom consistency (specified in ADR-0065; ADR-0066 answers the untrusted-host case with a SIGNATURE, which is named and deliberately not built), and OMISSION detection, which is impossible within the premise rather than deferred and is precisely why the named host must be trusted like the build pipeline. Do not add either.
 
 With the checks in place, this is also where the install becomes a public, advertised entry point of `@etherfold/core`.
 
@@ -42,7 +42,7 @@ With the checks in place, this is also where the install becomes a public, adver
 - [ ] A capture taken inside the reorg window is refused, using a synthetic artifact (the committed reference capture sits about 27.5M blocks below its observed head, so it cannot exercise this).
 - [ ] The committed reference artifact still installs and folds after the checks land: the checks a real artifact passes are asserted to pass, so a check no real artifact can satisfy is caught here rather than disabled later.
 - [ ] Chain anchoring, bloom consistency and any attempt at omission detection are NOT built.
-- [ ] The install call is exported as a public entry point of `@etherfold/core`, with its trust contract stated in its JSDoc (the pin comes from the build; an unpinned third-party seed is refused; omission is not defended against).
+- [ ] The install call is exported as a public entry point of `@etherfold/core`, with its trust contract stated in its JSDoc (the CALLER names the locations and owns that choice, including any runtime override it accepts; a content hash is OPTIONAL and only an immutable release-tied artifact can carry a pinned one; omission is NOT defended against, so the named host is trusted like the build pipeline).
 - [ ] Tests cover the new behaviour, mirroring the repo's existing test style, and any synthetic artifacts they build live in the tests' own fixtures rather than beside the committed reference artifact.
 - [ ] A changeset records the `@etherfold/core` change.
 - [ ] The repo acceptance gate is green.

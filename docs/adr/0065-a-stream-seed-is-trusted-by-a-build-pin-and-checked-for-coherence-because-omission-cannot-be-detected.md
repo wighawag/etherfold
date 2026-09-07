@@ -105,7 +105,7 @@ Not defended and out of scope by the source spec: the SNAPSHOT's own verificatio
 
 ## Refusal
 
-As DATA, with the vocabulary of ADR-0064 extended by this layer's reasons (`integrity-mismatch`, `incoherent`, `inside-reorg-window`, `unpinned-third-party`), never thrown. That is `bootstrapFromSnapshot`'s judgement and the stance ADR-0040 settled.
+As DATA, with the vocabulary of ADR-0064 extended by this layer's reasons (`integrity-mismatch`, `incoherent`, `inside-reorg-window`; the `unpinned-third-party` reason listed here is WITHDRAWN by ADR-0066, which has no location-based refusal), never thrown. That is `bootstrapFromSnapshot`'s judgement and the stance ADR-0040 settled.
 
 **One note on citing ADR-0040**: its stance is what survives, not its mechanism. It decided where `BLOB_SNAPSHOT_FORMAT` lives for the free-form blob snapshot, and that path is deleted (ADR-0037) with only a stale doc reference left in `@etherfold/state-store`'s `snapshot.ts`. It is cited here for the principle -- an artifact a client cannot use is refused rather than installed, and a mirror that cannot serve is skipped rather than fatal -- and a reader following it to the code will not find it.
 

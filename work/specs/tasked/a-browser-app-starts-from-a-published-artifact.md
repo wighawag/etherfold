@@ -9,8 +9,9 @@ taskedAfter: [a-generation-can-be-seeded-from-a-published-artifact]
 > **This is the BUILD spec the exploration `a-generation-can-be-seeded-from-a-published-artifact`
 > emitted.** Every story below names the recorded decision that makes it buildable: ADR-0063 (the
 > arrival seam and what installing writes), `work/notes/findings/what-a-published-stream-seed-costs-to-install.md`
-> (the measured wire shape and the publishing cadence), ADR-0064 (the identity rule) and ADR-0065
-> (the trust and verification rule). Nothing here re-opens those. What the exploration found NOT
+> (the measured wire shape and the publishing cadence), ADR-0064 (the identity rule), ADR-0065
+> (verification, superseded in part) and ADR-0066 (the trust anchor, which replaced ADR-0065's build
+> pin after the reference deployment showed a build cannot pin a rolling artifact). Nothing here re-opens those. What the exploration found NOT
 > confidently buildable is in **Out of Scope**, kept out deliberately rather than padded in.
 
 ## Problem Statement
@@ -53,8 +54,8 @@ free.
 **A STREAM SEED is the other mode, and it buys exactly one thing**: a stream under the state, so a
 successor generation re-folds locally and a processor-only change costs nothing between snapshots. It
 arrives through its own loader in `@etherfold/core`, is INSTALLED by writing through the public
-keeper seam, is admitted only when its stream digest equals the client's, and is trusted because the
-client BUILD names its content hash.
+keeper seam, is admitted only when its stream digest equals the client's, and is fetched only from the
+locations the caller named, ordinarily from its build (ADR-0066).
 
 The artifact is a single compact gzipped document carrying only the STORED half of each event, which
 the measurement settled: 0.54 MB gzipped and 20.1 MB raw for the 31,332-log reference capture,
@@ -104,10 +105,13 @@ discards anyway.
    DIRECTION of the disagreement, so that I can tell a user whether this build indexes less than the
    publisher does or the published seed is stale relative to this build. *(ADR-0064, including that
    the loader reports the direction and never infers "you are out of date", which it cannot know.)*
-7. As a **browser app**, I want the loader to fetch only from LOCATIONS my build named, and to refuse
-   a seed offered from anywhere else, so that what I trust is a host I chose rather than whatever
-   answered. *(ADR-0066. This is the trust anchor: the build pins the LOCATION, and TLS to that host
-   is what the client relies on. It replaces ADR-0065's mandatory content pin, which cannot exist for
+7. As a **browser app**, I want the loader to fetch only from the ORDERED list of locations I give it,
+   walking to the next on failure, so that what I trust is a host I chose and my app still starts when
+   the freshest one is unreachable. *(ADR-0066. This is the trust anchor: the caller names the locations, ordinarily from its build, and
+   TLS to a named host is what it relies on. There is deliberately NO location-based REFUSAL, because a
+   loader cannot be offered a seed from somewhere it was not pointed at. The list must accept a
+   BUILD-EMBEDDED artifact at a relative path, with no host at all, and failover must reach it: that is
+   the shape the reference deployment ships (rolling remote first, embedded last). It replaces ADR-0065's mandatory content pin, which cannot exist for
    a ROLLING artifact -- the reference deployment held one web build against an hourly snapshot -- and
    its same-origin condition, which is unavailable when the app is served from any IPFS gateway while
    the artifact lives on a known host.)*
