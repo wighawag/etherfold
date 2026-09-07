@@ -113,6 +113,28 @@ describe('the seed envelope', () => {
 		const {streamConfig: _dropped, ...withoutConfig} = seedOf();
 		expect(() => parseStreamSeed(JSON.stringify(withoutConfig))).toThrow(/not a stream seed/);
 	});
+
+	it('refuses a seed whose numbers an admission check would do ARITHMETIC on and find absent', () => {
+		// The capture-depth check is `chainHeadAtCapture - coverage.toBlock < finality`.
+		// On an absent head that is `NaN < finality`, which is FALSE -- so a seed with
+		// no observed head would be ADMITTED by the check written to refuse it. The
+		// reader is shallow, but a number an admission check compares is checked at the
+		// door precisely so no comparison downstream can silently pass.
+		const {chainHeadAtCapture: _noHead, ...withoutHead} = seedOf();
+		expect(() => parseStreamSeed(JSON.stringify(withoutHead))).toThrow(/chainHeadAtCapture must be a number/);
+
+		const {toBlock: _noEnd, ...partialCoverage} = seedOf().coverage;
+		expect(() => parseStreamSeed(JSON.stringify({...seedOf(), coverage: partialCoverage}))).toThrow(
+			/coverage must carry a numeric fromBlock and toBlock/,
+		);
+	});
+
+	it('admits block number ZERO, which is a legal head and a legal coverage start', () => {
+		// A truthiness test would refuse a seed captured against a chain whose observed
+		// head is 0, or one covering from block 0, both of which are legal.
+		const atGenesis = {...seedOf(), chainHeadAtCapture: 0, coverage: {fromBlock: 0, toBlock: 0}};
+		expect(parseStreamSeed(JSON.stringify(atGenesis)).chainHeadAtCapture).toBe(0);
+	});
 });
 
 describe('the content hash a build pins', () => {

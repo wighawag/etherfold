@@ -251,6 +251,17 @@ export function streamSeedContentHash(payload: Uint8Array): string {
  * whether the capture was taken far enough below the head are ADMISSION checks
  * that run before the first write (ADR-0065); making them parse errors would
  * turn a refusal a client can explain into an exception it cannot.
+ *
+ * Shallow does NOT mean untyped, though, and the three NUMBERS are checked here
+ * for a reason worth stating: an admission check compares them arithmetically,
+ * and a missing one arrives as `undefined` rather than as a refusal. The
+ * capture-depth check is the sharp case -- `chainHeadAtCapture - coverage.toBlock
+ * < finality` on an absent head is `NaN < finality`, which is FALSE, so a seed
+ * carrying no observed head would be ADMITTED by the very check written to
+ * refuse it. A comparison that silently passes is the one failure a shallow
+ * reader must not hand downstream, so the fields an admission check does
+ * arithmetic on are typed at the door. `0` is a legal block number, so this is a
+ * `typeof` test and never a truthiness one.
  */
 export function parseStreamSeed(text: string): StreamSeed {
 	const parsed = JSON.parse(text) as Partial<StreamSeed>;
@@ -265,6 +276,12 @@ export function parseStreamSeed(text: string): StreamSeed {
 	}
 	if (!Array.isArray(parsed.eventStream)) {
 		throw new Error(`not a stream seed: missing eventStream`);
+	}
+	if (typeof parsed.chainHeadAtCapture !== 'number') {
+		throw new Error(`not a stream seed: chainHeadAtCapture must be a number`);
+	}
+	if (typeof parsed.coverage.fromBlock !== 'number' || typeof parsed.coverage.toBlock !== 'number') {
+		throw new Error(`not a stream seed: coverage must carry a numeric fromBlock and toBlock`);
 	}
 	return parsed as StreamSeed;
 }
