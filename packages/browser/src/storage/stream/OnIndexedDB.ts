@@ -1,6 +1,5 @@
 import {
 	createSegmentedStream,
-	degradingStream,
 	resolveStreamConfig,
 	streamDigestOf,
 	type Abi,
@@ -283,12 +282,13 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 	 *
 	 * `createSegmentedStream` already degrades everything that goes through the
 	 * segment port, but the legacy-blob probe in `fetchFrom` (and the `del` in
-	 * `clear`) are this module's own calls, outside it -- and an unopenable database fails there
-	 * FIRST, before a single port operation runs. Wrapping twice costs nothing and
-	 * never doubles a log line: the inner one answers `undefined` rather than
-	 * raising, so this one only ever sees what it did not already handle.
+	 * `clear`) are this module's own calls, outside it -- and an unopenable database
+	 * fails there FIRST, before a single port operation runs. Those failures now
+	 * RAISE THROUGH, like the segment port's own: what an unreadable substrate means
+	 * is the caller's to decide, because "absent is safe" is true of a generation
+	 * that re-indexes and false of an installer that writes (ADR-0068).
 	 */
-	const guarded = degradingStream<ABI>({
+	const guarded: ExistingStream<ABI> = {
 		async fetchFrom(source, fromBlock) {
 			if (await dropLegacyBlob(source)) {
 				return undefined;
@@ -302,7 +302,7 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 			await del(streamAddress(name, source, streamConfig).legacy, store);
 			await segmented.clear(source);
 		},
-	});
+	};
 
 	return {
 		...guarded,

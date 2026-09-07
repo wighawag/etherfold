@@ -10,8 +10,9 @@ import {BRANCH_A, fakeChain, FINALITY, indexToTip, SOURCE, START_BLOCK, type Tes
  * RE-INDEX, which is today's behaviour, so the feature degrades rather than
  * breaks.
  *
- * The rule itself is asserted against the core helper and the wrapper
- * (`@etherfold/core`'s `streamSegments.test.ts` and `degradingStream.test.ts`).
+ * The rule itself is asserted against the core helper and the load path
+ * (`@etherfold/core`'s `streamSegments.test.ts` and
+ * `anUnreadableCacheDoesNotWedgeOrCorrupt.test.ts`).
  * What is only observable HERE is the ROUND TRIP through the one stream keeper
  * that actually exists -- the browser's IndexedDB keeper over core's segmented
  * helper -- and, more to the point, what an APP experiences when the store under
@@ -21,8 +22,11 @@ import {BRANCH_A, fakeChain, FINALITY, indexToTip, SOURCE, START_BLOCK, type Tes
  * The failure this pins is not hypothetical: a browser can and does refuse to
  * open IndexedDB (private browsing, storage evicted or blocked, a database at a
  * version this build cannot open). `fetchFrom` and `clear` are called on the
- * load path with no `try`/`catch` above them, so a keeper that raised there
- * would leave the indexer permanently unloadable.
+ * load path, so a keeper that raised into a load path which did not catch would
+ * leave the indexer permanently unloadable. Since ADR-0068 the keeper DOES raise
+ * and the load path catches (`IndexerGeneration.readStoredStream`), which is the
+ * same outcome decided by the caller the policy is about -- so the app-level case
+ * below is what pins it, and it is unchanged.
  */
 
 let counter = 0;
@@ -54,15 +58,19 @@ async function captureLogs() {
 	return {messages, restore: () => spies.forEach((spy) => spy.mockRestore())};
 }
 
-describe('the keeper reports absent rather than raising when its store is gone', () => {
-	it('answers `undefined` from `fetchFrom` and settles `clear`', async () => {
+describe('the keeper RAISES when its store is gone, and the caller decides what that means', () => {
+	it('raises from `fetchFrom` and from `clear`, rather than calling an unreadable store empty', async () => {
 		const logged = await captureLogs();
 		const keeper = keepStreamOnIndexedDB<TestABI>(freshName(), {store: unavailableStore});
 
 		// including the legacy-blob probe this keeper does BEFORE the segmented read:
-		// it is this module's own IndexedDB call, outside the helper's rules
-		await expect(keeper.fetchFrom(SOURCE, START_BLOCK)).resolves.toBeUndefined();
-		await expect(keeper.clear(SOURCE)).resolves.toBeUndefined();
+		// it is this module's own IndexedDB call, outside the helper's rules, and it now
+		// raises through like every other
+		// What an APP experiences over this keeper -- it still loads, still indexes and
+		// still answers -- is asserted below in 'an app whose stream store is unusable',
+		// which is where the rule now lives and which is unchanged by the relocation.
+		await expect(keeper.fetchFrom(SOURCE, START_BLOCK)).rejects.toThrow(/unavailable/);
+		await expect(keeper.clear(SOURCE)).rejects.toThrow(/unavailable/);
 		logged.restore();
 	});
 

@@ -1,7 +1,6 @@
 import type {Abi} from 'abitype';
 import {logs} from 'named-logs';
 import type {ExistingStream, IndexingSource, LastSync, StoredLastSync, StoredLogEvent} from '../types.js';
-import {degradingStream} from './degrading.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -155,12 +154,13 @@ function isSegment(value: unknown): value is StreamSegment {
  * Nothing here assumes a tail, reads a segment's cursor, or knows what a key
  * looks like.
  *
- * The damage rule has TWO halves and they are both here, so a second keeper
- * inherits both. The damage a port can SHOW is inspected and cleared below. The
- * damage it can only RAISE -- a substrate that is unavailable, which no amount of
- * reading the keys can detect -- is `degradingStream`: the read side answers
- * ABSENT, which is the same answer, and the caller re-indexes rather than
- * failing to load. The write side raises through, because its caller acts on it.
+ * The damage rule has TWO halves and only ONE of them is here. The damage a port
+ * can SHOW is inspected and cleared below. The damage it can only RAISE -- a
+ * substrate that is unavailable, which no amount of reading the keys can detect
+ * -- RAISES THROUGH, and what to do about it belongs to the caller: a generation
+ * treats it as absent and re-indexes, an installer refuses to write (ADR-0068).
+ * This keeper used to answer absent for both, which quietly told an installer
+ * that an unreadable subtree was an empty one.
  */
 export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<ABI>): ExistingStream<ABI> {
 	/**
@@ -221,7 +221,7 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 		);
 	}
 
-	return degradingStream<ABI>({
+	return {
 		async fetchFrom(source: IndexingSource<ABI>, fromBlock: number) {
 			const cursor = await port.readCursor(source);
 			if (!cursor) {
@@ -344,5 +344,5 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 			// coverage of events that are gone.
 			await port.clearSubtree(source);
 		},
-	});
+	};
 }

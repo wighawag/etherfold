@@ -953,7 +953,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		}
 		this._load.reset();
 
-		await this.config.keepStream?.clear(this.source);
+		await this.clearStoredStream();
 		this.forgetStoredStream();
 		await this.processor.clear().then(() => this.load());
 		// Unconditional, and the only one of the three that is: `reset` IS the discard.
@@ -970,6 +970,74 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		lastSync: LastSync<ABI>,
 	): Promise<StreamWriteOutcome> {
 		return this._save.next({source, eventStream, lastSync});
+	}
+
+	/**
+	 * A CACHE MUST NEVER WEDGE THE INDEXER, applied HERE because this is the caller
+	 * the rule is about.
+	 *
+	 * `fetchFrom` and `clear` are called from the load path below with no
+	 * `try`/`catch` above them, so a keeper that raises from either does not degrade
+	 * a cache -- it makes `load()` reject, on this boot and every boot after it, for
+	 * a LOCAL CACHE whose correct recovery is to throw the bytes away and index
+	 * again. That is the difference between a slow app and a dead one, and it is
+	 * story 12 of `a-reconfigure-is-not-an-outage`. Absent is the honest answer for a
+	 * substrate that is simply unavailable (IndexedDB refused in private browsing,
+	 * storage evicted, a database at a version this build cannot open), and it is the
+	 * one the load path already knows what to do with.
+	 *
+	 * This USED to live in a `degradingStream` wrapper each keeper applied to itself,
+	 * and it moved here because a policy at the SEAM binds every caller, including
+	 * ones for whom it is false. "Absence is safe" is a statement about the load
+	 * path: this generation responds to an absent stream by re-indexing, so losing
+	 * one costs time. It is NOT true of a caller that responds to an absent stream by
+	 * WRITING -- `installStreamSeed` reads emptiness as permission to install, so a
+	 * swallowed read failure let it append a seed under a stream that was really
+	 * there, duplicating events beneath a cursor moved backwards. A keeper cannot
+	 * know which kind of caller it has, so it no longer decides for them: it raises,
+	 * and each caller applies its own policy (ADR-0068).
+	 *
+	 * The WRITE side is deliberately not guarded here or anywhere: `promiseToSave`
+	 * catches `saveNewEvents` itself and what it does with the failure is
+	 * load-bearing -- it counts it, paces the retry, freezes the cache, and until
+	 * then does not process the batch at all. A swallowed write failure would let the
+	 * state advance past events the stream never received, which is a HOLE.
+	 */
+	protected async readStoredStream(
+		fromBlock: number,
+	): Promise<{eventStream: StoredLogEvent[]; lastSync: StoredLastSync} | undefined> {
+		const keepStream = this.config.keepStream;
+		if (!keepStream) return undefined;
+		try {
+			return await keepStream.fetchFrom(this.source, fromBlock);
+		} catch (error) {
+			this.cacheDegraded('read', error);
+			// the SAME answer a never-written stream gives, which is why it is the safe
+			// one HERE: the load path clears and re-indexes on it
+			return undefined;
+		}
+	}
+
+	/** The other half of the rule above: a substrate that cannot be read cannot be emptied either. */
+	protected async clearStoredStream(source: IndexingSource<ABI> = this.source): Promise<void> {
+		const keepStream = this.config.keepStream;
+		if (!keepStream) return;
+		try {
+			await keepStream.clear(source);
+		} catch (error) {
+			// `fetchFrom` reporting absent is what MAKES the caller clear, so a raising
+			// `clear` would put the outage back one line further down.
+			this.cacheDegraded('cleared', error);
+		}
+	}
+
+	private cacheDegraded(operation: string, error: unknown): void {
+		namedLogger.error(
+			`the cached stream could not be ${operation} on chain ${this.source.chainId}: ${error}. It is treated as ` +
+				`ABSENT, so this generation re-indexes from its start block rather than failing to load at all -- a cache ` +
+				`is an optimisation and must never wedge the indexer.`,
+			error,
+		);
 	}
 
 	/** There is no stream on disk any more, so nothing constrains the next write. */
@@ -1081,7 +1149,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 				await this._onLoad('FetchingEventStream');
 				// we start from scratch
 				const fromBlock = this.defaultFromBlock;
-				const existingStreamData = await this.config.keepStream.fetchFrom(this.source, fromBlock);
+				const existingStreamData = await this.readStoredStream(fromBlock);
 
 				// we assume the stream is correct and start from the requested number
 				if (existingStreamData) {
@@ -1106,7 +1174,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 							// version can be: it is a stream an OLDER version wrote, back when a parse
 							// config could project `topics` or `data` away. So this stream cannot be
 							// re-read and must not be replayed on trust (ADR-0034).
-							await this.config.keepStream.clear(this.source);
+							await this.clearStoredStream();
 							this.forgetStoredStream();
 						} else {
 							// we update the processorHash in case it was changed
@@ -1138,11 +1206,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 							}
 						}
 					} else {
-						await this.config.keepStream.clear(this.source);
+						await this.clearStoredStream();
 						this.forgetStoredStream();
 					}
 				} else {
-					await this.config.keepStream.clear(this.source);
+					await this.clearStoredStream();
 					this.forgetStoredStream();
 				}
 			}
@@ -1156,7 +1224,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 				await this._onLoad('FetchingEventStream');
 				const fromBlock = getFromBlock(currentLastSync, this.defaultFromBlock, this.finality);
 				// we still need to clear if it does not matches, as otherwise it will be written as if it contained all logs
-				const existingStreamData = await this.config.keepStream.fetchFrom(this.source, fromBlock);
+				const existingStreamData = await this.readStoredStream(fromBlock);
 				if (existingStreamData) {
 					const eventsFetched = existingStreamData.eventStream;
 					// the requested `fromBlock`, taken onto the fetched cursor exactly as the
@@ -1165,7 +1233,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 					// cursor's own is whatever the last fetch used
 					const lastSyncFetched = cursorFromStream<ABI>(existingStreamData.lastSync, fromBlock);
 					if (!this.streamMatches(lastSyncFetched.lastToBlock, lastSyncFetched.context)) {
-						await this.config.keepStream.clear(this.source);
+						await this.clearStoredStream();
 						this.forgetStoredStream();
 					} else {
 						this.streamLastToBlock = lastSyncFetched.lastToBlock;
@@ -1181,7 +1249,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 							// decoding rule for a replayed stream is better than two.
 							const replayable = this.logEventFetcher.reparse(eventsFetched);
 							if (!replayable) {
-								await this.config.keepStream.clear(this.source);
+								await this.clearStoredStream();
 								this.forgetStoredStream();
 							} else if (replayable.length > 0) {
 								await this._onLoad('ProcessingEventStream');
@@ -1223,7 +1291,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		}
 
 		const fromBlock = getFromBlock(current, this.defaultFromBlock, this.finality);
-		const existingStreamData = await unlessCancelled(keepStream.fetchFrom(this.source, fromBlock));
+		const existingStreamData = await unlessCancelled(this.readStoredStream(fromBlock));
 		if (!existingStreamData) {
 			return current;
 		}

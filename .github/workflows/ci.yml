@@ -81,3 +81,19 @@ jobs:
       # an example whose `tsc` emit breaks passes the gate and fails here.
       - name: Build examples
         run: pnpm build:examples
+
+      # VitePress fails the build on a DEAD LINK, and until this step existed
+      # nothing on a pull request ever ran it: `docs.yml` builds the site only on
+      # a push to `main`, where it is a DEPLOY, so a broken link landed first and
+      # broke the deploy afterwards. That is exactly what happened -- a spike
+      # README linked `../../../work/notes/findings/...`, which is outside the
+      # VitePress root, and `docs:build` was red on `main` from 00805ae until
+      # someone happened to run it locally.
+      #
+      # It belongs HERE and not in `dorfl.json`'s `verify`: it is ~35s, it needs
+      # no per-task feedback, and the failure it catches is a repo-wide one rather
+      # than something a single task's build agent can act on. The guide is now
+      # user-facing product documentation with copyable recipes in it, so a dead
+      # link is a broken deliverable rather than cosmetic.
+      - name: Build docs site
+        run: pnpm docs:build
