@@ -60,6 +60,10 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 >
 > RECORD non-obvious in-scope decisions you make while building, in a `## Decisions` block at the end of your FINAL REPORT: the wiring you were given or chose, the field shape, and what happens to an app whose seed was refused. The runner transcribes the block into the done record; do not write the done record, the commit message or the PR body yourself, and do not open a `decisions-*` note.
 
-## Open questions
+## Note on the build pin, resolved
 
-- The build PIN, which is the entire trust story of stories 7 and 8, is split across two tasks with no contract between them and no round-trip assertion, so both tasks can pass their own tests while every real pinned install refuses. The producer task says only that it PRINTS the content hash; the admission task says only that a seed whose bytes do not match a caller-supplied hash is refused. Neither names the hash ALGORITHM, nor the BYTE DOMAIN (the published compressed document versus the decompressed JSON text), and no task owns how a single compact GZIPPED document becomes a parsed envelope on the wire. That last one decides the first: a host declaring Content-Encoding gzip makes fetch decompress transparently, so a hash taken over the compressed file cannot be recomputed from what the client receives. Fixed in the edits: the producer declares algorithm plus byte domain and asserts its printed hash is reproducible; the loader owns and records the decompression arrangement and exercises it the way a real host would; the admission task pins the reference artifact with the literal value the PRODUCER printed rather than one it recomputed with the same helper it is verifying. (producer AC 'The producer PRINTS the artifact stream digest and its content hash'; admission AC 'A seed whose bytes do not match a caller-supplied expected content hash is refused'; loader task never mentions decompression; ADR-0065 pins that trust comes from the build hash but does not fix the byte domain.)
+The set-wide blocking issue the tasking loop raised (ADR-0065 pinned trust to a build-named content hash
+without fixing the byte domain, which over a gzipped artifact breaks every correctly pinned install) is
+resolved at the source: ADR-0065 carries a 2026-09-07 amendment fixing SHA-256 over the PUBLISHED BYTES,
+served opaque and never with `Content-Encoding: gzip`. It does not touch this task's own two questions,
+which remain open and are the reason `needsAnswers` is still set here.

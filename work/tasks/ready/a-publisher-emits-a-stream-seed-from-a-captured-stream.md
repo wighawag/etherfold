@@ -4,7 +4,6 @@ slug: a-publisher-emits-a-stream-seed-from-a-captured-stream
 spec: a-browser-app-starts-from-a-published-artifact
 blockedBy: [the-stored-event-strip-is-exported-from-core]
 covers: [4]
-needsAnswers: true
 ---
 
 ## What to build
@@ -77,6 +76,12 @@ One wrinkle to expect rather than be surprised by: the stream digest rule is def
 >
 > RECORD non-obvious in-scope decisions you make while building, in a `## Decisions` block at the end of your FINAL REPORT: where the producer lives, the committed artifact's path, what the format number is and why, the content hash's ALGORITHM and BYTE DOMAIN (the next two tasks pin against them), whether an unreadable format is reported as data or thrown (the loader task consumes that choice), and any field you added beyond the ones listed here. The runner transcribes the block into the done record; do not write the done record, the commit message or the PR body yourself, and do not open a `decisions-*` note. If a choice meets the ADR gate, write the ADR and name it in the block.
 
-## Open questions
+## Note on the build pin, resolved
 
-- The build PIN, which is the entire trust story of stories 7 and 8, is split across two tasks with no contract between them and no round-trip assertion, so both tasks can pass their own tests while every real pinned install refuses. The producer task says only that it PRINTS the content hash; the admission task says only that a seed whose bytes do not match a caller-supplied hash is refused. Neither names the hash ALGORITHM, nor the BYTE DOMAIN (the published compressed document versus the decompressed JSON text), and no task owns how a single compact GZIPPED document becomes a parsed envelope on the wire. That last one decides the first: a host declaring Content-Encoding gzip makes fetch decompress transparently, so a hash taken over the compressed file cannot be recomputed from what the client receives. Fixed in the edits: the producer declares algorithm plus byte domain and asserts its printed hash is reproducible; the loader owns and records the decompression arrangement and exercises it the way a real host would; the admission task pins the reference artifact with the literal value the PRODUCER printed rather than one it recomputed with the same helper it is verifying. (producer AC 'The producer PRINTS the artifact stream digest and its content hash'; admission AC 'A seed whose bytes do not match a caller-supplied expected content hash is refused'; loader task never mentions decompression; ADR-0065 pins that trust comes from the build hash but does not fix the byte domain.)
+The tasking loop raised one blocking issue against every task in this set: ADR-0065 pinned trust to a
+build-named content hash without saying a hash OF WHAT, and over a gzipped artifact that is ambiguous
+enough to break every correctly pinned install (a host sending `Content-Encoding: gzip` makes `fetch`
+decompress transparently, so a hash over the compressed file cannot be recomputed from what the client
+receives). It is resolved at the source: ADR-0065 now carries a 2026-09-07 amendment fixing SHA-256 over
+the PUBLISHED BYTES, with the artifact served as an opaque file and never with `Content-Encoding: gzip`.
+Build to that; the producer's printed hash must be reproducible from the published file alone.

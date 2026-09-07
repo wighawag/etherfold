@@ -42,6 +42,18 @@ ADR-0063 installs by writing through the keeper seam, so a check made afterwards
 
 **Integrity**: the artifact's content hash equals the pinned one. On the chunked shape this is per chunk plus the manifest, so an interrupted install verifies what it installed rather than what it eventually will.
 
+### Amendment, 2026-09-07: the hash is SHA-256 over the PUBLISHED BYTES, and the artifact is served opaque
+
+The paragraph above said trust comes from a pinned content hash and did not say a hash OF WHAT, which the tasker's review loop refused to task around and was right to: over a gzipped artifact the byte domain is ambiguous, and the ambiguity is not pedantic. If a host serves the seed with `Content-Encoding: gzip`, `fetch` decompresses TRANSPARENTLY, so a hash taken over the compressed file cannot be recomputed from anything the client receives, and every correctly pinned install would refuse. Two producers and two clients could each be self-consistent and never agree.
+
+So, pinned here:
+
+- **The hash is SHA-256**, hex-encoded, lowercase, with no prefix. One algorithm, named, because a negotiated one is two implementations that must agree.
+- **The domain is the PUBLISHED BYTES**: exactly the octets the publisher wrote and a client received, which for the recommended shape is the GZIPPED document. It is not the decompressed JSON text, and it is not a canonicalised re-serialisation, because a hash over anything the client has to reconstruct makes integrity depend on the reconstruction being byte-identical, which JSON does not guarantee.
+- **Therefore the artifact is served as an OPAQUE FILE and never with `Content-Encoding: gzip`**, and the client decompresses it itself. This is a constraint on the PUBLISHER as much as on the code, so it belongs with the artifact's definition rather than in a host's documentation. It is also what the measurement already did: the spike's harness served the `.gz` as a plain file and decompressed in the page with `DecompressionStream`, precisely so that the bytes measured were the bytes published.
+
+The consequence for whoever builds this: the producer PRINTS a hash a build can pin, and the value it prints must be reproducible from the published file alone. A test that recomputes the expected value with the same helper it is verifying asserts nothing; pin the literal the producer printed.
+
 **Structural coherence**, all O(n) over the events and needing no node:
 
 - block numbers non-decreasing, and `(blockNumber, logIndex)` strictly increasing;
