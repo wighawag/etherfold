@@ -23,6 +23,7 @@ import type {
 	LogEvent,
 	StoredLastSync,
 	StoredLogEvent,
+	StreamRead,
 } from './types.js';
 import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
 import type {Abi} from 'abitype';
@@ -1008,14 +1009,44 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	): Promise<{eventStream: StoredLogEvent[]; lastSync: StoredLastSync} | undefined> {
 		const keepStream = this.config.keepStream;
 		if (!keepStream) return undefined;
+		let read: StreamRead;
 		try {
-			return await keepStream.fetchFrom(this.source, fromBlock);
+			read = await keepStream.fetchFrom(this.source, fromBlock);
 		} catch (error) {
 			this.cacheDegraded('read', error);
 			// the SAME answer a never-written stream gives, which is why it is the safe
-			// one HERE: the load path clears and re-indexes on it
+			// one HERE: this generation re-indexes on it
 			return undefined;
 		}
+		if (read.status === 'stream') {
+			return read;
+		}
+		if (read.status !== 'absent') {
+			// THE REPAIR, and it is this caller's (ADR-0069). A keeper REPORTS what it
+			// found and clears nothing, because the right response differs by caller: a
+			// FOLLOWER reaches this same code through `readOnlyStream`, whose `clear` is a
+			// no-op, so it can no longer destroy the stream its writer is still appending
+			// to -- which is precisely what a keeper clearing on its own behalf used to do.
+			//
+			// For THIS generation the answer is what it has always been: throw the bytes
+			// away and index again. Repairing them would cost more machinery than the
+			// re-index it saves, and a `does-not-reach-back` stream is discarded for the
+			// same reason it always was -- the events below its start would be missing from
+			// a fold that believed it was whole.
+			const why =
+				read.status === 'inconsistent'
+					? `it is inconsistent (${read.reason})`
+					: `it starts at ${read.startBlock} and does not reach back to ${fromBlock}`;
+			namedLogger.info(
+				`the cached stream is being cleared and will rebuild, because ${why}. Nothing else reads it, so this ` +
+					`costs a re-index and nothing more.`,
+			);
+			await this.clearStoredStream();
+		}
+		// Every non-`stream` verdict reaches the caller below as ABSENT, which is the
+		// shape the load path has always branched on. The verdict changed WHO repairs,
+		// not what this generation does about it.
+		return undefined;
 	}
 
 	/** The other half of the rule above: a substrate that cannot be read cannot be emptied either. */

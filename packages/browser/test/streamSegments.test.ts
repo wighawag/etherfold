@@ -23,6 +23,7 @@ import {
 	SOURCE,
 	START_BLOCK,
 	type TestABI,
+	streamOf,
 } from '../browser/workload.js';
 
 /**
@@ -211,14 +212,14 @@ describe('the address', () => {
 		await shortName.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursorAt(100, 100)});
 		await longName.saveNewEvents(SOURCE, {eventStream: [event(200), event(201)], lastSync: cursorAt(100, 201)});
 
-		expect((await shortName.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(1);
-		expect((await longName.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(2);
+		expect(streamOf(await shortName.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(1);
+		expect(streamOf(await longName.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(2);
 
 		// a flat delimited key would have made `stream_<tag>_1` a prefix of
 		// `stream_<tag>_10_0`; comparing key ELEMENTS cannot
 		await shortName.clear(SOURCE);
-		expect(await shortName.fetchFrom(SOURCE, 100)).toBeUndefined();
-		expect((await longName.fetchFrom(SOURCE, 100))?.eventStream).toHaveLength(2);
+		expect(await shortName.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
+		expect(streamOf(await longName.fetchFrom(SOURCE, 100)).eventStream).toHaveLength(2);
 	});
 });
 
@@ -230,15 +231,15 @@ describe('two CHAINS under one indexer name do not see each other', () => {
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(100), event(101)], lastSync: cursorAt(100, 101)});
 		await keeper.saveNewEvents(OTHER_CHAIN, {eventStream: [event(500)], lastSync: cursorAt(500, 500)});
 
-		expect((await keeper.fetchFrom(SOURCE, 100))?.eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
-		expect((await keeper.fetchFrom(OTHER_CHAIN, 500))?.eventStream.map((e) => e.blockNumber)).toEqual([500]);
+		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
+		expect(streamOf(await keeper.fetchFrom(OTHER_CHAIN, 500)).eventStream.map((e) => e.blockNumber)).toEqual([500]);
 
 		await keeper.clear(SOURCE);
 
-		expect(await keeper.fetchFrom(SOURCE, 100)).toBeUndefined();
-		const survivor = await keeper.fetchFrom(OTHER_CHAIN, 500);
-		expect(survivor?.eventStream.map((e) => e.blockNumber)).toEqual([500]);
-		expect(survivor?.lastSync.lastToBlock).toBe(500);
+		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
+		const survivor = streamOf(await keeper.fetchFrom(OTHER_CHAIN, 500));
+		expect(survivor.eventStream.map((e) => e.blockNumber)).toEqual([500]);
+		expect(survivor.lastSync.lastToBlock).toBe(500);
 	});
 });
 
@@ -256,8 +257,8 @@ describe('segments are read by KEY RANGE, not by a whole-store scan', () => {
 		}
 		recorded.scans.length = 0;
 
-		const fetched = await keeper.fetchFrom(SOURCE, 100);
-		expect(fetched?.eventStream).toHaveLength(5);
+		const fetched = streamOf(await keeper.fetchFrom(SOURCE, 100));
+		expect(fetched.eventStream).toHaveLength(5);
 
 		// five segments, not ten, and not "every key in the store": `keys()` would
 		// make `fetchFrom` O(store) once several streams exist
@@ -369,8 +370,8 @@ describe('two keepers over one store cannot lose a batch', () => {
 		expect(ordinals).toHaveLength(rounds * 2);
 		expect(new Set(ordinals).size).toBe(ordinals.length);
 
-		const stored = await keeperA.fetchFrom(SOURCE, 100);
-		const logIndexes = (stored?.eventStream ?? []).map((e) => e.logIndex).sort((x, y) => Number(x) - Number(y));
+		const stored = streamOf(await keeperA.fetchFrom(SOURCE, 100));
+		const logIndexes = stored.eventStream.map((e) => e.logIndex).sort((x, y) => Number(x) - Number(y));
 		expect(logIndexes).toEqual(Array.from({length: rounds * 2}, (_, i) => i));
 	});
 });
@@ -389,7 +390,7 @@ describe('clear removes the subtree and nothing else', () => {
 		// `idb-keyval`'s `clear()` would have taken this with it, along with every
 		// other stream and every row any other keeper wrote
 		expect(await get(neighbourKey)).toEqual({mine: true});
-		expect(await keeper.fetchFrom(SOURCE, 100)).toBeUndefined();
+		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
 		expect((await allKeys()).filter((key) => Array.isArray(key) && key[1] === tag)).toEqual([]);
 	});
 });
@@ -407,7 +408,7 @@ describe('the legacy flat-key blob', () => {
 		// detected in `fetchFrom` and not only in `clear`: `indexer.ts`'s state-kept
 		// branch guards its `clear` behind `if (existingStreamData)`, so a blob found
 		// only by `clear` would survive indefinitely
-		expect(await keeper.fetchFrom(SOURCE, 100)).toBeUndefined();
+		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
 		expect(await get(address.legacy)).toBeUndefined();
 		expect(logged.messages.some((m) => m.includes('DELETED rather than'))).toBe(true);
 		logged.restore();
@@ -525,7 +526,8 @@ function withWindowReattached(keeper: ReturnType<typeof keepStreamOnIndexedDB<Te
 		...keeper,
 		async fetchFrom(source: never, fromBlock: number) {
 			const fetched = await keeper.fetchFrom(source, fromBlock);
-			if (!fetched) return fetched;
+			// only a real stream has a window to rebuild; every other verdict passes through
+			if (fetched.status !== 'stream') return fetched;
 			const floor = fetched.lastSync.latestBlock - FINALITY;
 			const events = fetched.eventStream as unknown as {
 				blockNumber: number;
@@ -578,8 +580,8 @@ describe('a reorg, replayed', () => {
 	it('returns the retractions in APPEND order', async () => {
 		const {stream} = await liveRunThroughAReorg(freshName());
 
-		const stored = await stream.fetchFrom(SOURCE, START_BLOCK);
-		const order = (stored?.eventStream ?? []).map((e) => `${e.blockHash}:${e.logIndex}${e.removed ? ':removed' : ''}`);
+		const stored = streamOf(await stream.fetchFrom(SOURCE, START_BLOCK));
+		const order = stored.eventStream.map((e) => `${e.blockHash}:${e.logIndex}${e.removed ? ':removed' : ''}`);
 		// the superseded 104 comes back at its ORIGINAL block, flagged `removed`, AFTER
 		// the events it supersedes and BEFORE the replacement branch -- which is why
 		// segments are keyed by ordinal and the read is a full ordered scan: a later
@@ -679,11 +681,11 @@ describe('`fetchFrom` answers what it answered before', () => {
 		await indexToTip(indexer as never);
 		indexer.dispose();
 
-		const whole = await stream.fetchFrom(SOURCE, START_BLOCK);
-		expect(whole?.eventStream.map((e) => `${e.blockHash}:${e.logIndex}`)).toEqual(
+		const whole = streamOf(await stream.fetchFrom(SOURCE, START_BLOCK));
+		expect(whole.eventStream.map((e) => `${e.blockHash}:${e.logIndex}`)).toEqual(
 			BRANCH_A.map((log) => `${log.blockHash}:${parseInt(log.logIndex.slice(2), 16)}`),
 		);
 		// the window is not stored and not reconstructed
-		expect(whole?.lastSync.unconfirmedBlocks).toEqual([]);
+		expect(whole.lastSync.unconfirmedBlocks).toEqual([]);
 	});
 });

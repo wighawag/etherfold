@@ -1,6 +1,6 @@
 import type {Abi} from 'abitype';
 import {logs} from 'named-logs';
-import type {ExistingStream, IndexingSource, LastSync, StoredLastSync, StoredLogEvent} from '../types.js';
+import type {ExistingStream, IndexingSource, LastSync, StoredLastSync, StoredLogEvent, StreamRead} from '../types.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -213,67 +213,73 @@ export function createSegmentedStream<ABI extends Abi>(port: StreamSegmentPort<A
 		};
 	}
 
-	async function clearBecause(source: IndexingSource<ABI>, reason: string): Promise<void> {
-		const removed = await port.clearSubtree(source);
-		namedLogger.info(
-			`the cached stream is inconsistent (${reason}), so it is being cleared and will rebuild: ` +
-				`${removed} record(s) removed. Repairing it would cost more machinery than the re-index it saves.`,
-		);
+	/**
+	 * REPORTED, not repaired (ADR-0069).
+	 *
+	 * This used to CLEAR the subtree and answer absent. It no longer touches
+	 * anything: the caller decides, because the right answer differs by caller. A
+	 * generation clears and re-indexes (`IndexerGeneration.readStoredStream`, which
+	 * is where the message below is now logged); a FOLLOWER reads through
+	 * `readOnlyStream`, whose `clear` is a no-op, so it can no longer destroy the
+	 * stream its writer is still appending to; and an installer refuses, because
+	 * damage is not emptiness and writing a seed on top of orphaned segments would
+	 * collide at ordinal 0.
+	 */
+	function inconsistent(reason: string): StreamRead {
+		return {status: 'inconsistent', reason};
 	}
 
 	return {
 		async fetchFrom(source: IndexingSource<ABI>, fromBlock: number) {
 			const cursor = await port.readCursor(source);
 			if (!cursor) {
-				// UNCONDITIONALLY, before reporting absent: no cursor is also what
-				// SEGMENTS WITH NO CURSOR look like, and left in place the next save
-				// would take ordinal 0 again, overwrite the old segment 0 and leave every
-				// higher ordinal to be replayed as part of a stream it is not part of.
-				// Nothing else cleans it up -- `indexer.ts` clears on absence in its
-				// state-DISCARDED branch only.
-				const removed = await port.clearSubtree(source);
-				if (removed > 0) {
-					namedLogger.info(
-						`the cached stream has ${removed} segment(s) and no cursor record, so it is being cleared and ` +
-							`will rebuild: with no cursor there is nothing to allocate from and nothing to replay them as.`,
-					);
+				// NO CURSOR is two different things and they are now told apart. With no
+				// segments either, the subtree is genuinely EMPTY -- and that is the one
+				// answer an installer may read as permission to write, so it must not be
+				// confused with the other. With segments, it is DAMAGE: there is nothing to
+				// allocate from and nothing to replay them as, and left in place the next
+				// save would take ordinal 0 again, overwrite the old segment 0 and leave
+				// every higher ordinal replayed as part of a stream it is not part of. The
+				// repair is still exactly one `clear`; it is the caller's to make.
+				const stored = await port.readSegments(source);
+				if (stored.length === 0) {
+					return {status: 'absent'};
 				}
-				return undefined;
+				return inconsistent(`${stored.length} segment(s) and no cursor record`);
 			}
 
 			const stored = await port.readSegments(source);
 			const eventStream: StoredLogEvent[] = [];
 			for (let i = 0; i < stored.length; i++) {
 				if (stored[i].ordinal !== i) {
-					await clearBecause(source, `a gap in the ordinals at ${i}`);
-					return undefined;
+					return inconsistent(`a gap in the ordinals at ${i}`);
 				}
 				const segment = stored[i].value;
 				if (!isSegment(segment)) {
-					await clearBecause(source, `segment ${i} does not parse`);
-					return undefined;
+					return inconsistent(`segment ${i} does not parse`);
 				}
 				eventStream.push(...segment.events);
 			}
 			if (stored.length !== cursor.nextOrdinal) {
-				await clearBecause(
-					source,
-					`the cursor claims ${cursor.nextOrdinal} segment(s) and ${stored.length} are stored`,
-				);
-				return undefined;
+				return inconsistent(`the cursor claims ${cursor.nextOrdinal} segment(s) and ${stored.length} are stored`);
 			}
 			if (cursor.startBlock > fromBlock) {
-				// A stream that does not reach back to what was ASKED FOR. Compared
-				// against the REQUESTED `fromBlock` and never against the source's own
-				// minimum: the state-KEPT branch asks from the RESUME point, so a keeper
-				// re-deriving that minimum would clear a perfectly good partial stream on
-				// every reload and the next save would recreate it partial -- a
-				// clear-and-recreate loop that never converges.
-				await clearBecause(source, `it starts at ${cursor.startBlock} and does not reach back to ${fromBlock}`);
-				return undefined;
+				// A stream that does not reach back to what was ASKED FOR -- and nothing is
+				// WRONG with it, which is why it is its own verdict rather than damage. It
+				// is compared against the REQUESTED `fromBlock` and never against the
+				// source's own minimum: the state-KEPT branch asks from the RESUME point, so
+				// a keeper re-deriving that minimum would reject a perfectly good partial
+				// stream on every reload.
+				//
+				// This used to CLEAR, which is the defect a follower could reach: reading a
+				// writer's stream that starts above what the follower asked from destroyed
+				// the writer's history through a view whose writes were supposed to be
+				// no-ops (ADR-0044, ADR-0069).
+				return {status: 'does-not-reach-back', startBlock: cursor.startBlock};
 			}
 
 			return {
+				status: 'stream',
 				eventStream: eventStream.filter((e) => e.blockNumber >= fromBlock),
 				lastSync: {
 					context: cursor.context,

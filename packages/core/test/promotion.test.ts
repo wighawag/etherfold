@@ -121,10 +121,11 @@ function keyedStream() {
 			const held = stored.get(digestOf(source));
 			return held
 				? {
+						status: 'stream' as const,
 						eventStream: held.eventStream.filter((event) => event.blockNumber >= fromBlock),
 						lastSync: clone(held.lastSync),
 					}
-				: undefined;
+				: {status: 'absent' as const};
 		},
 		saveNewEvents: async (source, {eventStream, lastSync}) => {
 			const digest = digestOf(source);

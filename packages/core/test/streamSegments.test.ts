@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import type {Abi} from 'abitype';
 import {createSegmentedStream, type StreamCursorRecord, type StreamSegmentPort} from '../src/stream/segments.js';
 import type {IndexingSource, LastSync, StoredLastSync, StoredLogEvent} from '../src/types.js';
-import {memorySegmentPort as memoryPort} from './utils/streamCacheWorld.js';
+import {memorySegmentPort as memoryPort, streamOf} from './utils/streamCacheWorld.js';
 
 // ---------------------------------------------------------------------------
 // THE SEGMENTATION HELPER, against a memory port.
@@ -113,7 +113,7 @@ describe('the cursor record is the only place the block numbers live', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursor(100, 104, 107)});
 
 		expect(JSON.stringify([...rows.values()])).not.toContain('unconfirmedBlocks');
-		const fetched = await stream.fetchFrom(SOURCE, 100);
+		const fetched = streamOf(await stream.fetchFrom(SOURCE, 100));
 		expect(fetched?.lastSync.unconfirmedBlocks).toEqual([]);
 		expect(fetched?.lastSync.lastToBlock).toBe(104);
 		expect(fetched?.lastSync.latestBlock).toBe(107);
@@ -144,7 +144,7 @@ describe('a full ordered scan, in APPEND order', () => {
 			lastSync: cursor(102, 105),
 		});
 
-		const fetched = await stream.fetchFrom(SOURCE, 100);
+		const fetched = streamOf(await stream.fetchFrom(SOURCE, 100));
 		expect(fetched?.eventStream.map((e) => [e.blockNumber, e.removed])).toEqual([
 			[100, false],
 			[104, false],
@@ -159,7 +159,7 @@ describe('a full ordered scan, in APPEND order', () => {
 
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(100), event(104)], lastSync: cursor(100, 104)});
 
-		const fetched = await stream.fetchFrom(SOURCE, 102);
+		const fetched = streamOf(await stream.fetchFrom(SOURCE, 102));
 		expect(fetched?.eventStream.map((e) => e.blockNumber)).toEqual([104]);
 	});
 });
@@ -241,13 +241,24 @@ describe('a forward JUMP is refused; an overlap is ordinary', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(105)], lastSync: cursor(105, 105)});
 
 		expect([...rows.keys()].sort()).toEqual(['0', '1', 'cursor']);
-		const fetched = await stream.fetchFrom(SOURCE, 100);
+		const fetched = streamOf(await stream.fetchFrom(SOURCE, 100));
 		expect(fetched?.eventStream.map((e) => e.blockNumber)).toEqual([100, 105]);
 		logged.restore();
 	});
 });
 
-describe('inconsistency is CLEARED, not repaired', () => {
+describe('inconsistency is REPORTED, and the caller repairs it', () => {
+	/*
+	 * These used to assert that the keeper CLEARED. It no longer does (ADR-0069):
+	 * it reports what it found and touches nothing, because the right response
+	 * differs by caller -- a generation clears and re-indexes, a FOLLOWER reading
+	 * through `readOnlyStream` must not delete the stream its writer is appending
+	 * to, and an installer must refuse rather than write onto orphaned segments.
+	 *
+	 * So each case now asserts BOTH halves: the verdict, and that the rows are still
+	 * there. The repair itself did not vanish -- the last case in this block drives
+	 * a real generation over the same damage and asserts it clears and re-indexes.
+	 */
 	it('clears a GAP in the ordinals, logs it, and reports absent', async () => {
 		const {port, rows} = memoryPort();
 		const stream = createSegmentedStream<Abi>(port);
@@ -257,10 +268,14 @@ describe('inconsistency is CLEARED, not repaired', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(101)], lastSync: cursor(101, 101)});
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(102)], lastSync: cursor(102, 102)});
 		rows.delete('1');
+		const before = rows.size;
 
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
-		expect(rows.size).toBe(0);
-		expect(logged.messages.some((m) => m.includes('being cleared'))).toBe(true);
+		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toEqual({
+			status: 'inconsistent',
+			reason: 'a gap in the ordinals at 1',
+		});
+		// REPORTED, not destroyed: what is left is the caller's to clear
+		expect(rows.size).toBe(before);
 		logged.restore();
 	});
 
@@ -272,11 +287,16 @@ describe('inconsistency is CLEARED, not repaired', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursor(100, 100)});
 		rows.delete('cursor');
 
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
-		// left in place, the next save would take ordinal 0 again, overwrite it, and
-		// leave every higher ordinal to be replayed as part of a stream it is not in
-		expect(rows.size).toBe(0);
-		expect(logged.messages.some((m) => m.includes('being cleared'))).toBe(true);
+		// SEGMENTS WITH NO CURSOR is damage and must not read as a never-written
+		// stream: left in place the next save takes ordinal 0 again, overwrites it and
+		// leaves every higher ordinal replayed as part of a stream it is not in. That
+		// is why it is `inconsistent` and not `absent` -- an installer reads `absent`
+		// as permission to write, and these orphans would collide with its ordinal 0.
+		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toEqual({
+			status: 'inconsistent',
+			reason: '1 segment(s) and no cursor record',
+		});
+		expect(rows.size).toBe(1);
 		logged.restore();
 	});
 
@@ -287,10 +307,13 @@ describe('inconsistency is CLEARED, not repaired', () => {
 
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursor(100, 100)});
 		rows.set('0', 'not a segment');
+		const before = rows.size;
 
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
-		expect(rows.size).toBe(0);
-		expect(logged.messages.some((m) => m.includes('being cleared'))).toBe(true);
+		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toEqual({
+			status: 'inconsistent',
+			reason: 'segment 0 does not parse',
+		});
+		expect(rows.size).toBe(before);
 		logged.restore();
 	});
 
@@ -302,16 +325,18 @@ describe('inconsistency is CLEARED, not repaired', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursor(100, 100)});
 		rows.set('0', {events: 'not an array'});
 
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
+		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toMatchObject({status: 'inconsistent'});
 		logged.restore();
 	});
 
-	it('a never-written stream reports absent and logs nothing', async () => {
+	it('a never-written stream reports ABSENT and logs nothing', async () => {
+		// The one verdict an installer may read as permission to write, which is why it
+		// must not be shared with any of the damage cases above (ADR-0067, ADR-0069).
 		const {port} = memoryPort();
 		const stream = createSegmentedStream<Abi>(port);
 		const logged = await captureLogs();
 
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
+		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toEqual({status: 'absent'});
 		expect(logged.messages).toEqual([]);
 		logged.restore();
 	});
@@ -324,7 +349,7 @@ describe('a CURSOR WITH NO SEGMENTS is legal', () => {
 
 		await stream.saveNewEvents(SOURCE, {eventStream: [], lastSync: cursor(100, 200)});
 
-		const fetched = await stream.fetchFrom(SOURCE, 100);
+		const fetched = streamOf(await stream.fetchFrom(SOURCE, 100));
 		expect(fetched).toBeDefined();
 		expect(fetched?.eventStream).toEqual([]);
 		expect(fetched?.lastSync.lastToBlock).toBe(200);
@@ -338,12 +363,12 @@ describe('a CURSOR WITH NO SEGMENTS is legal', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [], lastSync: cursor(100, 200)});
 		await stream.saveNewEvents(SOURCE, {eventStream: [], lastSync: cursor(201, 300)});
 
-		expect((await stream.fetchFrom(SOURCE, 100))?.lastSync.lastToBlock).toBe(300);
+		expect(streamOf(await stream.fetchFrom(SOURCE, 100)).lastSync.lastToBlock).toBe(300);
 	});
 });
 
 describe('a stream that does not reach back to the requested fromBlock', () => {
-	it('is CLEARED rather than served, and the clear is logged', async () => {
+	it('is REPORTED as such rather than served, and is NOT destroyed by being asked', async () => {
 		const {port, rows} = memoryPort();
 		const stream = createSegmentedStream<Abi>(port);
 		const logged = await captureLogs();
@@ -353,14 +378,22 @@ describe('a stream that does not reach back to the requested fromBlock', () => {
 		await stream.saveNewEvents(SOURCE, {eventStream: [event(500)], lastSync: cursor(500, 500)});
 
 		// the resume point: the stream serves it and is kept
-		expect(await stream.fetchFrom(SOURCE, 500)).toBeDefined();
-		expect(await stream.fetchFrom(SOURCE, 501)).toBeDefined();
-		expect(rows.size).toBeGreaterThan(0);
+		expect(streamOf(await stream.fetchFrom(SOURCE, 500))).toBeDefined();
+		expect(streamOf(await stream.fetchFrom(SOURCE, 501))).toBeDefined();
+		const before = rows.size;
+		expect(before).toBeGreaterThan(0);
 
-		// a REBUILD asks from the source's first block, which this stream cannot serve
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
-		expect(rows.size).toBe(0);
-		expect(logged.messages.some((m) => m.includes('does not reach back'))).toBe(true);
+		// a REBUILD asks from the source's first block, which this stream cannot serve.
+		// Nothing is WRONG with the stream, so this is its own verdict and not damage.
+		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toEqual({
+			status: 'does-not-reach-back',
+			startBlock: 500,
+		});
+		// and asking did not DESTROY it, which is the defect a follower could reach:
+		// reading a writer's stream from below its start used to clear the writer's
+		// history through a view whose writes are supposed to be no-ops (ADR-0044).
+		expect(rows.size).toBe(before);
+		expect(streamOf(await stream.fetchFrom(SOURCE, 500))).toBeDefined();
 		logged.restore();
 	});
 });
@@ -417,6 +450,6 @@ describe('clear', () => {
 		await stream.clear(SOURCE);
 
 		expect(rows.size).toBe(0);
-		expect(await stream.fetchFrom(SOURCE, 0)).toBeUndefined();
+		expect(await stream.fetchFrom(SOURCE, 0)).toEqual({status: 'absent'});
 	});
 });

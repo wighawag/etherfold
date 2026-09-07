@@ -3,7 +3,7 @@ import {describe, expect, it} from 'vitest';
 import {readOnlyStream} from '../src/stream/readOnly.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
 import type {ExistingStream, UsedStreamConfig} from '../src/types.js';
-import {makeLog, memoryStream, SOURCE} from './utils/streamCacheWorld.js';
+import {makeLog, memoryStream, SOURCE, streamOf} from './utils/streamCacheWorld.js';
 
 // ---------------------------------------------------------------------------
 // A READ-ONLY STREAM VIEW: the seam that makes a pure reader EXPRESSIBLE.
@@ -36,7 +36,7 @@ describe('a read-only stream view', () => {
 		});
 
 		const view = readOnlyStream<Abi>(stream.keeper);
-		const served = await view.fetchFrom(SOURCE, 100);
+		const served = streamOf(await view.fetchFrom(SOURCE, 100));
 
 		expect(served?.eventStream.map((event) => event.blockNumber)).toEqual([100, 102]);
 	});
@@ -60,7 +60,7 @@ describe('a read-only stream view', () => {
 		// not write: the one-writer rule is expressed by writing NOWHERE, silently
 		expect(stream.writes).toHaveLength(0);
 		expect(stream.events).toHaveLength(0);
-		expect(await view.fetchFrom(SOURCE, 0)).toBeUndefined();
+		expect(await view.fetchFrom(SOURCE, 0)).toEqual({status: 'absent'});
 	});
 
 	it('does NOT reach the keeper on a clear either', async () => {
@@ -88,7 +88,7 @@ describe('a read-only stream view', () => {
 	it('passes the stream CONFIG through, so the view addresses the same stream', async () => {
 		const seen: UsedStreamConfig[] = [];
 		const keeper: ExistingStream<Abi> = {
-			fetchFrom: async () => undefined,
+			fetchFrom: async () => ({status: 'absent' as const}),
 			saveNewEvents: async () => {},
 			clear: async () => {},
 			setStreamConfig: (streamConfig) => seen.push(streamConfig),
@@ -101,6 +101,6 @@ describe('a read-only stream view', () => {
 	});
 
 	it('has no `setStreamConfig` when the reader addresses nothing', () => {
-		expect(readOnlyStream<Abi>({fetchFrom: async () => undefined}).setStreamConfig).toBeUndefined();
+		expect(readOnlyStream<Abi>({fetchFrom: async () => ({status: 'absent' as const})}).setStreamConfig).toBeUndefined();
 	});
 });

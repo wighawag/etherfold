@@ -8,6 +8,7 @@ import {streamDigestOfSourceHashes} from '../src/stream/identity.js';
 import {gzipSync} from 'node:zlib';
 import type {ExistingStream, IndexingSource, StoredLastSync, StoredLogEvent} from '../src/types.js';
 import {createSegmentedStream} from '../src/stream/segments.js';
+import {readOnlyStream} from '../src/stream/readOnly.js';
 import {
 	BRANCH_A,
 	BRANCH_A_TIP,
@@ -18,6 +19,7 @@ import {
 	makeIndexer,
 	makeLog,
 	memorySegmentPort,
+	streamOf,
 	SOURCE,
 	START_BLOCK,
 } from './utils/streamCacheWorld.js';
@@ -119,6 +121,68 @@ describe('the LOAD PATH degrades: a generation whose cache cannot be read still 
 		const indexer = makeIndexer(chain, processor, rejectingStream());
 
 		await expect(indexer.load()).resolves.toBeDefined();
+		logged.restore();
+	});
+});
+
+describe('the REPAIR moved to the load path, it did not vanish', () => {
+	it('clears damaged segments and re-indexes, which is what the keeper used to do for it', async () => {
+		// ADR-0069 took the repair out of `fetchFrom`. The keeper now REPORTS
+		// `inconsistent` and touches nothing, so the guarantee that damage does not
+		// survive has to be met HERE -- and it is the same guarantee: a generation
+		// throws the bytes away and indexes again. Left unrepaired, the next save would
+		// take ordinal 0 again and overwrite the orphan.
+		const logged = await captureLogs();
+		const {port, rows} = memorySegmentPort();
+		const keeper = createSegmentedStream<Abi>(port);
+
+		// a stream with its cursor removed: damage the keeper can see and will not fix
+		await keeper.saveNewEvents(SOURCE, {
+			eventStream: [makeLog(101, '0xs101')],
+			lastSync: cursor(START_BLOCK, 101),
+		});
+		rows.delete('cursor');
+		expect(await keeper.fetchFrom(SOURCE, START_BLOCK)).toMatchObject({status: 'inconsistent'});
+		expect(rows.size).toBeGreaterThan(0);
+
+		const chain = fakeChain([...BRANCH_A], BRANCH_A_TIP);
+		const {processor, store} = fakeProcessor();
+		const indexer = makeIndexer(chain, processor, keeper);
+		await indexer.load();
+		await indexToTip(indexer);
+
+		// the damage is gone, and the generation re-indexed from the start block
+		expect(chain.ranges[0].from).toBe(START_BLOCK);
+		expect(store.saved?.state).toHaveLength(BRANCH_A.length);
+		expect(logged.messages.some((m) => m.includes('being cleared and will rebuild'))).toBe(true);
+		logged.restore();
+	});
+
+	it('does NOT clear through a read-only view, so a follower cannot destroy its writer`s stream', async () => {
+		// The defect this refactor closes as a side effect
+		// (`a-follower-can-self-clear-the-writers-stream-through-the-read-only-view`).
+		// A follower folds a stream ANOTHER generation is still appending to, and it is
+		// handed a `readOnlyStream` whose `clear` is a no-op. That was not enough while
+		// the CLEAR happened inside `fetchFrom`, beneath the view: reading a writer's
+		// stream from below its start deleted it. Now the read only reports, and the
+		// no-op `clear` is what the repair runs into.
+		const logged = await captureLogs();
+		const {port, rows} = memorySegmentPort();
+		const writersKeeper = createSegmentedStream<Abi>(port);
+		// the writer's stream opens mid-history, as a resumed one does
+		await writersKeeper.saveNewEvents(SOURCE, {eventStream: [makeLog(500, '0xw500')], lastSync: cursor(500, 500)});
+		const before = JSON.stringify([...rows.entries()]);
+
+		const follower = readOnlyStream<Abi>(writersKeeper);
+		const chain = fakeChain([...BRANCH_A], BRANCH_A_TIP);
+		const {processor} = fakeProcessor();
+		const indexer = makeIndexer(chain, processor, follower);
+
+		// asks from the source's start block, well below the writer's 500
+		await indexer.load();
+
+		expect(JSON.stringify([...rows.entries()])).toBe(before);
+		expect(streamOf(await writersKeeper.fetchFrom(SOURCE, 500))).toBeDefined();
 		logged.restore();
 	});
 });
@@ -255,7 +319,7 @@ describe('a failed WRITE still reaches the caller that acts on it', () => {
 		const chain = fakeChain([...BRANCH_A], BRANCH_A_TIP);
 		const {processor, store} = fakeProcessor();
 		const throwsSynchronously: ExistingStream<Abi> = {
-			fetchFrom: async () => undefined,
+			fetchFrom: async () => ({status: 'absent' as const}),
 			saveNewEvents: (() => {
 				throw new Error('the store is unavailable');
 			}) as unknown as ExistingStream<Abi>['saveNewEvents'],

@@ -251,24 +251,21 @@ export type StreamSeedInstallOptions<ABI extends Abi> = {
 const DEFAULT_MAX_EVENTS_PER_BATCH = 1000;
 
 /**
- * The block the EMPTINESS PROBE asks from, and the whole reason the probe is
- * safe.
+ * The block the EMPTINESS PROBE asks from.
  *
- * `ExistingStream` exposes exactly one read and that read MUTATES: `fetchFrom`
- * CLEARS the entire subtree when the stored cursor's `startBlock` is above the
- * block it was asked from, and it does so before answering. A probe asking from
- * the seed's own (low) coverage start -- the number this task otherwise puts in
- * front of you -- is exactly the shape that fires it on a client that already
- * holds a stream starting higher. That client would lose its whole cached stream
- * to a call whose only purpose was to decide the seed cannot be installed, which
- * contradicts the refusal this module returns.
+ * It no longer carries any SAFETY, and that is worth saying plainly because it
+ * used to carry all of it. `fetchFrom` once CLEARED the entire subtree when the
+ * stored cursor's `startBlock` was above the block it was asked from, and it did
+ * so before answering -- so a probe asking from the seed's own (low) coverage
+ * start, the obvious number, destroyed the cached stream of a client that
+ * already held one starting higher. `Number.MAX_SAFE_INTEGER` was chosen because
+ * no stored `startBlock` can be above it, which put that branch out of reach.
  *
- * No stored `startBlock` can be above `Number.MAX_SAFE_INTEGER`, so asking from
- * there cannot reach that branch, whatever is stored. The keeper's OTHER
- * clearing branches (segments with no cursor record, a gap in the ordinals, a
- * segment that does not parse) are damage repair the keeper owns, and defeating
- * them is not this module's business: each of them leaves an EMPTY subtree,
- * which is exactly what this probe then reports.
+ * Since ADR-0069 the read REPORTS and never repairs, so no block can make this
+ * call destructive and the choice is free. It stays at the ceiling because it is
+ * still the clearest way to ask the question this probe is actually asking --
+ * "is there ANYTHING here", not "is there a stream I could fold" -- and because
+ * `absent` is the only verdict that means empty regardless of the block.
  */
 const PROBE_FROM_BLOCK = Number.MAX_SAFE_INTEGER;
 
@@ -774,7 +771,16 @@ async function subtreeStateOf<ABI extends Abi>(
 	source: IndexingSource<ABI>,
 ): Promise<SubtreeState> {
 	try {
-		return (await keepStream.fetchFrom(source, PROBE_FROM_BLOCK)) === undefined ? 'empty' : 'holds-a-stream';
+		const read = await keepStream.fetchFrom(source, PROBE_FROM_BLOCK);
+		// ONLY `absent` is permission to write (ADR-0067). Every other verdict means
+		// something is stored -- a usable stream, a stream that starts higher, or
+		// DAMAGE -- and damage matters as much as the other two: orphaned segments
+		// would collide with this seed's own ordinal 0. Before ADR-0069 the keeper
+		// destroyed that damage and answered absent, so this read as an empty subtree
+		// and the install proceeded into one the keeper had just emptied on its own
+		// initiative. Refusing lets the caller clear DELIBERATELY, which is the whole
+		// shape of ADR-0067.
+		return read.status === 'absent' ? 'empty' : 'holds-a-stream';
 	} catch (error) {
 		namedLogger.error(
 			`not installing a stream seed: this client's own stream storage could not be read, so whether the subtree ` +

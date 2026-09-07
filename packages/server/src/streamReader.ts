@@ -114,25 +114,28 @@ export function storedEmissionStream<ABI extends Abi>(db: RemoteSQL, indexer: st
 			// them or how far they reach, so they are not a stream anything may fold.
 			const coverage = await readStreamCoverage(db, {indexer, stream});
 			if (!coverage) {
-				return undefined;
+				return {status: 'absent'};
 			}
 
 			if (coverage.startBlock > fromBlock) {
-				// A stream that does not reach back to what was ASKED FOR. Reported ABSENT
-				// rather than served, because a partial history replays as though it were
-				// whole and the missing blocks are simply absent from the rebuilt state --
-				// silent, permanent and self-consistent. Nothing is deleted in response,
-				// unlike the segment keeper's identical check: this view owns none of these
-				// rows, and the generation that DOES own them is still appending to them.
+				// A stream that does not reach back to what was ASKED FOR. Reported rather
+				// than served, because a partial history replays as though it were whole and
+				// the missing blocks are simply absent from the rebuilt state -- silent,
+				// permanent and self-consistent. Nothing is deleted in response: this view
+				// owns none of these rows, and the generation that DOES own them is still
+				// appending to them. Since ADR-0069 that is true of the SEGMENT keeper's
+				// identical check too, so the two implementations of this seam finally agree
+				// about what a read may do rather than differing behind one `undefined`.
 				logger.info(
 					`the stored emission stream of '${indexer}' at ${stream} starts at block ${coverage.startBlock} and ` +
-						`does not reach back to ${fromBlock}, so it is reported ABSENT rather than replayed as if it were ` +
+						`does not reach back to ${fromBlock}, so it is reported as such rather than replayed as if it were ` +
 						`the whole history.`,
 				);
-				return undefined;
+				return {status: 'does-not-reach-back', startBlock: coverage.startBlock};
 			}
 
 			return {
+				status: 'stream',
 				eventStream: await readStoredStream(db, {indexer, stream, fromBlock}),
 				lastSync: {
 					context: {

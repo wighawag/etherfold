@@ -24,6 +24,7 @@ import {
 	nodeRefusingProvider,
 	SOURCE,
 	START_BLOCK,
+	streamOf,
 } from './utils/streamCacheWorld.js';
 
 // ---------------------------------------------------------------------------
@@ -407,7 +408,7 @@ describe('the three block rules, asserted through what they cause', () => {
 		await installStreamSeed(keeper, [REMOTE], {source: SOURCE, streamConfig: STREAM_CONFIG, fetch: get});
 
 		// what a fresh generation's `load()` asks for
-		const fetched = await keeper.fetchFrom(SOURCE, START_BLOCK);
+		const fetched = streamOf(await keeper.fetchFrom(SOURCE, START_BLOCK));
 
 		expect(fetched).toBeDefined();
 		expect(rows.size).toBeGreaterThan(0);
@@ -444,7 +445,7 @@ describe('the three block rules, asserted through what they cause', () => {
 		const {get} = servingFetch({[REMOTE]: servedOpaque(seed)});
 		await installStreamSeed(keeper, [REMOTE], {source: SOURCE, streamConfig: STREAM_CONFIG, fetch: get});
 
-		const fetched = await keeper.fetchFrom(SOURCE, START_BLOCK);
+		const fetched = streamOf(await keeper.fetchFrom(SOURCE, START_BLOCK));
 
 		// a quiet range moves the cursor without adding a row, so the rows cannot say
 		// how far the stream REACHES: cut this short and the client re-scans every
@@ -466,7 +467,7 @@ describe('the three block rules, asserted through what they cause', () => {
 			fetch: get,
 		});
 
-		const fetched = await keeper.fetchFrom(SOURCE, START_BLOCK);
+		const fetched = streamOf(await keeper.fetchFrom(SOURCE, START_BLOCK));
 		expect(fetched?.eventStream.map(idOf)).toEqual(SEED_EVENTS.map(idOf));
 		// one segment per accepted save, and a declined one would leave the count
 		// short with the events silently missing
@@ -626,23 +627,33 @@ describe('a subtree that is not EMPTY is refused, whatever it holds', () => {
 		expect(asked).toEqual([]);
 	});
 
-	it('would have DESTROYED that stream had the probe asked from the seed`s own coverage start', async () => {
-		// The negative control for the case above, and the reason `PROBE_FROM_BLOCK` is
-		// `Number.MAX_SAFE_INTEGER` rather than the number the seed puts in front of
-		// you. Without it the emptiness check reads as a design preference; with it the
-		// naive probe is on record as a stream-deleting operation. This drives
-		// `fetchFrom` directly, because the point is what the SEAM does to a caller who
-		// asks the obvious question the obvious way -- the install itself never asks it.
+	it('is no longer destroyed by asking from the seed`s own coverage start either', async () => {
+		// This case used to assert the OPPOSITE, and the change is the point.
+		//
+		// It was the negative control for the case above: `PROBE_FROM_BLOCK` is
+		// `Number.MAX_SAFE_INTEGER` because `fetchFrom` CLEARED the subtree when the
+		// stored cursor started above the block asked from, so a probe asking from the
+		// seed's own (low) coverage start -- the obvious number -- deleted the stream it
+		// was only trying to ask about. That was on record here as a stream-deleting
+		// operation.
+		//
+		// ADR-0069 removed the repair from the read, so no block makes this call
+		// destructive any more: the seam REPORTS `does-not-reach-back` and touches
+		// nothing. The probe's choice of block is now a matter of clarity rather than
+		// safety, and this asserts the hazard is actually gone instead of merely
+		// side-stepped -- which is a stronger thing to know, and the reason the case is
+		// kept rather than deleted.
 		const {rows, keeper, startBlock} = await locallyIndexedAbove();
 		expect(startBlock).toBeGreaterThan(START_BLOCK);
-		expect(rows.size).toBeGreaterThan(0);
+		const before = snapshotOf(rows);
 
-		// exactly what a probe asking from the seed's coverage start would do
+		// exactly what a naive probe asking from the seed's coverage start would do
 		const answer = await keeper.fetchFrom(SOURCE, START_BLOCK);
 
-		// it answers "nothing here" AND makes that true on the way past
-		expect(answer).toBeUndefined();
-		expect(rows.size).toBe(0);
+		expect(answer).toEqual({status: 'does-not-reach-back', startBlock});
+		expect(snapshotOf(rows)).toBe(before);
+		// and it is still a stream, readable from where it reaches
+		expect(await keeper.fetchFrom(SOURCE, startBlock)).toMatchObject({status: 'stream'});
 	});
 
 	it('refuses a FOREIGN stream by the same bare test, with no discriminator', async () => {

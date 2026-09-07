@@ -8,6 +8,7 @@ import type {
 	LogEvent,
 	StoredLastSync,
 	StoredLogEvent,
+	StreamRead,
 } from '../../src/types.js';
 
 /**
@@ -133,10 +134,11 @@ export function memoryStream(initial?: {lastSync: StoredLastSync; eventStream: S
 		fetchFrom: async (_source, fromBlock) =>
 			stored
 				? {
+						status: 'stream' as const,
 						eventStream: stored.eventStream.filter((event) => event.blockNumber >= fromBlock),
 						lastSync: JSON.parse(JSON.stringify(stored.lastSync)),
 					}
-				: undefined,
+				: {status: 'absent' as const},
 		saveNewEvents: async (_source, {eventStream, lastSync}) => {
 			const failure = failWith?.();
 			if (failure) {
@@ -384,3 +386,19 @@ export const BRANCH_A_TIP = 105;
 /** The same chain after a reorg at 104: same 100 and 102, a DIFFERENT 104. */
 export const BRANCH_B = [BRANCH_A[0], BRANCH_A[1], BRANCH_A[2], makeLog(104, '0xb104')];
 export const BRANCH_B_TIP = 106;
+
+/**
+ * The stream a read was expected to hand back, or a failure that SAYS what came
+ * instead.
+ *
+ * `fetchFrom` answers a VERDICT since ADR-0069, so a test that wants the stream
+ * has to narrow. Doing it through one helper keeps the failure message useful --
+ * `expected a stream, got 'inconsistent'` names the actual verdict, where a bare
+ * non-null assertion would fail later and somewhere else.
+ */
+export function streamOf(read: StreamRead): {lastSync: StoredLastSync; eventStream: StoredLogEvent[]} {
+	if (read.status !== 'stream') {
+		throw new Error(`expected a stream, got '${read.status}'`);
+	}
+	return read;
+}

@@ -291,8 +291,12 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 	 */
 	const withLegacyBlobProbe: ExistingStream<ABI> = {
 		async fetchFrom(source, fromBlock) {
+			// The legacy blob was DROPPED, so this subtree now genuinely holds nothing: the
+			// blob is gone and no segmented stream was ever written here. `absent` is the
+			// honest verdict and not merely the convenient one -- there is nothing left for
+			// a caller to repair or refuse over.
 			if (await dropLegacyBlob(source)) {
-				return undefined;
+				return {status: 'absent'};
 			}
 			return segmented.fetchFrom(source, fromBlock);
 		},

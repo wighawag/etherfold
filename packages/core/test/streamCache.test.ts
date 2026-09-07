@@ -510,7 +510,7 @@ describe('a keeper that declines the batch', () => {
 	function decliningStream() {
 		let declines = 0;
 		const keeper: ExistingStream<Abi> = {
-			fetchFrom: async () => undefined,
+			fetchFrom: async () => ({status: 'absent' as const}),
 			saveNewEvents: async () => {
 				declines++;
 				return 'declined' as const;
