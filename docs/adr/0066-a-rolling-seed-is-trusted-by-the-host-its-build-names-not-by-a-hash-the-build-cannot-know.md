@@ -6,7 +6,11 @@ status: accepted, not yet implemented
 
 Supersedes ADR-0065 on its trust anchor and on the byte domain of its content hash. Everything else in that ADR stands unchanged: why a stream seed needs more defence than a snapshot, the checks that run before the first write, refusal as data, and the omission residue.
 
-**The rule.** A client's BUILD names the LOCATIONS a seed may be fetched from. Trust is the named host, reached over TLS, and nothing about the artifact's bytes is required to establish it. A content hash is OPTIONAL and is supported for the case where it can exist -- an IMMUTABLE artifact published for one release -- where it is the strongest thing available. A seed from a host the build did not name is refused. A seed from a host the build DID name is installed, pinned or not.
+**The rule.** The CALLER supplies the LOCATIONS, and the loader fetches from those and nowhere else. Trust is whatever the caller's choice of location is worth -- ordinarily a host its build named, reached over TLS -- and nothing about the artifact's bytes is required to establish it. A content hash is OPTIONAL and is supported for the case where it can exist -- an IMMUTABLE artifact published for one release -- where it is the strongest thing available.
+
+**There is no allowlist and no origin check, and saying so precisely matters**, because an earlier draft of this ADR listed "a location the build did not name" as a refusal REASON and that reason has no mechanism: a loader cannot be offered a seed from somewhere it was not pointed at. Where the caller GETS its locations is the application's business and the application's risk -- a build constant, an environment variable, or a query parameter, which the reference deployment does support (`?snapshot=` overriding the configured host, `work/notes/findings/how-a-shipped-browser-indexer-is-actually-deployed.md`). The library must not pretend to validate a decision it cannot see.
+
+**A BUILD-EMBEDDED location is a first-class member of that list**, and is the case that needs no host at all: an artifact shipped inside the application's own build, at a relative path, delivered by the same bytes as the code. The reference deployment lists exactly that as its LAST resort, behind the rolling remote, so the app still starts when its snapshot host is unreachable or gone. Checking such an artifact's hash proves nothing that was not already assumed, since it arrived in the same delivery as the code that would check it.
 
 **And the hash, when there is one, is SHA-256 over the DECOMPRESSED payload octets**: the bytes as they exist after any transfer decoding and before `JSON.parse`.
 
@@ -46,7 +50,7 @@ The objection ADR-0065 raised against this domain was that a hash over something
 
 ## Consequences
 
-- **ADR-0065's "unpinned third-party seed is refused" rule is withdrawn**, and with it the same-origin condition. The refusal that replaces it is narrower and is about LOCATION: a seed from a host the build did not name.
-- **The loader takes locations and an OPTIONAL expected content hash.** No same-origin assertion, because the concept does not apply to the deployment this serves.
+- **ADR-0065's "unpinned third-party seed is refused" rule is withdrawn**, and with it the same-origin condition. NOTHING replaces it as a refusal: the loader fetches what it was pointed at, so there is no admission decision about location to make.
+- **The loader takes an ORDERED list of locations and an OPTIONAL expected content hash.** No same-origin assertion, because the concept does not apply to the deployment this serves. Order is the caller's, and failover walks it, so "freshest remote first, build-embedded last" is expressible -- which is what the reference deployment actually does.
 - **Nothing else in ADR-0065 moves.** Identity (ADR-0064), the coherence checks, the capture-depth check, refusal-as-data and the pre-write ordering are unchanged, and they remain the only things a client establishes for itself.
 - **A publisher may still pin**, and should when it can: a seed shipped for a single release is immutable, so its hash is knowable at build time and is strictly better than trusting the host.
