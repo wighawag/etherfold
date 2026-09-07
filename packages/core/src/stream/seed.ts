@@ -73,6 +73,39 @@ export type StreamSeedProducer = {
 };
 
 /**
+ * WHICH CHAIN a seed's events came from, DECLARED, so a refusal can say so.
+ *
+ * ## Why it is here at all, when the digest already covers it
+ *
+ * `chainId` and `genesisHash` are hashed into the block-0 SKELETON entry, so a
+ * seed taken on another chain already fails the identity check (ADR-0064). What
+ * the digest cannot do is SAY so: a skeleton entry also covers each contract's
+ * address and `startBlock`, and the hash is one-way, so a loader comparing
+ * entries can only report that something at block 0 moved. ADR-0064 requires the
+ * chain case to be reported SEPARATELY -- "telling a developer who pointed at the
+ * wrong chain that an entry was added at block 0 is useless" -- and a DECLARED
+ * chain is the only thing a client can compare to say it truthfully.
+ *
+ * ## Why it is OPTIONAL, which is the honest part
+ *
+ * It arrived after the reference artifact was emitted, and that artifact's
+ * content hash is PUBLISHED (`work/tasks/done/a-publisher-emits-a-stream-seed-from-a-captured-stream.md`).
+ * Re-emitting it to populate a field would move a value a build may already have
+ * pinned, for a refusal MESSAGE. So a seed that omits this is admitted or
+ * refused exactly as before -- the digest still refuses a foreign chain -- and
+ * only the sharper reason is unavailable for it.
+ *
+ * It is NOT an admission credential and cannot become one: it is the publisher's
+ * own claim about itself, checked only to NAME a disagreement the digest already
+ * decided. A seed declaring this client's chain while carrying another chain's
+ * events is still refused, by the digest, on its context.
+ */
+export type StreamSeedChain = {
+	chainId: string;
+	genesisHash?: `0x${string}`;
+};
+
+/**
  * How far a seed REACHES, which is not where its events are.
  *
  * The client-side counterpart of the stored stream's coverage claim (ADR-0055),
@@ -140,6 +173,13 @@ export type StreamSeed = {
 	 * avoid, at the one boundary where the input is not ours (ADR-0064).
 	 */
 	streamConfig: UsedStreamConfig;
+	/**
+	 * Which chain the events came from, DECLARED so a refusal can name it.
+	 *
+	 * Optional, and checked only to sharpen a refusal the digest already decides
+	 * (see `StreamSeedChain`).
+	 */
+	chain?: StreamSeedChain;
 	/**
 	 * The stream digest, as a LABEL the client verifies rather than trusts.
 	 *
@@ -233,6 +273,39 @@ export function streamSeedPayloadOf(seed: StreamSeed): Uint8Array {
  */
 export function streamSeedContentHash(payload: Uint8Array): string {
 	return `sha256:${sha256(payload).slice(2)}`;
+}
+
+/** The one rendering `streamSeedContentHash` emits, as the pattern a PIN must match. */
+const RENDERED_CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * A caller's PINNED content hash, checked to be in the rendering this module
+ * emits -- and RAISING when it is not.
+ *
+ * It lives beside `streamSeedContentHash` because it is the same decision read
+ * backwards: one function writes the rendering and one reads it, so the two
+ * cannot drift.
+ *
+ * ## Why this RAISES where everything else about a seed is refused as data
+ *
+ * A pin is a BUILD CONSTANT, pasted from what a producer printed, so a malformed
+ * one is a programming error at the call site and not an ordinary runtime
+ * condition -- the same class as handing an install an unresolved stream config.
+ * Reported as data it would arrive as an integrity MISMATCH from every location,
+ * which points a developer at the artifact and the host when the fault is in
+ * their own source; and it would do so on a path that only runs in a real
+ * deployment, since a test that pins a value it just computed can never produce
+ * one. Raising names the actual mistake, before anything is fetched.
+ */
+export function pinnedStreamSeedContentHash(expected: string): string {
+	if (!RENDERED_CONTENT_HASH.test(expected)) {
+		throw new Error(
+			`not a stream seed content hash: ${JSON.stringify(expected)}. A pin is what a producer PRINTED, ` +
+				`rendered "sha256:" followed by 64 lowercase hex characters -- the form \`streamSeedContentHash\` emits, ` +
+				`which says which function produced it (ADR-0066).`,
+		);
+	}
+	return expected;
 }
 
 /**

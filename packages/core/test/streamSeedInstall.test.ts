@@ -4,6 +4,7 @@ import type {Abi} from 'abitype';
 import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
 import {serializeStreamSeed, STREAM_SEED_FORMAT, streamSeedPayloadOf, type StreamSeed} from '../src/stream/seed.js';
+import {streamDigestOfSourceHashes} from '../src/stream/identity.js';
 import {installStreamSeed, streamSeedPayloadFrom} from '../src/stream/seedInstall.js';
 import {createSegmentedStream, type StreamCursorRecord, type StreamSegmentPort} from '../src/stream/segments.js';
 import {STREAM_FIXTURE_FORMAT} from '../src/stream/fixture.js';
@@ -89,16 +90,19 @@ async function contextOfAnOrdinaryRun(): Promise<ContextIdentifier> {
 async function seedOf(
 	overrides: Partial<Pick<StreamSeed, 'coverage' | 'eventStream' | 'context' | 'chainHeadAtCapture'>> = {},
 ): Promise<StreamSeed> {
+	const context = overrides.context ?? (await contextOfAnOrdinaryRun());
 	return {
 		format: STREAM_SEED_FORMAT,
 		producer: {kind: 'capture', name: 'test/streamSeedInstall.test.ts', at: '2026-09-07T00:00:00.000Z'},
 		chainHeadAtCapture: overrides.chainHeadAtCapture ?? HEAD_AT_CAPTURE,
 		streamConfig: STREAM_CONFIG,
-		// A LABEL, and this task verifies nothing: the digest check is the admission
-		// task's, and writing a plausible value here would suggest otherwise.
-		streamDigest: 'not-checked-until-the-admission-task',
+		// A LABEL, which the admission pass VERIFIES rather than trusts: it is
+		// recomputed from the seed's own context and resolved config, so a seed built
+		// here states what those two produce. What the ADMISSION cases assert about
+		// the digest lives in `streamSeedAdmission.test.ts`.
+		streamDigest: streamDigestOfSourceHashes(context.source, STREAM_CONFIG),
 		coverage: overrides.coverage ?? {fromBlock: START_BLOCK, toBlock: COVERAGE_TO},
-		context: overrides.context ?? (await contextOfAnOrdinaryRun()),
+		context,
 		eventStream: overrides.eventStream ?? SEED_EVENTS,
 	};
 }
