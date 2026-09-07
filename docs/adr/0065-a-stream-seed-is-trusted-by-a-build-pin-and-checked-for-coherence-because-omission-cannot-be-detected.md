@@ -77,7 +77,7 @@ That is the sharpest form of the asymmetry this ADR opens with: an omitted event
 
 Also not defended, and both already own the application, so neither is a new exposure: a compromised build pipeline, and a publisher lying to its own users.
 
-Not defended and out of scope by the source spec: the SNAPSHOT's own verification, which belongs to `work/tasks/backlog/a-snapshot-a-client-cannot-read-is-refused-not-installed.md`, and the publishing pipeline, which is `work/notes/ideas/publishing-snapshots-of-versioned-state.md`.
+Not defended and out of scope by the source spec: the SNAPSHOT's own verification, which is already BUILT (`work/tasks/done/a-snapshot-a-client-cannot-read-is-refused-not-installed.md`; the source spec cites it under `work/tasks/backlog/` because it was written before that task landed), and the publishing pipeline, which is `work/notes/ideas/publishing-snapshots-of-versioned-state.md`.
 
 ## Refusal
 

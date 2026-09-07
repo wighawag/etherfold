@@ -25,8 +25,9 @@ Two things are wrong with how that stands today.
 published snapshot (`bootstrapFromSnapshot`), and it can run with no stream keeper at all, because
 `keepStream` is optional and the engine skips the save when it is absent. That combination is the
 primary browser deployment and it works by accident rather than by design: nothing names it, nothing
-tests it, nothing documents what it costs, and one latent defect is reachable from it (see Further
-Notes). An app author choosing it is guessing.
+tests it and nothing documents what it costs. An app author choosing it is guessing. (A latent defect
+sits in the NEIGHBOURING combination, snapshot-seeded WITH a stream kept, which is not this mode and
+is one more reason to name the boundary; see Further Notes.)
 
 **And the other path does not exist.** A captured stream cannot be handed to an indexer: a fixture is
 not a keeper (ADR-0059) and the keeper seam takes only the raw stored event (ADR-0060). There is no
@@ -38,11 +39,13 @@ one.
 
 Support both, and be honest about which is which.
 
-**A snapshot-seeded generation with NO STREAM is a first-class mode.** It is what the reference
-deployment actually ran: a state snapshot republished on a cron, with the client backfilling only the
-blocks since. The measured record is that the cadence held a median 1.0 h with a worst observed gap
-of 50.9 h, leaving 1,802 to 91,527 blocks to fetch, all of it inside what a public node serves. So
-this mode is not a fallback, it is the default a browser app should reach for. Its cost is stated
+**A snapshot-seeded generation with NO STREAM is a first-class mode.** Two separate pieces of
+evidence, and they are worth keeping apart. The PUBLISHER's cadence is MEASURED from the git history
+of the snapshot repository: a median 1.0 h between publishes with a worst observed gap of 50.9 h,
+leaving a client 1,802 to 91,527 blocks to fetch, all of it inside what a public node serves. That
+the CLIENT ran on the snapshot alone is the maintainer's account of the deployment rather than
+something the measurement shows, and it is recorded as such. Together they make this the default a
+browser app should reach for rather than a fallback. Its cost is stated
 rather than discovered: the generation is a LEAF (ADR-0028's retention floor, and no stream beneath
 it to re-fold), so a later processor-only change waits for a republished snapshot instead of being
 free.
@@ -70,15 +73,29 @@ discards anyway.
    locally, rather than discovering it at the reconfigure. *(The measured cadence belongs here, so an
    author can judge the wait.)*
 3. As a **maintainer**, I want `storedEventOf` and `storedStreamOf` exported from `@etherfold/core`,
-   so that an install written outside the engine reduces a decoded event to a stored one through the
-   ONE implementation of that rule instead of a copy. *(ADR-0063 names this as a build item; the
-   exploration's spike had to duplicate the three-key strip, which is the duplication ADR-0060
-   exists to prevent.)*
+   so that the PRODUCER in story 4, which lives outside core, reduces a decoded event to a stored one
+   through the ONE implementation of that rule instead of a copy. *(ADR-0063 names this as a build
+   item. Note what it does NOT justify: the loader itself lives INSIDE core and can reach the
+   internal module directly, so the export earns its keep only because something outside core, the
+   producer and any consumer writing its own installer, has to apply the same strip. The
+   exploration's spike duplicating the three-key destructure is the evidence, and that duplication is
+   what ADR-0060 exists to prevent.)*
 4. As a **publisher**, I want to emit a stream-seed ARTIFACT from a captured stream, carrying its
-   resolved stream config, its stream digest, its coverage, what PRODUCED it, and an integrity hash,
-   so that a client can establish what the artifact is without trusting the host that served it.
-   *(Shape from the finding; the resolved config from ADR-0064, because a client cannot compute the
-   128-bit digest without it; the producer declaration and integrity hash from ADR-0065.)*
+   resolved stream config, its stream digest, its coverage, the chain head its producer OBSERVED at
+   capture, and a declaration of what produced it, so that a client can establish what the artifact
+   is without trusting the host that served it. *(Shape from the finding. The resolved config from
+   ADR-0064, because a client cannot compute the 128-bit digest without it, and it is a SEPARATE
+   input to the producer rather than something it can recover from the fixture, which carries only
+   the 32-bit `streamConfigHashOf`. The observed chain head and the producer declaration from
+   ADR-0065: story 9's capture-depth check reads the first, and the retraction rule is stated against
+   the second. Today `StreamFixtureProvenance` types neither, admitting them only through its
+   free-form index signature, so this story TYPES them.)*
+
+   Note what the artifact does NOT carry: its own integrity hash. A document cannot contain a hash of
+   itself, and ADR-0065's per-chunk-plus-manifest arrangement applies to the chunked shape this spec
+   excludes. In the single-document shape the hash is computed by the client over the bytes it
+   received and compared against the value story 7 pins; the producer's job is to PRINT it so a build
+   can pin it, not to embed it.
 5. As a **browser app**, I want to install a published stream seed through ONE call that fetches,
    checks and writes, so that a seed either lands fully verified or does not land at all. *(ADR-0063
    for the install through the keeper seam and its three block rules; ADR-0065 for every mandatory
@@ -87,30 +104,43 @@ discards anyway.
    DIRECTION of the disagreement, so that I can tell a user whether this build indexes less than the
    publisher does or the published seed is stale relative to this build. *(ADR-0064, including that
    the loader reports the direction and never infers "you are out of date", which it cannot know.)*
-7. As a **browser app**, I want a seed whose bytes do not match the hash my BUILD pinned to be
-   refused, so that a seed served from a mirror, a CDN or a gateway is exactly as trustworthy as the
-   code that fetched it. *(ADR-0065. A hash fetched from the same place as the artifact is a label
-   for early rejection, never an admission credential.)*
-8. As a **browser app**, I want a seed that is internally incoherent, or captured too close to the
+7. As a **browser app**, I want the loader to take an EXPECTED CONTENT HASH and refuse a seed whose
+   bytes do not match it, so that a seed served from a mirror, a CDN or a gateway is exactly as
+   trustworthy as the code that fetched it. *(ADR-0065, and the hash must be named by the caller,
+   which is how it comes from the BUILD rather than from the host.)*
+8. As a **browser app developer serving my own seed from my own origin**, I want to be able to
+   install WITHOUT pinning a hash, so that a same-origin deployment is not made to carry a ceremony
+   that buys it nothing. *(ADR-0065 accepts this shape explicitly: an attacker holding that origin
+   would change the application's own code rather than its seed, so the seed adds no attack surface.
+   The loader therefore takes the expected hash as OPTIONAL, and the caller states the trust it is
+   relying on rather than the library guessing. What must NOT be possible is silently adopting a
+   THIRD-PARTY seed with no pin, so an unpinned install is refused unless the caller has said the
+   location is same-origin.)*
+9. As a **browser app**, I want a seed that is internally incoherent, or captured too close to the
    chain tip, refused before anything is written, so that a capture which recorded a branch that
    later lost cannot become my history. *(ADR-0065: ordering, one block hash per block number, no
    duplicates, coverage containment, retraction coherence against the declared producer, and the
    capture-depth check that mirrors the snapshot path's `inside-reorg-window`.)*
-9. As a **browser app developer**, I want the seeding outcome to reach the surface I already
+10. As a **browser app developer**, I want the seeding outcome to reach the surface I already
    subscribe to, so that an app can render "installing", "seeded at block N" or a refusal reason
    instead of an unexplained empty screen. *(ADR-0064 names this as a build-plan item; it lands on
    the existing browser status surface, which already carries `error` and `nonCanonicalGenerations`.)*
-10. As a **browser app**, I want an install interrupted partway to RESUME rather than restart, so
-    that a closed tab costs the blocks it had not reached and not the ones it had. *(Already true by
+11. As a **browser app**, I want an install interrupted partway to resume WRITING from where the
+    keeper's cursor already reaches, rather than writing the whole stream again, so that a closed tab
+    does not corrupt the stream and does not re-do the work it had already committed. *(True by
     construction under ADR-0063, since a partial install is a contiguous prefix with an honest
-    cursor; this story is to assert it end to end rather than to build it.)*
+    cursor, so this story ASSERTS rather than builds. Scope it honestly: in the single-document shape
+    this spec chose, an interrupted install still re-fetches and re-parses the whole document, and
+    only the WRITE phase resumes. Skipping the fetch is what the chunked shape buys and that shape is
+    out of scope, so the spike's end-to-end resume assertion, which is a chunked run, is prior art
+    for the mechanism and not for this story's scope.)*
 
 ### Autonomy notes
 
 Neither gate flag is set. Every story above is a committed direction with its decision recorded, so
 there is nothing for `needsAnswers` to carry, and nothing here is never-for-agents by nature.
 
-The one thing a tasker should NOT infer: story 9 lands on the existing status surface deliberately,
+The one thing a tasker should NOT infer: story 10 lands on the existing status surface deliberately,
 and is not licence to implement the reactive-envelope redesign in
 `work/notes/ideas/the-reactive-update-is-an-envelope-not-a-handle.md`. That is a separate, undecided
 change.
@@ -129,13 +159,22 @@ envelope with its own format number beside `STREAM_FIXTURE_FORMAT` (a seed is no
 not borrow its number); produce one from a captured stream. Demoable as a committed artifact emitted
 from the committed capture, with its digest and integrity hash printed.
 
-**Slice C -- the loader and the install (stories 5, 6, 7, 8, 10).** The vertical tracer bullet: fetch
-from a location list, run every check, write through the keeper seam, return an outcome. Demoable in
-a browser as "a generation folds 31,332 events with no node in the loop", which the exploration's
-spike already did in prototype form (`docs/spikes/pin-the-seam-a-published-stream-arrives-through/`).
+**Slice C -- the loader and the install (stories 5, 6, 7, 8, 9, 11).** The vertical tracer bullet:
+fetch from a location list, run every check, write through the keeper seam, return an outcome.
+Demoable in a browser as "a generation folds 31,332 events with no node in the loop", which the
+exploration's spike already did in prototype form
+(`docs/spikes/pin-the-seam-a-published-stream-arrives-through/`).
 
-**Slice D -- visibility (story 9).** Surfaces the outcome slice C returns. Last because it has nothing
-to show until there is an outcome to show.
+**Slice C is a CHAIN of tasks, not one task, and a tasker should cut it that way**: it carries six
+stories and every admission rule, so cut as a single tracer bullet it would be the oversized task
+§3's vertical slicing exists to prevent. The natural cut is (i) the loader plus the install of an
+ALREADY-TRUSTED artifact, which is the tracer bullet and is demoable on its own, then (ii) the
+admission checks in one task, since identity, integrity, coherence and capture depth share one
+refusal path and one outcome type and splitting them would spread that type across three tasks.
+Story 11 is an assertion on top of (i) and needs no task of its own.
+
+**Slice D -- visibility (story 10).** Surfaces the outcome slice C returns. Last because it has
+nothing to show until there is an outcome to show.
 
 **The seams each slice lands on**, all of them existing: `ExistingStream` (`@etherfold/core`) for the
 install, `StreamSegmentPort` beneath it untouched, the `IndexerGeneration` config's optional
@@ -170,8 +209,11 @@ The load-bearing assertions, stated as external behaviour:
   (`seed-covers-more` versus `seed-covers-less`), because the direction is the half an application
   renders.
 - **A refused seed writes NOTHING**, asserted on the keyspace after the refusal.
-- **An interrupted install resumes across a reload** and lands on a stream identical to an
-  uninterrupted one; the measurement harness already does this in a real browser.
+- **An interrupted install resumes its WRITES from the keeper's cursor** and lands on a stream
+  identical to an uninterrupted one. The measurement harness asserts this end to end in a real
+  browser for the CHUNKED shape; for the single-document shape the assertion is narrower (the writes
+  resume, the fetch and parse do not), so write it against the writes rather than copying the
+  chunked test's claim.
 - **A capture taken inside the reorg window is refused**, which needs a synthetic artifact since the
   committed capture sits 27.5M blocks below its head.
 
@@ -192,7 +234,7 @@ should not be built yet. Each says which.
   a capture growing past the threshold, a publisher that cannot serve range requests), so this
   returns as its own spec when one of those becomes true, not now.
 - **Chain anchoring and bloom consistency.** Specified in ADR-0065 and deliberately not built: their
-  value concentrates in adopting an unpinned third-party seed, which story 7 refuses outright.
+  value concentrates in adopting an unpinned third-party seed, which story 8 refuses outright.
 - **Publisher SIGNING.** Would let a client trust a publisher it did not build with; needs key
   distribution this project has none of. The artifact keeps room for it.
 - **Server-side seeding.** `@etherfold/server` has no `ExistingStream` writer over `_emissions` (that
@@ -201,12 +243,15 @@ should not be built yet. Each says which.
   clients for this reason.
 - **The publishing pipeline** (CI, hosting, retention of old artifacts, who is allowed to publish):
   `work/notes/ideas/publishing-snapshots-of-versioned-state.md`.
-- **The snapshot's own verification**, owned by
-  `work/tasks/backlog/a-snapshot-a-client-cannot-read-is-refused-not-installed.md`.
+- **The snapshot's own verification**, which is BUILT, not pending:
+  `work/tasks/done/a-snapshot-a-client-cannot-read-is-refused-not-installed.md` landed it. (The
+  source exploration spec and ADR-0065 both cite it under `work/tasks/backlog/`, a path that no
+  longer exists; the exploration spec is a launch snapshot and is left alone, and the ADR's citation
+  is corrected in the same change as this spec.)
 - **Detecting OMISSION.** Not deferred, IMPOSSIBLE within the premise: a seed that leaves logs out is
   structurally perfect and bloom-consistent, and finding out otherwise needs the historical logs the
-  node will not serve. ADR-0065 accepts this residue explicitly, which is why story 7's pin is
-  mandatory rather than advisory.
+  node will not serve. ADR-0065 accepts this residue explicitly, which is why stories 7 and 8 make a
+  pin the price of trusting anyone but your own origin.
 - **The `readOnlyStream` self-clear defect**
   (`work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md`).
   Reachable only by a snapshot-seeded generation that ALSO keeps a stream, which this spec recommends
