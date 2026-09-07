@@ -41,8 +41,16 @@ export function applyingProcessor(control: {failFromBlock?: number} = {}): Entit
 	};
 }
 
-/** What the store says was applied, in chain order, with the count beside it. */
-export async function appliedIn(view: EntityStateView): Promise<{key: string; times: number}[]> {
+/**
+ * What the store says was applied, in chain order, with the count beside it.
+ *
+ * Typed on the READ it makes rather than on the handle it is usually given: the
+ * hook's `EntityStateView` and a bare `StateStore` declare the same listing, and
+ * a case that has to read the state of a store BEFORE building a hook over it
+ * (a reload, checking what survived) is asking the same question of the same
+ * rows.
+ */
+export async function appliedIn(view: Pick<EntityStateView, 'listCurrent'>): Promise<{key: string; times: number}[]> {
 	const listing = await view.listCurrent<{key: string; times: number}>('applied', {bucket: 'all'}, 500);
 	expect(listing.truncated).toBe(false);
 	return listing.rows.map((row) => ({key: row.key, times: Number(row.times)}));
