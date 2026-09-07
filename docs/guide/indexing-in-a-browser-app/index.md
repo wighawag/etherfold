@@ -51,6 +51,77 @@ The reason this survives testing is that the paths a human *clicks* — a wallet
 
 The same trap is not limited to the `unsubscribe` handle. Attach `indexer.syncing.subscribe(...)` and `indexer.state.subscribe(...)` at the **end** of your setup, after everything they close over exists. While writing the reference, those two calls sat above the pending-transaction map they read, and the page died on load. It typechecked perfectly; the browser run caught it.
 
+## Starting from a published snapshot: the snapshot-only mode
+
+A browser app usually cannot rebuild its state from the chain: on a public node the historical `eth_getLogs` a backfill needs is frequently refused outright. So what the tab holds at startup has to arrive as a **published artifact**, and the supported shape of that is the **snapshot-only mode**: state seeded from a published state **snapshot**, the tab indexing forward from the snapshot's own block, and **no stream keeper at all**, so nothing is ever written or read under the stream keyspace. It is the path most browser apps should take rather than a fallback.
+
+It is asserted end to end by [`packages/browser/test/snapshotOnlyMode.test.ts`](https://github.com/wighawag/etherfold/blob/main/packages/browser/test/snapshotOnlyMode.test.ts), which is the thing to read next to this page: the mode lands on the same state as the same run with a keeper under it, survives a reorg inside the finality window and a reload, and the empty keyspace is proved by **reading the keys** of the substrate a keeper would have used, against a kept-stream control in the same case, rather than by asserting that a function was not called.
+
+### The trade, before the recipe: the generation is a leaf
+
+A snapshot carries nothing below its own block. A bootstrapped store reports its **retention** floor there and refuses a revert reaching under it ([ADR-0028](../../adr/0028-a-bootstrapped-store-reports-a-floor-at-its-snapshot-and-refuses-to-revert-under-it.md)), and with no stream keeper there is no stored stream beneath the fold either. The generation is a **leaf**, and one consequence follows that you want to know before you ship rather than at the first reconfigure.
+
+**A later processor-only change is not free.** [A generation built beside the live one](#the-same-edit-without-the-blank-app), which is how an edited processor lands without blanking the app, fetches not one log precisely because the successor re-folds the stream that is already stored. Seeded from a snapshot there is no such stream, and a snapshot is keyed to the processor version that computed it, so the successor cannot start from the snapshot you already hold either. Its state comes from a snapshot the **publisher** republishes with the new processor, and that wait is the price of the mode.
+
+**Adding `keepStream` on top does not buy it back.** That is the reach that looks obvious and leaves exactly the same hole: a stream kept by a snapshot-seeded tab starts at the snapshot's block, so a successor still has nothing to fold below it. (It is also the one combination with a known hazard under it, a follower generation that can clear the writer's stream: [the note](https://github.com/wighawag/etherfold/blob/main/work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md).) What buys the free re-fold, plus revert and as-of depth below the snapshot's floor, is a stream that reaches back to your source's own start block: either indexed from that block by this tab, which is the fetch a public node will not serve, or installed from a published **stream seed**, which is designed and not built ([ADR-0063](../../adr/0063-a-published-stream-seed-arrives-through-its-own-loader-and-installs-through-the-keeper-seam.md), [ADR-0064](../../adr/0064-a-seed-for-another-stream-is-refused-on-an-exact-digest-and-the-refusal-names-a-direction.md), [ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). Until that exists, snapshot-only is a mode whose cost is stated rather than hidden.
+
+### How long that wait is
+
+Measured, and quotable as fact: the reference deployment's publisher republished its state snapshot **8,198 times over 357 days**, measured from the git history of its public snapshot repository.
+
+| gap between publishes | |
+| --- | --- |
+| median | 1.0 h |
+| p90 / p99 | 1.2 h / 1.9 h |
+| worst observed | 50.9 h |
+| within 2 h / 4 h | 99.74% / 99.90% |
+
+Read that as the floor on the wait rather than the wait itself. It measures the interval between republications of the snapshot the SAME processor computed, so a processor-only change pays it only after the publisher has deployed the new processor and re-indexed under it; the cadence bounds the last step, not the first. The tail is also what to plan the UI against rather than the median. The same cadence bounds what a freshly seeded tab fetches for itself before it is caught up: at 2.000 s/block that is **1,802 blocks at the median gap and 91,527 at the worst observed one**, all of it inside the recent range a public node does serve. Every number here is from [`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md), which measured them.
+
+**One half of this is measured and the other is an account, and they are worth keeping apart.** The cadence above is a measurement of a public git history, so take it as fact. That the **client** of that deployment then ran on the snapshot ALONE, with no stream underneath at all, is the maintainer's account of how one deployment was built and behaved: no measurement here shows it, and that deployment ran on this library's predecessor, so read it for the shape of a deployment and not for an API. It is a good reason to believe the mode is viable in production, offered as testimony rather than as data.
+
+### Wiring it
+
+```ts
+import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
+import {entityProcessorVersionHash, fromEntityProcessor, openAndBootstrap} from '@etherfold/processor-entities';
+
+// Locations in priority order, freshest first: a rolling remote your build
+// NAMES, then the copy EMBEDDED in this build at a relative path. That last one
+// needs no host and no TLS relationship, arrives in the same bytes as the code,
+// and is what makes the app start when the snapshot host is unreachable or gone.
+const SNAPSHOT_LOCATIONS = [SNAPSHOT_URI, '/indexed-states/token/state.json'];
+
+const indexer = createIndexerState({
+	// Seed the FOLD. Open snapshot-aware FIRST (that is what recovers a floor an
+	// earlier run recorded), then bootstrap only if this tab has never synced.
+	createState: async (context: GenerationContext) => {
+		const {store, outcome} = await openAndBootstrap(
+			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `app-${CHAIN.id}-${context.stream}`}),
+			SNAPSHOT_LOCATIONS,
+			{processor: entityProcessorVersionHash(tokenProcessor), finalityDepth: 12},
+		);
+		// A refusal is DATA rather than a throw, so render it instead of leaving an
+		// unexplained empty app: {status: 'bootstrapped', at, from} | {status: 'kept-local',
+		// at} | {status: 'not-bootstrapped', reason}.
+		showSeedingStatus(outcome);
+		return store;
+	},
+	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
+});
+// There is no second argument, and that ABSENCE is the whole of the mode:
+// `keepStream` is how a stream keeper would arrive, the save answers `'skipped'`
+// without one, and nothing is stored or read under `['stream', ...]`.
+
+await indexer.init({provider, source, config: {stream: {finality: 12}}});
+```
+
+From there it is an ordinary indexer: it starts at the cursor the snapshot carried, re-reads that cursor's finality window without applying anything twice, and indexes forward.
+
+**The locations are yours, and so is the risk.** The library fetches where it is pointed and judges nothing: there is no allowlist and no origin check, because a client cannot be offered a snapshot from somewhere it was not pointed at ([ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). So the host your build names has to be trusted the way your build pipeline is trusted, and an app that lets a URL query parameter override it (as the reference deployment's `?snapshot=` does) is accepting a state source anyone with a link can choose. Nothing downstream catches that: what is checked is the processor version, the envelope format and the reorg window, while the rows themselves are taken on trust, and a snapshot that quietly leaves some out is structurally perfect. Detecting that needs the historical logs the node will not serve ([ADR-0065](../../adr/0065-a-stream-seed-is-trusted-by-a-build-pin-and-checked-for-coherence-because-omission-cannot-be-detected.md), whose omission residue ADR-0066 leaves standing).
+
+**Pass `finalityDepth`, and publish below the tip.** A snapshot taken within the reorg window of the tip its producer had seen cannot absorb a reorg reaching under its own block, since it carries no history there. That has two halves and you own both: the publisher takes the snapshot at least the finality depth behind the tip, and the client passes `finalityDepth` so a snapshot that was not is refused as `not-bootstrapped` / `inside-reorg-window` instead of installed. Omit it and the check never runs. Give it the same finality your indexer runs with.
+
 ## Telling whether the state already accounts for your transaction
 
 Before an app lays an **optimistic update** over indexed state, it has to know whether the indexed state already contains the transaction's effects — because applied on top of a state that already has it, a non-idempotent update (a counter, a balance, an append) is counted twice.
