@@ -1,0 +1,2402 @@
+{
+  "device": "Pixel 8a",
+  "deviceFacts": {
+    "model": "Pixel 8a",
+    "serial": "45281JEKB08709",
+    "androidRelease": "16",
+    "sdk": "36",
+    "hardware": "akita",
+    "soc": "Tensor G3",
+    "memTotalBytes": 7940812800,
+    "chromeVersion": "152.0.7977.76"
+  },
+  "ranAt": "2026-09-07T10:36:43.711Z",
+  "throttle": "none (real device)",
+  "rows": [
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 645.0849998891354
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 4,
+        "totalMs": 795,
+        "longestMs": 436
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 14892738
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 88066169
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 102820071
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 102820615
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 104797680
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6962900,
+        "largeBytes": 6659628,
+        "ratio": 0.956,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 104797680,
+      "peakHeapAboveBaselineBytes": 89904942,
+      "peakSampledHeapBytes": 69199652,
+      "heapSampleCount": 445,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 211.00499999523163
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 432.7450000047684
+        },
+        {
+          "label": "install",
+          "ms": 692.3049999773502
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 727.0849999189377
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 468,
+        "longestMs": 192
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 22549139
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 75217381
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 69371706
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 69372062
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 70628410
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6826180,
+        "largeBytes": 13609784,
+        "ratio": 1.994,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 75217381,
+      "peakHeapAboveBaselineBytes": 52668242,
+      "peakSampledHeapBytes": 88709932,
+      "heapSampleCount": 225,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 158.3550000190735
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 189.47499999403954
+        },
+        {
+          "label": "install",
+          "ms": 775.3100000023842
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 868.5499999821186
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 443,
+        "longestMs": 198
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 15966623
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 89112268
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 69990182
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 69990538
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 71097934
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6888800,
+        "largeBytes": 6668124,
+        "ratio": 0.968,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 89112268,
+      "peakHeapAboveBaselineBytes": 73145645,
+      "peakSampledHeapBytes": 57320976,
+      "heapSampleCount": 235,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 186.44000002741814
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 195.0600000023842
+        },
+        {
+          "label": "install",
+          "ms": 920.419999986887
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 789.9750000536442
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 539,
+        "longestMs": 272
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 16384003
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 73826394
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 62797382
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 62797738
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 63909222
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6818036,
+        "largeBytes": 6573040,
+        "ratio": 0.964,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 73826394,
+      "peakHeapAboveBaselineBytes": 57442391,
+      "peakSampledHeapBytes": 57878988,
+      "heapSampleCount": 224,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 153.58500000834465
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 190.0799999833107
+        },
+        {
+          "label": "install",
+          "ms": 838.6650000214577
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 725.7050000429153
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 481,
+        "longestMs": 216
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 16802601
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 47463263
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 63134794
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 63135150
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 63708836
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6820356,
+        "largeBytes": 6734108,
+        "ratio": 0.987,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 63708836,
+      "peakHeapAboveBaselineBytes": 46906235,
+      "peakSampledHeapBytes": 58353656,
+      "heapSampleCount": 234,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 170.0300000011921
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 178.92500001192093
+        },
+        {
+          "label": "install",
+          "ms": 774.0850000083447
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 577.250000089407
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 374,
+        "longestMs": 213
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 17563485
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 61237107
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 63448294
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 63448650
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 64638234
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13688169,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 64638234,
+      "peakHeapAboveBaselineBytes": 47074749,
+      "peakSampledHeapBytes": 58523712,
+      "heapSampleCount": 84,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 147.87000000476837
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 209.0199999809265
+        },
+        {
+          "label": "install",
+          "ms": 611.8949999809265
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 710.825000077486
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 341,
+        "longestMs": 193
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 17640513
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 75082782
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 89635171
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 89635527
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 65844458
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6804000,
+        "largeBytes": 6750912,
+        "ratio": 0.992,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 89635527,
+      "peakHeapAboveBaselineBytes": 71995014,
+      "peakSampledHeapBytes": 58975100,
+      "heapSampleCount": 364,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 149.53499999642372
+        },
+        {
+          "label": "parse (json)",
+          "ms": 66.05000001192093
+        },
+        {
+          "label": "install",
+          "ms": 758.8650000095367
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 588.8850001096725
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 267,
+        "longestMs": 107
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 18236205
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 61891875
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 68756707
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 68757063
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 66177338
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13686537,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 68757063,
+      "peakHeapAboveBaselineBytes": 50520858,
+      "peakSampledHeapBytes": 58137404,
+      "heapSampleCount": 179,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 144.2300000190735
+        },
+        {
+          "label": "parse (json)",
+          "ms": 81.23000001907349
+        },
+        {
+          "label": "install",
+          "ms": 621.1299999952316
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 719.4149999916553
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 438,
+        "longestMs": 231
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 18477689
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 62486847
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 76753167
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 76753523
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 66596666
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6827648,
+        "largeBytes": 6726816,
+        "ratio": 0.985,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 76753523,
+      "peakHeapAboveBaselineBytes": 58275834,
+      "peakSampledHeapBytes": 58331004,
+      "heapSampleCount": 276,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 195.47500002384186
+        },
+        {
+          "label": "parse (json)",
+          "ms": 106.81499999761581
+        },
+        {
+          "label": "install",
+          "ms": 769.3250000178814
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 734.5649999380112
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 260,
+        "longestMs": 190
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 18899081
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 62339699
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 62339699
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 70225652
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 53798652
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6790629,
+        "largeBytes": 6721268,
+        "ratio": 0.99,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 70225652,
+      "peakHeapAboveBaselineBytes": 51326571,
+      "peakSampledHeapBytes": 58837344,
+      "heapSampleCount": 336,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 137.02000001072884
+        },
+        {
+          "label": "parse (json)",
+          "ms": 46.849999994039536
+        },
+        {
+          "label": "install",
+          "ms": 791.4499999880791
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 716.4050000011921
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 357,
+        "longestMs": 202
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 19315658
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 62756243
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 70644032
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 70644388
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 55246744
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6878700,
+        "largeBytes": 6675740,
+        "ratio": 0.97,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 70644388,
+      "peakHeapAboveBaselineBytes": 51328730,
+      "peakSampledHeapBytes": 52720560,
+      "heapSampleCount": 360,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 146.27500000596046
+        },
+        {
+          "label": "parse (json)",
+          "ms": 82.84999999403954
+        },
+        {
+          "label": "install",
+          "ms": 770.5049999952316
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 440.41500005126
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 188,
+        "longestMs": 116
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 19844874
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 63285247
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 63285247
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 71078912
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 59465211
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13620061,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 71078912,
+      "peakHeapAboveBaselineBytes": 51234038,
+      "peakSampledHeapBytes": 53891964,
+      "heapSampleCount": 124,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 150.8449999988079
+        },
+        {
+          "label": "parse (json)",
+          "ms": 33.064999997615814
+        },
+        {
+          "label": "install",
+          "ms": 473.69999998807907
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 591.1499999463558
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 203,
+        "longestMs": 203
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 20153586
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 33641079
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 45688999
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 55149183
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 66895129
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 78825207
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 16822894
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 27888053
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 36116782
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 36116782
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6798832,
+        "largeBytes": 6755608,
+        "ratio": 0.994,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 78825207,
+      "peakHeapAboveBaselineBytes": 58671621,
+      "peakSampledHeapBytes": 53589532,
+      "heapSampleCount": 337,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 17.944999992847443
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1149.9399999976158
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 409.39999997615814
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 115.95500001311302
+        },
+        {
+          "label": "chunks: install",
+          "ms": 622.8549999892712
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 572.3850000202656
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 52,
+        "longestMs": 52
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 20700898
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 18833136
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 28423388
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 38171412
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 48948674
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 16444750
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 27474167
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 40138125
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 47790804
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 47790804
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13667276,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 48948674,
+      "peakHeapAboveBaselineBytes": 28247776,
+      "peakSampledHeapBytes": 27871944,
+      "heapSampleCount": 115,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 16.555000007152557
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1039.3550000190735
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 361.7650000154972
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 81.70499995350838
+        },
+        {
+          "label": "chunks: install",
+          "ms": 594.5050000548363
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 648.6400000751019
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 139,
+        "longestMs": 139
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 27891922
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 33109979
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 44506341
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 56323949
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 67683699
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 77473243
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 88902589
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 17434678
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 27354548
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 27354548
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6817136,
+        "largeBytes": 13622636,
+        "ratio": 1.998,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 88902589,
+      "peakHeapAboveBaselineBytes": 61010667,
+      "peakSampledHeapBytes": 44274684,
+      "heapSampleCount": 333,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 14.270000010728836
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1203.1649999916553
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 422.4200000464916
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 100.73499995470047
+        },
+        {
+          "label": "chunks: install",
+          "ms": 678.3900001049042
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 796.3349999785423
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 200,
+        "longestMs": 200
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21427198
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 24740188
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 28404489
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 28404489
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 32696818
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 36550739
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 40149402
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 41029255
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 44419766
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 48074357
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 48866070
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 52648979
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 56083370
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 57045837
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 60429264
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 64017961
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 64808490
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 68233575
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 71958892
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 72787775
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 76442748
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 79904859
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 80892940
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 84295137
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 87724388
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 35002203
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 14251321
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 17691448
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 21085761
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 24557992
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 23486817
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 23486817
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6816808,
+        "largeBytes": 6740296,
+        "ratio": 0.989,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 87724388,
+      "peakHeapAboveBaselineBytes": 66297190,
+      "peakSampledHeapBytes": 43025788,
+      "heapSampleCount": 269,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 17.05000001192093
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 2061.705000013113
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 1138.114999949932
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 94.91000002622604
+        },
+        {
+          "label": "chunks: install",
+          "ms": 822.5600000619888
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 631.66500005126
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 122,
+        "longestMs": 122
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 22036194
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 28009600
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 28009600
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 31607033
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 31607033
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 36097565
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 36097565
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 14174966
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 14174966
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 21254834
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 24619431
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 24503074
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 27887227
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 29788606
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 33188395
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 36777092
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 40223345
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 40222852
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 43927269
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 23229490
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 14100851
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 14100851
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 21064751
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 21064751
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 23966961
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 23966961
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 29765835
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 29765835
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 36591783
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 37444782
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 40239413
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 40239413
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13732300,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 43927269,
+      "peakHeapAboveBaselineBytes": 21891075,
+      "peakSampledHeapBytes": 26199760,
+      "heapSampleCount": 113,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 31.094999998807907
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1617.75
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 886.58499994874
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 73.90500006079674
+        },
+        {
+          "label": "chunks: install",
+          "ms": 652.8599999845028
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 815.7800000011921
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 196,
+        "longestMs": 196
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 22280470
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 26361510
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 30046799
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 13902110
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 14668180
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 18537659
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 22170478
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 25649675
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 15875987
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 14499515
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 17869392
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 21634343
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 25043014
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 15928307
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 14322722
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 17910023
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 21336712
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 24779431
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 24709276
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 19033451
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 17786186
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 21250649
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 24750086
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 28178513
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 16680850
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 14330126
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 18354003
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 21794886
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 25189947
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 24701798
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 16233446
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 16233446
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6873376,
+        "largeBytes": 6685332,
+        "ratio": 0.973,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 30046799,
+      "peakHeapAboveBaselineBytes": 7766329,
+      "peakSampledHeapBytes": 32810620,
+      "heapSampleCount": 316,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 13.840000003576279
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1981.7700000107288
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 1033.4700000584126
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 95.32500004768372
+        },
+        {
+          "label": "chunks: install",
+          "ms": 845.9350000023842
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 0,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 635.0400000214577
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 101,
+        "longestMs": 101
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 22868430
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 34477219
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 42977071
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 51696349
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 60249807
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 17341307
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 24653290
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 34658904
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 40080405
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 40080405
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13732280,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 60249807,
+      "peakHeapAboveBaselineBytes": 37381377,
+      "peakSampledHeapBytes": 37643928,
+      "heapSampleCount": 185,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 27.549999982118607
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1033.9549999833107
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 319.6200000345707
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 50.80999997258186
+        },
+        {
+          "label": "chunks: install",
+          "ms": 662.2599999606609
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 1,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 672.5000000298023
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 234,
+        "longestMs": 234
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23116366
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 33119541
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 41089905
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 51114967
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 59516697
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 68152621
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 76765385
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 85355083
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 15222981
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 15222981
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6873704,
+        "largeBytes": 6685212,
+        "ratio": 0.973,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 85355083,
+      "peakHeapAboveBaselineBytes": 62238717,
+      "peakSampledHeapBytes": 45911176,
+      "heapSampleCount": 302,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 37.020000010728836
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1141.2700000107288
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 395.3700000345707
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 34.730000019073486
+        },
+        {
+          "label": "chunks: install",
+          "ms": 709.4900000095367
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 2,
+      "throttle": "none (real device)",
+      "device": "Pixel 8a",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 688.6099999547005
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 80,
+        "longestMs": 80
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23663770
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 34977913
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 43288059
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 51851957
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 60232783
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 68713021
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 77404849
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 86156855
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 21644631
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 21644631
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 0,
+        "largeBytes": 13683641,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": null,
+      "peakHeapBytes": 86156855,
+      "peakHeapAboveBaselineBytes": 62493085,
+      "peakSampledHeapBytes": 46712900,
+      "heapSampleCount": 182,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 19.41499999165535
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1186.3600000143051
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 401.5900000035763
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 46.64999997615814
+        },
+        {
+          "label": "chunks: install",
+          "ms": 736.0700000524521
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+      },
+      "errors": []
+    }
+  ]
+}

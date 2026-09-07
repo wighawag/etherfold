@@ -1,0 +1,38 @@
+{
+  "repo": "https://github.com/wighawag/stratagems-snapshots.git",
+  "measuredAt": "2026-09-07T10:28:13.081Z",
+  "commits": 8221,
+  "publishes": 8198,
+  "firstPublish": "2024-02-08T11:50:32.000Z",
+  "lastPublish": "2025-01-30T13:18:20.000Z",
+  "spanDays": 357.1,
+  "gapHours": {
+    "min": 0.02,
+    "p10": 0.91,
+    "median": 1,
+    "p90": 1.18,
+    "p99": 1.85,
+    "max": 50.85
+  },
+  "shareWithin": {
+    "1h": 49.32,
+    "2h": 99.74,
+    "4h": 99.9,
+    "6h": 99.93,
+    "12h": 99.96,
+    "24h": 99.99
+  },
+  "backfillBlocks": {
+    "secondsPerBlock": 2,
+    "atMedian": 1802,
+    "atP99": 3339,
+    "atWorst": 91527
+  },
+  "longestGaps": [
+    50.85,
+    13.07,
+    12.48,
+    8.87,
+    8.36
+  ]
+}

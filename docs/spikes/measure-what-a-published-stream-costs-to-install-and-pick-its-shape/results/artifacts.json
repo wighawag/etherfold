@@ -1,0 +1,50 @@
+{
+  "fixture": {
+    "events": 31332,
+    "rawBytes": 35428663,
+    "gzipBytes": 1099520,
+    "compactRawBytes": 27832909,
+    "compactGzipBytes": 850130,
+    "storedRawBytes": 21124286,
+    "storedGzipBytes": 563565,
+    "fromBlock": 12082307,
+    "lastToBlock": 23400000,
+    "lastEventBlock": 23303136
+  },
+  "sharedHeaderRawBytes": 36124,
+  "chunkSets": [
+    {
+      "name": "chunks-4000",
+      "size": 4000,
+      "stored": false,
+      "chunks": 8,
+      "manifestRawBytes": 36830,
+      "totalRawBytes": 27797225,
+      "totalGzipBytes": 888435,
+      "largestChunkGzipBytes": 119607,
+      "largestChunkRawBytes": 3683920
+    },
+    {
+      "name": "chunks-1000",
+      "size": 1000,
+      "stored": false,
+      "chunks": 30,
+      "manifestRawBytes": 38545,
+      "totalRawBytes": 27798479,
+      "totalGzipBytes": 908465,
+      "largestChunkGzipBytes": 36500,
+      "largestChunkRawBytes": 1088829
+    },
+    {
+      "name": "chunks-stored-4000",
+      "size": 4000,
+      "stored": true,
+      "chunks": 8,
+      "manifestRawBytes": 36830,
+      "totalRawBytes": 21088602,
+      "totalGzipBytes": 600146,
+      "largestChunkGzipBytes": 80686,
+      "largestChunkRawBytes": 2806357
+    }
+  ]
+}

@@ -1,0 +1,5121 @@
+{
+  "project": "chromium",
+  "ranAt": "2026-09-06T22:15:15.005Z",
+  "throttle": "cpu4",
+  "rows": [
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 193.62500017881393
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 448,
+        "longestMs": 341
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21869200
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 74453792
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 141379809
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 97189337
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 120394982
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6807592,
+        "largeBytes": 13615720,
+        "ratio": 2,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 141379809,
+      "peakHeapAboveBaselineBytes": 119510609,
+      "peakSampledHeapBytes": 90755572,
+      "heapSampleCount": 22,
+      "instrumentAgreement": {
+        "fromPage": 124823986,
+        "fromCdp": 89097680,
+        "ratio": 1.401
+      },
+      "cdpHeapAfterRunBytes": 89097680,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 155.72999995946884
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 337.50999999046326
+        },
+        {
+          "label": "install",
+          "ms": 217.01499998569489
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 195.12999999523163
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 291,
+        "longestMs": 179
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 136461608
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 174175558
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 207898698
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 207899054
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 213193278
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6821032,
+        "largeBytes": 6652328,
+        "ratio": 0.975,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 213193278,
+      "peakHeapAboveBaselineBytes": 76731670,
+      "peakSampledHeapBytes": 145975436,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 227979769,
+        "fromCdp": 154658940,
+        "ratio": 1.474
+      },
+      "cdpHeapAfterRunBytes": 154658940,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 172.32499998807907
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 173.82499998807907
+        },
+        {
+          "label": "install",
+          "ms": 209.04499995708466
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 194.17500019073486
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 426,
+        "longestMs": 175
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 241104965
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 278818580
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 318319280
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 318319636
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 326299498
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6856512,
+        "largeBytes": 5267972,
+        "ratio": 0.768,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 326299498,
+      "peakHeapAboveBaselineBytes": 85194533,
+      "peakSampledHeapBytes": 215256724,
+      "heapSampleCount": 18,
+      "instrumentAgreement": {
+        "fromPage": 334794273,
+        "fromCdp": 223733316,
+        "ratio": 1.496
+      },
+      "cdpHeapAfterRunBytes": 223733316,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 275.22000002861023
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 170.46999996900558
+        },
+        {
+          "label": "install",
+          "ms": 209.12999999523163
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 188.06999999284744
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 317,
+        "longestMs": 317
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21895180
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 58961799
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 125998396
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 89526583
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 112692924
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6827472,
+        "largeBytes": 13621612,
+        "ratio": 1.995,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 125998396,
+      "peakHeapAboveBaselineBytes": 104103216,
+      "peakSampledHeapBytes": 90751428,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 117232196,
+        "fromCdp": 89101636,
+        "ratio": 1.316
+      },
+      "cdpHeapAfterRunBytes": 89101636,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 70.18500000238419
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 315.3700000047684
+        },
+        {
+          "label": "install",
+          "ms": 207.9800000190735
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 188.46499997377396
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 153,
+        "longestMs": 153
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 135786038
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 145055354
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 178779454
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 172168094
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 195677380
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6822888,
+        "largeBytes": 13558808,
+        "ratio": 1.987,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 195677380,
+      "peakHeapAboveBaselineBytes": 59891342,
+      "peakSampledHeapBytes": 139495668,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 199715223,
+        "fromCdp": 142006644,
+        "ratio": 1.406
+      },
+      "cdpHeapAfterRunBytes": 142006644,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 69.71999996900558
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 149
+        },
+        {
+          "label": "install",
+          "ms": 202.0100000500679
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 189.9850001335144
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 234,
+        "longestMs": 179
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 211196169
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 240802106
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 274581818
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 274582174
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 280359392
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6796076,
+        "largeBytes": 6645880,
+        "ratio": 0.978,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 280359392,
+      "peakHeapAboveBaselineBytes": 69163223,
+      "peakSampledHeapBytes": 198634076,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 294724151,
+        "fromCdp": 207510432,
+        "ratio": 1.42
+      },
+      "cdpHeapAfterRunBytes": 207510432,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 91.3299999833107
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 175.43000000715256
+        },
+        {
+          "label": "install",
+          "ms": 202.9650000333786
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 175.94499999284744
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21903132
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 58961795
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 86761648
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 86762040
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 87118997
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6826792,
+        "largeBytes": 13630248,
+        "ratio": 1.997,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 87118997,
+      "peakHeapAboveBaselineBytes": 65215865,
+      "peakSampledHeapBytes": 53974540,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 91472145,
+        "fromCdp": 56795912,
+        "ratio": 1.611
+      },
+      "cdpHeapAfterRunBytes": 56795912,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 70.75499999523163
+        },
+        {
+          "label": "parse (json)",
+          "ms": 38.2950000166893
+        },
+        {
+          "label": "install",
+          "ms": 197.61000001430511
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 178.56000012159348
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 1,
+        "totalMs": 52,
+        "longestMs": 52
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 103342527
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 132946183
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 160927459
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 160932851
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 177791059
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6781440,
+        "largeBytes": 4196196,
+        "ratio": 0.619,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 177791059,
+      "peakHeapAboveBaselineBytes": 74448532,
+      "peakSampledHeapBytes": 115089708,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 188307066,
+        "fromCdp": 124078848,
+        "ratio": 1.518
+      },
+      "cdpHeapAfterRunBytes": 124078848,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 69.73000001907349
+        },
+        {
+          "label": "parse (json)",
+          "ms": 47.84500002861023
+        },
+        {
+          "label": "install",
+          "ms": 192.64999997615814
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 190.11499977111816
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 199955274
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 229517871
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 257571911
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 124174639
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 81414464
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6851144,
+        "largeBytes": 3848312,
+        "ratio": 0.562,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 257571911,
+      "peakHeapAboveBaselineBytes": 57616637,
+      "peakSampledHeapBytes": 163955052,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 85972848,
+        "fromCdp": 57842288,
+        "ratio": 1.486
+      },
+      "cdpHeapAfterRunBytes": 57842288,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 75.94499999284744
+        },
+        {
+          "label": "parse (json)",
+          "ms": 37.935000002384186
+        },
+        {
+          "label": "install",
+          "ms": 204.1850000023842
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 174.73500001430511
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21871648
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 44960106
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 66313778
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 66083911
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 66970848
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6820348,
+        "largeBytes": 13605208,
+        "ratio": 1.995,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 66970848,
+      "peakHeapAboveBaselineBytes": 45099200,
+      "peakSampledHeapBytes": 47079112,
+      "heapSampleCount": 20,
+      "instrumentAgreement": {
+        "fromPage": 71574856,
+        "fromCdp": 50152920,
+        "ratio": 1.427
+      },
+      "cdpHeapAfterRunBytes": 50152920,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 58.439999997615814
+        },
+        {
+          "label": "parse (json)",
+          "ms": 13.780000030994415
+        },
+        {
+          "label": "install",
+          "ms": 190.12000000476837
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 183.9100000858307
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 83373562
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 105684197
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 126962297
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 126962501
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 139281837
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6800124,
+        "largeBytes": 4105244,
+        "ratio": 0.604,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 139281837,
+      "peakHeapAboveBaselineBytes": 55908275,
+      "peakSampledHeapBytes": 97158128,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 153019164,
+        "fromCdp": 109368588,
+        "ratio": 1.399
+      },
+      "cdpHeapAfterRunBytes": 109368588,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 56.280000030994415
+        },
+        {
+          "label": "parse (json)",
+          "ms": 30.1149999499321
+        },
+        {
+          "label": "install",
+          "ms": 197.40499997138977
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 182.6200001835823
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 166024036
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 188334592
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 209785660
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 89683540
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 68504032
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6827452,
+        "largeBytes": 5187224,
+        "ratio": 0.76,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 209785660,
+      "peakHeapAboveBaselineBytes": 43761624,
+      "peakSampledHeapBytes": 143892768,
+      "heapSampleCount": 21,
+      "instrumentAgreement": {
+        "fromPage": 72589684,
+        "fromCdp": 51167748,
+        "ratio": 1.419
+      },
+      "cdpHeapAfterRunBytes": 51167748,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 56.57499998807907
+        },
+        {
+          "label": "parse (json)",
+          "ms": 20.415000021457672
+        },
+        {
+          "label": "install",
+          "ms": 196.11000001430511
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 188.53000003099442
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21861864
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 11430121
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 24956616
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 31921154
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 10852403
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 24500798
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 9796340
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 23509209
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 33442244
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 33443604
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6866284,
+        "largeBytes": 13548512,
+        "ratio": 1.973,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 33443604,
+      "peakHeapAboveBaselineBytes": 11581740,
+      "peakSampledHeapBytes": 21783960,
+      "heapSampleCount": 16,
+      "instrumentAgreement": {
+        "fromPage": 8415597,
+        "fromCdp": 1694724,
+        "ratio": 4.966
+      },
+      "cdpHeapAfterRunBytes": 1694724,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 4.625
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 348
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 119.51500004529953
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 25.394999980926514
+        },
+        {
+          "label": "chunks: install",
+          "ms": 202.66499996185303
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 191.11499989032745
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23253247
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 16989829
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 30480561
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 44072739
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 57493981
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 57447886
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 71121978
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 84879348
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 84537015
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 84537719
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6847624,
+        "largeBytes": 13558780,
+        "ratio": 1.98,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 84879348,
+      "peakHeapAboveBaselineBytes": 61626101,
+      "peakSampledHeapBytes": 32860000,
+      "heapSampleCount": 15,
+      "instrumentAgreement": {
+        "fromPage": 106371612,
+        "fromCdp": 48879068,
+        "ratio": 2.176
+      },
+      "cdpHeapAfterRunBytes": 48879068,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.665000021457672
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 349.375
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 118.33499997854233
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 25.340000092983246
+        },
+        {
+          "label": "chunks: install",
+          "ms": 205.3749998807907
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 182.19000005722046
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 119689202
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 33502911
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 46983359
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 60575537
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 73996779
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 71752577
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 85424217
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 92431843
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 102329334
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 102330022
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6838488,
+        "largeBytes": 5409788,
+        "ratio": 0.791,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 119689202,
+      "peakHeapAboveBaselineBytes": 0,
+      "peakSampledHeapBytes": 62224584,
+      "heapSampleCount": 16,
+      "instrumentAgreement": {
+        "fromPage": 121131959,
+        "fromCdp": 63612680,
+        "ratio": 1.904
+      },
+      "cdpHeapAfterRunBytes": 63612680,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 4.915000021457672
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 337.47000002861023
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 115.02500003576279
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 25.27999997138977
+        },
+        {
+          "label": "chunks: install",
+          "ms": 196.78500002622604
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 188.1800001859665
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21886148
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 9971938
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 13541755
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 17126454
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 12573180
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 12596023
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 16204638
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 19683303
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 23074664
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 26735383
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 30104036
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 33869143
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 37280998
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 33657761
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 13759342
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 7259827
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 10709244
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 14162819
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 17887860
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 21308059
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 24977882
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 28438721
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 31934542
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 12573800
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 7093709
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 10593260
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 14615921
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 18055632
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 21451517
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 24922728
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 27732117
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 27733469
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6777624,
+        "largeBytes": 13661456,
+        "ratio": 2.016,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 37280998,
+      "peakHeapAboveBaselineBytes": 15394850,
+      "peakSampledHeapBytes": 21808244,
+      "heapSampleCount": 19,
+      "instrumentAgreement": {
+        "fromPage": 8533923,
+        "fromCdp": 1693376,
+        "ratio": 5.04
+      },
+      "cdpHeapAfterRunBytes": 1693376,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.784999966621399
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 430.49000000953674
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 206.34499996900558
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 26.62999999523163
+        },
+        {
+          "label": "chunks: install",
+          "ms": 196.3700003027916
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 186.78000020980835
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23200927
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 32347837
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 8890054
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 12432843
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 16114640
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 19982639
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 23579486
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 27055575
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 30444936
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 34095555
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 37458324
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 41265703
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 44699514
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 48271153
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 51695346
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 55280027
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 58706056
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 62146515
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 51948833
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 55286280
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 58954459
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 62414910
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 65909399
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 69324726
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 72727157
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 76222468
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 80242757
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 83680368
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 78536129
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 81953888
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 84761045
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 84761733
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6796660,
+        "largeBytes": 13558760,
+        "ratio": 1.995,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 84761733,
+      "peakHeapAboveBaselineBytes": 61560806,
+      "peakSampledHeapBytes": 30301212,
+      "heapSampleCount": 19,
+      "instrumentAgreement": {
+        "fromPage": 106123730,
+        "fromCdp": 48591668,
+        "ratio": 2.184
+      },
+      "cdpHeapAfterRunBytes": 48591668,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.810000002384186
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 435.8299999833107
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 213.13499975204468
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 27.59000015258789
+        },
+        {
+          "label": "chunks: install",
+          "ms": 193.98000013828278
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 178.84000027179718
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 119051780
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 24870134
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 28434339
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 32028718
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 35698979
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 39589802
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 43186521
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 46662642
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 50053863
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 53704426
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 57068143
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 60853438
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 64260373
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 67821428
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 54357641
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 57853952
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 61277789
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 64718248
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 68441693
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 71862104
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 75530383
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 78990006
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 82485523
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 85900970
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 89303317
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 83405464
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 87368571
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 90806162
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 94197991
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 97667354
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 100474371
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 100475059
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6866452,
+        "largeBytes": 4992284,
+        "ratio": 0.727,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 119051780,
+      "peakHeapAboveBaselineBytes": 0,
+      "peakSampledHeapBytes": 61547644,
+      "heapSampleCount": 19,
+      "instrumentAgreement": {
+        "fromPage": 117598916,
+        "fromCdp": 60093580,
+        "ratio": 1.957
+      },
+      "cdpHeapAfterRunBytes": 60093580,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 10.514999985694885
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 424.3149999976158
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 209.19500017166138
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 27.92500013113022
+        },
+        {
+          "label": "chunks: install",
+          "ms": 186.09500008821487
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 188.4549999833107
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21875604
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 18151182
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 9121637
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 20245810
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 30986548
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 8065669
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 19014680
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 29977990
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 7104334
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 7105482
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6837712,
+        "largeBytes": 13590808,
+        "ratio": 1.988,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 30986548,
+      "peakHeapAboveBaselineBytes": 9110944,
+      "peakSampledHeapBytes": 21797700,
+      "heapSampleCount": 15,
+      "instrumentAgreement": {
+        "fromPage": 1827706,
+        "fromCdp": 1739708,
+        "ratio": 1.051
+      },
+      "cdpHeapAfterRunBytes": 1739708,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 4.325000047683716
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 321.5
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 109.85000002384186
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 10.849999964237213
+        },
+        {
+          "label": "chunks: install",
+          "ms": 200.40499997138977
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 165.76999992132187
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23274067
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 14350197
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 25206185
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 36163003
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 46968741
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 57959971
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 56063504
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 67023426
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 74968291
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 74968979
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6823508,
+        "largeBytes": 13558784,
+        "ratio": 1.987,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 74968979,
+      "peakHeapAboveBaselineBytes": 51694912,
+      "peakSampledHeapBytes": 30215380,
+      "heapSampleCount": 13,
+      "instrumentAgreement": {
+        "fromPage": 90362230,
+        "fromCdp": 46889520,
+        "ratio": 1.927
+      },
+      "cdpHeapAfterRunBytes": 46889520,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 4.080000042915344
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 292.38499999046326
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 102.05999994277954
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 13.569999992847443
+        },
+        {
+          "label": "chunks: install",
+          "ms": 176.45999997854233
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 166.35500007867813
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 104892754
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 30845579
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 41706631
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 52663021
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 63468759
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 61467265
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 72389273
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 83358963
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 84314190
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 84314878
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6812744,
+        "largeBytes": 6622448,
+        "ratio": 0.972,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 104892754,
+      "peakHeapAboveBaselineBytes": 0,
+      "peakSampledHeapBytes": 61421960,
+      "heapSampleCount": 14,
+      "instrumentAgreement": {
+        "fromPage": 106047727,
+        "fromCdp": 62543080,
+        "ratio": 1.696
+      },
+      "cdpHeapAfterRunBytes": 62543080,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.7450000047683716
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 288.0649999976158
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 97.98000001907349
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 11.604999959468842
+        },
+        {
+          "label": "chunks: install",
+          "ms": 178.13999998569489
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, interrupted after 3 and resumed across a reload",
+      "throttle": "none",
+      "project": "chromium",
+      "partialAfterThreeChunks": {
+        "present": true,
+        "events": 12267,
+        "lastToBlock": 13216341,
+        "startBlock": 13129967
+      },
+      "resumedFrom": 13216342,
+      "chunksInstalledOnResume": 5,
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.7300000190734863
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 127.39499998092651
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 46.409999907016754
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 10.099999964237213
+        },
+        {
+          "label": "chunks: install",
+          "ms": 70.72499996423721
+        },
+        {
+          "label": "fetch manifest",
+          "ms": 3.7950000166893005
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 217.06999999284744
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 75.76499998569489
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 19.994999945163727
+        },
+        {
+          "label": "chunks: install",
+          "ms": 121.03000009059906
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 630.7299999594688
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 4,
+        "totalMs": 1621,
+        "longestMs": 1269
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21841640
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 74455728
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 142084048
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 97157509
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 120235838
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6827408,
+        "largeBytes": 13568152,
+        "ratio": 1.987,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 142084048,
+      "peakHeapAboveBaselineBytes": 120242408,
+      "peakSampledHeapBytes": 90755600,
+      "heapSampleCount": 35,
+      "instrumentAgreement": {
+        "fromPage": 124805878,
+        "fromCdp": 89079572,
+        "ratio": 1.401
+      },
+      "cdpHeapAfterRunBytes": 89079572,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 372.6899999976158
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 1255.5950000286102
+        },
+        {
+          "label": "install",
+          "ms": 697.3950000405312
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 556.5249999761581
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 976,
+        "longestMs": 651
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 143309524
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 160758646
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 187874378
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 187874734
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 209712628
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6773448,
+        "largeBytes": 13558760,
+        "ratio": 2.002,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 209712628,
+      "peakHeapAboveBaselineBytes": 66403104,
+      "peakSampledHeapBytes": 137903604,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 215197867,
+        "fromCdp": 141799008,
+        "ratio": 1.518
+      },
+      "cdpHeapAfterRunBytes": 141799008,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 388.55000001192093
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 629.8700000047684
+        },
+        {
+          "label": "install",
+          "ms": 605.1000000238419
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 573.2349998950958
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 1068,
+        "longestMs": 663
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 227030041
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 264742476
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 304292892
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 292528628
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 296548442
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6792532,
+        "largeBytes": 4116956,
+        "ratio": 0.606,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 304292892,
+      "peakHeapAboveBaselineBytes": 77262851,
+      "peakSampledHeapBytes": 201863836,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 317000021,
+        "fromCdp": 206074316,
+        "ratio": 1.538
+      },
+      "cdpHeapAfterRunBytes": 206074316,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 481.18000000715256
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 640.0799999833107
+        },
+        {
+          "label": "install",
+          "ms": 624.2549999952316
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 606.3149998188019
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 1610,
+        "longestMs": 1353
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21903028
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 36196661
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 125667061
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 89120095
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 112024672
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6808724,
+        "largeBytes": 13648208,
+        "ratio": 2.005,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 125667061,
+      "peakHeapAboveBaselineBytes": 103764033,
+      "peakSampledHeapBytes": 90778704,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 116698240,
+        "fromCdp": 88567680,
+        "ratio": 1.318
+      },
+      "cdpHeapAfterRunBytes": 88567680,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 314.4950000047684
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 1341.3349999785423
+        },
+        {
+          "label": "install",
+          "ms": 672.3599999547005
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 564.2549998760223
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 851,
+        "longestMs": 626
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 135178922
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 144556350
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 171774194
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 171774550
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 193643856
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6779168,
+        "largeBytes": 13558780,
+        "ratio": 2,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 193643856,
+      "peakHeapAboveBaselineBytes": 58464934,
+      "peakSampledHeapBytes": 137460588,
+      "heapSampleCount": 34,
+      "instrumentAgreement": {
+        "fromPage": 198971067,
+        "fromCdp": 141262488,
+        "ratio": 1.409
+      },
+      "cdpHeapAfterRunBytes": 141262488,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 273.54499995708466
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 607.4399999976158
+        },
+        {
+          "label": "install",
+          "ms": 615.839999973774
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 606.7949999570847
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 876,
+        "longestMs": 632
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 217582049
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 227006938
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 254019306
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 254019662
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 275577260
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6788808,
+        "largeBytes": 13558780,
+        "ratio": 1.997,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 275577260,
+      "peakHeapAboveBaselineBytes": 57995211,
+      "peakSampledHeapBytes": 189880548,
+      "heapSampleCount": 35,
+      "instrumentAgreement": {
+        "fromPage": 281279915,
+        "fromCdp": 193993368,
+        "ratio": 1.45
+      },
+      "cdpHeapAfterRunBytes": 193993368,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 294.27499997615814
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 612.8799999952316
+        },
+        {
+          "label": "install",
+          "ms": 652.7350000143051
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 566.3450002074242
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 466,
+        "longestMs": 239
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21849476
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 36604476
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 64600096
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 64600640
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 80089464
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6811900,
+        "largeBytes": 13591484,
+        "ratio": 1.995,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 80089464,
+      "peakHeapAboveBaselineBytes": 58239988,
+      "peakSampledHeapBytes": 53487684,
+      "heapSampleCount": 35,
+      "instrumentAgreement": {
+        "fromPage": 84915352,
+        "fromCdp": 56784792,
+        "ratio": 1.495
+      },
+      "cdpHeapAfterRunBytes": 56784792,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 286.5250000357628
+        },
+        {
+          "label": "parse (json)",
+          "ms": 215.17500001192093
+        },
+        {
+          "label": "install",
+          "ms": 633.8199999928474
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 574.0949999094009
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 378,
+        "longestMs": 167
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 96719890
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 126324734
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 154302630
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 154302986
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 170452360
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6771520,
+        "largeBytes": 4140272,
+        "ratio": 0.611,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 170452360,
+      "peakHeapAboveBaselineBytes": 73732470,
+      "peakSampledHeapBytes": 114301860,
+      "heapSampleCount": 34,
+      "instrumentAgreement": {
+        "fromPage": 181590891,
+        "fromCdp": 123913524,
+        "ratio": 1.465
+      },
+      "cdpHeapAfterRunBytes": 123913524,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 261.3949999809265
+        },
+        {
+          "label": "parse (json)",
+          "ms": 139.98500001430511
+        },
+        {
+          "label": "install",
+          "ms": 624.1349999904633
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 703.9749997854233
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 3,
+        "totalMs": 390,
+        "longestMs": 174
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 193342757
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 222948846
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 250983278
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 250983634
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 74094894
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6793720,
+        "largeBytes": 4004364,
+        "ratio": 0.589,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 250983634,
+      "peakHeapAboveBaselineBytes": 57640877,
+      "peakSampledHeapBytes": 169672640,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 84794646,
+        "fromCdp": 56703308,
+        "ratio": 1.495
+      },
+      "cdpHeapAfterRunBytes": 56703308,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 269.6399999856949
+        },
+        {
+          "label": "parse (json)",
+          "ms": 146.0799999833107
+        },
+        {
+          "label": "install",
+          "ms": 752.4250000119209
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 538.8149998188019
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 266,
+        "longestMs": 148
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21848580
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 65298666
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 66305386
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 66305930
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 89289443
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6855552,
+        "largeBytes": 13546936,
+        "ratio": 1.976,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 89289443,
+      "peakHeapAboveBaselineBytes": 67440863,
+      "peakSampledHeapBytes": 47210796,
+      "heapSampleCount": 33,
+      "instrumentAgreement": {
+        "fromPage": 94045735,
+        "fromCdp": 50372344,
+        "ratio": 1.867
+      },
+      "cdpHeapAfterRunBytes": 50372344,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 218.56999999284744
+        },
+        {
+          "label": "parse (json)",
+          "ms": 111.01499998569489
+        },
+        {
+          "label": "install",
+          "ms": 591.0649999976158
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 571.8999999165535
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 207,
+        "longestMs": 146
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 112577041
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 114718997
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 136065697
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 136066053
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 148271921
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6782576,
+        "largeBytes": 13558784,
+        "ratio": 1.999,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 148271921,
+      "peakHeapAboveBaselineBytes": 35694880,
+      "peakSampledHeapBytes": 83896796,
+      "heapSampleCount": 34,
+      "instrumentAgreement": {
+        "fromPage": 162222768,
+        "fromCdp": 96320776,
+        "ratio": 1.684
+      },
+      "cdpHeapAfterRunBytes": 96320776,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 218.8400000333786
+        },
+        {
+          "label": "parse (json)",
+          "ms": 47.5450000166893
+        },
+        {
+          "label": "install",
+          "ms": 624.1650000214577
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 561.1550001502037
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 2,
+        "totalMs": 234,
+        "longestMs": 152
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 175234224
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": 197547144
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": 218920964
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": 218896544
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 240683098
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6779812,
+        "largeBytes": 5241444,
+        "ratio": 0.773,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 240683098,
+      "peakHeapAboveBaselineBytes": 65448874,
+      "peakSampledHeapBytes": 152435448,
+      "heapSampleCount": 34,
+      "instrumentAgreement": {
+        "fromPage": 134701972,
+        "fromCdp": 46607936,
+        "ratio": 2.89
+      },
+      "cdpHeapAfterRunBytes": 46607936,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 223.87999999523163
+        },
+        {
+          "label": "parse (json)",
+          "ms": 67.39499998092651
+        },
+        {
+          "label": "install",
+          "ms": 609.9749999642372
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 564.7299999594688
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21880548
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 11084237
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 24575400
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 31562782
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 10869687
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 24545314
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 17235647
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 23292145
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 33218072
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 33219220
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6820492,
+        "largeBytes": 13612988,
+        "ratio": 1.996,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 33219220,
+      "peakHeapAboveBaselineBytes": 11338672,
+      "peakSampledHeapBytes": 21802644,
+      "heapSampleCount": 37,
+      "instrumentAgreement": {
+        "fromPage": 8463403,
+        "fromCdp": 1737344,
+        "ratio": 4.871
+      },
+      "cdpHeapAfterRunBytes": 1737344,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 12.429999947547913
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1162.9800000190735
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 420.245000064373
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 108.5799999833107
+        },
+        {
+          "label": "chunks: install",
+          "ms": 631.2099999785423
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 542.9700000882149
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23227355
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 17062429
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 30537105
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 44125031
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 57547277
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 57476830
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 71151954
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 84909340
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 84623043
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 84623731
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6779508,
+        "largeBytes": 13558780,
+        "ratio": 2,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 84909340,
+      "peakHeapAboveBaselineBytes": 61681985,
+      "peakSampledHeapBytes": 32783040,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 106380468,
+        "fromCdp": 48887924,
+        "ratio": 2.176
+      },
+      "cdpHeapAfterRunBytes": 48887924,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 6.939999997615814
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1126.6549999713898
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 419.1000000834465
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 107.82499986886978
+        },
+        {
+          "label": "chunks: install",
+          "ms": 599.1600000858307
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 552.4800001978874
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 45538537
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 33974541
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 47449217
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 61037143
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 60220105
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 73840613
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 80828566
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 94528116
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 104453747
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 104454435
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6776208,
+        "largeBytes": -68638817,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 104454435,
+      "peakHeapAboveBaselineBytes": 58915898,
+      "peakSampledHeapBytes": 49917552,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 32368661,
+        "fromCdp": 2737508,
+        "ratio": 11.824
+      },
+      "cdpHeapAfterRunBytes": 2737508,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 11.589999973773956
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1144.1899999976158
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 419.30999994277954
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 116.33500009775162
+        },
+        {
+          "label": "chunks: install",
+          "ms": 608.2799999117851
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 603.0299999117851
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21872560
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 8439915
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 12009868
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 15632427
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 19238980
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 12581695
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 16190318
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 19668751
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 23065960
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 26721231
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 30090144
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 33855107
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 37267630
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 33585161
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 13757422
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 7257495
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 10707272
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 14160847
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 17885888
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 21305859
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 24975826
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 28436621
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 31932678
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 12571828
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 7091737
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 10591288
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 14614089
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 18053788
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 21449525
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 24920752
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 27730285
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 27731637
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6868476,
+        "largeBytes": 13557016,
+        "ratio": 1.974,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 37267630,
+      "peakHeapAboveBaselineBytes": 15395070,
+      "peakSampledHeapBytes": 23664396,
+      "heapSampleCount": 50,
+      "instrumentAgreement": {
+        "fromPage": 8532151,
+        "fromCdp": 1691604,
+        "ratio": 5.044
+      },
+      "cdpHeapAfterRunBytes": 1691604,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 9.84500002861023
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1374.3599999547005
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 623.0249999165535
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 108.14000004529953
+        },
+        {
+          "label": "chunks: install",
+          "ms": 637.9450000524521
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 557.860000193119
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23189035
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 30190565
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 33755134
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 11490801
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 15143470
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 18997181
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 22599008
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 26078205
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 29467622
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 33136033
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 36506318
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 40291833
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 43698708
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 47260503
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 50649468
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 54234117
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 57657450
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 61096417
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 51941142
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 55317028
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 58985083
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 62444622
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 65939443
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 69355054
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 72776405
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 76273392
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 80316997
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 83770460
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 78470581
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 81888076
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 84695129
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 84695817
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6786696,
+        "largeBytes": 13558780,
+        "ratio": 1.998,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 84695817,
+      "peakHeapAboveBaselineBytes": 61506782,
+      "peakSampledHeapBytes": 31550700,
+      "heapSampleCount": 49,
+      "instrumentAgreement": {
+        "fromPage": 106106166,
+        "fromCdp": 48574104,
+        "ratio": 2.184
+      },
+      "cdpHeapAfterRunBytes": 48574104,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 9.120000004768372
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1330.2649999856949
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 626.6350001692772
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 111.11499977111816
+        },
+        {
+          "label": "chunks: install",
+          "ms": 590.4800002574921
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 564.1550000905991
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 45575350
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": 23068517
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": 26639690
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": 30222393
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": 33824162
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": 37677957
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": 41275824
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": 44753465
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": 48142846
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": 51793501
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": 55156698
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": 58942037
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": 49021104
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": 52504281
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": 55893202
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": 59477879
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": 62902844
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": 66341935
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": 70097856
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": 73548467
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": 70349642
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": 73783378
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": 77311171
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": 80749782
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": 84178069
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": 87675056
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": 91718661
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": 95172124
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": 98593257
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": 102068560
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": 104902613
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 104903301
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6779732,
+        "largeBytes": -68331226,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 104903301,
+      "peakHeapAboveBaselineBytes": 59327951,
+      "peakSampledHeapBytes": 49603732,
+      "heapSampleCount": 50,
+      "instrumentAgreement": {
+        "fromPage": 32411038,
+        "fromCdp": 2743336,
+        "ratio": 11.814
+      },
+      "cdpHeapAfterRunBytes": 2743336,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 53.144999980926514
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1338.4449999928474
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 618.414999961853
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 115.00999993085861
+        },
+        {
+          "label": "chunks: install",
+          "ms": 603.1650000214577
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 0,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 585.5000001192093
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 21872840
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 16448223
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 8881473
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 19876134
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 30733492
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 9089095
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 20017154
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 30944664
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 7102162
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 7103310
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6787852,
+        "largeBytes": 13637904,
+        "ratio": 2.009,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 30944664,
+      "peakHeapAboveBaselineBytes": 9071824,
+      "peakSampledHeapBytes": 23624708,
+      "heapSampleCount": 36,
+      "instrumentAgreement": {
+        "fromPage": 1825306,
+        "fromCdp": 1737308,
+        "ratio": 1.051
+      },
+      "cdpHeapAfterRunBytes": 1737308,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 8.855000019073486
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 1047.285000026226
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 359.13500010967255
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 46.0349999666214
+        },
+        {
+          "label": "chunks: install",
+          "ms": 640.3749998807907
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 1,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 537.8049998283386
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 23222963
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 13687007
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 24524487
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 35476561
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 46280351
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 57286353
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 56044752
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 67015122
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 74971903
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 74972591
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6774656,
+        "largeBytes": 13558780,
+        "ratio": 2.001,
+        "spoiledByGc": false
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 74972591,
+      "peakHeapAboveBaselineBytes": 51749628,
+      "peakSampledHeapBytes": 33020068,
+      "heapSampleCount": 33,
+      "instrumentAgreement": {
+        "fromPage": 90298374,
+        "fromCdp": 46825664,
+        "ratio": 1.928
+      },
+      "cdpHeapAfterRunBytes": 46825664,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 9.034999966621399
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 990.1499999761581
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 350.1749999523163
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 52.50999999046326
+        },
+        {
+          "label": "chunks: install",
+          "ms": 586.464999973774
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 2,
+      "throttle": "cpu4",
+      "project": "chromium",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 531.4449998140335
+      },
+      "longTasks": {
+        "supported": true,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": 38252888
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": 31250313
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": 42087933
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": 53040707
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": 51157313
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": 62144651
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": 73089175
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": 77537406
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": 85491299
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": 85491987
+        }
+      ],
+      "heapCalibration": {
+        "smallBytes": 6784840,
+        "largeBytes": -59876582,
+        "ratio": null,
+        "spoiledByGc": true
+      },
+      "heapInstrument": "performance.memory (needs --enable-precise-memory-info)",
+      "uaMemoryUnavailableBecause": "SecurityError: Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available.",
+      "peakHeapBytes": 85491987,
+      "peakHeapAboveBaselineBytes": 47239099,
+      "peakSampledHeapBytes": 47855292,
+      "heapSampleCount": 34,
+      "instrumentAgreement": {
+        "fromPage": 105302988,
+        "fromCdp": 61784176,
+        "ratio": 1.704
+      },
+      "cdpHeapAfterRunBytes": 61784176,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 8.75
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 981.3600000143051
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 352.7900000214577
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 49.5799999833107
+        },
+        {
+          "label": "chunks: install",
+          "ms": 578.6949999928474
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    },
+    {
+      "case": "chunked 4000, interrupted after 3 and resumed across a reload",
+      "throttle": "cpu4",
+      "project": "chromium",
+      "partialAfterThreeChunks": {
+        "present": true,
+        "events": 12267,
+        "lastToBlock": 13216341,
+        "startBlock": 13129967
+      },
+      "resumedFrom": 13216342,
+      "chunksInstalledOnResume": 5,
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 12.894999980926514
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 461.8600000143051
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 163.1350000500679
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 43.12000000476837
+        },
+        {
+          "label": "chunks: install",
+          "ms": 255.3149999976158
+        },
+        {
+          "label": "fetch manifest",
+          "ms": 7.290000021457672
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 721.6000000238419
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 261.9899999499321
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 87.60500001907349
+        },
+        {
+          "label": "chunks: install",
+          "ms": 371.76999992132187
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36"
+      }
+    }
+  ]
+}

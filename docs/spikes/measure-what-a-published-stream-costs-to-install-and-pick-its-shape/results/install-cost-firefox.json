@@ -1,0 +1,2375 @@
+{
+  "project": "firefox",
+  "ranAt": "2026-09-06T22:14:05.118Z",
+  "throttle": "none",
+  "rows": [
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 257.4400000000005
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 471.78
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 386.34000000000003
+        },
+        {
+          "label": "install",
+          "ms": 276.8599999999999
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 252.6400000000001
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 352.38
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 396.1
+        },
+        {
+          "label": "install",
+          "ms": 268.98
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, as committed (indented, parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 1099520,
+      "rawBytes": 35428663,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 253.40000000000032
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 373.72
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 393.14000000000004
+        },
+        {
+          "label": "install",
+          "ms": 267.44000000000005
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 250.2599999999992
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 88.75999999999999
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 393.64
+        },
+        {
+          "label": "install",
+          "ms": 271.56000000000006
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 254.70000000000016
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 231.57999999999998
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 379.16
+        },
+        {
+          "label": "install",
+          "ms": 270.5
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, compact (parseStreamFixture)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "fixture",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 282.2000000000003
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 111.46000000000001
+        },
+        {
+          "label": "parse (fixture)",
+          "ms": 390.72
+        },
+        {
+          "label": "install",
+          "ms": 295.76
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 259.5599999999997
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 101.44
+        },
+        {
+          "label": "parse (json)",
+          "ms": 85.97999999999996
+        },
+        {
+          "label": "install",
+          "ms": 277.67999999999995
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 243.9200000000004
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 107.84
+        },
+        {
+          "label": "parse (json)",
+          "ms": 98.57999999999998
+        },
+        {
+          "label": "install",
+          "ms": 257.36
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, decoded, compact (plain JSON.parse: isolates the revive)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-compact/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 850130,
+      "rawBytes": 27832909,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 259.55999999999983
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 113.08
+        },
+        {
+          "label": "parse (json)",
+          "ms": 97.49999999999997
+        },
+        {
+          "label": "install",
+          "ms": 274.02
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 271.27999999999963
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 75.41999999999999
+        },
+        {
+          "label": "parse (json)",
+          "ms": 56.27999999999997
+        },
+        {
+          "label": "install",
+          "ms": 288.36
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 262.5199999999997
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 68.94
+        },
+        {
+          "label": "parse (json)",
+          "ms": 68.24000000000001
+        },
+        {
+          "label": "install",
+          "ms": 276.46000000000004
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "single, STORED-only, compact (plain JSON.parse)",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "single",
+      "url": "./assets/single-stored/stream.json.gz",
+      "parser": "json",
+      "maxEvents": 1000,
+      "transferBytes": 563565,
+      "rawBytes": 21124286,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 245.25999999999988
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after fetch+gunzip (the text alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after parse (text AND objects alive: the peak this shape forces)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after dropping the text (objects alive)",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch+gunzip",
+          "ms": 126.28000000000002
+        },
+        {
+          "label": "parse (json)",
+          "ms": 78.68
+        },
+        {
+          "label": "install",
+          "ms": 260.76
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 294.96000000000004
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.5600000000000023
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 500.84
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 112.94000000000014
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 74.13999999999999
+        },
+        {
+          "label": "chunks: install",
+          "ms": 313.5999999999999
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 290.5000000000001
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 2.9399999999999977
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 568.9
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 183.15999999999997
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 73.2000000000001
+        },
+        {
+          "label": "chunks: install",
+          "ms": 312.34
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, decoded",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 851605,
+      "rawBytes": 27797225,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 279.02000000000004
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 2.980000000000004
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 502.59999999999997
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 120.21999999999998
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 79.4999999999999
+        },
+        {
+          "label": "chunks: install",
+          "ms": 302.6800000000001
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 293.0200000000001
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.579999999999984
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 612.06
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 214.07999999999993
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 77.55999999999995
+        },
+        {
+          "label": "chunks: install",
+          "ms": 319.86000000000035
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 268.03999999999985
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.0799999999999983
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 584.3800000000001
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 219.34000000000026
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 61.10000000000002
+        },
+        {
+          "label": "chunks: install",
+          "ms": 303.4199999999999
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 1000, decoded",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-1000",
+      "maxEvents": 1000,
+      "chunksAvailable": 30,
+      "chunksInstalled": 30,
+      "resumedFrom": null,
+      "manifestBytes": 38545,
+      "transferBytes": 869920,
+      "rawBytes": 27798479,
+      "events": 31332,
+      "segments": 30,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 30,
+        "ms": 267.8399999999999
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15808337
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 9/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 10/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 11/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 12/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 13/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 14/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 15/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 16/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 17/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 18/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 19/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 20/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 21/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 22/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 23/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 24/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 25/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 26/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 27/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 28/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 29/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 30/30",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 2.6400000000000006
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 623.7
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 258.3800000000001
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 60.77999999999987
+        },
+        {
+          "label": "chunks: install",
+          "ms": 304.10000000000014
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 0,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 282.49999999999994
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.0600000000000023
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 450.5
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 96.80000000000004
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 51.120000000000005
+        },
+        {
+          "label": "chunks: install",
+          "ms": 302.46000000000004
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 1,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 269.77999999999986
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 2.960000000000001
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 455.28
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 108.93999999999997
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 54.86000000000007
+        },
+        {
+          "label": "chunks: install",
+          "ms": 291.31999999999994
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, STORED-only",
+      "repeat": 2,
+      "throttle": "none",
+      "project": "firefox",
+      "shape": "chunked",
+      "base": "./assets/chunks-stored-4000",
+      "maxEvents": 1000,
+      "chunksAvailable": 8,
+      "chunksInstalled": 8,
+      "resumedFrom": null,
+      "manifestBytes": 36830,
+      "transferBytes": 563316,
+      "rawBytes": 21088602,
+      "events": 31332,
+      "segments": 31,
+      "declinedAt": null,
+      "keeperWrites": {
+        "calls": 31,
+        "ms": 263.82
+      },
+      "longTasks": {
+        "supported": false,
+        "count": 0,
+        "totalMs": 0,
+        "longestMs": 0
+      },
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "coverage": {
+        "fromBlock": 12082307,
+        "toBlock": 23400000
+      },
+      "memory": [
+        {
+          "label": "baseline",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 1/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 2/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 3/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 4/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 5/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 6/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 7/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after chunk 8/8",
+          "jsHeapBytes": null
+        },
+        {
+          "label": "after install",
+          "jsHeapBytes": null
+        }
+      ],
+      "heapCalibration": null,
+      "heapInstrument": "none",
+      "uaMemoryUnavailableBecause": "performance.measureUserAgentSpecificMemory is not implemented here",
+      "peakHeapBytes": null,
+      "peakHeapAboveBaselineBytes": null,
+      "peakSampledHeapBytes": null,
+      "heapSampleCount": 0,
+      "instrumentAgreement": null,
+      "cdpHeapAfterRunBytes": null,
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.180000000000007
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 427.70000000000005
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 99.85999999999994
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 28.160000000000025
+        },
+        {
+          "label": "chunks: install",
+          "ms": 299.47999999999996
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    },
+    {
+      "case": "chunked 4000, interrupted after 3 and resumed across a reload",
+      "throttle": "none",
+      "project": "firefox",
+      "partialAfterThreeChunks": {
+        "present": true,
+        "events": 12267,
+        "lastToBlock": 13216341,
+        "startBlock": 13129967
+      },
+      "resumedFrom": 13216342,
+      "chunksInstalledOnResume": 5,
+      "stored": {
+        "present": true,
+        "events": 31332,
+        "lastToBlock": 23400000,
+        "startBlock": 15594812
+      },
+      "timings": [
+        {
+          "label": "fetch manifest",
+          "ms": 3.1399999999999864
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 190.35999999999999
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 45.21999999999997
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 29.840000000000003
+        },
+        {
+          "label": "chunks: install",
+          "ms": 115.24000000000001
+        },
+        {
+          "label": "fetch manifest",
+          "ms": 3.3200000000000003
+        },
+        {
+          "label": "all chunks (fetch+gunzip+parse+install)",
+          "ms": 303.43999999999994
+        },
+        {
+          "label": "chunks: fetch+gunzip",
+          "ms": 82.55999999999995
+        },
+        {
+          "label": "chunks: parse",
+          "ms": 38.34000000000003
+        },
+        {
+          "label": "chunks: install",
+          "ms": 182.44
+        }
+      ],
+      "env": {
+        "crossOriginIsolated": true,
+        "hasSharedArrayBuffer": true,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+      }
+    }
+  ]
+}
