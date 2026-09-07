@@ -265,9 +265,28 @@ describe('the hash is WIDE, SYNCHRONOUS, and rendered FIXED-LENGTH', () => {
 		// different value that nothing addresses storage by, and it is built ON this
 		// digest rather than beside it (a stream digest goes IN). Anything else
 		// appearing in this list is the failure above.
+		//
+		// `stream/seed.ts` is the third, admitted on the same test and not on
+		// convenience: it hashes a DOCUMENT's octets (`streamSeedContentHash`, the
+		// integrity value a build may pin against an immutable artifact, ADR-0066).
+		// It takes bytes rather than a source and a config, it truncates nothing, and
+		// no keyspace anywhere is addressed by it -- so it cannot put a stream at two
+		// addresses, which is what this guard exists to prevent. It uses the SAME
+		// primitive deliberately, because a second one would be a second thing a
+		// producer and a loader must agree on.
 		const root = fileURLToPath(new URL('../src/', import.meta.url));
 		const hashing = filesUnder(root).filter((file) => /\bsha256\b/.test(readFileSync(file, 'utf-8')));
-		expect(hashing.map((file) => file.slice(root.length))).toEqual(['generation/identity.ts', 'stream/identity.ts']);
+		expect(hashing.map((file) => file.slice(root.length))).toEqual([
+			'generation/identity.ts',
+			'stream/identity.ts',
+			'stream/seed.ts',
+		]);
+		// ... and the one that ADDRESSES is still alone in doing so: nothing else
+		// truncates to the digest's width.
+		const truncating = hashing.filter((file) =>
+			/slice\(2, 2 \+ STREAM_DIGEST_LENGTH\)/.test(readFileSync(file, 'utf-8')),
+		);
+		expect(truncating.map((file) => file.slice(root.length))).toEqual(['stream/identity.ts']);
 	});
 
 	it('produces no collision across a corpus of realistic sources', () => {

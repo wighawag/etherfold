@@ -151,6 +151,18 @@ export * from './receivingContainer.js';
 export * from './stream/identity.js';
 export * from './stream/fixture.js';
 /**
+ * THE PUBLISHED SEED ENVELOPE, beside the fixture format and NOT sharing its
+ * number.
+ *
+ * A seed is what a third party publishes and a client installs, so the shape,
+ * the digest rule it is checked against and the content-hash domain a build pins
+ * are all PUBLISHED capability even where the emitting script is ours: the
+ * producer lives outside this package (that is what the strip export below is
+ * for), and a consumer writing its own installer must be able to reach the same
+ * envelope and the same hash without re-deriving either.
+ */
+export * from './stream/seed.js';
+/**
  * THE READ-ONLY STREAM VIEW, which is what makes the one-writer rule structural.
  *
  * Read and write share ONE `ExistingStream`, so a generation handed the stream

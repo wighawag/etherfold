@@ -32,6 +32,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:full": "STRATAGEMS_WORKLOAD=full vitest run",
-		"test:all-backends": "STRATAGEMS_WORKLOAD=all vitest run"
+		"test:all-backends": "STRATAGEMS_WORKLOAD=all vitest run",
+		"emit:seed": "tsx scripts/emit-stream-seed.ts"
 	}
 }
