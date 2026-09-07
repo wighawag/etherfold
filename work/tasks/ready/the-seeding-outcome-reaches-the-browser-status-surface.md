@@ -14,16 +14,11 @@ Both were asked by the tasking loop and are now decided by the human. Build to t
 
 The core loader is callable directly, so an application may drive the install itself; AND `createIndexerState` takes an optional `seed` (the locations the build names, and an optional pinned content hash) and runs the install itself at the right moment. The hook path is what the docs show.
 
-**The deciding argument is a SILENT failure mode, and it is worth understanding before you build either path.** The window for an install is after the generation is built and before it loads, and the boot path already provides one: `init()` builds the container, and the `IndexerGeneration` constructor's `reinit` calls `keepStream.setStreamConfig(resolvedConfig)` -- which is the moment the keeper learns which stream address it is writing to. `init()` does NOT load; `indexer.load()` happens later, inside `setupIndexing()`, driven by the first `indexMore()` or `startAutoIndexing()`. So the correct window is between those two, and it is comfortable.
+**The hook option is ERGONOMICS, and an earlier draft of this task oversold it.** It claimed the install must run inside the hook because only the hook knows when the keeper's address has been configured, so an app installing "too early" would silently write to the wrong stream. That is no longer true: ADR-0067 makes the install take the RESOLVED stream config as an argument and set it itself, so it is correct whether it runs before or after a generation exists, and the silent failure mode is gone rather than guarded. Build the option because it saves an app from sequencing the call and because it gives this surface something to publish, not because it is a safety mechanism.
 
-Missing it fails in two very different ways:
+What DOES remain true about ordering, and is worth one test: the install refuses a subtree that is not empty (ADR-0067), so an app that starts indexing before installing gets a refusal rather than a corrupted stream. That is loud and needs no hook to prevent.
 
-- **TOO LATE** (after indexing has started): the subtree is not empty, the loader refuses, the app renders a refusal. Loud, and nothing is corrupted.
-- **TOO EARLY** (before `init()`): the keeper still holds its DEFAULT stream config, so `streamDigestOf` resolves a different digest and the seed installs at an address nothing will ever read. **Silent**, and it is exactly the "installs under a key nothing reads" waste ADR-0064 exists to forbid, arriving through ordering instead of identity.
-
-The hook option exists to make that second case unreachable for the common path: only the hook knows when the address has been configured. The direct path stays supported because it is symmetric with how the state SNAPSHOT is already bootstrapped today (the app calls `bootstrapFromSnapshot` itself and hands the store to the hook through `createState`; `createIndexerState` knows nothing about it), and because an app may prefer to keep the trust statement in its own code beside its build pin.
-
-So: the hook's `seed` option is a convenience that encodes the ordering rule, not a new owner of the trust decision. Document the ordering constraint for the direct path.
+So: the hook's `seed` option is a convenience, not a new owner of the trust decision and not a safety mechanism. Document the direct path too, including that it needs the resolved stream config passed to it.
 
 ### 2. A dedicated `seed` field, plus a phase value; NO byte progress in v1
 
@@ -48,8 +43,8 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 
 - [ ] The seeding outcome is observable through the browser package's existing subscribable status surface, with no new reactive mechanism introduced, as a DEDICATED field carrying `installing` / `seeded` / `refused` / absent, plus a seeding value in the status phase enum.
 - [ ] `error` is not reused for a refusal, and no existing field changes meaning.
-- [ ] `createIndexerState` accepts an optional `seed` and runs the install AFTER the generation is built (so the keeper's stream config is set) and BEFORE it loads, publishing `installing` and then the terminal outcome.
-- [ ] Driving the install DIRECTLY from an application still works and is documented, including the ordering constraint: installing before `init()` lands the seed at the wrong stream address SILENTLY, because the keeper still holds its default stream config.
+- [ ] `createIndexerState` accepts an optional `seed` and runs the install BEFORE the generation loads, publishing `installing` and then the terminal outcome.
+- [ ] Driving the install DIRECTLY from an application still works and is documented, and is asserted to be correct BEFORE `init()` as well as after, since the install carries its own resolved stream config (ADR-0067). An app that installs after indexing has started gets the not-empty REFUSAL, which is loud; assert that too.
 - [ ] No byte-level progress is reported during the install; the terminal states plus `installing` are the whole surface.
 - [ ] A refusal reaches the surface WITH its reason and, where the reason carries one, its direction, so an app can render something true rather than "loading".
 - [ ] Nothing in the library infers or renders "you are out of date": the direction is reported as data.

@@ -1,6 +1,13 @@
 ---
-status: accepted, not yet implemented
+status: superseded in part by ADR-0067
 ---
+
+> **ADR-0067 withdraws the RESUMABILITY conclusion below.** A partial install really is a contiguous
+> prefix with an honest cursor, but nothing can tell one from a stream the client indexed ITSELF: in
+> the target deployment the publisher and the client are the same build, so the stored `context` is
+> identical and `fetchFrom` does not expose the cursor's `startBlock`. So an install now refuses any
+> subtree it did not find EMPTY, and it takes the resolved stream config as an argument rather than
+> relying on whatever was last set on the keeper. Everything else here stands.
 
 # A published stream seed arrives through its OWN loader, and installs through the KEEPER SEAM
 
@@ -36,9 +43,11 @@ Batches are cut on BLOCK boundaries. Nothing in the keeper requires it, since a 
 
 **The address is DERIVED, never supplied.** A keeper resolves the subtree itself from the `source` it is handed on every call plus the stream config it was given, so a seed physically cannot be installed under a digest that is not the one the client will read. What an installer must do is set that config first (`setStreamConfig` with the RESOLVED config, exactly as `IndexerGeneration.reinit` does), or it writes a perfectly valid stream to a subtree nobody reads.
 
-### A partial install is a contiguous prefix, not damage
+### A partial install is a contiguous prefix, not damage (but it is NOT resumed: see ADR-0067)
 
-Worth stating because it decides an argument the next task will have. Installing as N saves rather than one bulk write means an interrupted install leaves a shorter stream whose cursor describes it honestly, which the keeper's own contract already calls a usable seed and which a later install resumes by continuing from `lastToBlock + 1`. Resumability is inherited rather than designed.
+Installing as N saves rather than one bulk write means an interrupted install leaves a shorter stream whose cursor describes it honestly, rather than a torn record. That much stands, and it is why an interrupted install is safe to CLEAR.
+
+What this ADR originally concluded from it -- that a later install resumes by continuing from `lastToBlock + 1` -- is WITHDRAWN by ADR-0067: resuming requires telling a partial install of this seed from a locally-indexed stream, and in the deployment this feature exists for those two are indistinguishable, so the resume would duplicate events or leave a hole, silently.
 
 ## Considered options
 

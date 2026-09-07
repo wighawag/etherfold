@@ -130,15 +130,20 @@ discards anyway.
    subscribe to, so that an app can render "installing", "seeded at block N" or a refusal reason
    instead of an unexplained empty screen. *(ADR-0064 names this as a build-plan item; it lands on
    the existing browser status surface, which already carries `error` and `nonCanonicalGenerations`.)*
-11. As a **browser app**, I want an install interrupted partway to resume WRITING from where the
-    keeper's cursor already reaches, rather than writing the whole stream again, so that a closed tab
-    does not corrupt the stream and does not re-do the work it had already committed. *(True by
-    construction under ADR-0063, since a partial install is a contiguous prefix with an honest
-    cursor, so this story ASSERTS rather than builds. Scope it honestly: in the single-document shape
-    this spec chose, an interrupted install still re-fetches and re-parses the whole document, and
-    only the WRITE phase resumes. Skipping the fetch is what the chunked shape buys and that shape is
-    out of scope, so the spike's end-to-end resume assertion, which is a chunked run, is prior art
-    for the mechanism and not for this story's scope.)*
+11. As a **browser app**, I want an install into a subtree that is not EMPTY to be refused rather than
+    silently continued, so that a stream I indexed myself, or a half-finished earlier install, can
+    never be mistaken for the prefix of the seed being installed. *(ADR-0067, which withdraws
+    ADR-0063's resume. Nothing can tell a partial install of this seed from a locally-indexed stream:
+    in this deployment the publisher and the client are the SAME build, so the stored `context` is
+    identical and `fetchFrom` does not expose the cursor's `startBlock`. A resume would therefore
+    duplicate events or leave a hole, silently. An interrupted install is CLEARED and redone, which
+    costs the keeper writes alone, about 200 ms of a ~1 s install on a real device.)*
+12. As a **browser app on IPFS**, I want a BUILD-EMBEDDED artifact at a relative path to be a location
+    like any other, reached by the same failover, so that my app still starts when the snapshot host
+    is unreachable or gone. *(ADR-0066, and it is what the reference deployment ships: the remote is
+    listed first and the embedded copy last, `work/notes/findings/how-a-shipped-browser-indexer-is-actually-deployed.md`.
+    It needs no host, no TLS relationship and no trust decision separate from the app's own, because
+    it arrives in the same delivery as the code.)*
 
 ### Autonomy notes
 
@@ -164,7 +169,7 @@ envelope with its own format number beside `STREAM_FIXTURE_FORMAT` (a seed is no
 not borrow its number); produce one from a captured stream. Demoable as a committed artifact emitted
 from the committed capture, with its digest and integrity hash printed.
 
-**Slice C -- the loader and the install (stories 5, 6, 7, 8, 9, 11).** The vertical tracer bullet:
+**Slice C -- the loader and the install (stories 5, 6, 7, 8, 9, 11, 12).** The vertical tracer bullet:
 fetch from a location list, run every check, write through the keeper seam, return an outcome.
 Demoable in a browser as "a generation folds 31,332 events with no node in the loop", which the
 exploration's spike already did in prototype form
@@ -214,11 +219,12 @@ The load-bearing assertions, stated as external behaviour:
   (`seed-covers-more` versus `seed-covers-less`), because the direction is the half an application
   renders.
 - **A refused seed writes NOTHING**, asserted on the keyspace after the refusal.
-- **An interrupted install resumes its WRITES from the keeper's cursor** and lands on a stream
-  identical to an uninterrupted one. The measurement harness asserts this end to end in a real
-  browser for the CHUNKED shape; for the single-document shape the assertion is narrower (the writes
-  resume, the fetch and parse do not), so write it against the writes rather than copying the
-  chunked test's claim.
+- **An install into a NON-EMPTY subtree is refused and writes nothing**, asserted for both shapes it
+  can take: a stream the client indexed itself, and a half-finished earlier install. This is a test
+  about damage that does not happen, so assert the keyspace afterwards and not just the return value.
+- **Failover reaches a BUILD-EMBEDDED location**: with an unreachable remote listed first and a
+  relative, hostless path listed last, the install still succeeds from the second. That relative path
+  is the case a location type can quietly fail to accept, so assert it rather than assuming it.
 - **A capture taken inside the reorg window is refused**, which needs a synthetic artifact since the
   committed capture sits 27.5M blocks below its head.
 
