@@ -76,7 +76,7 @@ Measured, and quotable as fact: the reference deployment's publisher republished
 | worst observed | 50.9 h |
 | within 2 h / 4 h | 99.74% / 99.90% |
 
-So the wait a processor-only change pays on that cadence is about an hour, and the tail is what to plan the UI against rather than the median. The same cadence bounds what a freshly seeded tab fetches for itself before it is caught up: at 2.000 s/block that is **1,802 blocks at the median gap and 91,527 at the worst observed one**, all of it inside the recent range a public node does serve. Every number here is from [`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md), which measured them.
+Read that as the floor on the wait rather than the wait itself. It measures the interval between republications of the snapshot the SAME processor computed, so a processor-only change pays it only after the publisher has deployed the new processor and re-indexed under it; the cadence bounds the last step, not the first. The tail is also what to plan the UI against rather than the median. The same cadence bounds what a freshly seeded tab fetches for itself before it is caught up: at 2.000 s/block that is **1,802 blocks at the median gap and 91,527 at the worst observed one**, all of it inside the recent range a public node does serve. Every number here is from [`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md), which measured them.
 
 **One half of this is measured and the other is an account, and they are worth keeping apart.** The cadence above is a measurement of a public git history, so take it as fact. That the **client** of that deployment then ran on the snapshot ALONE, with no stream underneath at all, is the maintainer's account of how one deployment was built and behaved: no measurement here shows it, and that deployment ran on this library's predecessor, so read it for the shape of a deployment and not for an API. It is a good reason to believe the mode is viable in production, offered as testimony rather than as data.
 
@@ -102,7 +102,7 @@ const indexer = createIndexerState({
 			{processor: entityProcessorVersionHash(tokenProcessor), finalityDepth: 12},
 		);
 		// A refusal is DATA rather than a throw, so render it instead of leaving an
-		// unexplained empty app: {status: 'bootstrapped', at} | {status: 'kept-local',
+		// unexplained empty app: {status: 'bootstrapped', at, from} | {status: 'kept-local',
 		// at} | {status: 'not-bootstrapped', reason}.
 		showSeedingStatus(outcome);
 		return store;
