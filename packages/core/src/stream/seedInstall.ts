@@ -652,6 +652,22 @@ function incoherenceOf(seed: StreamSeed): string | undefined {
 	let previousLogIndex = -1;
 
 	for (const event of seed.eventStream) {
+		// THE SHAPE FIRST, because every rule below is a COMPARISON and a comparison
+		// against `undefined` is FALSE rather than a refusal. An event with no
+		// `blockNumber` would pass coverage containment, the ordering rule and the
+		// duplicate rule alike -- all three vacuously -- and be INSTALLED, and a stored
+		// stream is re-folded by every later generation, so that is permanent. The
+		// reader types what IT does arithmetic on (`parseStreamSeed`); these are the
+		// fields only this pass touches, so this is where they are typed.
+		if (
+			!event ||
+			typeof event !== 'object' ||
+			typeof event.blockNumber !== 'number' ||
+			typeof event.logIndex !== 'number' ||
+			typeof event.blockHash !== 'string'
+		) {
+			return `an event that is not one: every entry must carry a numeric blockNumber and logIndex and a string blockHash`;
+		}
 		const at = `block ${event.blockNumber}, log ${event.logIndex}`;
 		if (event.blockNumber < seed.coverage.fromBlock || event.blockNumber > seed.coverage.toBlock) {
 			return `an event at ${at} sits outside the coverage it claims (${seed.coverage.fromBlock} to ${seed.coverage.toBlock})`;

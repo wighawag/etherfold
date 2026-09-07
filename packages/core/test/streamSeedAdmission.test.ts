@@ -231,6 +231,20 @@ describe('identity: a seed that is not for THIS stream is refused, and the refus
 		await refuses('incoherent', seed);
 	});
 
+	it('refuses a seed whose stored context is not a LIST of entries, rather than throwing out of the loader', async () => {
+		// The identity check ITERATES these entries to recompute the publisher's digest,
+		// so a document carrying something else reached `entries.map` and left a
+		// `TypeError` escaping a PUBLIC entry point -- an unhandled rejection on an app's
+		// boot path instead of the explanation ADR-0064 exists to give it. Every refusal
+		// is data, including this one, and the door is where the shape is typed.
+		const notAList = {
+			...seedFor(CLIENT_SOURCE, STREAM_CONFIG),
+			context: {source: 'not-a-list', config: streamConfigHashOf(STREAM_CONFIG), processor: ''},
+		} as unknown as StreamSeed;
+
+		await refuses('unreadable-format', notAList);
+	});
+
 	it('names a CHAIN mismatch separately, because "an entry was added at block 0" is useless', async () => {
 		// Structurally subsumed by the digest -- `chainId` and `genesisHash` are hashed
 		// into the block-0 skeleton entry -- and reported separately anyway, which is
@@ -363,6 +377,30 @@ describe('structural coherence: each rule with its own failing artifact', () => 
 
 	it('refuses OUT-OF-ORDER pairs', async () => {
 		await refuses('incoherent', eventsWith([makeLog(100, '0xs100', 1), makeLog(100, '0xs100', 0)]));
+	});
+
+	it('refuses a BLOCK NUMBER that goes backwards, which is the other half of the ordering rule', async () => {
+		// The case above varies `logIndex` inside ONE block, so it exercises only the
+		// second half of ADR-0065's rule ("`(blockNumber, logIndex)` strictly
+		// increasing") and leaves the first ("block numbers non-decreasing") unpinned:
+		// deleting the block-number comparison keeps every other case green.
+		await refuses('incoherent', eventsWith([makeLog(102, '0xs102', 0), makeLog(100, '0xs100', 0)]));
+	});
+
+	it('refuses an ENTRY THAT IS NOT AN EVENT, rather than comparing against `undefined`', async () => {
+		// Every rule in the pass is a COMPARISON, and a comparison against `undefined`
+		// is FALSE rather than a refusal -- so an event missing its `blockNumber` would
+		// satisfy coverage containment, ordering and the duplicate rule ALL vacuously
+		// and be INSTALLED. A stored stream is re-folded by every later generation, so
+		// that install is permanent. The shape is checked before anything is compared.
+		const noBlockNumber = {blockHash: '0xs100', logIndex: 0} as unknown as StoredLogEvent;
+		await refuses('incoherent', eventsWith([noBlockNumber]));
+
+		const notAnObject = null as unknown as StoredLogEvent;
+		await refuses('incoherent', eventsWith([notAnObject]));
+
+		const blockNumberAsText = {...makeLog(100, '0xs100', 0), blockNumber: '100'} as unknown as StoredLogEvent;
+		await refuses('incoherent', eventsWith([blockNumberAsText]));
 	});
 
 	it('refuses a block number carrying TWO block hashes, which is an unreconciled reorg', async () => {

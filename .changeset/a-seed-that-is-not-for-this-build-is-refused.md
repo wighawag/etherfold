@@ -1,5 +1,5 @@
 ---
-'@etherfold/core': patch
+'@etherfold/core': minor
 ---
 
 A published stream seed is now ADMITTED or REFUSED on everything a client can establish by itself, all of it BEFORE the first write, and `installStreamSeed` is a PUBLIC entry point of `@etherfold/core`.

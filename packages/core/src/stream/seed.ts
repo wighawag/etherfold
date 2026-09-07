@@ -356,5 +356,11 @@ export function parseStreamSeed(text: string): StreamSeed {
 	if (typeof parsed.coverage.fromBlock !== 'number' || typeof parsed.coverage.toBlock !== 'number') {
 		throw new Error(`not a stream seed: coverage must carry a numeric fromBlock and toBlock`);
 	}
+	// The identity check ITERATES these entries to recompute the publisher's digest,
+	// so a non-array here leaves the door as a `TypeError` thrown out of a public
+	// entry point rather than as the refusal every reason is contracted to be.
+	if (!Array.isArray(parsed.context.source)) {
+		throw new Error(`not a stream seed: context.source must be a list of source hash entries`);
+	}
 	return parsed as StreamSeed;
 }
