@@ -1,0 +1,23 @@
+{
+	"name": "spike-measure-what-a-published-stream-costs-to-install",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Evidence for work/notes/findings/: what does installing a published stream seed cost a browser, and does the artifact have to be chunked?",
+	"scripts": {
+		"prepare-assets": "node prepare.mjs",
+		"browser": "playwright test",
+		"android": "node android.mjs"
+	},
+	"devDependencies": {
+		"@etherfold/browser": "file:../../../packages/browser",
+		"@etherfold/core": "file:../../../packages/core",
+		"@playwright/test": "^1.60.0",
+		"@types/node": "^22.0.0",
+		"esbuild": "^0.28.1",
+		"idb-keyval": "^6.2.4",
+		"playwright": "^1.60.0",
+		"playwright-browser-harness": "^0.3.0",
+		"typescript": "^5.9.0"
+	}
+}

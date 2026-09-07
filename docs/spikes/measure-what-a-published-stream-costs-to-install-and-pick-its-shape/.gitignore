@@ -1,0 +1,8 @@
+# Derived from the committed fixture by `node prepare.mjs`, in a few seconds, so
+# it is regenerable rather than evidence: 4.9 MB of artifacts nobody should have
+# to clone. `results/` IS committed, because that is the measurement.
+assets/
+
+node_modules/
+test-results/
+playwright-report/
