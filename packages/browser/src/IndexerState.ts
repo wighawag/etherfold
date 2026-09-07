@@ -11,17 +11,22 @@ import type {
 	IndexingSource,
 	LastSync,
 	ExistingStream,
+	NotInstalledReason,
 	PromotionConfig,
 	UsedPromotionConfig,
 	ProvidedStreamConfig,
 	ProvidedIndexerConfig,
+	StreamSeedInstallOutcome,
+	StreamSeedLocation,
 	TxInclusionQuery,
 	TxInclusionVerdict,
 } from '@etherfold/core';
 import {
 	checkTxInclusion as checkTxInclusionAgainst,
+	installStreamSeed,
 	openIndexer,
 	openMemoryGenerationRegistry,
+	resolveStreamConfig,
 	sameGeneration,
 } from '@etherfold/core';
 import type {StateStore} from '@etherfold/state-store';
@@ -81,6 +86,112 @@ export type GenerationProgress = {
 	readonly blocksBehind?: number;
 };
 
+/**
+ * WHICH WAY a refused seed and this client disagree, where the reason carries a
+ * direction at all (ADR-0064).
+ *
+ * It is the refusal REASON, narrowed: the two members are exactly the two
+ * reasons that name a direction, restated here so an application can switch on
+ * one field instead of knowing which members of the refusal vocabulary happen to
+ * be directional. It is DERIVED from `reason` and is never a second fact.
+ *
+ * What nothing in this library does with it is INFER. An app may render "a newer
+ * version of this app may be available" off `seed-covers-more`; the library may
+ * not, because a deliberately NARROWER client is indistinguishable from a stale
+ * one and only the application knows which it is (ADR-0064).
+ */
+export type StreamSeedDirection = Extract<NotInstalledReason, 'seed-covers-more' | 'seed-covers-less'>;
+
+/**
+ * WHAT HAPPENED TO THE STREAM SEED, as a small discriminated state an app can
+ * render.
+ *
+ * The visibility half of `a-browser-app-starts-from-a-published-artifact`: an
+ * app that cannot say WHY it has no seed shows an empty screen instead of an
+ * explanation, which is the outcome that spec exists to avoid (ADR-0064). So the
+ * outcome the loader returns reaches the surface an application already
+ * subscribes to, and not only the boot path's return value.
+ *
+ * It REPORTS and it does not decide, exactly as `nonCanonicalGenerations` does:
+ * whether "installing", "seeded" or "refused" should dim, hide or replace what is
+ * on screen is the application's call.
+ *
+ * ## What it deliberately does NOT carry
+ *
+ * **No byte-level progress.** In the recommended single-document shape the whole
+ * install is about 1 s on a mid-range phone and ~300 ms on desktop, which a
+ * spinner covers; the variable part is the DOWNLOAD, not the install, so a
+ * progress signal belongs on the fetch as an optional loader callback if it is
+ * ever wanted (`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`).
+ * `installing` and the terminal states are the whole surface, which is also why
+ * this field publishes at most twice per boot.
+ *
+ * **No inference.** See `StreamSeedDirection`.
+ */
+export type StreamSeedState =
+	/** The install is running. Published before the fetch and replaced by a terminal state. */
+	| {readonly status: 'installing'}
+	| {
+			/** A stream was installed, and the app now holds history it never fetched. */
+			readonly status: 'seeded';
+			/** How far the installed stream REACHES: the seed's coverage end, above its last event. */
+			readonly at: number;
+			/** How far back it reaches: what the keeper recorded as the stream's `startBlock`. */
+			readonly reachesBackTo: number;
+			/** WHICH location served it, so an app can say where its history came from. */
+			readonly from: string;
+			readonly events: number;
+			/** How many saves it took, which is how many SEGMENTS the keeper now holds. */
+			readonly segments: number;
+	  }
+	| {
+			/**
+			 * No seed was installed, and the app STARTS ANYWAY.
+			 *
+			 * A refusal is a NORMAL condition and never gates the boot (ADR-0064): state
+			 * still comes up from a published snapshot and indexes forward from the tip,
+			 * and what is lost is the stream underneath, so the generation is a leaf and a
+			 * later processor-only change waits for a republished snapshot instead of
+			 * being free. That is why this is its own field and not `error`: an app
+			 * treating `error` as a fault would render a crash for an ordinary outcome,
+			 * and `acknowledgeError()` does not fit an outcome nothing can acknowledge
+			 * away.
+			 */
+			readonly status: 'refused';
+			/** WHY, verbatim from the loader, so an app can explain it. */
+			readonly reason: NotInstalledReason;
+			/** Present only where the reason names one. See `StreamSeedDirection`. */
+			readonly direction?: StreamSeedDirection;
+	  };
+
+/**
+ * The loader's outcome as this surface publishes it, plus the direction where
+ * the reason carries one.
+ *
+ * A translation and not a re-decision: every field is the loader's own, and the
+ * `direction` is `reason` narrowed. It is a free function because it decides
+ * nothing about any particular indexer.
+ */
+function streamSeedStateOf(outcome: StreamSeedInstallOutcome): StreamSeedState {
+	if (outcome.status === 'installed') {
+		return {
+			status: 'seeded',
+			at: outcome.at,
+			reachesBackTo: outcome.reachesBackTo,
+			from: outcome.from,
+			events: outcome.events,
+			segments: outcome.segments,
+		};
+	}
+	const direction = directionOf(outcome.reason);
+	return {status: 'refused', reason: outcome.reason, ...(direction ? {direction} : {})};
+}
+
+/** The two refusal reasons that name a direction, and no others. */
+function directionOf(reason: NotInstalledReason): StreamSeedDirection | undefined {
+	return reason === 'seed-covers-more' || reason === 'seed-covers-less' ? reason : undefined;
+}
+
 export type SyncingState<ABI extends Abi> = {
 	waitingForProvider: boolean;
 	autoIndexing: boolean;
@@ -104,10 +215,47 @@ export type SyncingState<ABI extends Abi> = {
 	 * the same way.
 	 */
 	nonCanonicalGenerations: readonly GenerationProgress[];
+	/**
+	 * WHAT HAPPENED TO THE STREAM SEED this hook was asked to install, or ABSENT
+	 * where none was asked for.
+	 *
+	 * Additive, and its own field rather than a second meaning for an existing one:
+	 * an app that never seeds sees `undefined` here for ever and nothing else about
+	 * this store changes. See `StreamSeedState`.
+	 *
+	 * It reports the install THIS hook ran at `init`, into the stream the indexer
+	 * was initialised on. A reconfigure that moves the indexer to a DIFFERENT
+	 * stream does not re-run an install and does not clear this, so on that path it
+	 * goes on describing the stream the app booted on -- which is the honest reading
+	 * of a boot-time fact, and the reason it is not cleared alongside `lastSync`:
+	 * the common reconfigure (a processor change) keeps the very stream this
+	 * describes, and clearing there would drop a true report.
+	 */
+	streamSeed?: StreamSeedState;
 };
 
 export type StatusState = {
-	state: 'Idle' | 'Loading' | 'FetchingEventStream' | 'ProcessingEventStream' | 'CatchingUp' | 'IndexingLatest';
+	/**
+	 * WHICH PHASE the indexer is in, which is where applications already switch to
+	 * choose what to render.
+	 *
+	 * `InstallingStreamSeed` is the boot phase a published **stream seed** is
+	 * written to the keeper in. It is here, beside the phases an app already
+	 * handles, so that the boot becomes visible without every app learning a new
+	 * field; WHAT the install then did is `SyncingState.streamSeed`, because a phase
+	 * says what is happening and not what happened. The phase LEAVES this value the
+	 * moment the install reaches a terminal outcome, back to `Idle` until the load
+	 * moves it on -- an indexer that has finished installing and not yet been asked
+	 * to load really is idle.
+	 */
+	state:
+		| 'Idle'
+		| 'InstallingStreamSeed'
+		| 'Loading'
+		| 'FetchingEventStream'
+		| 'ProcessingEventStream'
+		| 'CatchingUp'
+		| 'IndexingLatest';
 };
 
 /**
@@ -191,6 +339,53 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	registry?: GenerationRegistry;
 };
 
+/**
+ * WHERE A PUBLISHED STREAM SEED COMES FROM, as the hook takes it.
+ *
+ * ## Convenience, not a trust boundary and not a safety mechanism
+ *
+ * The loader is callable directly (`installStreamSeed`, `@etherfold/core`) and
+ * an application may drive the install itself; this option saves it sequencing
+ * the call, and gives this hook's surface something to publish. It is NOT a
+ * safety mechanism: the install carries its own RESOLVED stream config and sets
+ * it on the keeper before it addresses anything (ADR-0067), so it is correct
+ * whether it runs before or after a generation exists.
+ *
+ * ## The trust contract travels with the locations (ADR-0066)
+ *
+ * The CALLER names the locations and owns that choice: the loader fetches where
+ * it is pointed and nowhere else, so there is no origin check to make. Keep BOTH
+ * the list and any `expectedContentHash` in the BUILD -- a pin read from the same
+ * place as the artifact proves nothing -- and read `installStreamSeed`'s own
+ * JSDoc before shipping one, including what it does NOT defend against
+ * (OMISSION, which is impossible within the premise rather than deferred).
+ */
+export type BrowserStreamSeedOptions = {
+	/**
+	 * The ORDERED list, freshest first, walked until one is usable. A relative,
+	 * hostless path is a first-class location and is what a BUILD-EMBEDDED artifact
+	 * is listed as, ordinarily LAST so the app still starts when the remote is gone.
+	 */
+	locations: StreamSeedLocation | readonly StreamSeedLocation[];
+	/**
+	 * An OPTIONAL content hash, verbatim as the producer printed it
+	 * (`sha256:<hex>`). Only an IMMUTABLE, release-tied artifact can have one
+	 * pinned: a build cannot know the hash of a ROLLING artifact, and rolling is how
+	 * this is ordinarily deployed.
+	 */
+	expectedContentHash?: string;
+	/**
+	 * The block the client will ask this stream FROM, which a seed must reach back
+	 * to or be refused. Defaults to the source's own earliest `startBlock`, which is
+	 * exactly what a fresh generation's `load()` asks for.
+	 */
+	reachBackTo?: number;
+	/** How many events one save carries, at most. Defaults to the loader's own 1,000. */
+	maxEventsPerBatch?: number;
+	/** Injectable for tests and for a host with its own retry/timeout policy. */
+	fetch?: typeof globalThis.fetch;
+};
+
 type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfig extends undefined
 	? (indexerSetup: {
 			provider: EIP1193ProviderWithoutEvents;
@@ -249,6 +444,21 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		trackNumRequests?: boolean;
 		logRequests?: boolean;
 		keepStream?: ExistingStream<ABI>;
+		/**
+		 * INSTALL A PUBLISHED STREAM SEED into `keepStream` at `init`, before the
+		 * generation loads.
+		 *
+		 * The documented default way to seed a stream, and a convenience over calling
+		 * `installStreamSeed` yourself: this hook sequences the call and publishes what
+		 * it did on `syncing.streamSeed` and `status.state`. See
+		 * `BrowserStreamSeedOptions` for the trust contract, which is the caller's.
+		 *
+		 * It needs a `keepStream`, because a seed is a stream and there is nothing to
+		 * install into without one; asking for a seed with no keeper RAISES at `init`
+		 * rather than being reported as a refusal, since it is a wiring mistake in the
+		 * caller's own source and no location makes it right.
+		 */
+		seed?: BrowserStreamSeedOptions;
 		/**
 		 * WHEN the canonical pointer moves to a generation added beside the live one.
 		 *
@@ -439,6 +649,65 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		});
 	}
 
+	/**
+	 * INSTALL THE PUBLISHED SEED, and PUBLISH what it did.
+	 *
+	 * Run from `init` and BEFORE the generation is built, so the fold that follows
+	 * finds the stream already there rather than fetching a history a public node
+	 * would refuse to serve. Ordering is not what makes it correct, though: the
+	 * install takes the RESOLVED stream config as an argument and sets it on the
+	 * keeper itself (ADR-0067), so an application driving `installStreamSeed`
+	 * directly gets the same answer before `init` or after it.
+	 *
+	 * TWO publications and never more: `installing`, then the terminal outcome. A
+	 * refusal is DATA and does not stop anything -- `init` carries on, the generation
+	 * is built, state comes up from whatever the application's `createState`
+	 * bootstrapped and indexes forward, and the refusal is reported ALONGSIDE that
+	 * boot rather than gating it (ADR-0064).
+	 *
+	 * What DOES propagate is a THROW, which the loader reserves for what is not an
+	 * ordinary condition: a malformed pin, a keeper that failed mid-install, or a
+	 * batch declined by a subtree something else wrote into. `init` rejects, and
+	 * this field is left saying `installing`, which is what actually happened: there
+	 * is no terminal outcome to report.
+	 */
+	async function installSeed(
+		seed: BrowserStreamSeedOptions,
+		source: IndexingSource<ABI>,
+		config: ProvidedIndexerConfig<ABI>,
+	) {
+		const keepStream = config.keepStream;
+		if (!keepStream) {
+			throw new Error(
+				`a stream seed was given with no \`keepStream\`: a seed IS a stream, so there is nothing to install it ` +
+					`into. Pass a keeper (\`keepStreamOnIndexedDB(name)\`), or drop the seed and run the snapshot-only mode.`,
+			);
+		}
+		setSyncing({streamSeed: {status: 'installing'}});
+		setStatus({state: 'InstallingStreamSeed'});
+		try {
+			const outcome = await installStreamSeed(keepStream, seed.locations, {
+				source,
+				// RESOLVED here, because the install addresses the subtree with it and the
+				// digest half of that address must be the one the indexer itself will run
+				// under -- never the config as a user spelled it.
+				streamConfig: resolveStreamConfig(config.stream),
+				...(seed.reachBackTo === undefined ? {} : {reachBackTo: seed.reachBackTo}),
+				...(seed.maxEventsPerBatch === undefined ? {} : {maxEventsPerBatch: seed.maxEventsPerBatch}),
+				...(seed.expectedContentHash === undefined ? {} : {expectedContentHash: seed.expectedContentHash}),
+				...(seed.fetch === undefined ? {} : {fetch: seed.fetch}),
+			});
+			setSyncing({streamSeed: streamSeedStateOf(outcome)});
+			// The install is over either way, and nothing is loading yet. `setupIndexing`
+			// moves this on to `Loading` at the next call; leaving `InstallingStreamSeed`
+			// standing would be the one thing that is certainly untrue.
+			setStatus({state: 'Idle'});
+		} catch (err) {
+			setStatus({state: 'Idle'});
+			throw err;
+		}
+	}
+
 	async function init(
 		indexerSetup: {
 			provider: EIP1193ProviderWithoutEvents;
@@ -452,6 +721,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		}
 		const config = {...{}, keepStream: options?.keepStream, ...(indexerSetup.config || {})};
 		const source = indexerSetup.source;
+
+		// BEFORE the generation is built, and therefore before it loads: a fold that
+		// starts first would find an empty subtree, index into it, and the install would
+		// then be refused as `subtree-not-empty` -- loudly and as data, but too late.
+		if (options?.seed) {
+			await installSeed(options.seed, source, config);
+		}
 
 		let provider: EIP1193ProviderWithoutEvents = indexerSetup.provider;
 
@@ -782,6 +1058,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			lastSync: undefined,
 			error: undefined,
 			nonCanonicalGenerations: [],
+			// The install this hook reports is the one IT ran, at `init`. A later `init`
+			// runs its own (or none), so carrying the previous one across a dispose would
+			// report a stream a second container may never have been pointed at.
+			streamSeed: undefined,
 		});
 		setStatus({state: 'Idle'});
 	}

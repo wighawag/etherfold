@@ -81,7 +81,15 @@ export function browserStore(name: string, definition: EntityProcessor<TestABI>)
 export function indexerOver(
 	definition: EntityProcessor<TestABI>,
 	store: StateStore,
-	keepers: {keepStream?: unknown} = {},
+	keepers: {
+		keepStream?: unknown;
+		/**
+		 * The published STREAM SEED to install at `init`, for the cases about the
+		 * seeding surface. Untyped here for the same reason `keepStream` is: these
+		 * helpers are shared by suites that do not name the option at all.
+		 */
+		seed?: unknown;
+	} = {},
 ) {
 	return createIndexerState<TestABI, EntityStateView>(
 		{
@@ -90,6 +98,7 @@ export function indexerOver(
 		},
 		{
 			...(keepers.keepStream ? {keepStream: keepers.keepStream as never} : {}),
+			...(keepers.seed ? {seed: keepers.seed as never} : {}),
 		},
 	);
 }
