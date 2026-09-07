@@ -163,6 +163,33 @@ export * from './stream/fixture.js';
  */
 export * from './stream/seed.js';
 /**
+ * THE INSTALL: fetch a published seed, CHECK it, and write it through the keeper
+ * seam.
+ *
+ * Public because it is the whole capability a browser app consumes -- and public
+ * only NOW, because until the admission checks landed it verified nothing and an
+ * exported "fetched and hoped" would have been worse than no entry point at all.
+ *
+ * Read its JSDoc before using it, and the trust contract first: the CALLER names
+ * the locations and owns that choice (including any runtime override the
+ * application accepts), a content hash is OPTIONAL and only an immutable,
+ * release-tied artifact can carry a pinned one, and OMISSION is not defended
+ * against -- so the named host must be trusted the way the build pipeline is
+ * (ADR-0066).
+ *
+ * Deliberately a NAMED export list rather than a star: `streamSeedPayloadFrom`
+ * is the module's own decompression arrangement, which the install's tests and
+ * the content-hash domain are pinned against, and publishing it would offer a
+ * consumer a tool for a job `installStreamSeed` already does.
+ */
+export {installStreamSeed} from './stream/seedInstall.js';
+export type {
+	NotInstalledReason,
+	StreamSeedInstallOptions,
+	StreamSeedInstallOutcome,
+	StreamSeedLocation,
+} from './stream/seedInstall.js';
+/**
  * THE READ-ONLY STREAM VIEW, which is what makes the one-writer rule structural.
  *
  * Read and write share ONE `ExistingStream`, so a generation handed the stream
