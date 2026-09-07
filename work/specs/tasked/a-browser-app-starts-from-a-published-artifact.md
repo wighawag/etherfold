@@ -104,18 +104,19 @@ discards anyway.
    DIRECTION of the disagreement, so that I can tell a user whether this build indexes less than the
    publisher does or the published seed is stale relative to this build. *(ADR-0064, including that
    the loader reports the direction and never infers "you are out of date", which it cannot know.)*
-7. As a **browser app**, I want the loader to take an EXPECTED CONTENT HASH and refuse a seed whose
-   bytes do not match it, so that a seed served from a mirror, a CDN or a gateway is exactly as
-   trustworthy as the code that fetched it. *(ADR-0065, and the hash must be named by the caller,
-   which is how it comes from the BUILD rather than from the host.)*
-8. As a **browser app developer serving my own seed from my own origin**, I want to be able to
-   install WITHOUT pinning a hash, so that a same-origin deployment is not made to carry a ceremony
-   that buys it nothing. *(ADR-0065 accepts this shape explicitly: an attacker holding that origin
-   would change the application's own code rather than its seed, so the seed adds no attack surface.
-   The loader therefore takes the expected hash as OPTIONAL, and the caller states the trust it is
-   relying on rather than the library guessing. What must NOT be possible is silently adopting a
-   THIRD-PARTY seed with no pin, so an unpinned install is refused unless the caller has said the
-   location is same-origin.)*
+7. As a **browser app**, I want the loader to fetch only from LOCATIONS my build named, and to refuse
+   a seed offered from anywhere else, so that what I trust is a host I chose rather than whatever
+   answered. *(ADR-0066. This is the trust anchor: the build pins the LOCATION, and TLS to that host
+   is what the client relies on. It replaces ADR-0065's mandatory content pin, which cannot exist for
+   a ROLLING artifact -- the reference deployment held one web build against an hourly snapshot -- and
+   its same-origin condition, which is unavailable when the app is served from any IPFS gateway while
+   the artifact lives on a known host.)*
+8. As a **publisher of a release-tied seed**, I want to give the loader an OPTIONAL expected content
+   hash and have a mismatched artifact refused, so that an immutable seed shipped for one release is
+   verified rather than merely fetched from the right place. *(ADR-0066: optional because a rolling
+   artifact's hash cannot be known at build time, and strongest-available where it can. The hash is
+   SHA-256 over the DECOMPRESSED octets, taken after transfer decoding and before `JSON.parse`, which
+   is transport-invariant and therefore imposes no rule on how a host serves the file.)*
 9. As a **browser app**, I want a seed that is internally incoherent, or captured too close to the
    chain tip, refused before anything is written, so that a capture which recorded a branch that
    later lost cannot become my history. *(ADR-0065: ordering, one block hash per block number, no
@@ -234,7 +235,8 @@ should not be built yet. Each says which.
   a capture growing past the threshold, a publisher that cannot serve range requests), so this
   returns as its own spec when one of those becomes true, not now.
 - **Chain anchoring and bloom consistency.** Specified in ADR-0065 and deliberately not built: their
-  value concentrates in adopting an unpinned third-party seed, which story 8 refuses outright.
+  value concentrates in adopting a seed whose host is not trusted, and ADR-0066 answers that case with
+  a signature rather than a sampled check, deliberately not built.
 - **Publisher SIGNING.** Would let a client trust a publisher it did not build with; needs key
   distribution this project has none of. The artifact keeps room for it.
 - **Server-side seeding.** `@etherfold/server` has no `ExistingStream` writer over `_emissions` (that
@@ -250,8 +252,12 @@ should not be built yet. Each says which.
   is corrected in the same change as this spec.)
 - **Detecting OMISSION.** Not deferred, IMPOSSIBLE within the premise: a seed that leaves logs out is
   structurally perfect and bloom-consistent, and finding out otherwise needs the historical logs the
-  node will not serve. ADR-0065 accepts this residue explicitly, which is why stories 7 and 8 make a
-  pin the price of trusting anyone but your own origin.
+  node will not serve. ADR-0065 accepts this residue explicitly, and ADR-0066 draws the consequence:
+  because omission is undetectable and a poisoned stream is inherited by every later generation, the
+  host a build names must be trusted the way the build pipeline is trusted.
+- **Signature-based verification**, which is the only thing that makes an artifact trustworthy
+  INDEPENDENT of the host serving it, and the named answer for a third-party mirror or an untrusted
+  gateway. Not built: no key distribution or rotation exists here (ADR-0066).
 - **The `readOnlyStream` self-clear defect**
   (`work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md`).
   Reachable only by a snapshot-seeded generation that ALSO keeps a stream, which this spec recommends

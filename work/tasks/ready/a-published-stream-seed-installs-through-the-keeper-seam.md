@@ -85,12 +85,23 @@ Batches are cut on BLOCK boundaries. The stream CONFIG is set (resolved) before 
 >
 > RECORD non-obvious in-scope decisions you make while building, in a `## Decisions` block at the end of your FINAL REPORT: the outcome type's shape (the next task extends it with refusal reasons), how you made the subtree probe non-destructive, the rule that tells this seed's own resumable prefix from a stream the install may not top up, where the reference-artifact case lives, how the gzipped body is decompressed and which bytes a later integrity check would therefore hash, the batch size you chose and on what basis, whether the call is exported yet, and how a caller states which block it needs the seed to reach back to. The runner transcribes the block into the done record; do not write the done record, the commit message or the PR body yourself, and do not open a `decisions-*` note.
 
-## Note on the build pin, resolved
+## Note on the build pin, superseded
 
 The tasking loop raised one blocking issue against every task in this set: ADR-0065 pinned trust to a
-build-named content hash without saying a hash OF WHAT, and over a gzipped artifact that is ambiguous
-enough to break every correctly pinned install (a host sending `Content-Encoding: gzip` makes `fetch`
-decompress transparently, so a hash over the compressed file cannot be recomputed from what the client
-receives). It is resolved at the source: ADR-0065 now carries a 2026-09-07 amendment fixing SHA-256 over
-the PUBLISHED BYTES, with the artifact served as an opaque file and never with `Content-Encoding: gzip`.
-Build to that; the producer's printed hash must be reproducible from the published file alone.
+build-named content HASH without saying a hash of what. That is settled, but not the way the first
+amendment settled it. **ADR-0066 supersedes ADR-0065 on the trust anchor and the byte domain**, and a
+builder should read it before either:
+
+- **Trust is the HOST the build NAMES**, not a content hash. A build cannot pin the hash of a ROLLING
+  artifact, and rolling is how this is deployed: the reference deployment held one web build against a
+  snapshot republished every hour. `bootstrapFromSnapshot`, the path that already ships and works,
+  verifies no hash at all.
+- **A content hash is OPTIONAL**, for a release-tied immutable artifact, where it is the strongest
+  thing available. When present it is SHA-256 over the DECOMPRESSED octets, taken after transfer
+  decoding and before `JSON.parse`.
+- **There is NO hosting constraint.** The earlier rule forbidding `Content-Encoding: gzip` is
+  withdrawn: hashing the decompressed octets is transport-invariant, so it does not matter whether a
+  host serves the file opaque or compresses it in transit.
+- **Same-origin is not a condition anywhere**, and the refusal it once justified is gone. The app may
+  be served from any IPFS gateway while the artifact lives on a known host, so the two origins never
+  match by construction.

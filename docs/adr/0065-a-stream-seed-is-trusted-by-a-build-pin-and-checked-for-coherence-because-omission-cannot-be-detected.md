@@ -1,6 +1,18 @@
 ---
-status: accepted, not yet implemented
+status: superseded in part by ADR-0066
 ---
+
+> **ADR-0066 replaces this ADR's TRUST ANCHOR and the byte domain of its content hash.** A build cannot
+> pin the hash of a ROLLING artifact, which is how this is actually deployed (a fixed web build against
+> an hourly snapshot), and "same origin" is unavailable when the app is served from any IPFS gateway
+> while the artifact lives on a known host. Trust is now the HOST the build names; a content hash is
+> optional and is for an immutable, release-tied artifact. The 2026-09-07 amendment below, which took
+> the hash over the published bytes and forced the artifact to be served without `Content-Encoding:
+> gzip`, is WITHDRAWN: the hash is over the decompressed octets and there is no hosting constraint.
+>
+> Everything else here stands: why a stream seed needs more defence than a snapshot, the checks that
+> run before the first write, refusal as data, and the omission residue that makes the whole thing rest
+> on trusting whoever publishes.
 
 # A stream seed is TRUSTED by a build pin and CHECKED for coherence, because omission cannot be detected
 

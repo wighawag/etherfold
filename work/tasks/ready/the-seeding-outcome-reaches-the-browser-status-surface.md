@@ -12,7 +12,7 @@ Both were asked by the tasking loop and are now decided by the human. Build to t
 
 ### 1. BOTH paths exist, and the hook-driven one is the documented default
 
-The core loader is callable directly, so an application may drive the install itself; AND `createIndexerState` takes an optional `seed` (the locations, the optional pinned content hash, and the caller's same-origin statement) and runs the install itself at the right moment. The hook path is what the docs show.
+The core loader is callable directly, so an application may drive the install itself; AND `createIndexerState` takes an optional `seed` (the locations the build names, and an optional pinned content hash) and runs the install itself at the right moment. The hook path is what the docs show.
 
 **The deciding argument is a SILENT failure mode, and it is worth understanding before you build either path.** The window for an install is after the generation is built and before it loads, and the boot path already provides one: `init()` builds the container, and the `IndexerGeneration` constructor's `reinit` calls `keepStream.setStreamConfig(resolvedConfig)` -- which is the moment the keeper learns which stream address it is writing to. `init()` does NOT load; `indexer.load()` happens later, inside `setupIndexing()`, driven by the first `indexMore()` or `startAutoIndexing()`. So the correct window is between those two, and it is comfortable.
 
@@ -72,7 +72,7 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 >
 > Vocabulary (`CONTEXT.md`): the browser package wraps the engine in observable stores (state, syncing, status); its syncing store already carries an `error` and the non-canonical **generation** progress list, which is the precedent for how this library REPORTS rather than decides ("only the developer knows whether their reconfigure made the old answers WRONG or merely INCOMPLETE"). **Seeding** is creating a generation from a published artifact; a refusal is DATA with a reason and, for an identity mismatch, a DIRECTION.
 >
-> The decisions that constrain you: ADR-0064's "This must reach the application's own surface, not only the boot path's return value" and its rule that the loader reports the direction and never claims the client is behind; ADR-0065's trust contract, since whatever option carries the pin or the same-origin statement must keep the pin in the BUILD; and the spec's own note that story 10 lands on the existing status surface deliberately and is NOT licence to implement the reactive-envelope idea in `work/notes/ideas/the-reactive-update-is-an-envelope-not-a-handle.md`, which is a separate, undecided change.
+> The decisions that constrain you: ADR-0064's "This must reach the application's own surface, not only the boot path's return value" and its rule that the loader reports the direction and never claims the client is behind; ADR-0066's trust contract, since whatever option carries the locations and the optional hash must keep BOTH in the BUILD; and the spec's own note that story 10 lands on the existing status surface deliberately and is NOT licence to implement the reactive-envelope idea in `work/notes/ideas/the-reactive-update-is-an-envelope-not-a-handle.md`, which is a separate, undecided change.
 >
 > Where to look, by concept: the browser package's indexer-state module (the syncing store, its fields and how a reconfigure clears them), its existing tests for how a status claim is asserted against the real IndexedDB substrate under `fake-indexeddb`, and the core loader's outcome type. Also read `work/notes/observations/browser-reactive-updates-depend-on-a-store-that-never-dedupes.md` before adding a field that fires often.
 >
@@ -80,9 +80,23 @@ Two constraints from the spec are firm whatever the answers above are. It lands 
 >
 > RECORD non-obvious in-scope decisions you make while building, in a `## Decisions` block at the end of your FINAL REPORT: the wiring you were given or chose, the field shape, and what happens to an app whose seed was refused. The runner transcribes the block into the done record; do not write the done record, the commit message or the PR body yourself, and do not open a `decisions-*` note.
 
-## Note on the build pin, resolved
+## Note on the build pin, superseded
 
-The set-wide blocking issue the tasking loop raised (ADR-0065 pinned trust to a build-named content hash
-without fixing the byte domain, which over a gzipped artifact breaks every correctly pinned install) is
-resolved at the source: ADR-0065 carries a 2026-09-07 amendment fixing SHA-256 over the PUBLISHED BYTES,
-served opaque and never with `Content-Encoding: gzip`.
+The tasking loop raised one blocking issue against every task in this set: ADR-0065 pinned trust to a
+build-named content HASH without saying a hash of what. That is settled, but not the way the first
+amendment settled it. **ADR-0066 supersedes ADR-0065 on the trust anchor and the byte domain**, and a
+builder should read it before either:
+
+- **Trust is the HOST the build NAMES**, not a content hash. A build cannot pin the hash of a ROLLING
+  artifact, and rolling is how this is deployed: the reference deployment held one web build against a
+  snapshot republished every hour. `bootstrapFromSnapshot`, the path that already ships and works,
+  verifies no hash at all.
+- **A content hash is OPTIONAL**, for a release-tied immutable artifact, where it is the strongest
+  thing available. When present it is SHA-256 over the DECOMPRESSED octets, taken after transfer
+  decoding and before `JSON.parse`.
+- **There is NO hosting constraint.** The earlier rule forbidding `Content-Encoding: gzip` is
+  withdrawn: hashing the decompressed octets is transport-invariant, so it does not matter whether a
+  host serves the file opaque or compresses it in transit.
+- **Same-origin is not a condition anywhere**, and the refusal it once justified is gone. The app may
+  be served from any IPFS gateway while the artifact lives on a known host, so the two origins never
+  match by construction.
