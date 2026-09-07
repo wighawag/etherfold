@@ -63,7 +63,7 @@ A snapshot carries nothing below its own block. A bootstrapped store reports its
 
 **A later processor-only change is not free.** [A generation built beside the live one](#the-same-edit-without-the-blank-app), which is how an edited processor lands without blanking the app, fetches not one log precisely because the successor re-folds the stream that is already stored. Seeded from a snapshot there is no such stream, and a snapshot is keyed to the processor version that computed it, so the successor cannot start from the snapshot you already hold either. Its state comes from a snapshot the **publisher** republishes with the new processor, and that wait is the price of the mode.
 
-**Adding `keepStream` on top does not buy it back.** That is the reach that looks obvious and leaves exactly the same hole: a stream kept by a snapshot-seeded tab starts at the snapshot's block, so a successor still has nothing to fold below it. (It is also the one combination with a known hazard under it, a follower generation that can clear the writer's stream: [the note](https://github.com/wighawag/etherfold/blob/main/work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md).) What buys the free re-fold, plus revert and as-of depth below the snapshot's floor, is a stream that reaches back to your source's own start block: either indexed from that block by this tab, which is the fetch a public node will not serve, or installed from a published **stream seed**, which is designed and not built ([ADR-0063](../../adr/0063-a-published-stream-seed-arrives-through-its-own-loader-and-installs-through-the-keeper-seam.md), [ADR-0064](../../adr/0064-a-seed-for-another-stream-is-refused-on-an-exact-digest-and-the-refusal-names-a-direction.md), [ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). Until that exists, snapshot-only is a mode whose cost is stated rather than hidden.
+**Adding `keepStream` on top does not buy it back.** That is the reach that looks obvious and leaves exactly the same hole: a stream kept by a snapshot-seeded tab starts at the snapshot's block, so a successor still has nothing to fold below it. (It is also the one combination with a known hazard under it, a follower generation that can clear the writer's stream: [the note](https://github.com/wighawag/etherfold/blob/main/work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md).) What buys the free re-fold, plus revert and as-of depth below the snapshot's floor, is a stream that reaches back to your source's own start block: either indexed from that block by this tab, which is the fetch a public node will not serve, or installed from a published **stream seed**, which is the next section ([ADR-0063](../../adr/0063-a-published-stream-seed-arrives-through-its-own-loader-and-installs-through-the-keeper-seam.md), [ADR-0064](../../adr/0064-a-seed-for-another-stream-is-refused-on-an-exact-digest-and-the-refusal-names-a-direction.md), [ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)).
 
 ### How long that wait is
 
@@ -121,6 +121,82 @@ From there it is an ordinary indexer: it starts at the cursor the snapshot carri
 **The locations are yours, and so is the risk.** The library fetches where it is pointed and judges nothing: there is no allowlist and no origin check, because a client cannot be offered a snapshot from somewhere it was not pointed at ([ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). So the host your build names has to be trusted the way your build pipeline is trusted, and an app that lets a URL query parameter override it (as the reference deployment's `?snapshot=` does) is accepting a state source anyone with a link can choose. Nothing downstream catches that: what is checked is the processor version, the envelope format and the reorg window, while the rows themselves are taken on trust, and a snapshot that quietly leaves some out is structurally perfect. Detecting that needs the historical logs the node will not serve ([ADR-0065](../../adr/0065-a-stream-seed-is-trusted-by-a-build-pin-and-checked-for-coherence-because-omission-cannot-be-detected.md), whose omission residue ADR-0066 leaves standing).
 
 **Pass `finalityDepth`, and publish below the tip.** A snapshot taken within the reorg window of the tip its producer had seen cannot absorb a reorg reaching under its own block, since it carries no history there. That has two halves and you own both: the publisher takes the snapshot at least the finality depth behind the tip, and the client passes `finalityDepth` so a snapshot that was not is refused as `not-bootstrapped` / `inside-reorg-window` instead of installed. Omit it and the check never runs. Give it the same finality your indexer runs with.
+
+## Installing a published stream seed, and rendering what it did
+
+The other published artifact: a **stream seed** puts the raw stream UNDER your state, so a later processor-only change re-folds locally instead of waiting for a republished snapshot. It is a separate decision from the snapshot above and composes with it (the snapshot seeds the fold, the seed seeds the stream), and it needs a stream keeper, which the snapshot-only mode deliberately does not have.
+
+### The wiring, which has two shapes and one behaviour
+
+The **documented default is the hook's `seed` option**: it sequences the install for you and publishes what it did on the stores you already subscribe to.
+
+```ts
+import {createIndexerState, keepStreamOnIndexedDB} from '@etherfold/browser';
+
+// Ordered, freshest first, and BOTH of these live in your BUILD: a rolling
+// remote your build names, then the copy embedded in the build at a relative,
+// hostless path, which needs no host and is what makes the app start when the
+// remote is gone.
+const SEED_LOCATIONS = ['https://seeds.example/token.seed.json.gz', '/seeds/token.seed.json.gz'];
+
+const indexer = createIndexerState(
+	{createState, createProcessor},
+	{
+		keepStream: keepStreamOnIndexedDB('token'),
+		seed: {locations: SEED_LOCATIONS},
+		// For an IMMUTABLE, release-tied artifact, add the hash the producer PRINTED:
+		// seed: {locations: SEED_LOCATIONS, expectedContentHash: 'sha256:…'},
+	},
+);
+
+await indexer.init({provider, source, config: {stream: {finality: 12}}});
+```
+
+The **direct path** is the same capability with the sequencing in your hands, and it is fully supported:
+
+```ts
+import {installStreamSeed, resolveStreamConfig} from '@etherfold/core';
+
+const keeper = keepStreamOnIndexedDB('token');
+const outcome = await installStreamSeed(keeper, SEED_LOCATIONS, {
+	source,
+	// RESOLVED, and the same stream config your indexer runs with: it is half of
+	// the address the stream is stored under, so `{finality: 12}` as a user spelled
+	// it is not what to pass.
+	streamConfig: resolveStreamConfig({finality: 12}),
+});
+```
+
+**Either order is correct**, before `init()` or after it, because the install carries its own resolved stream config and sets it on the keeper before it addresses anything ([ADR-0067](../../adr/0067-the-install-is-self-sufficient-it-carries-its-address-and-refuses-a-subtree-it-did-not-empty.md)). So the hook option is ergonomics, not a safety mechanism. What is NOT free is installing after the tab has started indexing: the install writes only into an EMPTY subtree, so it comes back `not-installed` / `subtree-not-empty` and leaves what is there alone. That is loud and it is data, so clear the stream deliberately if you meant to replace it.
+
+### What reaches your stores
+
+No new reactive shape: a field on `syncing` and a value in the `status` phase enum.
+
+```ts
+indexer.status.subscribe(($status) => {
+	if ($status.state === 'InstallingStreamSeed') showSpinner('Installing history…');
+});
+
+indexer.syncing.subscribe(($syncing) => {
+	const seed = $syncing.streamSeed; // undefined when no seed was asked for
+	if (seed?.status === 'seeded') show(`history from ${seed.from}, up to block ${seed.at}`);
+	// `subtree-not-empty` is the ORDINARY case on every visit after the first: see below
+	if (seed?.status === 'refused' && seed.reason !== 'subtree-not-empty') show(explain(seed.reason, seed.direction));
+});
+```
+
+**`subtree-not-empty` is the steady state, not a problem — do not render it.** The install writes only into an empty subtree, so it succeeds ONCE. Every later page load finds the stream already there and comes back `not-installed` / `subtree-not-empty`, which is truthful (this boot installed nothing, for exactly that reason) and costs nothing (the emptiness check runs before any download, so a returning visitor fetches no artifact at all). It is the signal that seeding WORKED and is still working. An app that renders every `refused` alike will therefore show a failure banner to a perfectly healthy returning user, which is the inverse of the point — so treat this one reason as a non-event, as the snippet above does. The refusals worth showing a user are the ones about the artifact: a direction, an integrity mismatch, incoherence, a capture too close to the tip.
+
+**A refusal is not an error, and it does not stop your app.** State still comes up from your published snapshot and indexes forward from the tip; what is lost is the stream underneath, so the generation is a leaf again ([ADR-0064](../../adr/0064-a-seed-for-another-stream-is-refused-on-an-exact-digest-and-the-refusal-names-a-direction.md)). That is why it is its own field and not `syncing.error`: an app that renders `error` as a crash must not render one for an ordinary outcome.
+
+**The direction is yours to interpret, and only yours.** A seed for another stream is refused with a reason, and where the reason names a direction it is repeated as `direction`: `seed-covers-more` (the publisher indexes more than this build does) or `seed-covers-less` (this build indexes something the seed lacks). Your app may render "a newer version of this app may be available"; the library will not, because a deliberately narrower client is indistinguishable from a stale one and only you know which yours is.
+
+**There is no byte-level progress, deliberately.** `installing` and one terminal state is the whole surface: the install itself is about a second on a mid-range phone in this shape, and the variable part is the download rather than the write ([the finding](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md)).
+
+**The locations are yours, and so is the risk**, which is the same sentence as for snapshots and for a sharper reason. The loader fetches where it is pointed and judges nothing, an optional `expectedContentHash` only exists for an immutable release-tied artifact, and OMISSION is not detectable at all: a seed that quietly leaves logs out is structurally perfect, and a stored stream is re-folded by every later generation, so the poison is inherited. Name a host you trust the way you trust your build pipeline ([ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)).
+
+It is asserted end to end by [`packages/browser/test/streamSeeding.test.ts`](https://github.com/wighawag/etherfold/blob/main/packages/browser/test/streamSeeding.test.ts), against the real IndexedDB substrate.
 
 ## Telling whether the state already accounts for your transaction
 

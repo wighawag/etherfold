@@ -45,6 +45,16 @@ export type {
 	FilterRule,
 	ArgumentFilter,
 	ExistingStream,
+	// WHERE a published stream seed is fetched from, and WHY one was not installed.
+	// This package's own public surface names both -- `createIndexerState`'s `seed`
+	// option takes the locations, and `SyncingState.streamSeed` publishes the
+	// reason -- so an app that renders a refusal can annotate what it is handed.
+	// The install itself is `installStreamSeed` in `@etherfold/core`, which is
+	// where its trust contract is stated and where it stays: an application may
+	// drive it directly, and a second entry point here would be a second place for
+	// that contract to be read from.
+	NotInstalledReason,
+	StreamSeedLocation,
 	// What the KEEPER seam speaks, both halves of it: a browser keeper is written
 	// against these, and a caller that cannot name them cannot annotate one.
 	StoredLogEvent,
