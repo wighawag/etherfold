@@ -43,6 +43,7 @@ import {
 	START_BLOCK,
 	timestampOf,
 	type TestABI,
+	streamOf,
 } from '../browser/workload.js';
 import {appliedIn, applyingProcessor, indexerOver, keysOf} from './utils/applied.js';
 
@@ -608,7 +609,7 @@ describe('an application may drive the install itself, before init or after it',
 		expect(outcome).toEqual({status: 'not-installed', reason: 'subtree-not-empty'});
 		// intact, and still a STREAM rather than merely bytes: it reads back
 		expect(await streamKeysUnder(name)).toEqual(before);
-		expect(await keeper.fetchFrom(SOURCE, START_BLOCK)).toBeDefined();
+		expect(streamOf(await keeper.fetchFrom(SOURCE, START_BLOCK))).toBeDefined();
 		// and nothing was even downloaded: a client that already has a stream pays no
 		// download to be told it may not install over it
 		expect(asked).toEqual([]);

@@ -158,6 +158,34 @@ describe('the REPAIR moved to the load path, it did not vanish', () => {
 		logged.restore();
 	});
 
+	it('clears on the state-KEPT branch too, which is the path with no `else` to fall back on', async () => {
+		// The case above takes the state-DISCARDED branch, whose own `else` clears
+		// regardless -- so it passes with the repair in `readStoredStream` DELETED, and
+		// on its own it proves nothing about the line this ADR moved. The state-KEPT
+		// branch has no such fallback: `readStoredStream` is the only repair there, and
+		// damaged segments left behind mean the next save retakes ordinal 0 and
+		// overwrites the old one. This is the case that actually pins it.
+		const logged = await captureLogs();
+		const {port, rows} = memorySegmentPort();
+		const keeper = createSegmentedStream<Abi>(port);
+		const chain = fakeChain([...BRANCH_A], BRANCH_A_TIP);
+		const {processor, store} = fakeProcessor();
+
+		const first = makeIndexer(chain, processor, keeper);
+		await first.load();
+		await indexToTip(first);
+
+		// damage the stream while the STATE survives, so the reload keeps its state
+		rows.delete('cursor');
+		expect(rows.size).toBeGreaterThan(0);
+
+		const second = makeIndexer(chain, fakeProcessor(store).processor, keeper);
+		await second.load();
+
+		expect(rows.size).toBe(0);
+		logged.restore();
+	});
+
 	it('does NOT clear through a read-only view, so a follower cannot destroy its writer`s stream', async () => {
 		// The defect this refactor closes as a side effect
 		// (`a-follower-can-self-clear-the-writers-stream-through-the-read-only-view`).
@@ -279,7 +307,7 @@ describe('the INSTALLER refuses: absence it cannot verify is not permission to w
 		expect(JSON.stringify([...rows.entries()])).toBe(before);
 		// and it is still a readable stream once the substrate comes back
 		port.readCursor = readCursor;
-		expect(await createSegmentedStream<Abi>(port).fetchFrom(SOURCE, 500)).toBeDefined();
+		expect(streamOf(await createSegmentedStream<Abi>(port).fetchFrom(SOURCE, 500))).toBeDefined();
 		logged.restore();
 	});
 

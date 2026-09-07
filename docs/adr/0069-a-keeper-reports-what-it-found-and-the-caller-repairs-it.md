@@ -18,6 +18,7 @@ A caller could not tell "there is nothing here" from "there was something here a
 - **A FOLLOWER** reaches the same code through `readOnlyStream`, whose `clear` is a no-op, so the repair runs into it and the writer's stream survives. The guarantee ADR-0044 documented is now actually delivered.
 - **`installStreamSeed`** treats only `absent` as permission to write. Damage is refused rather than silently repaired-then-installed-over, which is what ADR-0067's "install only into an EMPTY subtree, and a caller that wants to replace one CLEARS it deliberately" always meant.
 - **`storedEmissionStream`** reports the same verdicts and, as before, deletes nothing. The two implementations of this seam finally agree about what a read may do.
+- **The browser keeper's LEGACY-BLOB drop moved with everything else.** `keepStreamOnIndexedDB.fetchFrom` used to `del` an old whole-blob stream and `clear` the segmented subtree inline, then answer absent -- which made it the last read on this seam that still mutated, and left both holes this ADR closes open on that one path (a follower could still destroy its writer's subtree; the installer's probe could still destroy-then-read-absent-then-install). It now reports `inconsistent`, and the caller's `clear` removes the legacy key AND the subtree, so the migration is deferred rather than lost.
 
 ## Why `does-not-reach-back` is its own verdict
 

@@ -435,7 +435,7 @@ describe('the three block rules, asserted through what they cause', () => {
 		expect(cursorRecord(rows).startBlock).toBe(START_BLOCK);
 		// and the consequence that makes it matter: the block a fresh generation's
 		// `load()` asks from is served rather than answered by wiping the subtree
-		expect(await keeper.fetchFrom(SOURCE, START_BLOCK)).toBeDefined();
+		expect(streamOf(await keeper.fetchFrom(SOURCE, START_BLOCK))).toBeDefined();
 		expect(rows.size).toBeGreaterThan(0);
 	});
 
@@ -622,7 +622,7 @@ describe('a subtree that is not EMPTY is refused, whatever it holds', () => {
 		expect(snapshotOf(rows)).toBe(before);
 		// and it is still a STREAM, not merely bytes: it reads back from where it
 		// reaches, cursor and segments together
-		expect(await keeper.fetchFrom(SOURCE, startBlock)).toBeDefined();
+		expect(streamOf(await keeper.fetchFrom(SOURCE, startBlock))).toBeDefined();
 		// nothing was even downloaded: the client already has a stream
 		expect(asked).toEqual([]);
 	});
@@ -654,6 +654,43 @@ describe('a subtree that is not EMPTY is refused, whatever it holds', () => {
 		expect(snapshotOf(rows)).toBe(before);
 		// and it is still a stream, readable from where it reaches
 		expect(await keeper.fetchFrom(SOURCE, startBlock)).toMatchObject({status: 'stream'});
+	});
+
+	it('refuses a DAMAGED subtree too, which used to be repaired out from under it', async () => {
+		// The third thing ADR-0069 closes, and the one that was correct only by
+		// accident: damage and emptiness were the same answer here, because the keeper
+		// DESTROYED the damage before answering, so the install proceeded into a
+		// subtree the keeper had just emptied on its own initiative. Now the read
+		// reports `inconsistent`, the install refuses, and the orphaned segment that
+		// would have collided with this seed's own ordinal 0 is still there for the
+		// caller to clear DELIBERATELY (ADR-0067).
+		const {rows, keeper} = freshKeeper();
+		await keeper.saveNewEvents(SOURCE, {
+			eventStream: [makeLog(500, '0xold')],
+			lastSync: {
+				context: await contextOfAnOrdinaryRun(),
+				latestBlock: 600,
+				lastFromBlock: 500,
+				lastToBlock: 600,
+				unconfirmedBlocks: [],
+			},
+		});
+		// the orphan: segments with no cursor record, which is damage rather than
+		// emptiness and would collide with this seed's own ordinal 0
+		rows.delete('cursor');
+		const before = snapshotOf(rows);
+		const seed = await seedOf();
+		const {get, asked} = servingFetch({[REMOTE]: servedOpaque(seed)});
+
+		const outcome = await installStreamSeed(keeper, [REMOTE], {
+			source: SOURCE,
+			streamConfig: STREAM_CONFIG,
+			fetch: get,
+		});
+
+		expect(outcome).toEqual({status: 'not-installed', reason: 'subtree-not-empty'});
+		expect(snapshotOf(rows)).toBe(before);
+		expect(asked).toEqual([]);
 	});
 
 	it('refuses a FOREIGN stream by the same bare test, with no discriminator', async () => {

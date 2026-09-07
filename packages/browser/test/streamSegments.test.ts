@@ -396,7 +396,7 @@ describe('clear removes the subtree and nothing else', () => {
 });
 
 describe('the legacy flat-key blob', () => {
-	it('is DELETED rather than adopted, from `fetchFrom`, and the deletion is logged', async () => {
+	it('is REPORTED as unusable by `fetchFrom`, which deletes nothing', async () => {
 		const tag = freshName();
 		const keeper = keepStreamOnIndexedDB<TestABI>(tag);
 		const address = addressOf(tag);
@@ -405,13 +405,46 @@ describe('the legacy flat-key blob', () => {
 		// exactly what the shipped keeper wrote: one flat key, the whole stream
 		await set(address.legacy, {lastSync: cursorAt(100, 104), eventStream: [event(100), event(104)]});
 
-		// detected in `fetchFrom` and not only in `clear`: `indexer.ts`'s state-kept
-		// branch guards its `clear` behind `if (existingStreamData)`, so a blob found
-		// only by `clear` would survive indefinitely
-		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
-		expect(await get(address.legacy)).toBeUndefined();
-		expect(logged.messages.some((m) => m.includes('DELETED rather than'))).toBe(true);
+		// A blob this build cannot read is DAMAGE, not absence: an installer reads
+		// `absent` as permission to write. This used to `del` the blob and clear the
+		// subtree inline, which made it the last read on this seam that mutated
+		// (ADR-0069) -- so a FOLLOWER could destroy its writer's subtree on this one
+		// path, and the seed installer's probe could destroy-then-read-absent.
+		expect(await keeper.fetchFrom(SOURCE, 100)).toMatchObject({status: 'inconsistent'});
+		expect(await get(address.legacy)).toBeDefined();
 		logged.restore();
+	});
+
+	it('is still DELETED promptly, on the state-KEPT branch as well as the discarded one', async () => {
+		// The guarantee the inline delete used to provide, and the reason it was inline:
+		// `indexer.ts`'s state-kept branch guards its own `clear` behind
+		// `if (existingStreamData)`, so a blob found only by an `else` would survive
+		// indefinitely. `readStoredStream` now clears on every non-`stream` verdict
+		// regardless of branch, so the blob goes on the first load either way -- which
+		// is what makes deferring the delete to the caller safe rather than a leak.
+		const tag = freshName();
+		const keeper = keepStreamOnIndexedDB<TestABI>(tag);
+		// the address the INDEXER's keeper will use: the blob is addressed under the
+		// resolved stream config, so the default-config address is a different subtree
+		const address = addressOf(tag, {finality: FINALITY});
+		const definition = applyingProcessor();
+		const store = await browserStore(freshName(), definition);
+		const indexer = indexerOver(definition, store, {keepStream: keeper});
+
+		const chain = fakeChain(BRANCH_A, BRANCH_A_TIP);
+		await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
+		await indexToTip(indexer as never);
+		indexer.dispose();
+
+		// a blob appears beside a healthy stream, and the next boot keeps its STATE
+		await set(address.legacy, {lastSync: cursorAt(100, 104), eventStream: [event(100)]});
+		const second = indexerOver(definition, store, {keepStream: keeper});
+		await second.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
+		// `init` alone does not read the stream: `load()` runs on the first cycle
+		await indexToTip(second as never);
+		second.dispose();
+
+		expect(await get(address.legacy)).toBeUndefined();
 	});
 
 	it('is deleted by `clear` too', async () => {
