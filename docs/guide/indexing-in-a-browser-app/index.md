@@ -181,9 +181,12 @@ indexer.status.subscribe(($status) => {
 indexer.syncing.subscribe(($syncing) => {
 	const seed = $syncing.streamSeed; // undefined when no seed was asked for
 	if (seed?.status === 'seeded') show(`history from ${seed.from}, up to block ${seed.at}`);
-	if (seed?.status === 'refused') show(explain(seed.reason, seed.direction));
+	// `subtree-not-empty` is the ORDINARY case on every visit after the first: see below
+	if (seed?.status === 'refused' && seed.reason !== 'subtree-not-empty') show(explain(seed.reason, seed.direction));
 });
 ```
+
+**`subtree-not-empty` is the steady state, not a problem — do not render it.** The install writes only into an empty subtree, so it succeeds ONCE. Every later page load finds the stream already there and comes back `not-installed` / `subtree-not-empty`, which is truthful (this boot installed nothing, for exactly that reason) and costs nothing (the emptiness check runs before any download, so a returning visitor fetches no artifact at all). It is the signal that seeding WORKED and is still working. An app that renders every `refused` alike will therefore show a failure banner to a perfectly healthy returning user, which is the inverse of the point — so treat this one reason as a non-event, as the snippet above does. The refusals worth showing a user are the ones about the artifact: a direction, an integrity mismatch, incoherence, a capture too close to the tip.
 
 **A refusal is not an error, and it does not stop your app.** State still comes up from your published snapshot and indexes forward from the tip; what is lost is the stream underneath, so the generation is a leaf again ([ADR-0064](../../adr/0064-a-seed-for-another-stream-is-refused-on-an-exact-digest-and-the-refusal-names-a-direction.md)). That is why it is its own field and not `syncing.error`: an app that renders `error` as a crash must not render one for an ordinary outcome.
 

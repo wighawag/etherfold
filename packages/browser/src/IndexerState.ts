@@ -129,7 +129,22 @@ export type StreamSeedDirection = Extract<NotInstalledReason, 'seed-covers-more'
  * **No inference.** See `StreamSeedDirection`.
  */
 export type StreamSeedState =
-	/** The install is running. Published before the fetch and replaced by a terminal state. */
+	/**
+	 * The install is running. Published before the fetch, and replaced by a
+	 * terminal state on every path the loader RETURNS from -- which is every
+	 * ordinary one, since a refusal is data.
+	 *
+	 * The exception, stated here because this is what an app author reads: if the
+	 * loader THROWS (a malformed `expectedContentHash`, a keeper failing mid-install,
+	 * a batch declined by another writer) there is no outcome to report, so this
+	 * value STANDS and `init` rejects instead. Neither of the alternatives is
+	 * truthful -- clearing the field says no seed was asked for, and a synthetic
+	 * terminal state needs a reason the loader's vocabulary does not have -- so the
+	 * honest signal is the rejection, and an app must treat `init` rejecting as the
+	 * end of the boot rather than waiting on this field. The status phase does NOT
+	 * stick: it returns to `Idle`, so a spinner keyed on `InstallingStreamSeed`
+	 * (which is what the guide shows) clears.
+	 */
 	| {readonly status: 'installing'}
 	| {
 			/** A stream was installed, and the app now holds history it never fetched. */

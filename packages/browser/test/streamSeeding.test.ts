@@ -535,15 +535,21 @@ describe('an application may drive the install itself, before init or after it',
 		expect(outcome).toMatchObject({status: 'installed', at: SEED_TO, reachesBackTo: START_BLOCK});
 		expect(await streamKeysUnder(name)).toHaveLength(2);
 
+		const chain = fakeChain();
 		const indexer = indexerOver(definition, await createBrowserStateStore(definition.entities, {databaseName: name}), {
 			keepStream: keeper,
 		});
-		await indexer.init({provider: fakeChain().provider, source: SOURCE, config: PROVIDED_CONFIG});
+		await indexer.init({provider: chain.provider, source: SOURCE, config: PROVIDED_CONFIG});
 		await indexToTip(indexer as never);
 
 		const applied = await appliedIn(indexer.state.$state);
 		expect(applied).toHaveLength(BRANCH_A.length);
 		expect(applied.map((row) => row.times)).toEqual(applied.map(() => 1));
+		// the half of this test's own name that `times` cannot prove: the fold FOUND the
+		// installed stream rather than re-fetching what it already had, so the node is
+		// only ever asked for the tail ABOVE the seed's coverage end. Without this the
+		// case passes just as well against a generation that backfilled from block 100.
+		expect(chain.ranges).toEqual([{from: SEED_TO + 1, to: BRANCH_A_TIP}]);
 		// the hook publishes nothing, because the hook installed nothing: this field
 		// reports the install IT ran
 		expect(indexer.syncing.$state.streamSeed).toBeUndefined();
