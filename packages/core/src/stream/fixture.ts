@@ -28,6 +28,17 @@ export const STREAM_FIXTURE_FORMAT = 2;
  * because what makes a capture trustworthy is domain-specific: which contracts
  * repo and commit the addresses came from, which node served the logs, who ran
  * it. Those go in as extra keys rather than being guessed at here.
+ *
+ * Two of those extra keys are TYPED below and stay OPTIONAL, which is the whole
+ * of the concession. A seed PRODUCER needs both of them (`StreamSeed` types them
+ * as required fields of the envelope and takes them as typed inputs), and the
+ * committed captures already carry them, so typing them here lets a producer
+ * READ them instead of casting an `unknown` out of the index signature. Making
+ * either REQUIRED is a different thing and is refused: `captureStream` writes
+ * this shape and every committed capture already matches it, so a required field
+ * would force a fixture-format bump, and ADR-0063 is explicit that
+ * `STREAM_FIXTURE_FORMAT` is untouched by the seeding work. A producer therefore
+ * treats them as a convenience and never as a guarantee.
  */
 export type StreamFixtureProvenance = {
 	/** ISO-8601, when the capture ran. */
@@ -35,6 +46,10 @@ export type StreamFixtureProvenance = {
 	chainId: string;
 	fromBlock: number;
 	toBlock: number;
+	/** The chain head the capture OBSERVED, which is what a capture-depth check needs. */
+	chainHeadAtCapture?: number;
+	/** What ran the capture, in enough detail that a reader can go and look at it. */
+	capturedBy?: string;
 	[key: string]: unknown;
 };
 

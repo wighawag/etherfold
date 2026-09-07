@@ -14,8 +14,9 @@
  */
 import * as path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {taggedBnReplacer, type StreamFixture} from '@etherfold/core';
+import {taggedBnReplacer, type Abi, type StreamFixture} from '@etherfold/core';
 import {loadStreamFixture} from './fixture-file.js';
+import type {StreamSeedInputs} from './stream-seed.js';
 import type {StratagemsABI} from '../vendor/stratagems/abi.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,17 @@ export type WorkloadFixture = {
 	 * free-form authoring path (ADR-0037). See `../fixtures/README.md`.
 	 */
 	readonly goldenStatePath: string;
+	/**
+	 * The published stream SEED emitted from that capture, where one is
+	 * committed.
+	 *
+	 * ONE place, deliberately: the loader and the admission tasks install exactly
+	 * this file, so it is a deliverable rather than a throwaway and a second copy
+	 * in another package would be a second thing to keep true. It is emitted by
+	 * `../scripts/emit-stream-seed.ts` and kept honest by
+	 * `../test/reference-seed.test.ts`.
+	 */
+	readonly seedPath?: string;
 	/** Roughly how big it is, so a reader knows which loop it belongs in. */
 	readonly events: number;
 	readonly blocks: number;
@@ -61,9 +73,53 @@ export const ALPHA1: WorkloadFixture = {
 	deployment: 'contracts/deployments/alpha1, on Base (chain 8453)',
 	streamPath: path.join(FIXTURES, 'stratagems-alpha1.stream.json.gz'),
 	goldenStatePath: path.join(FIXTURES, 'stratagems-alpha1.state.json'),
+	seedPath: path.join(FIXTURES, 'stratagems-alpha1.seed.json.gz'),
 	events: 31_332,
 	blocks: 1_042,
 };
+
+/**
+ * The stream config the alpha1 capture was TAKEN under.
+ *
+ * It cannot be recovered from the capture, which records only the 32-bit
+ * `streamConfigHashOf` of it, and a client needs the resolved object to compute
+ * the 128-bit stream digest (ADR-0064) -- so it is stated here, from the capture
+ * script that ran (`docs/spikes/sqlite-in-the-browser/capture/capture-stratagems-base.mjs`,
+ * `streamConfig: {finality: 12}`). Stating it is safe rather than a guess
+ * because `streamSeedFrom` REFUSES to emit unless this hashes to the value the
+ * capture recorded: a wrong number here produces no artifact instead of a wrong
+ * one.
+ */
+export const ALPHA1_STREAM_CONFIG = {finality: 12} as const;
+
+/**
+ * The reference seed's inputs, read from the capture's own provenance where the
+ * capture happens to carry them.
+ *
+ * `chainHeadAtCapture` and `capturedBy` are OPTIONAL keys of
+ * `StreamFixtureProvenance` -- a capture is not obliged to carry either, and
+ * making them required would force a fixture-format bump ADR-0063 forbids. So
+ * this reads them and REFUSES a capture that lacks them, rather than inventing a
+ * plausible value for a field the seed types as required and a later
+ * capture-depth check reads.
+ *
+ * Shared by the emit script and the test that keeps the committed artifact
+ * honest, so that "what the producer would emit from this capture" is one
+ * answer: the emit is a deterministic function of the capture plus these.
+ */
+export function alpha1SeedInputs<ABI extends Abi>(fixture: StreamFixture<ABI>): StreamSeedInputs {
+	const {chainHeadAtCapture, capturedBy, capturedAt} = fixture.provenance;
+	if (typeof chainHeadAtCapture !== 'number' || typeof capturedBy !== 'string') {
+		throw new Error(
+			`the alpha1 capture must carry provenance.chainHeadAtCapture and provenance.capturedBy to be published as a seed`,
+		);
+	}
+	return {
+		streamConfig: ALPHA1_STREAM_CONFIG,
+		producer: {kind: 'capture', name: capturedBy, at: capturedAt},
+		chainHeadAtCapture,
+	};
+}
 
 /**
  * The ABANDONED early deployment: the fast smoke case, and NOTHING else.

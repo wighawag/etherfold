@@ -1,7 +1,7 @@
 import type {Abi} from 'abitype';
 import {sha256, stringToHex} from 'viem';
 import {sourceHashesOf} from '../internal/engine/eventRanges.js';
-import type {IndexingSource, UsedStreamConfig} from '../types.js';
+import type {IndexingSource, SourceHashEntry, UsedStreamConfig} from '../types.js';
 import {canonical_form} from '../utils/hash.js';
 
 /**
@@ -86,11 +86,33 @@ const STREAM_DIGEST_RULE = 'etherfold/stream/1';
  * fixed length is what stops one digest's rendering being read as another's.
  */
 export function streamDigestOf<ABI extends Abi>(source: IndexingSource<ABI>, streamConfig: UsedStreamConfig): string {
+	return streamDigestOfSourceHashes(sourceHashesOf(source), streamConfig);
+}
+
+/**
+ * The SAME digest, taken from the source hash ENTRIES instead of the source.
+ *
+ * The rule above is already defined over the entries: `sourceHashesOf` is the
+ * whole of what the source contributes to it. This is that function with its
+ * first step lifted out, for the one caller that HAS the entries and cannot have
+ * the source -- a client checking a downloaded stream SEED, which carries its
+ * publisher's entries in its stored `context` and deliberately ships no ABI
+ * (ADR-0064: the client computes the publisher's digest and verifies the label,
+ * rather than trusting a claim).
+ *
+ * It is a REPHRASING and not a second rule, which is what the parameter split
+ * has to buy: nothing about what enters the digest, how wide it is or how it
+ * renders is different here, and `streamDigestOf` is now defined in terms of it
+ * so the two cannot drift apart into the silent history-orphaning the docstring
+ * above describes.
+ */
+export function streamDigestOfSourceHashes(
+	entries: readonly SourceHashEntry[],
+	streamConfig: UsedStreamConfig,
+): string {
 	const filter = [
 		...new Set(
-			sourceHashesOf(source)
-				.map((entry) => entry.streamHash)
-				.filter((streamHash): streamHash is string => streamHash !== undefined),
+			entries.map((entry) => entry.streamHash).filter((streamHash): streamHash is string => streamHash !== undefined),
 		),
 	].sort();
 	const preimage = canonical_form({rule: STREAM_DIGEST_RULE, filter, config: streamConfig});
