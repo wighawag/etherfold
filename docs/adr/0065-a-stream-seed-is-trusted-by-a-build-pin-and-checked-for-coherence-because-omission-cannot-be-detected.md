@@ -38,6 +38,11 @@ The deployment fact the source spec starts from is real: a filter change means t
 
 **What only looks like a boundary is fetching the expected hash from the same place as the artifact.** A manifest served beside the seed, advertising the seed's hash, proves nothing an attacker who controls that origin cannot forge. It verifies transport integrity, which TLS already did, and nothing else. A manifest hash is therefore a LABEL for early rejection (a client can refuse a mirror before downloading the body) and never an admission credential.
 
+> **WITHDRAWN by ADR-0066 -- the three shapes below no longer hold.** There is no same-origin
+> condition (the app is served from any IPFS gateway while the artifact lives on a named host, so the
+> two origins never match), the pin is not required, and a third-party seed is NOT refused. The
+> caller supplies the locations and the loader fetches those and no others. Kept for the record.
+
 Two shapes are accepted, and one is not:
 
 - **Build-pinned hash (the rule).** Required whenever the seed and the application are not served by the same origin: a CDN, a mirror set, an IPFS gateway.
@@ -54,7 +59,14 @@ ADR-0063 installs by writing through the keeper seam, so a check made afterwards
 
 **Integrity**: the artifact's content hash equals the pinned one. On the chunked shape this is per chunk plus the manifest, so an interrupted install verifies what it installed rather than what it eventually will.
 
-### Amendment, 2026-09-07: the hash is SHA-256 over the PUBLISHED BYTES, and the artifact is served opaque
+### Amendment, 2026-09-07: the hash is SHA-256 over the PUBLISHED BYTES, and the artifact is served opaque -- ITSELF WITHDRAWN, SEE BELOW
+
+> **WITHDRAWN by ADR-0066 the following day.** The domain is the DECOMPRESSED octets, which is
+> transport-invariant, and there is NO hosting constraint: forbidding `Content-Encoding: gzip` is a
+> rule a publisher on Pages, CloudFront, Cloudflare or a gateway frequently cannot enforce, and a rule
+> the publisher cannot enforce is one the client cannot rely on. The amendment is kept because the
+> failure it identified is real and still worth understanding: over a gzipped artifact the byte domain
+> IS ambiguous, and ADR-0066 fixes it the other way.
 
 The paragraph above said trust comes from a pinned content hash and did not say a hash OF WHAT, which the tasker's review loop refused to task around and was right to: over a gzipped artifact the byte domain is ambiguous, and the ambiguity is not pedantic. If a host serves the seed with `Content-Encoding: gzip`, `fetch` decompresses TRANSPARENTLY, so a hash taken over the compressed file cannot be recomputed from anything the client receives, and every correctly pinned install would refuse. Two producers and two clients could each be self-consistent and never agree.
 

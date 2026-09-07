@@ -244,9 +244,19 @@ should not be built yet. Each says which.
   near that. The finding names what would overturn it (a low-memory device evicting at a 50 MB peak,
   a capture growing past the threshold, a publisher that cannot serve range requests), so this
   returns as its own spec when one of those becomes true, not now.
-- **Chain anchoring and bloom consistency.** Specified in ADR-0065 and deliberately not built: their
-  value concentrates in adopting a seed whose host is not trusted, and ADR-0066 answers that case with
-  a signature rather than a sampled check, deliberately not built.
+- **Chain anchoring and bloom consistency.** Specified in ADR-0065 and still deliberately not built,
+  but the REASON changed and is restated honestly here rather than left inverted. Under ADR-0065 the
+  untrusted-host case was refused outright, so these checks had no case to serve. Under ADR-0066 the
+  caller supplies the locations and the library does not judge them, so an app that accepts a runtime
+  override (as the reference deployment's `?snapshot=` does) can be pointed at an attacker's host, and
+  that is now an ADMITTED input rather than a refused one. They stay out on their own merits: bloom
+  consistency defends against FABRICATED events (an event absent from a block's bloom is proof) and
+  not against OMITTED ones, which is the attack that actually matters here and which nothing detects;
+  chain anchoring catches a wholesale fake but not fabricated logs attached to real block hashes; and
+  both cost a header fetch per sampled block. So they are half a defence against half the threat, and
+  a SIGNATURE is the whole one. What follows from the change is not a new story but a documentation
+  duty, and it is covered: the loader's JSDoc must state that the caller owns the location choice and
+  its risk, including any runtime override it accepts.
 - **Publisher SIGNING.** Would let a client trust a publisher it did not build with; needs key
   distribution this project has none of. The artifact keeps room for it.
 - **Server-side seeding.** `@etherfold/server` has no `ExistingStream` writer over `_emissions` (that

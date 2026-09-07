@@ -25,6 +25,7 @@ One thing the page must NOT say: that a stream seed is what makes a browser app 
 
 ## Acceptance criteria
 
+- [ ] Where the documentation names a snapshot or seed LOCATION, it states that the caller owns that choice and its risk: the library fetches where it is pointed and judges nothing, so an app that accepts a runtime override (a query parameter, as the reference deployment does) is accepting an untrusted state source, and omission is not detectable (ADR-0066, ADR-0065's residue).
 - [ ] The mode is documented in the user-facing guide (under `docs/`), reachable from the browser-app guide rather than parked somewhere a reader would have to already know about.
 - [ ] The page NAMES the mode and states its configuration in one place a reader can copy.
 - [ ] The leaf trade is stated explicitly: what a later processor-only change costs when there is no stream underneath, and what the alternative buys.
