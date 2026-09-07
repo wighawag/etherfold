@@ -1,6 +1,5 @@
 import {
 	createSegmentedStream,
-	degradingStream,
 	resolveStreamConfig,
 	streamDigestOf,
 	type Abi,
@@ -35,7 +34,7 @@ const CURSOR = 'cursor';
  * prefix of `stream_tag_10_0`), a temp-name rule and an extra keeper operation.
  * All of that was a consequence of the flat namespace: comparing key ELEMENTS
  * cannot confuse chain `1` with chain `10`, so the hazard is gone rather than
- * guarded. There is no string-prefix matching anywhere below.
+ * withLegacyBlobProbe. There is no string-prefix matching anywhere below.
  *
  * The DIGEST level is `@etherfold/core`'s `streamDigestOf`: what the stream
  * CONTAINS -- its fetch filter and its stream config -- and nothing about who
@@ -279,16 +278,18 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 	}
 
 	/**
-	 * WRAPPED AGAIN, because this keeper makes IndexedDB calls of its OWN.
+	 * THIS KEEPER'S OWN IndexedDB CALLS, which sit OUTSIDE the segment port.
 	 *
-	 * `createSegmentedStream` already degrades everything that goes through the
-	 * segment port, but the legacy-blob probe in `fetchFrom` (and the `del` in
-	 * `clear`) are this module's own calls, outside it -- and an unopenable database fails there
-	 * FIRST, before a single port operation runs. Wrapping twice costs nothing and
-	 * never doubles a log line: the inner one answers `undefined` rather than
-	 * raising, so this one only ever sees what it did not already handle.
+	 * The legacy-blob probe in `fetchFrom` (and the `del` in `clear`) are this
+	 * module's own, so an unopenable database fails HERE first, before a single port
+	 * operation runs. Nothing wraps them and nothing swallows them: they RAISE
+	 * THROUGH, exactly as the segment port's own failures now do, because what an
+	 * unreadable substrate MEANS is the caller's to decide -- "absent is safe" is
+	 * true of a generation that answers absence by re-indexing and false of an
+	 * installer that answers it by writing (ADR-0068). This used to be wrapped in
+	 * `degradingStream`, which decided for both.
 	 */
-	const guarded = degradingStream<ABI>({
+	const withLegacyBlobProbe: ExistingStream<ABI> = {
 		async fetchFrom(source, fromBlock) {
 			if (await dropLegacyBlob(source)) {
 				return undefined;
@@ -302,10 +303,10 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 			await del(streamAddress(name, source, streamConfig).legacy, store);
 			await segmented.clear(source);
 		},
-	});
+	};
 
 	return {
-		...guarded,
+		...withLegacyBlobProbe,
 		setStreamConfig(next) {
 			streamConfig = next;
 		},

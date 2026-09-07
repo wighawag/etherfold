@@ -1,5 +1,4 @@
 import {
-	degradingStream,
 	readOnlyStream,
 	resolveStreamConfig,
 	streamDigestOf,
@@ -82,12 +81,11 @@ const logger = logs('@etherfold/server');
  * is ever omitted from a query: omitting the name would serve another tenant's
  * rows under a `seq` that means something else there.
  *
- * The result is wrapped twice, and both layers are rules rather than decoration:
- * `readOnlyStream` is the one-writer rule (ADR-0044), and `degradingStream` is
- * the "a stream that cannot be READ costs a re-index, not the indexer" rule --
- * the load path calls `fetchFrom` with no `try`/`catch` above it, so a database
- * error here would make a generation permanently unloadable rather than merely
- * un-followed.
+ * The result is wrapped in `readOnlyStream`, which is the one-writer rule
+ * (ADR-0044). It is deliberately NOT wrapped in a degrading layer any more: a
+ * database error here RAISES, and the load path catches it and treats the stream
+ * as absent, which is the same outcome reached at the caller that owns the policy
+ * rather than at a keeper deciding for every caller it might have (ADR-0068).
  */
 export function storedEmissionStream<ABI extends Abi>(db: RemoteSQL, indexer: string): ExistingStream<ABI> {
 	/**
@@ -101,64 +99,62 @@ export function storedEmissionStream<ABI extends Abi>(db: RemoteSQL, indexer: st
 	 */
 	let streamConfig: UsedStreamConfig = resolveStreamConfig(undefined);
 
-	return degradingStream<ABI>(
-		readOnlyStream<ABI>({
-			setStreamConfig: (next: UsedStreamConfig) => {
-				streamConfig = next;
-			},
-			fetchFrom: async (source: IndexingSource<ABI>, fromBlock: number) => {
-				const stream = streamDigestOf(source, streamConfig);
+	return readOnlyStream<ABI>({
+		setStreamConfig: (next: UsedStreamConfig) => {
+			streamConfig = next;
+		},
+		fetchFrom: async (source: IndexingSource<ABI>, fromBlock: number) => {
+			const stream = streamDigestOf(source, streamConfig);
 
-				// PRESENCE is the COVERAGE CLAIM and never "there are rows" -- ADR-0035's
-				// rule, and it decides both directions. A stream that has been scanned and
-				// found nothing yet is PRESENT with no rows, and must not read as absent or
-				// a re-fold would start again from the source's first block on every cycle.
-				// Rows with no claim are the opposite: they cannot say what filter produced
-				// them or how far they reach, so they are not a stream anything may fold.
-				const coverage = await readStreamCoverage(db, {indexer, stream});
-				if (!coverage) {
-					return undefined;
-				}
+			// PRESENCE is the COVERAGE CLAIM and never "there are rows" -- ADR-0035's
+			// rule, and it decides both directions. A stream that has been scanned and
+			// found nothing yet is PRESENT with no rows, and must not read as absent or
+			// a re-fold would start again from the source's first block on every cycle.
+			// Rows with no claim are the opposite: they cannot say what filter produced
+			// them or how far they reach, so they are not a stream anything may fold.
+			const coverage = await readStreamCoverage(db, {indexer, stream});
+			if (!coverage) {
+				return undefined;
+			}
 
-				if (coverage.startBlock > fromBlock) {
-					// A stream that does not reach back to what was ASKED FOR. Reported ABSENT
-					// rather than served, because a partial history replays as though it were
-					// whole and the missing blocks are simply absent from the rebuilt state --
-					// silent, permanent and self-consistent. Nothing is deleted in response,
-					// unlike the segment keeper's identical check: this view owns none of these
-					// rows, and the generation that DOES own them is still appending to them.
-					logger.info(
-						`the stored emission stream of '${indexer}' at ${stream} starts at block ${coverage.startBlock} and ` +
-							`does not reach back to ${fromBlock}, so it is reported ABSENT rather than replayed as if it were ` +
-							`the whole history.`,
-					);
-					return undefined;
-				}
+			if (coverage.startBlock > fromBlock) {
+				// A stream that does not reach back to what was ASKED FOR. Reported ABSENT
+				// rather than served, because a partial history replays as though it were
+				// whole and the missing blocks are simply absent from the rebuilt state --
+				// silent, permanent and self-consistent. Nothing is deleted in response,
+				// unlike the segment keeper's identical check: this view owns none of these
+				// rows, and the generation that DOES own them is still appending to them.
+				logger.info(
+					`the stored emission stream of '${indexer}' at ${stream} starts at block ${coverage.startBlock} and ` +
+						`does not reach back to ${fromBlock}, so it is reported ABSENT rather than replayed as if it were ` +
+						`the whole history.`,
+				);
+				return undefined;
+			}
 
-				return {
-					eventStream: await readStoredStream(db, {indexer, stream, fromBlock}),
-					lastSync: {
-						context: {
-							source: coverage.source,
-							config: coverage.config,
-							// A STREAM has no processor, so there is nothing honest to put here. Only
-							// `sourceInvalidationOf`'s STREAM half ever reads a stored context, and it
-							// reads `source` and `config` alone; the folding generation's own processor
-							// hash is on ITS cursor, where it belongs. See `StreamCoverage`.
-							processor: '',
-						},
-						latestBlock: coverage.latestBlock,
-						lastFromBlock: coverage.lastFromBlock,
-						lastToBlock: coverage.lastToBlock,
-						// Stored by nobody and read by nobody: `generateStreamFromReplay` rebuilds
-						// the window by WALKING the events it is handed back (ADR-0035 as amended,
-						// ADR-0042), which is the only way a rebuild can get it right.
-						unconfirmedBlocks: [],
+			return {
+				eventStream: await readStoredStream(db, {indexer, stream, fromBlock}),
+				lastSync: {
+					context: {
+						source: coverage.source,
+						config: coverage.config,
+						// A STREAM has no processor, so there is nothing honest to put here. Only
+						// `sourceInvalidationOf`'s STREAM half ever reads a stored context, and it
+						// reads `source` and `config` alone; the folding generation's own processor
+						// hash is on ITS cursor, where it belongs. See `StreamCoverage`.
+						processor: '',
 					},
-				};
-			},
-		}),
-	);
+					latestBlock: coverage.latestBlock,
+					lastFromBlock: coverage.lastFromBlock,
+					lastToBlock: coverage.lastToBlock,
+					// Stored by nobody and read by nobody: `generateStreamFromReplay` rebuilds
+					// the window by WALKING the events it is handed back (ADR-0035 as amended,
+					// ADR-0042), which is the only way a rebuild can get it right.
+					unconfirmedBlocks: [],
+				},
+			};
+		},
+	});
 }
 
 /**

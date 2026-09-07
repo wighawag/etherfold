@@ -59,6 +59,26 @@ export type NotInstalledReason =
 	 */
 	| 'subtree-not-empty'
 	/**
+	 * This client's OWN stream storage could not be read, so whether the subtree is
+	 * empty is UNKNOWN (ADR-0068).
+	 *
+	 * Distinct from `subtree-not-empty`, and the distinction is the point: that one
+	 * says "there is a stream here", this one says "I cannot tell". An installer may
+	 * not treat the second as the first's opposite. A keeper used to answer ABSENT
+	 * for an unreadable substrate, which is the right answer for a generation (it
+	 * re-indexes, and a lost cache costs time) and the wrong one here, because this
+	 * caller answers absence by WRITING -- so a swallowed read failure appended a
+	 * seed beneath a stream that was really there, duplicating events under a cursor
+	 * moved backwards, silently and permanently.
+	 *
+	 * Nothing is written and nothing is cleared. It is usually transient (IndexedDB
+	 * refused in private browsing, storage evicted, a database at a version this
+	 * build cannot open), so the remedy is to try again later; it is deliberately NOT
+	 * resolved by clearing, because destroying a stream you could not read in order
+	 * to install over it is a worse answer than declining.
+	 */
+	| 'subtree-unreadable'
+	/**
 	 * The seed DECLARES a chain this client does not index (ADR-0064).
 	 *
 	 * Structurally subsumed by the digest -- `chainId` and `genesisHash` are hashed
@@ -373,7 +393,12 @@ export async function installStreamSeed<ABI extends Abi>(
 	// install wrote another (ADR-0067).
 	keepStream.setStreamConfig?.(options.streamConfig);
 
-	if (!(await subtreeIsEmpty(keepStream, options.source))) {
+	const subtree = await subtreeStateOf(keepStream, options.source);
+	if (subtree === 'unreadable') {
+		// already logged, with the reason: this is the refusal, not the diagnosis
+		return {status: 'not-installed', reason: 'subtree-unreadable'};
+	}
+	if (subtree === 'holds-a-stream') {
 		namedLogger.info(
 			`not installing a stream seed: this subtree already holds a stream. Nothing here can tell a stream this ` +
 				`client indexed itself from a half-written install of the seed being offered, so an install that is not ` +
@@ -392,14 +417,28 @@ export async function installStreamSeed<ABI extends Abi>(
 	const client = clientIdentityOf(options.source, options.streamConfig);
 
 	for (const location of all) {
-		let payload: Uint8Array;
+		let body: Uint8Array;
 		try {
-			payload = await fetchSeedPayload(get, location);
+			body = await fetchSeedBody(get, location);
 		} catch (error) {
 			// logged and skipped, never thrown: one unreachable location must not
 			// decide whether the app starts.
 			namedLogger.error(`could not fetch a stream seed from ${location}, trying the next location`, error);
 			reasons.add('unreachable');
+			continue;
+		}
+
+		// The INFLATE is its own refusal, and not the fetch's. The host answered, so
+		// it was reached; what arrived is the problem. Reported as `unreadable-format`
+		// alongside a document that parses but is not a seed, because the remedy is the
+		// same one (the artifact at this location is wrong) and it is not the remedy
+		// `unreachable` would send someone looking for.
+		let payload: Uint8Array;
+		try {
+			payload = await streamSeedPayloadFrom(body);
+		} catch (error) {
+			namedLogger.error(`the document at ${location} could not be decompressed, trying the next location`, error);
+			reasons.add('unreadable-format');
 			continue;
 		}
 
@@ -712,16 +751,39 @@ function incoherenceOf(seed: StreamSeed): string | undefined {
 }
 
 /**
- * Whether this subtree holds NOTHING: no cursor record and no segments.
+ * What this subtree holds, as the THREE answers an installer needs and not the
+ * two a nullable can give.
  *
- * The whole rule (ADR-0067), and a bare one on purpose. See `PROBE_FROM_BLOCK`
- * for why asking from there is the thing that makes this read non-destructive.
+ * The whole admission rule is bare emptiness (ADR-0067), and `PROBE_FROM_BLOCK`
+ * is what makes asking non-destructive. What this adds is the third answer: a
+ * read that RAISED. A keeper used to swallow that and report absent, on the
+ * ground that a cache which cannot be read costs a re-index rather than an
+ * outage -- true of a generation, which responds to absence by re-indexing, and
+ * false here, because THIS caller responds to absence by WRITING. Told "empty"
+ * about a subtree that was merely unreadable, the install appended a seed
+ * underneath a stream that was really there: `carryForward` keeps the existing
+ * cursor's `startBlock` and `nextOrdinal`, and the seed's first batch sits at or
+ * below `lastToBlock + 1` so it is not declined as a hole. The result is
+ * duplicated events beneath a cursor moved BACKWARDS, silently, and re-folded by
+ * every later generation. The keeper now raises and this decides (ADR-0068).
  */
-async function subtreeIsEmpty<ABI extends Abi>(
+type SubtreeState = 'empty' | 'holds-a-stream' | 'unreadable';
+
+async function subtreeStateOf<ABI extends Abi>(
 	keepStream: ExistingStream<ABI>,
 	source: IndexingSource<ABI>,
-): Promise<boolean> {
-	return (await keepStream.fetchFrom(source, PROBE_FROM_BLOCK)) === undefined;
+): Promise<SubtreeState> {
+	try {
+		return (await keepStream.fetchFrom(source, PROBE_FROM_BLOCK)) === undefined ? 'empty' : 'holds-a-stream';
+	} catch (error) {
+		namedLogger.error(
+			`not installing a stream seed: this client's own stream storage could not be read, so whether the subtree ` +
+				`is empty is UNKNOWN -- and writing a seed into a subtree that turns out to hold a stream duplicates ` +
+				`events under a cursor moved backwards. Nothing was written and nothing was cleared.`,
+			error,
+		);
+		return 'unreadable';
+	}
 }
 
 /**
@@ -772,13 +834,26 @@ export async function streamSeedPayloadFrom(received: Uint8Array): Promise<Uint8
 	return new Uint8Array(await new Response(inflated).arrayBuffer());
 }
 
-/** One location fetched, down to the octets a seed IS. Raises, and the caller skips the location. */
-async function fetchSeedPayload(get: typeof globalThis.fetch, location: string): Promise<Uint8Array> {
+/**
+ * One location fetched, as the bytes the TRANSPORT delivered. Raises, and the
+ * caller skips the location.
+ *
+ * Deliberately stops at the transport, WITHOUT decompressing. What this can fail
+ * at -- a refused connection, a DNS miss, a `404`, a `503` -- is exactly the set
+ * of things `unreachable` truthfully describes, and decompression is not one of
+ * them: a host that answers `200` with a corrupt or truncated body is REACHED,
+ * and calling that "could not reach it" points an operator at their network
+ * while the artifact is the thing that is broken. So the inflate happens at the
+ * call site, under its own refusal (`unreadable-format`, which already means
+ * "something was fetched and it is not a seed this build reads" -- a body that
+ * will not inflate is precisely that).
+ */
+async function fetchSeedBody(get: typeof globalThis.fetch, location: string): Promise<Uint8Array> {
 	const response = await get(location);
 	if (!response.ok) {
 		throw new Error(`${response.status} ${response.statusText}`);
 	}
-	return streamSeedPayloadFrom(new Uint8Array(await response.arrayBuffer()));
+	return new Uint8Array(await response.arrayBuffer());
 }
 
 /**

@@ -365,7 +365,7 @@ describe('a stream that does not reach back to the requested fromBlock', () => {
 	});
 });
 
-describe('a substrate that is GONE degrades to a re-index, like the damage it can see', () => {
+describe('a substrate that is GONE raises, and the CALLER decides what that means', () => {
 	/** Every read raises: an object store that will not open, a database that was evicted. */
 	function unreadablePort(): StreamSegmentPort<Abi> {
 		const gone = async () => {
@@ -380,14 +380,20 @@ describe('a substrate that is GONE degrades to a re-index, like the damage it ca
 		} as unknown as StreamSegmentPort<Abi>;
 	}
 
-	it('reports absent instead of raising, so `load()` re-indexes rather than failing forever', async () => {
+	it('RAISES from the read rather than reporting absent, because absent is not the keeper`s call to make', async () => {
 		const logged = await captureLogs();
 		const stream = createSegmentedStream<Abi>(unreadablePort());
 
-		// the rules live in this helper, so EVERY keeper over the port inherits this
-		// one: a second keeper supplies five substrate operations and nothing else
-		await expect(stream.fetchFrom(SOURCE, 100)).resolves.toBeUndefined();
-		await expect(stream.clear(SOURCE)).resolves.toBeUndefined();
+		// This keeper used to answer `undefined` here, which is the right answer for the
+		// LOAD PATH (it re-indexes, so a lost cache costs time) and the wrong one for
+		// `installStreamSeed` (it reads emptiness as permission to WRITE, so a swallowed
+		// read failure let it append a seed beneath a stream that was really there). A
+		// keeper cannot know which caller it has, so it no longer decides for them:
+		// ADR-0068 moved the policy to each caller. The generation's half is
+		// `anUnreadableCacheDoesNotWedgeOrCorrupt.test.ts`, which asserts `load()` still
+		// comes up over exactly this shape.
+		await expect(stream.fetchFrom(SOURCE, 100)).rejects.toThrow(/could not be opened/);
+		await expect(stream.clear(SOURCE)).rejects.toThrow(/could not be opened/);
 		logged.restore();
 	});
 

@@ -200,19 +200,13 @@ export type {
 export * from './stream/readOnly.js';
 export * from './stream/capture.js';
 export * from './stream/segments.js';
-/**
- * DEGRADE, NEVER BREAK: the read side of a stream keeper reports ABSENT instead
- * of raising.
- *
- * The load path calls `fetchFrom` and `clear` with no `try`/`catch` above them,
- * so a keeper that raises there makes the indexer permanently unloadable -- for a
- * LOCAL CACHE whose correct recovery is to re-index. Exported because it is the
- * rule a KEEPER follows: `createSegmentedStream` applies it to everything built
- * over the segment port, and a keeper that makes substrate calls of its own
- * outside that helper applies it to those too. `saveNewEvents` deliberately
- * raises through; see the JSDoc for why swallowing it would make a HOLE.
- */
-export * from './stream/degrading.js';
+// `degradingStream` was exported here and is DELETED (ADR-0068). It turned an
+// unreadable substrate into ABSENT at the seam, which is the right answer for the
+// load path (it re-indexes) and the wrong one for `installStreamSeed` (it writes),
+// and a keeper cannot know which caller it has. A keeper now RAISES; each caller
+// applies its own policy -- the generation catches and re-indexes
+// (`IndexerGeneration.readStoredStream`), the installer refuses
+// (`subtree-unreadable`).
 /**
  * THE STRIP, published because something OUTSIDE this package has to apply the
  * SAME one.
