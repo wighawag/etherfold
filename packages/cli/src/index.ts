@@ -1,6 +1,8 @@
 import {
 	createDirectIngestion,
+	generationDigestOf,
 	resolveStreamConfig,
+	retryCanAdvance,
 	type Abi,
 	type EventProcessor,
 	type IndexingSource,
@@ -379,10 +381,35 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 	 * shape of a rebuild running beside a live fold. It costs one in-memory check on
 	 * a process holding no follower, which is every process until something adds one.
 	 */
+	/**
+	 * Which followers this loop has already reported as unable to advance, so a
+	 * permanent condition is said ONCE rather than on every cycle for ever.
+	 */
+	const stalled = new Set<string>();
+
 	const advanceFollowers: Sleep = async (ms, signal) => {
 		if (!stopAtTip && container.followers().length > 0) {
 			try {
-				await container.rebuildMore();
+				for (const report of await container.rebuildMore()) {
+					const id = generationDigestOf(report.generation);
+					// A rebuild that merely has more to do, or nothing to do yet, is the
+					// ordinary case and says nothing. A rebuild that CANNOT advance is
+					// different in kind: the same three reasons recur on every call, so
+					// polling never resolves them and the follower never becomes level --
+					// it will never inherit a vacant write duty and never promote. Silence
+					// there is what made this an invisible permanent stall (ADR-0070).
+					if (retryCanAdvance(report.stopped)) {
+						stalled.delete(id);
+						continue;
+					}
+					if (stalled.has(id)) continue;
+					stalled.add(id);
+					logger.error(
+						`the rebuild of generation ${id} cannot advance (${report.stopped.reason}) and retrying will not ` +
+							`change that. It stays behind and never becomes level, so it will not take over writing its ` +
+							`stream. This needs a look; the canonical generation is unaffected and goes on answering.`,
+					);
+				}
 			} catch (err) {
 				logger.error(`a rebuild chunk failed; the canonical generation is unaffected and the next cycle retries`, err);
 			}

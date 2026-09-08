@@ -61,8 +61,17 @@ export type GenerationRecord = GenerationId & {
 	 *
 	 * ORDERING only, never identity: it is what puts "the previous generation"
 	 * in a defined place in a listing an operator reads when a cap tells them to
-	 * delete something. Ties break on the identity itself, so the order is total
-	 * even when two are registered in the same millisecond.
+	 * delete something, and it is what `writerOf` reads to name the oldest
+	 * surviving generation on a stream.
+	 *
+	 * STRICTLY INCREASING within one registry, so it is a registration ORDER and
+	 * not merely a timestamp: `create` takes `max(now, newest + 1)`. A wall clock
+	 * has millisecond resolution, and two generations registered in one
+	 * millisecond used to tie -- after which `byAge` broke the tie on the processor
+	 * HASH and `writerOf` could name a SUCCESSOR as the writer of a stream its
+	 * incumbent already wrote, giving one stream two writers (ADR-0072). The
+	 * identity tie-break below is kept for totality and can no longer be reached
+	 * by two records of one registry.
 	 */
 	readonly createdAt: number;
 };
@@ -472,7 +481,25 @@ export async function openGenerationRegistry(
 					throw new GenerationCapReachedError('maxStreams', bounds.maxStreams, wanted, candidates, candidateStreams);
 				}
 
-				resolved = {...wanted, createdAt: Date.now()};
+				// STRICTLY INCREASING within a registry, and never a bare `Date.now()`.
+				//
+				// `createdAt` is the ORDERING key `writerOf` reads to name the oldest
+				// surviving generation on a stream, and a wall clock has MILLISECOND
+				// resolution: two generations registered in one millisecond tie, and
+				// `byAge` then breaks the tie on the processor HASH -- an order with no
+				// relation to which was registered first. That is not a cosmetic wobble in
+				// a listing. It makes `writerOf` name a SUCCESSOR as the writer of a
+				// stream its incumbent already writes, and both containers then believe
+				// they hold the write duty: measured at two writers on one stream, which
+				// is the invariant ADR-0044 exists to hold (ADR-0072).
+				//
+				// One `Math.max` removes the tie at the source rather than teaching every
+				// reader to break it the same way. It costs the field nothing it promised:
+				// its own docstring already says ORDERING only, never identity, so a value
+				// nudged a millisecond forward to stay ordered is more faithful to that
+				// than a raw clock reading is.
+				const newest = current.generations.reduce((high, record) => Math.max(high, record.createdAt), 0);
+				resolved = {...wanted, createdAt: Math.max(Date.now(), newest + 1)};
 				/**
 				 * The FIRST generation is canonical, and a successor is NOT.
 				 *
