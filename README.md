@@ -79,7 +79,38 @@ Due to the limitation of EIP-1193 (no batch request), anything that needs an ext
 
 Using them would work in a server environment where results can be cached across load-balanced instances, but in a browser environment where each user would have its own instance, they would slow down the indexing too much.
 
-**Block timestamps are no longer one of those features.** `blockTimestamp` is now part of the log object itself, standardised in [`ethereum/execution-apis#639`](https://github.com/ethereum/execution-apis/pull/639) and served by go-ethereum (>= 1.16.0), reth, besu, erigon, anvil and ethereumjs, so a processor can read `event.blockTimestamp` for free. The last holdout was Hardhat's EDR ([edr#1643](https://github.com/NomicFoundation/edr/issues/1643)), and it is now implemented: [`edr#1644`](https://github.com/NomicFoundation/edr/pull/1644) shipped in `@nomicfoundation/edr@0.20.0` (released 2026-09-02). Hardhat itself has not bumped to it yet (3.16.0 still bundles edr 0.19.0), but that is not a wait: EDR is an ordinary dependency, so a Hardhat project can pull it forward with a package-manager override (`pnpm.overrides`, npm `overrides`, yarn `resolutions`) pinning `@nomicfoundation/edr` to `0.20.0`. The field stays optional on the WIRE nonetheless, because two cases survive any version bump: a node being FORKED that predates the spec change keeps the field absent rather than defaulting it, and EDR's on-disk RPC cache is version-segmented, so entries written before the change keep answering without it. There is no longer a fallback for those: `stream.alwaysFetchTimestamps` is DELETED, and a fetched range holding a log with no readable `blockTimestamp` is REFUSED at the fetch boundary, naming the node and what to do about it (ADR-0073). The engine reads the timestamp off the log and makes no other data call, so `@nomicfoundation/edr >= 0.20.0` is a minimum requirement rather than a recommendation.
+**Block timestamps are no longer one of those features, and the engine now REQUIRES them on the log.** `blockTimestamp` is part of the log object itself, standardised in [`ethereum/execution-apis#639`](https://github.com/ethereum/execution-apis/pull/639) and served by go-ethereum (>= 1.16.0), reth, besu, erigon, anvil, ethereumjs and [`@nomicfoundation/edr@0.20.0`](https://github.com/NomicFoundation/edr/releases/tag/%40nomicfoundation%2Fedr%400.20.0) (released 2026-09-02, [`edr#1644`](https://github.com/NomicFoundation/edr/pull/1644) closing [`edr#1643`](https://github.com/NomicFoundation/edr/issues/1643)), so a processor reads `event.blockTimestamp` for free and the engine spends no request per block on it. There is no fallback any more: `stream.alwaysFetchTimestamps` is DELETED, and a fetched range holding a log with no readable `blockTimestamp` is REFUSED at the fetch boundary, naming the node and what to do about it ([ADR-0073](docs/adr/0073-the-engine-makes-one-data-call-and-eth-getlogs-is-it.md)). **So `@nomicfoundation/edr >= 0.20.0` is a minimum requirement rather than a recommendation.** The field stays optional on the WIRE nonetheless, because a node can still answer without it at any EDR version: one FORKING a remote that predates the spec change passes the absence through rather than defaulting it, and EDR's on-disk RPC response cache keeps replaying an absence it recorded that way until its `rpc_cache` is dropped.
+
+**The requirement is on the EDR VERSION, never on the Hardhat version, so you are not waiting for a Hardhat release.** No published Hardhat bundles EDR 0.20 yet: as of 2026-09-08, `hardhat@3.16.0` pins `@nomicfoundation/edr` at exactly `0.19.0` and the `hh2` line pins `0.12.0-next.23`. That reads like a dependency on somebody else's schedule and is not one, because EDR is an ordinary npm dependency: pull it forward in your own project with a package-manager override, in whichever of these files your package manager reads.
+
+pnpm 11 and later, in `pnpm-workspace.yaml`:
+
+```yaml
+overrides:
+  '@nomicfoundation/edr': '>=0.20.0'
+```
+
+pnpm 10, in `package.json` (pnpm 11 ignores this one, printing `The "pnpm" field in package.json is no longer read by pnpm`, so a project spanning both majors keeps the two in step):
+
+```json
+{"pnpm": {"overrides": {"@nomicfoundation/edr": ">=0.20.0"}}}
+```
+
+npm, in `package.json`:
+
+```json
+{"overrides": {"@nomicfoundation/edr": ">=0.20.0"}}
+```
+
+yarn, in `package.json`:
+
+```json
+{"resolutions": {"@nomicfoundation/edr": ">=0.20.0"}}
+```
+
+**Verify that combination in your project rather than reading this as a promise that it just works.** An override forces a pairing Hardhat did not ship and did not test, which is a small risk rather than no risk, so run your own test suite on it before you rely on it. The published 0.19 to 0.20 delta is narrow: the two behaviour changes to look at are interval mining now validating its range (`1 <= min <= max`, so a `[0, 0]` or `[0, N]` configuration that never worked as written is rejected when the provider is created) and the `function` field of `InlineConfigDirectiveError` widening to `string | undefined`, and the rest of that release is additions and fixes. EDR's RPC response cache also moves to `rpc_cache/v2` in 0.20.0, so the first run after the override refetches what it had cached.
+
+**"A fold over logs" is a claim about the ENGINE's calls, and it is not a promise that the fold sees every log on the chain.** What is claimed is completeness with respect to the node's LOG INDEX: every log `eth_getLogs` returns for a range is folded, and no second data call goes out to look for more. That index is generally derived from each block's `logsBloom`, so a log the bloom does not commit to can be left out of the answer with no error and nothing in the response signalling the omission. The captured case is Polygon's state-sync logs: on block 74,614,768 an archive endpoint returned 848 logs for the block, while the same node's `eth_getTransactionReceipt` for the state-sync transaction returned 8 more, and an indexed source had 856 (`work/notes/findings/what-nodes-answer-when-a-getlogs-range-is-too-big.md`, section 3, which carries the numbers, the endpoint, the reproducing calls and their provenance: they are a third party's captures, dated, and we have not re-run them; it also varies by node). This lands on the weakest point of the reorg model rather than on a cosmetic one: an absence is an INFERENCE that reverts state ([ADR-0004](docs/adr/0004-log-fetcher-wire-contract-receiver-authoritative-cursor.md)), and a bloom-omitted log is a STABLE absence rather than a flapping one, so it never presents as a noisy reorg, it presents as a log that never existed. The only known remedy is reading receipts, which is the per-transaction cost a browser deployment cannot pay and the one ADR-0073 exists to remove, so the scope is stated here rather than closed. If you index a chain that can emit logs outside the bloom, Polygon being the case we captured, check what your own endpoint returns for such a block before relying on the fold being complete.
 
 Having said that an hybrid approach is possible where a server index and the in-browser indexer exists only as a backup when every server instances are unavailable expect for a cache (which could even be shared across user in p2p manner).
 
