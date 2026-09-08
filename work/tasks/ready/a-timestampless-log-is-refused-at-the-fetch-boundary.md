@@ -31,6 +31,7 @@ While `alwaysFetchTimestamps` still exists, the refusal must NOT fire when that 
 - [ ] `blockPointer`'s fold-time refusal is unchanged and still fires for a stream that reached the fold without passing the fetcher
 - [ ] A test covers a seed-installed or fixture-replayed stream still being caught by the fold-time refusal, so the two guards are shown to be non-redundant
 - [ ] Tests mirror the repo's existing test style
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

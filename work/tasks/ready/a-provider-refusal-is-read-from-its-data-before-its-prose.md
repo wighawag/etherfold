@@ -26,6 +26,7 @@ Tests are built from REAL captured provider responses, not invented ones. `work/
 - [ ] A `-32602` archive refusal (mentioning neither `results` nor `block range`) still yields no range hint, asserted directly
 - [ ] Every parse path has a test whose input is a captured real-world response, with its provider named in a comment
 - [ ] A provider that says nothing useful still falls back to halving, unchanged
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

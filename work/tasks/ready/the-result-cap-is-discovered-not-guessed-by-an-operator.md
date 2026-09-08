@@ -26,6 +26,7 @@ Precedence, most to least specific: explicit configuration, then a limit reporte
 - [ ] The effective value and its SOURCE (configured, reported, default) are visible to an operator rather than silent
 - [ ] A discovered value cannot be zero, negative or otherwise nonsensical; such a report is ignored and logged
 - [ ] The refusal message that names this knob still names it correctly
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

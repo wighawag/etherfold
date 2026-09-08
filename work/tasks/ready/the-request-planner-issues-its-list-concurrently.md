@@ -26,6 +26,7 @@ Two properties that must survive, both of which the existing code already treats
 - [ ] The single-request path is unchanged, with no sort or de-duplication introduced, asserted directly
 - [ ] Concurrency is bounded by a stated limit rather than by the size of the request list
 - [ ] A failure in one request behaves sensibly: the fetch fails rather than silently returning a partial union, since a partial range is exactly what ADR-0004 turns into a false reorg
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

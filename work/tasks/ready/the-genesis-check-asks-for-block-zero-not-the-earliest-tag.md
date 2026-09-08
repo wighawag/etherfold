@@ -54,6 +54,7 @@ Note the same shape exists one line earlier for the `eth_chainId` check, which i
 - [ ] A genuine genesis mismatch still refuses, with a message naming both the expected and the received hash
 - [ ] (Adjacent) A node that cannot serve the block, and a request that fails outright, are each distinguishable from a mismatch by a caller, and none of the three is reported using another's wording
 - [ ] No `earliest` remains in the repo, comments included
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

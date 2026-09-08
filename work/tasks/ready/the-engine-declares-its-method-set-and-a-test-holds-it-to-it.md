@@ -30,6 +30,7 @@ The declared set should be stated ONCE, in the engine, and the test should read 
 - [ ] A deliberately reintroduced `eth_getBlockByHash` call fails the suite (demonstrate this, then revert the demonstration)
 - [ ] The README's provider-surface claim matches the declared set exactly
 - [ ] Tests mirror the repo's existing test style
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

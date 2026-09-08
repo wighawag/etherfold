@@ -23,6 +23,7 @@ This is deliberately narrow. Only refusals that clearly identify themselves as a
 - [ ] The error is structurally marked non-retryable, consistent with how the codebase already distinguishes retryable errors, rather than by a caller matching on message text
 - [ ] An unclassifiable refusal still halves and retries exactly as today
 - [ ] A transient network failure is NOT classified as terminal, asserted directly
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

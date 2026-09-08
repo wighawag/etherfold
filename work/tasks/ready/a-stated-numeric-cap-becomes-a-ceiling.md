@@ -24,6 +24,7 @@ Two properties to hold on to:
 - [ ] A message with no stated cap leaves behaviour exactly as it is today
 - [ ] A number that is clearly not a block count (zero, negative, absurdly large) is ignored rather than trusted
 - [ ] Tests use captured real-world messages, provider named in a comment
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 

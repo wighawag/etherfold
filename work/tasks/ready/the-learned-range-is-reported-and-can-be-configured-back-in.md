@@ -24,6 +24,7 @@ Two halves, and they are the same feature seen from both ends:
 - [ ] A configured starting point is still subject to adaptation: a provider that refuses it lowers it, so a stale configured value costs a retry and never wedges
 - [ ] Nothing is written to any store by this task
 - [ ] A run that configures nothing behaves exactly as today
+- [ ] A CHANGESET accompanies the change. The repo's acceptance gate runs `changeset status --since=main`, so a touched package with no changeset is a RED GATE rather than a style nit. Describe the change in prose, as the repo's existing changesets do, not in one line
 
 ## Blocked by
 
