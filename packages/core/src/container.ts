@@ -5,6 +5,7 @@ import {logs} from 'named-logs';
 import {IndexerGeneration, type LoadingState, type PauseState, type ReconfigureOutcome} from './indexer.js';
 import {
 	sameGeneration,
+	writerOf,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
@@ -669,7 +670,17 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 
 		// DETERMINED, and determined HERE: everything downstream reads this rather
 		// than re-deciding it, so there is one place the rule lives.
-		const follows = this.held.some((entry) => entry.record.stream === record.stream);
+		//
+		// Through the SHARED `writerOf` and not through this process's array order.
+		// They agree on the ordinary path -- the first generation held on a stream is
+		// also the oldest registered on it -- and they are not the same rule: the
+		// registry's writer is the oldest SURVIVING record by `createdAt`, which is
+		// durable and survives a restart, while `held` order is whatever order this
+		// caller happened to pass its specs in. A host that lists them differently after
+		// a reload would otherwise hand the append duty to a different engine than the
+		// registry names, and nothing reconciles the two (ADR-0044, ADR-0071).
+		const writer = writerOf(await this.registry.list(), record.stream);
+		const follows = writer !== undefined && !sameGeneration(writer, record);
 		const config: ProvidedIndexerConfig<ABI> =
 			follows && this.config.keepStream
 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}

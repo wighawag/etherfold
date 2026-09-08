@@ -2,6 +2,7 @@ import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
 import {openIndexer, type AnyGenerationSpec, type Indexer} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
+import {sameGeneration, writerOf, type GenerationRecord} from '../src/generation/registry.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
 import {streamDigestOf} from '../src/stream/identity.js';
@@ -358,6 +359,25 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 
 		const separate = await openWorld([{name: 'A'}, {name: 'B', source: SOURCE_B}]);
 		expect(separate.indexer.generations.map((held) => held.follows)).toEqual([false, false]);
+	});
+
+	it('agrees with the registry`s `writerOf`, rather than with this process`s array order', async () => {
+		// Two rules for one question, until ADR-0071. The registry names the writer as
+		// the OLDEST SURVIVING record by `createdAt` -- durable, and what the receiving
+		// container has always used -- while this container derived `follows` from the
+		// order its own `held` array happened to be in. They agree on the ordinary path,
+		// which is why nothing caught it, and they are still not the same rule: `held`
+		// order is whatever order a caller passed its specs in.
+		const shared = await openWorld([{name: 'A'}, {name: 'B'}]);
+		const records = await shared.registry.list();
+		const stream = shared.indexer.generations[0].record.stream;
+		const writer = writerOf(records, stream);
+
+		// exactly one non-follower on the stream, and it is the one the SHARED rule names
+		const writers = shared.indexer.generations.filter((held) => !held.follows);
+		expect(writers).toHaveLength(1);
+		expect(writer).toBeDefined();
+		expect(sameGeneration(writers[0].record, writer as GenerationRecord)).toBe(true);
 	});
 
 	it('RE-FOLDS the stored stream from the start when it is added to a running indexer', async () => {

@@ -105,8 +105,23 @@ export type BootstrapOptions = {
 export type NotBootstrappedReason =
 	/** No location was given at all. */
 	| 'no-locations'
-	/** Every location failed to fetch or parse. */
+	/** Every location failed to FETCH. Transport, not content: the host did not answer. */
 	| 'unreachable'
+	/**
+	 * Something WAS fetched and it is not a snapshot envelope this build reads.
+	 *
+	 * Deliberately distinct from `unreachable`, and it used to be folded into it
+	 * (ADR-0071). The two have opposite remedies: a host that did not answer may
+	 * answer on the next try, or another mirror may, so retrying is right; a
+	 * document this build cannot read means the app or the publisher is out of date
+	 * and retrying never helps. This is the reason an app renders to a user, so
+	 * telling them "the mirror is down" about a version mismatch is the failure this
+	 * outcome type exists to prevent.
+	 *
+	 * The stream-seed path, the deliberate analogue of this one, has split them
+	 * since it was written (`NotInstalledReason`); this union simply drifted.
+	 */
+	| 'unreadable-format'
 	/** Every reachable snapshot was computed by a different processor version. */
 	| 'processor-mismatch'
 	/** Every reachable snapshot was taken inside the reorg-eligible window. */
@@ -249,8 +264,9 @@ export async function bootstrapFromSnapshot(
 		}
 
 		if (!isReadableHead(fetched)) {
+			// REACHED, and unreadable. Not `unreachable`: the host answered.
 			logger.error(`the snapshot head at ${headUrl} is not an envelope this build reads`);
-			reasons.add('unreachable');
+			reasons.add('unreadable-format');
 			continue;
 		}
 		if (fetched.processor !== options.processor) {
@@ -357,7 +373,11 @@ function insideReorgWindow(head: SnapshotHead, finalityDepth: number): boolean {
 
 /** The most specific thing that went wrong, when several did. */
 function pickReason(reasons: ReadonlySet<NotBootstrappedReason>): NotBootstrappedReason {
-	for (const reason of ['processor-mismatch', 'inside-reorg-window', 'unreachable'] as const) {
+	// MOST SPECIFIC first: a reason about a document we actually read tells a user
+	// more than one about a host that did not answer. `unreadable-format` sits above
+	// `unreachable` for that reason and below the two content checks, which say
+	// something sharper still about a document this build DID read.
+	for (const reason of ['processor-mismatch', 'inside-reorg-window', 'unreadable-format', 'unreachable'] as const) {
 		if (reasons.has(reason)) return reason;
 	}
 	return 'unreachable';
