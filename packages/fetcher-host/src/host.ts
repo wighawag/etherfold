@@ -175,7 +175,6 @@ export class FetcherHost<ABI extends Abi> {
 			// passed EXPLICITLY, never left to default to `maxEventsPerFetch`: the two
 			// are independent, and `config.ts` says why at length
 			suspectResultCount: config.suspectResultCount,
-			providerSupportsETHBatch: config.providerSupportsETHBatch,
 			...(config.maxCorrectionsPerCycle !== undefined ? {maxCorrectionsPerCycle: config.maxCorrectionsPerCycle} : {}),
 		});
 	}

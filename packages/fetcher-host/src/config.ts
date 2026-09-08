@@ -124,16 +124,6 @@ export type FetcherHostConfig<ABI extends Abi> = {
 	maxBlocksPerFetch?: number;
 	/** MUST match the receiver's, since `{source, config}` is hashed into the wire identity. */
 	stream: ProvidedStreamConfig;
-	/**
-	 * Whether the node supports `eth_batch`.
-	 *
-	 * It buys nothing today: the enrichment fetches that batched are deleted
-	 * (ADR-0073), so the engine makes no request it could batch. Kept only until
-	 * `providersupportsethbatch-is-deleted-and-adr-0002-is-corrected` removes it
-	 * from all three packages at once, since it is a DOCUMENTED deployment
-	 * variable rather than an internal flag.
-	 */
-	providerSupportsETHBatch: boolean;
 	/** Rate limit applied to the JSON-RPC provider this host builds. */
 	requestsPerSecond?: number;
 	/**
@@ -168,14 +158,6 @@ function readNumber(env: EnvRecord, name: string): number | undefined {
 		throw new FetcherConfigError(`${name} must be a number, and is not. Fix the deployment's environment.`);
 	}
 	return value;
-}
-
-function readBoolean(env: EnvRecord, name: string): boolean | undefined {
-	const raw = env[name];
-	if (raw === undefined || raw.trim() === '') {
-		return undefined;
-	}
-	return raw === 'true' || raw === '1' || raw === 'yes';
 }
 
 /**
@@ -312,8 +294,6 @@ export function resolveFetcherHostConfig<ABI extends Abi>(
 			...(retryAttempts !== undefined ? {attempts: retryAttempts} : {}),
 			...(retryInitialDelayMs !== undefined ? {initialDelayMs: retryInitialDelayMs} : {}),
 		},
-		providerSupportsETHBatch:
-			overrides.providerSupportsETHBatch ?? readBoolean(env, 'PROVIDER_SUPPORTS_ETH_BATCH') ?? false,
 		requestsPerSecond: overrides.requestsPerSecond ?? readNumber(env, 'REQUESTS_PER_SECOND'),
 		maxCorrectionsPerCycle: overrides.maxCorrectionsPerCycle ?? readNumber(env, 'MAX_CORRECTIONS_PER_CYCLE'),
 		backoff: resolveBackoff({
