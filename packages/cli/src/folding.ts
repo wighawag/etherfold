@@ -78,11 +78,10 @@ import type {ExplicitSource, StoreTarget} from './types.js';
  *
  * It was `const STREAM_CONFIG = {}`, on the reasoning that an empty config makes
  * both halves take the same default. That held only while nothing else fed the
- * config. The fetcher host reads three settings from the environment
- * (`STREAM_FINALITY`, `STREAM_ALWAYS_FETCH_TIMESTAMPS`,
- * `STREAM_ALWAYS_FETCH_TRANSACTIONS`) and merged the caller's override OVER
- * them -- and a spread of `{}` cannot remove a key the environment has already
- * put there. So the sender resolved `STREAM_FINALITY` and the receiver resolved
+ * config. The fetcher host reads the stream settings from the environment
+ * (`STREAM_FINALITY`, `STREAM_ALWAYS_FETCH_TIMESTAMPS`) and merged the caller's
+ * override OVER them -- and a spread of `{}` cannot remove a key the
+ * environment has already put there. So the sender resolved `STREAM_FINALITY` and the receiver resolved
  * the default, the two digests could never match, and `run` and `build` refused
  * to start on any host that set the documented variable.
  *

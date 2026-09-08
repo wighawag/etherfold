@@ -2,7 +2,6 @@ import type {Abi, AbiEvent} from 'abitype';
 import type {EIP1193DATA, EIP1193Log, EIP1193QUANTITY} from 'eip-1193';
 import type {DecodeEventLogReturnType} from 'viem';
 import type {NumberifiedLog} from './internal/decoding/LogEventFetcher.js';
-import type {LogTransactionData} from './internal/engine/ethereum.js';
 import type {LogFetcherConfig} from './internal/engine/RangeLogFetcher.js';
 import type {JSONObject} from './internal/types.js';
 
@@ -18,7 +17,6 @@ export type BaseLogEvent<Extra extends JSONObject | undefined = undefined> = Num
 } & {
 	extra: Extra;
 	blockTimestamp?: number;
-	transaction?: LogTransactionData;
 };
 export type ParsedLogEvent<ABI extends Abi, Extra extends JSONObject | undefined = undefined> = BaseLogEvent<Extra> &
 	LogParsedData<ABI>;
@@ -538,7 +536,6 @@ export type UsedStreamConfig = ProvidedStreamConfig & {
 export type ProvidedStreamConfig = {
 	finality?: number;
 	alwaysFetchTimestamps?: boolean;
-	alwaysFetchTransactions?: boolean;
 	parse?: LogParseConfig;
 };
 

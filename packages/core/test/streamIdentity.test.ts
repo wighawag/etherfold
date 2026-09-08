@@ -156,14 +156,13 @@ describe('the digest is over the DEDUPLICATED `streamHash` values, SORTED BY THE
 
 describe('the digest ALSO covers the STREAM CONFIG', () => {
 	it('MOVES on a stream-config change, so the old stream is left alone rather than adopted', () => {
-		// `alwaysFetchTimestamps` and `alwaysFetchTransactions` each change WHAT IS
-		// STORED, so a stream keyed on the filter alone would hand a generation
-		// logs the invalidation verdict has already declared invalid -- and the only
-		// remedy, clearing the stream, destroys what the live generation answers
-		// from.
+		// `alwaysFetchTimestamps` changes WHAT IS STORED, so a stream keyed on the
+		// filter alone would hand a generation logs the invalidation verdict has
+		// already declared invalid -- and the only remedy, clearing the stream,
+		// destroys what the live generation answers from.
 		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true})).not.toBe(digestOf(SOURCE));
-		expect(digestOf(SOURCE, {alwaysFetchTransactions: true})).not.toBe(digestOf(SOURCE));
-		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true})).not.toBe(digestOf(SOURCE, {alwaysFetchTransactions: true}));
+		// and two DIFFERENT config changes are two different streams, never one
+		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true})).not.toBe(digestOf(SOURCE, {finality: 5}));
 		// `parse.filters` narrows which events are parsed and kept at all
 		expect(digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A]]}]}})).not.toBe(digestOf(SOURCE));
 		expect(digestOf(SOURCE, {finality: 5})).not.toBe(digestOf(SOURCE));
@@ -220,7 +219,7 @@ describe('the digest ALSO covers the STREAM CONFIG', () => {
 		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true, finality: 5})).toBe(
 			digestOf(SOURCE, {finality: 5, alwaysFetchTimestamps: true}),
 		);
-		expect(digestOf(SOURCE, {alwaysFetchTransactions: undefined})).toBe(digestOf(SOURCE));
+		expect(digestOf(SOURCE, {alwaysFetchTimestamps: undefined})).toBe(digestOf(SOURCE));
 	});
 });
 
@@ -296,12 +295,10 @@ describe('the hash is WIDE, SYNCHRONOUS, and rendered FIXED-LENGTH', () => {
 			const address = `0x${(contract + 1).toString(16).padStart(40, '0')}` as const;
 			for (let startBlock = 0; startBlock < 15; startBlock++) {
 				for (const abi of [[transfer], [approval], [transfer, approval]]) {
-					for (const streamConfig of [
-						undefined,
-						{alwaysFetchTimestamps: true},
-						{alwaysFetchTransactions: true},
-						{finality: 5},
-					] as (ProvidedStreamConfig | undefined)[]) {
+					for (const streamConfig of [undefined, {alwaysFetchTimestamps: true}, {finality: 5}, {finality: 64}] as (
+						| ProvidedStreamConfig
+						| undefined
+					)[]) {
 						const source = sourceOf(abi, {contracts: [{address, abi, startBlock: startBlock * 1000}]});
 						digests.add(digestOf(source, streamConfig));
 						counted++;

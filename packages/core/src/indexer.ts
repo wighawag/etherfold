@@ -1,10 +1,5 @@
-import {getBlockNumber, LogTransactionData} from './internal/engine/ethereum.js';
-import {
-	blockFetcherFor,
-	enrichEvents,
-	transactionFetcherFor,
-	type BlockTimestampCache,
-} from './internal/engine/enrich.js';
+import {getBlockNumber} from './internal/engine/ethereum.js';
+import {blockFetcherFor, enrichEvents, type BlockTimestampCache} from './internal/engine/enrich.js';
 
 import {EIP1193ProviderWithoutEvents} from 'eip-1193';
 
@@ -1818,11 +1813,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			assertLogsCarryTimestamps(eventsFetched as LogEvent<ABI>[], `the node's answer for [${fromBlock}, ${toBlock}]`);
 		}
 
-		// the timestamps and transactions the logs themselves did not carry. Shared
-		// with the split shape's `LogFetcher`, which is the only other thing allowed
-		// to make these calls (ADR-0003): the receiving half makes none at all.
-		// `getBlocks` / `getTransactions` are passed as bound methods rather than
-		// built inside, so a subclass overriding either still overrides it.
+		// the timestamps the logs themselves did not carry. Shared with the split
+		// shape's `LogFetcher`, which is the only other thing allowed to make this
+		// call (ADR-0003): the receiving half makes none at all. `getBlocks` is
+		// passed as a bound method rather than built inside, so a subclass
+		// overriding it still overrides it.
 		await enrichEvents(
 			eventsFetched as LogEvent<ABI>[],
 			{
@@ -1830,7 +1825,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 				latestBlock,
 				cache: this.blockTimestampCache,
 				getBlocks: (hashes, uc) => this.getBlocks(hashes, uc),
-				getTransactions: (hashes, uc) => this.getTransactions(hashes, uc),
 			},
 			unlessCancelled,
 		);
@@ -1860,16 +1854,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		unlessCancelled: <T>(p: Promise<T>) => Promise<T>,
 	): Promise<{timestamp: number}[]> {
 		return blockFetcherFor(this.provider, this.config.providerSupportsETHBatch)(blockHashes, unlessCancelled);
-	}
-
-	protected async getTransactions(
-		transactionHashes: string[],
-		unlessCancelled: <T>(p: Promise<T>) => Promise<T>,
-	): Promise<LogTransactionData[]> {
-		return transactionFetcherFor(this.provider, this.config.providerSupportsETHBatch)(
-			transactionHashes,
-			unlessCancelled,
-		);
 	}
 
 	/** Whether the persisted STATE is still a fold over what this source means. */
