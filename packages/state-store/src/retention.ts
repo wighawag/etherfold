@@ -119,7 +119,35 @@ export const DEFAULT_RETENTION: Retention = {kind: 'unbounded'};
  * window would be both a bound nobody chose and (at the sizes that look
  * generous) nearly empty in updates on a real stream.
  */
+/**
+ * The finality depth is a NON-NEGATIVE INTEGER wherever one is supplied.
+ *
+ * Exported because it is the model's rule and not any one backend's: it is
+ * checked once here, and `PatchStateStore` -- which resolves no retention at all
+ * (it is `revert-only` by construction) -- calls it directly rather than keeping
+ * the copy it used to carry.
+ *
+ * `undefined` is allowed and means "none stated". Only a retention WINDOW
+ * requires one, and that requirement is stated where the window is resolved.
+ */
+export function assertFinalityDepth(finalityDepth: number | undefined): number | undefined {
+	if (finalityDepth === undefined) return undefined;
+	if (!Number.isInteger(finalityDepth) || finalityDepth < 0) {
+		throw new Error(`invalid finality depth: ${JSON.stringify(finalityDepth)}. Expected a non-negative integer.`);
+	}
+	return finalityDepth;
+}
+
 export function resolveRetention(setting: RetentionSetting | undefined, options: RetentionOptions): Retention {
+	// BEFORE the early returns, because every retention kind USES this number.
+	// `revert-only` and `unbounded` do not require one, but they do pass whatever
+	// they were given to `retentionFloor`, so a malformed depth reached a floor
+	// computation on three of the four backends while only the `{blocks: N}` path
+	// ever checked it -- and a NEGATIVE depth puts the floor ABOVE the tip, which
+	// prunes exactly the versions a reorg revert reopens (measured: tip 1000,
+	// depth -5, floor 1005). This is a rule about the ARGUMENT, so it does not
+	// belong behind a branch on a different argument.
+	assertFinalityDepth(options.finalityDepth);
 	if (setting === undefined) return DEFAULT_RETENTION;
 	if (setting === 'revert-only') return {kind: 'revert-only'};
 	if (setting === 'unbounded') return {kind: 'unbounded'};
@@ -148,9 +176,6 @@ export function resolveRetention(setting: RetentionSetting | undefined, options:
 				`closed after the fork point, so a window is only meaningful next to the depth it must not go under: pass ` +
 				`the finality depth alongside it.`,
 		);
-	}
-	if (!Number.isInteger(finalityDepth) || finalityDepth < 0) {
-		throw new Error(`invalid finality depth: ${JSON.stringify(finalityDepth)}. Expected a non-negative integer.`);
 	}
 	if (blocks < finalityDepth) {
 		throw new Error(

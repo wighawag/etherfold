@@ -1,4 +1,7 @@
 import {describe, expect, it, vi} from 'vitest';
+import {readdirSync, readFileSync, statSync} from 'node:fs';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {
 	BlockNotRetainedError,
 	BlockUnavailableError,
@@ -36,6 +39,21 @@ const capabilities = (retention: Retention, asOf = retention.kind !== 'revert-on
 	asOf,
 });
 
+/** Every `.ts` under a root, so the guard below scans sources rather than a list someone maintains. */
+function filesUnder(root: string): string[] {
+	const found: string[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir)) {
+			if (entry === 'node_modules' || entry === 'dist') continue;
+			const full = join(dir, entry);
+			if (statSync(full).isDirectory()) walk(full);
+			else if (full.endsWith('.ts')) found.push(full);
+		}
+	};
+	walk(root);
+	return found.sort();
+}
+
 describe('a deployment sets retention, in block numbers', () => {
 	it('keeps everything when nothing is set', () => {
 		// The default is the only one that changes nothing about a store nobody
@@ -68,6 +86,49 @@ describe('a deployment sets retention, in block numbers', () => {
 
 	it('refuses a window that states no finality depth to protect', () => {
 		expect(() => resolveRetention({blocks: 64}, {})).toThrow(/finality/i);
+	});
+
+	it('refuses a malformed finality depth on EVERY retention kind, not only on a window', () => {
+		// The check used to sit AFTER the three early returns, so only `{blocks: N}`
+		// ever ran it -- while `revert-only`, `unbounded` and the default all stored
+		// whatever they were given and passed it to `retentionFloor`. Three of the four
+		// backends therefore accepted a NEGATIVE depth, and `PatchStateStore` carried a
+		// private copy of this rule because of it.
+		//
+		// The consequence is data loss, not untidiness: `retentionFloor` for
+		// `revert-only` is `tip - finalityDepth`, so a depth of -5 puts the floor ABOVE
+		// the tip and `prune` deletes every closed version, including the ones reorg
+		// revert has to reopen.
+		for (const setting of ['revert-only', 'unbounded', undefined] as const) {
+			for (const depth of [-5, 1.5, Number.NaN]) {
+				expect(() => resolveRetention(setting, {finalityDepth: depth}), `${setting} / ${depth}`).toThrow(
+					/finality depth/i,
+				);
+			}
+		}
+		expect(() => resolveRetention({blocks: 64}, {finalityDepth: -5})).toThrow(/finality depth/i);
+	});
+
+	it('still accepts a valid depth, and an ABSENT one, where no window demands it', () => {
+		// the other half: `revert-only` and `unbounded` do not REQUIRE a depth, so
+		// hoisting the check must not start demanding one
+		expect(resolveRetention('revert-only', {finalityDepth: 12})).toEqual({kind: 'revert-only'});
+		expect(resolveRetention('revert-only', {})).toEqual({kind: 'revert-only'});
+		expect(resolveRetention('unbounded', {})).toEqual({kind: 'unbounded'});
+		expect(resolveRetention(undefined, {})).toEqual(resolveRetention(undefined, {}));
+	});
+
+	it('is the ONE implementation of that rule: no backend keeps its own copy', () => {
+		// `PatchStateStore` had `assertFinalityDepth` inlined, with a comment admitting
+		// it was a copy of this check. A rule enforced on one backend and absent on
+		// three is the shape this seam exists to prevent.
+		const root = fileURLToPath(new URL('../../', import.meta.url));
+		const offenders = filesUnder(root)
+			.map((file) => file.slice(root.length))
+			.filter((file) => /^state-store[^/]*\/src\//.test(file))
+			.filter((file) => /Expected a non-negative integer/.test(readFileSync(join(root, file), 'utf-8')));
+
+		expect(offenders).toEqual(['state-store/src/retention.ts']);
 	});
 
 	it('refuses every duration, on every spelling', () => {
