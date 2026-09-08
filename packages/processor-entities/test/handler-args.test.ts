@@ -171,7 +171,7 @@ describe('a handler covering two versions of one event', () => {
 	it('takes the un-memoed branch for a pre-upgrade log and the memoed one after', async () => {
 		const store = new MemoryStateStore([...ENTITIES]);
 		const p = new EntityEventProcessor<UpgradedABI>(store, upgraded);
-		await p.load(SOURCE, {finality: 12, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality: 12});
 
 		await p.process(
 			[
@@ -238,7 +238,7 @@ describe('an event this ABI could not parse', () => {
 
 		const store = new MemoryStateStore([...ENTITIES]);
 		const p = new EntityEventProcessor<UpgradedABI>(store, withHandler);
-		await p.load(SOURCE, {finality: 12, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality: 12});
 
 		await p.process(
 			[unparsed(100, '0xA'), transfer(101, '0xB', {from: '0x0', to: '0xbob', id: 2n})],
@@ -253,7 +253,7 @@ describe('an event this ABI could not parse', () => {
 	it('costs nothing when the author declares no handler, and the batch still applies', async () => {
 		const store = new MemoryStateStore([...ENTITIES]);
 		const p = new EntityEventProcessor<UpgradedABI>(store, upgraded);
-		await p.load(SOURCE, {finality: 12, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality: 12});
 
 		await p.process(
 			[unparsed(100, '0xA'), transfer(101, '0xB', {from: '0x0', to: '0xbob', id: 2n})],

@@ -124,7 +124,15 @@ export type FetcherHostConfig<ABI extends Abi> = {
 	maxBlocksPerFetch?: number;
 	/** MUST match the receiver's, since `{source, config}` is hashed into the wire identity. */
 	stream: ProvidedStreamConfig;
-	/** Whether the node supports `eth_batch`, which the enrichment fetches use when it does. */
+	/**
+	 * Whether the node supports `eth_batch`.
+	 *
+	 * It buys nothing today: the enrichment fetches that batched are deleted
+	 * (ADR-0073), so the engine makes no request it could batch. Kept only until
+	 * `providersupportsethbatch-is-deleted-and-adr-0002-is-corrected` removes it
+	 * from all three packages at once, since it is a DOCUMENTED deployment
+	 * variable rather than an internal flag.
+	 */
 	providerSupportsETHBatch: boolean;
 	/** Rate limit applied to the JSON-RPC provider this host builds. */
 	requestsPerSecond?: number;
@@ -236,14 +244,16 @@ function required(value: string | undefined, variable: string, what: string): st
  * Exported because the commands that hold BOTH halves of the wire in one process
  * have to hand the identical config to each, and the way to get that wrong is to
  * derive it twice. A caller that needs the same config the fetcher host would
- * have used asks for it here rather than re-reading two variables.
+ * have used asks for it here rather than re-reading the variable.
+ *
+ * `STREAM_FINALITY` is the whole of it: `STREAM_ALWAYS_FETCH_TIMESTAMPS` and
+ * `STREAM_ALWAYS_FETCH_TRANSACTIONS` set flags that no longer exist (ADR-0073),
+ * so they are no longer read and are ignored like any other unrecognised
+ * variable.
  */
 export function streamConfigFromEnv(env: EnvRecord): ProvidedStreamConfig {
 	return {
 		...(readNumber(env, 'STREAM_FINALITY') !== undefined ? {finality: readNumber(env, 'STREAM_FINALITY')} : {}),
-		...(readBoolean(env, 'STREAM_ALWAYS_FETCH_TIMESTAMPS') !== undefined
-			? {alwaysFetchTimestamps: readBoolean(env, 'STREAM_ALWAYS_FETCH_TIMESTAMPS')}
-			: {}),
 	};
 }
 

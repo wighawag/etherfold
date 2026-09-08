@@ -212,14 +212,14 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 		this.finality = streamConfig.finality;
 		this.assertRetentionCoversReorgs(streamConfig.finality);
 
-		// No gate on `alwaysFetchTimestamps` here, on purpose. Every node
-		// implementing execution-apis#639 puts `blockTimestamp` on the log itself, so
-		// requiring the flag would force a pointless second round-trip per block on
-		// geth, reth, besu, erigon and anvil, which is precisely what an in-browser
-		// deployment wants to avoid (ADR-0002). The check that matters is per-block,
-		// in `blockPointer`: it cannot be known in advance whether a node supplies
-		// timestamps, but a block still cannot be recorded without one, and the
-		// failure lands on the FIRST block, before anything is written.
+		// No stream-config gate on the time axis here, on purpose, and there is no
+		// longer a flag that could be one (ADR-0073): every node implementing
+		// execution-apis#639 puts `blockTimestamp` on the log itself, so the engine
+		// reads it and never pays a round trip per block for it. The check that
+		// matters is per-block, in `blockPointer`: it cannot be known in advance
+		// whether a node supplied timestamps, but a block still cannot be recorded
+		// without one, and the failure lands on the FIRST block, before anything is
+		// written.
 		await this.ensureMigrated();
 
 		const lastSync = parseStoredCursor<ABI>(await this.store.readCursor(SYNC_CURSOR_KEY));

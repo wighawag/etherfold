@@ -11,8 +11,8 @@ import {streamConfigFor} from '../src/folding.js';
 // the receiver refuses the batch with a `WireContextMismatchError`, which is not
 // retryable, so the process exits rather than degrading.
 //
-// The environment owns the stream settings (`STREAM_FINALITY`,
-// `STREAM_ALWAYS_FETCH_TIMESTAMPS`) and the
+// The environment owns the stream settings (`STREAM_FINALITY`, and since
+// ADR-0073 that is the whole of them) and the
 // commands that hold BOTH halves in one process (`run`, `build`) have to hand
 // the same resolved config to each. The failure this pins is that they did not:
 // the sender derived its config from the environment while the receiver was
@@ -65,10 +65,16 @@ describe('the sending and receiving halves agree on the stream config', () => {
 		expect(streamConfigHashOf(sender)).toBe(streamConfigHashOf(receiver));
 	});
 
-	it('agree on the boolean setting as well', () => {
+	it('agree on a variable that names a DELETED flag: both ignore it, so neither forks', () => {
+		// `STREAM_ALWAYS_FETCH_TIMESTAMPS` set the fallback flag ADR-0073 deleted, so
+		// it is no longer read and is ignored exactly as any unrecognised variable is.
+		// What matters here is that BOTH halves ignore it: one half still reading it
+		// would put a key in one digest and not the other, and the two could never talk.
 		const {receiver, sender} = bothHalves(envWith({STREAM_ALWAYS_FETCH_TIMESTAMPS: 'true'}));
 		expect(streamConfigHashOf(sender)).toBe(streamConfigHashOf(receiver));
-		expect(resolveStreamConfig(receiver).alwaysFetchTimestamps).toBe(true);
+		expect(Object.keys(resolveStreamConfig(receiver))).toEqual(['finality']);
+		// and it is the same stream as an environment that never mentioned it
+		expect(streamConfigHashOf(receiver)).toBe(streamConfigHashOf(bothHalves(envWith()).receiver));
 	});
 
 	it('reach the SAME digest that a split deployment reaches from the same environment', () => {

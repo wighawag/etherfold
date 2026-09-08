@@ -92,7 +92,7 @@ export type NotInstalledReason =
 	 * The resolved stream CONFIGS differ (ADR-0064).
 	 *
 	 * Also subsumed by the digest and also reported separately: the config decides
-	 * what is STORED (`alwaysFetchTimestamps`, `parse.filters`) as much as the
+	 * what is STORED (`parse.filters`) as much as the
 	 * filter does, and "your finality is 12 and the
 	 * publisher's is 64" is a thing a developer can act on where a moved digest is
 	 * not. It is the same `stream-config` the invalidation model names.

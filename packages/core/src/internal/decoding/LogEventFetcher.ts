@@ -114,11 +114,11 @@ export interface NumberifiedLog {
 	 * and a node being forked that predates the change yields a log without it.
 	 *
 	 * What the ENGINE does about such a node is REFUSE it at the fetch boundary,
-	 * naming it (`assertLogsCarryTimestamps` / `TimestamplessLogError`, ADR-0073) --
-	 * unless `alwaysFetchTimestamps` is set, which is the legacy fallback that pays
-	 * a request per event-bearing block for what the log should have carried. The
-	 * field stays optional at the TYPE level either way, because the wire genuinely
-	 * does not guarantee it and this type says what the wire does.
+	 * naming it (`assertLogsCarryTimestamps` / `TimestamplessLogError`, ADR-0073).
+	 * There is no fallback and no configuration that buys one: the engine READS
+	 * this field and never fetches it. The field stays optional at the TYPE level
+	 * nonetheless, because the wire genuinely does not guarantee it and this type
+	 * says what the wire does.
 	 */
 	blockTimestamp?: number;
 }

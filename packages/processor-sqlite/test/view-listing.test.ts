@@ -44,7 +44,7 @@ const processor: SQLProcessor<TestABI> = {
  */
 async function indexed() {
 	const p = new VersionedStateEventProcessor<TestABI>(createTestDB(), processor);
-	await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+	await p.load(SOURCE, {finality});
 	await p.process(
 		[
 			transfer(100, '0xAAA', {from: '0x0', to: '0xalice', id: 1n}),

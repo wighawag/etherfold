@@ -53,7 +53,7 @@ describe('the backend-neutral read handle', () => {
 	it('and they are absent at RUN time, not merely typed away', async () => {
 		const store = await BACKENDS[0].open(processor.entities);
 		const p = new EntityEventProcessor(store, processor);
-		await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality});
 		const state = await p.process(
 			[transfer(100, '0xA', {from: '0x0', to: '0xalice', id: 1n})],
 			lastSync({latestBlock: 100, lastToBlock: 100}),

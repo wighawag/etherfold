@@ -23,7 +23,7 @@ describe('the deprecated SQLProcessor name still infers its ABI', () => {
 	it('is accepted by the constructor, which is generic over the ABI', async () => {
 		const annotated: SQLProcessor<TestABI> = processor;
 		const p = new VersionedStateEventProcessor(createTestDB(), annotated);
-		await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality});
 
 		await p.process(
 			[transfer(100, '0xAAA', {from: '0x0', to: '0xalice', id: 1n})],
@@ -36,7 +36,7 @@ describe('the deprecated SQLProcessor name still infers its ABI', () => {
 		const annotated: SQLProcessor<TestABI> = processor;
 		const make = fromSQLProcessor(annotated);
 		const p: VersionedStateEventProcessor<TestABI> = make(createTestDB());
-		await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality});
 
 		await p.process(
 			[transfer(100, '0xAAA', {from: '0x0', to: '0xbob', id: 7n})],

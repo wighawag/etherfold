@@ -156,15 +156,16 @@ describe('the digest is over the DEDUPLICATED `streamHash` values, SORTED BY THE
 
 describe('the digest ALSO covers the STREAM CONFIG', () => {
 	it('MOVES on a stream-config change, so the old stream is left alone rather than adopted', () => {
-		// `alwaysFetchTimestamps` changes WHAT IS STORED, so a stream keyed on the
-		// filter alone would hand a generation logs the invalidation verdict has
-		// already declared invalid -- and the only remedy, clearing the stream,
-		// destroys what the live generation answers from.
-		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true})).not.toBe(digestOf(SOURCE));
-		// and two DIFFERENT config changes are two different streams, never one
-		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true})).not.toBe(digestOf(SOURCE, {finality: 5}));
-		// `parse.filters` narrows which events are parsed and kept at all
+		// `parse.filters` narrows which events are parsed and kept at all, so it
+		// changes WHAT IS STORED, and a stream keyed on the filter alone would hand a
+		// generation logs the invalidation verdict has already declared invalid -- with
+		// the only remedy, clearing the stream, destroying what the live generation
+		// answers from.
 		expect(digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A]]}]}})).not.toBe(digestOf(SOURCE));
+		// and two DIFFERENT config changes are two different streams, never one
+		expect(digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A]]}]}})).not.toBe(
+			digestOf(SOURCE, {finality: 5}),
+		);
 		expect(digestOf(SOURCE, {finality: 5})).not.toBe(digestOf(SOURCE));
 	});
 
@@ -216,10 +217,10 @@ describe('the digest ALSO covers the STREAM CONFIG', () => {
 	});
 
 	it('does not depend on key ORDER or on an explicit `undefined`', () => {
-		expect(digestOf(SOURCE, {alwaysFetchTimestamps: true, finality: 5})).toBe(
-			digestOf(SOURCE, {finality: 5, alwaysFetchTimestamps: true}),
+		expect(digestOf(SOURCE, {parse: {filters: [{event: 'Transfer', match: [[A]]}]}, finality: 5})).toBe(
+			digestOf(SOURCE, {finality: 5, parse: {filters: [{event: 'Transfer', match: [[A]]}]}}),
 		);
-		expect(digestOf(SOURCE, {alwaysFetchTimestamps: undefined})).toBe(digestOf(SOURCE));
+		expect(digestOf(SOURCE, {parse: undefined})).toBe(digestOf(SOURCE));
 	});
 });
 
@@ -295,7 +296,7 @@ describe('the hash is WIDE, SYNCHRONOUS, and rendered FIXED-LENGTH', () => {
 			const address = `0x${(contract + 1).toString(16).padStart(40, '0')}` as const;
 			for (let startBlock = 0; startBlock < 15; startBlock++) {
 				for (const abi of [[transfer], [approval], [transfer, approval]]) {
-					for (const streamConfig of [undefined, {alwaysFetchTimestamps: true}, {finality: 5}, {finality: 64}] as (
+					for (const streamConfig of [undefined, {finality: 12}, {finality: 5}, {finality: 64}] as (
 						| ProvidedStreamConfig
 						| undefined
 					)[]) {

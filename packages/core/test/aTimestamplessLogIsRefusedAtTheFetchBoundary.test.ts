@@ -3,7 +3,7 @@ import {describe, expect, it} from 'vitest';
 import {TimestamplessLogError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {LogFetcher, type IngestionResponse, type IngestionTarget} from '../src/logFetcher.js';
-import type {IndexingSource, LastSync, WireBatch, WireContext} from '../src/types.js';
+import type {IndexingSource, LastSync, ProvidedStreamConfig, WireBatch, WireContext} from '../src/types.js';
 
 // ---------------------------------------------------------------------------
 // A TIMESTAMPLESS LOG IS REFUSED AT THE FETCH BOUNDARY, NAMING THE NODE
@@ -13,15 +13,19 @@ import type {IndexingSource, LastSync, WireBatch, WireContext} from '../src/type
 // node that does not put it there is REFUSED rather than silently compensated
 // for at a cost the operator did not choose (ADR-0073).
 //
-// Two properties are pinned here, and the second is the one a refactor is
+// Three properties are pinned here, and the last two are the ones a refactor is
 // likely to break:
 //
 //   1. the refusal fires ONE ROUND TRIP IN -- on the answer to `eth_getLogs`,
-//      before a range is enriched, folded, stored or pushed -- and it names the
-//      NODE, because every cause is node-level and each has a different fix;
+//      before a range is folded, stored or pushed -- and it names the NODE,
+//      because every cause is node-level and each has a different fix;
 //   2. it is one refusal in BOTH deployment shapes of ADR-0003, the
 //      single-process `IndexerGeneration` and the split `LogFetcher`, because
-//      the fetcher is the only side of a split that talks to a chain.
+//      the fetcher is the only side of a split that talks to a chain;
+//   3. it is UNCONDITIONAL. It was once skipped while `alwaysFetchTimestamps`
+//      was set, because the fallback then resolved the timestamp by fetching
+//      the block. That flag and the whole enrichment path are DELETED, so there
+//      is nothing left to defer to and no configuration that can quiet it.
 //
 // What it deliberately does NOT do is replace `blockPointer`'s fold-time
 // refusal. A stream can reach a fold without passing a fetcher at all (a seed
@@ -79,8 +83,15 @@ function rawLog(blockNumber: number, blockHash: string, blockTimestamp?: number)
 	};
 }
 
-/** A node answering `eth_getLogs` with exactly the logs it was given. */
-function makeNode(logs: ReturnType<typeof rawLog>[], blockTimestamps: {[blockHash: string]: number} = {}) {
+/**
+ * A node answering `eth_getLogs` with exactly the logs it was given, and
+ * THROWING on anything else.
+ *
+ * `eth_getBlockByHash` is deliberately not among the answers: the engine has no
+ * path that asks for it any more, so a fallback creeping back in fails here by
+ * name rather than by passing quietly on a fake that would have answered.
+ */
+function makeNode(logs: ReturnType<typeof rawLog>[]) {
 	const calls: {method: string; params?: any}[] = [];
 	const provider = {
 		async request(args: {method: string; params?: any}): Promise<any> {
@@ -92,12 +103,6 @@ function makeNode(logs: ReturnType<typeof rawLog>[], blockTimestamps: {[blockHas
 					return `0x${LATEST_BLOCK.toString(16)}`;
 				case 'eth_getLogs':
 					return logs;
-				case 'eth_getBlockByHash': {
-					const hash = args.params[0] as string;
-					const timestamp = blockTimestamps[hash];
-					if (timestamp === undefined) throw new Error(`unexpected eth_getBlockByHash for ${hash}`);
-					return {hash, timestamp: `0x${timestamp.toString(16)}`};
-				}
 				default:
 					throw new Error(`unexpected method ${args.method}`);
 			}
@@ -118,7 +123,7 @@ function freshLastSync(): LastSync<TestABI> {
 	};
 }
 
-function makeIndexer(provider: any, alwaysFetchTimestamps?: boolean) {
+function makeIndexer(provider: any, stream: ProvidedStreamConfig = {}) {
 	const processor: any = {
 		getVersionHash: () => 'proc',
 		getCodeFingerprint: () => undefined,
@@ -127,9 +132,7 @@ function makeIndexer(provider: any, alwaysFetchTimestamps?: boolean) {
 		reset: async () => {},
 		clear: async () => {},
 	};
-	return new IndexerGeneration<TestABI>(provider, processor, SOURCE, {
-		stream: {finality: 12, ...(alwaysFetchTimestamps === undefined ? {} : {alwaysFetchTimestamps})},
-	});
+	return new IndexerGeneration<TestABI>(provider, processor, SOURCE, {stream: {finality: 12, ...stream}});
 }
 
 /** A receiver that records what it was handed, so "nothing was pushed" is checkable. */
@@ -214,16 +217,34 @@ describe('the fetch boundary refuses a log with no readable blockTimestamp', () 
 		);
 	});
 
-	it('does NOT fire while alwaysFetchTimestamps is set, because the fallback resolves it', async () => {
-		// The flag is the legacy fallback, deleted by a later task in this spec. While
-		// it exists there is nothing to refuse: the block is fetched and the timestamp
-		// arrives, at a cost the operator chose.
-		const {provider} = makeNode([rawLog(101, '0xaaa')], {'0xaaa': 1_700_000_000});
-		const indexer = makeIndexer(provider, true);
+	it('fires UNCONDITIONALLY: no stream config quiets it, not even the deleted flag', async () => {
+		// It was once skipped while `alwaysFetchTimestamps` was set, and that condition
+		// went with the flag (ADR-0073). The interesting case is a deployment whose
+		// config still SPELLS the flag: it is an unrecognised key now, so it buys
+		// nothing, and what such an operator must get is the refusal naming their node
+		// rather than a silent fallback that no longer exists.
+		const legacy = {alwaysFetchTimestamps: true} as unknown as ProvidedStreamConfig;
+		for (const stream of [{}, {finality: 0}, legacy] as ProvidedStreamConfig[]) {
+			const {provider} = makeNode([rawLog(101, '0xaaa')]);
+			const indexer = makeIndexer(provider, stream);
 
-		const {eventStream} = await (indexer as any).fetchLogsFromProvider(freshLastSync(), passThrough);
+			await expect((indexer as any).fetchLogsFromProvider(freshLastSync(), passThrough)).rejects.toThrow(
+				TimestamplessLogError,
+			);
+		}
+	});
 
-		expect(eventStream.map((event: any) => event.blockTimestamp)).toEqual([1_700_000_000]);
+	it('has no flag to set: `alwaysFetchTimestamps` is GONE from the stream config', () => {
+		// Deliberately never CALLED: the assertion is the `@ts-expect-error`, and
+		// vitest strips types, so running the body would prove nothing. `pnpm
+		// typecheck` is what runs this half, and it FAILS if the line starts
+		// compiling again.
+		function refusal() {
+			// @ts-expect-error the flag is DELETED, with no alias and no deprecated stub behind it
+			const config: ProvidedStreamConfig = {finality: 12, alwaysFetchTimestamps: true};
+			return config;
+		}
+		expect(typeof refusal).toBe('function');
 	});
 
 	it('leaves a node that serves the field entirely alone: no new call, no new failure', async () => {

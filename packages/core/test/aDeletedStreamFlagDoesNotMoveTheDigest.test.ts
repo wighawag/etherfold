@@ -21,10 +21,10 @@ import {
 // DELETING A STREAM-CONFIG FIELD DOES NOT MOVE THE DIGEST OF A STREAM THAT
 // NEVER SET IT
 // ---------------------------------------------------------------------------
-// The question ADR-0073 turns on: `alwaysFetchTransactions` is now DELETED from
-// `ProvidedStreamConfig` and `alwaysFetchTimestamps` follows it, and for every
-// deployment that never SET one that deletion has to be free -- same resolved
-// config, same bytes, same digest, so no stream forks and no history is
+// The question ADR-0073 turns on: `alwaysFetchTransactions` and
+// `alwaysFetchTimestamps` are now both DELETED from `ProvidedStreamConfig`, and
+// for every deployment that never SET one that deletion had to be free -- same
+// resolved config, same bytes, same digest, so no stream forks and no history is
 // re-fetched from the node.
 //
 // It is free because of a mechanism, and the mechanism is what is asserted here:

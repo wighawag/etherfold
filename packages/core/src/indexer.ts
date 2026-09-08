@@ -1,5 +1,4 @@
 import {getBlockNumber} from './internal/engine/ethereum.js';
-import {blockFetcherFor, enrichEvents, type BlockTimestampCache} from './internal/engine/enrich.js';
 
 import {EIP1193ProviderWithoutEvents} from 'eip-1193';
 
@@ -301,24 +300,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	protected logEventFetcher!: LogEventFetcher<ABI>;
 
 	protected lastSync: LastSync<ABI> | undefined;
-
-	/**
-	 * Block timestamps already fetched, so the unconfirmed window is not re-fetched
-	 * every round.
-	 *
-	 * Only ever populated on the fallback path, for nodes that do not put
-	 * `blockTimestamp` on the log. Those nodes cost one `eth_getBlockByHash` per
-	 * block, and `getFromBlock` deliberately re-scans back to
-	 * `latestBlock - finality` on every round to catch reorgs, so without a cache
-	 * the same unconfirmed blocks are fetched again on every single round.
-	 *
-	 * **Keyed by block HASH, and that is what makes it safe.** A hash uniquely
-	 * determines a block, so a cached timestamp cannot become wrong: a reorged-out
-	 * block's hash simply never appears again. Keying by NUMBER would be silently
-	 * wrong across exactly the reorgs the re-scan exists to detect, since the same
-	 * height would return the dead branch's timestamp.
-	 */
-	protected blockTimestampCache: BlockTimestampCache = new Map();
 
 	/**
 	 * How far the STORED stream claims to reach, as this session last saw it, or
@@ -1800,34 +1781,15 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// engine would silently drop whatever arrived late.
 		assertAscendingByBlock(eventsFetched as LogEvent<ABI>[], `the node's answer for [${fromBlock}, ${toBlock}]`);
 
-		// ...and for the TIME AXIS, which the node now puts on the log itself
+		// ...and for the TIME AXIS, which the node puts on the log itself
 		// (execution-apis#639). Refused HERE, one round trip in, rather than after the
-		// range has been enriched, folded and stored -- and naming the node, because
-		// every cause of an absent timestamp is node-level (ADR-0073).
+		// range has been folded and stored -- and naming the node, because every cause
+		// of an absent timestamp is node-level (ADR-0073).
 		//
-		// Skipped while `alwaysFetchTimestamps` is set, because then there is nothing
-		// to refuse: the fallback below fetches the block and resolves it. That flag,
-		// and therefore this condition, is deleted by a later task in this spec; the
-		// refusal itself is permanent.
-		if (!this.config.stream.alwaysFetchTimestamps) {
-			assertLogsCarryTimestamps(eventsFetched as LogEvent<ABI>[], `the node's answer for [${fromBlock}, ${toBlock}]`);
-		}
-
-		// the timestamps the logs themselves did not carry. Shared with the split
-		// shape's `LogFetcher`, which is the only other thing allowed to make this
-		// call (ADR-0003): the receiving half makes none at all. `getBlocks` is
-		// passed as a bound method rather than built inside, so a subclass
-		// overriding it still overrides it.
-		await enrichEvents(
-			eventsFetched as LogEvent<ABI>[],
-			{
-				streamConfig: this.config.stream,
-				latestBlock,
-				cache: this.blockTimestampCache,
-				getBlocks: (hashes, uc) => this.getBlocks(hashes, uc),
-			},
-			unlessCancelled,
-		);
+		// UNCONDITIONAL: there is no configuration that turns it off, because there is
+		// no longer a fallback for it to defer to. The engine reads the timestamp off
+		// the log and never fetches one.
+		assertLogsCarryTimestamps(eventsFetched as LogEvent<ABI>[], `the node's answer for [${fromBlock}, ${toBlock}]`);
 
 		// ----------------------------------------------------------------------------------------
 		// PROCESS THE STREAM FOR REORG
@@ -1847,13 +1809,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// ----------------------------------------------------------------------------------------
 
 		return {lastSync: newLastSync, eventStream};
-	}
-
-	protected async getBlocks(
-		blockHashes: string[],
-		unlessCancelled: <T>(p: Promise<T>) => Promise<T>,
-	): Promise<{timestamp: number}[]> {
-		return blockFetcherFor(this.provider, this.config.providerSupportsETHBatch)(blockHashes, unlessCancelled);
 	}
 
 	/** Whether the persisted STATE is still a fold over what this source means. */

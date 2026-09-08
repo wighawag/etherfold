@@ -9,7 +9,6 @@ import {
 	type RetryableError,
 } from './errors.js';
 import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
-import {blockFetcherFor, enrichEvents, type BlockTimestampCache} from './internal/engine/enrich.js';
 import {getBlockNumber, getChainId} from './internal/engine/ethereum.js';
 import {
 	assertLogsCarryTimestamps,
@@ -231,7 +230,6 @@ export class LogFetcher<ABI extends Abi> {
 	readonly streamConfig: UsedStreamConfig;
 
 	private readonly logEventFetcher: LogEventFetcher<ABI>;
-	private readonly blockTimestampCache: BlockTimestampCache = new Map();
 	private readonly retryPolicy: ResolvedRetryPolicy;
 	private readonly suspectResultCount: number;
 	private readonly maxCorrectionsPerCycle: number;
@@ -304,27 +302,13 @@ export class LogFetcher<ABI extends Abi> {
 			// node that produced it (ADR-0073).
 			//
 			// Deliberately OUTSIDE the retrying fetch below: no node grows the field on a
-			// second ask. Skipped while `alwaysFetchTimestamps` is set, because the enrich
-			// call below then resolves it; that flag and this condition go together, in a
-			// later task of this spec.
-			if (!this.streamConfig.alwaysFetchTimestamps) {
-				assertLogsCarryTimestamps(events, `the node's answer for [${fromBlock}, ${toBlock}]`);
-			}
+			// second ask. UNCONDITIONAL, because there is no fallback left to defer to:
+			// this side reads the timestamp off the log and never fetches one.
+			assertLogsCarryTimestamps(events, `the node's answer for [${fromBlock}, ${toBlock}]`);
 
 			// after the fetch and BEFORE the push, because this is the last moment at
 			// which logs from another chain can still be stopped from being indexed
 			await this.assertChain('after');
-
-			await enrichEvents(
-				events,
-				{
-					streamConfig: this.streamConfig,
-					latestBlock,
-					cache: this.blockTimestampCache,
-					getBlocks: blockFetcherFor(this.provider, this.config.providerSupportsETHBatch),
-				},
-				passThrough,
-			);
 
 			const batch: WireBatch<ABI> = {context: this.context, fromBlock, toBlock, latestBlock, logs: events};
 			// the receiver's OWN envelope check, run here first. It costs nothing and it

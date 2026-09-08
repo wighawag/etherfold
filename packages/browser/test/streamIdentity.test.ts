@@ -49,7 +49,8 @@ let counter = 0;
 const freshName = () => `identity-${counter++}-${Math.random().toString(36).slice(2, 8)}`;
 
 const DEFAULT_CONFIG = resolveStreamConfig(undefined);
-const WITH_TIMESTAMPS = resolveStreamConfig({alwaysFetchTimestamps: true});
+/** A config that genuinely MOVED: a second stream, addressed separately. */
+const WITH_OTHER_FINALITY = resolveStreamConfig({finality: 64});
 
 const digestFor = <ABI extends Abi>(source: IndexingSource<ABI>, streamConfig: UsedStreamConfig = DEFAULT_CONFIG) =>
 	streamDigestOf(source, streamConfig);
@@ -162,18 +163,18 @@ describe('what moves the address and what does not', () => {
 
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(100), event(101)], lastSync: cursorAt(100, 101)});
 
-		// `alwaysFetchTimestamps` changes WHAT IS STORED, so keyed on the filter
-		// alone a generation would adopt logs the verdict has declared invalid --
-		// and the only remedy, clearing, destroys what the live generation answers
-		// from
-		keeper.setStreamConfig(WITH_TIMESTAMPS);
+		// the stream CONFIG decides what is STORED as much as the filter does, so
+		// keyed on the filter alone a generation would adopt logs the verdict has
+		// declared invalid -- and the only remedy, clearing, destroys what the live
+		// generation answers from
+		keeper.setStreamConfig(WITH_OTHER_FINALITY);
 		expect(await keeper.fetchFrom(SOURCE, 100)).toEqual({status: 'absent'});
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(200)], lastSync: cursorAt(200, 200)});
 		expect(streamOf(await keeper.fetchFrom(SOURCE, 200)).eventStream.map((e) => e.blockNumber)).toEqual([200]);
 
 		// two subtrees under one name, and the first is untouched
 		const digests = new Set((await keysUnder(tag)).map((key) => key[2]));
-		expect(digests).toEqual(new Set([digestFor(SOURCE), digestFor(SOURCE, WITH_TIMESTAMPS)]));
+		expect(digests).toEqual(new Set([digestFor(SOURCE), digestFor(SOURCE, WITH_OTHER_FINALITY)]));
 		keeper.setStreamConfig(DEFAULT_CONFIG);
 		expect(streamOf(await keeper.fetchFrom(SOURCE, 100)).eventStream.map((e) => e.blockNumber)).toEqual([100, 101]);
 	});
@@ -238,7 +239,7 @@ describe('the identity the keeper addresses by is the INDEXER\u2019s', () => {
 		const tag = freshName();
 		const chain = fakeChain();
 		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
-		const streamConfig = {finality: FINALITY, alwaysFetchTimestamps: true};
+		const streamConfig = {finality: FINALITY};
 		const indexer = createIndexerState<TestABI, EntityStateView>(
 			{
 				createState: () => store,
@@ -283,10 +284,10 @@ describe('the identity the keeper addresses by is the INDEXER\u2019s', () => {
 		const first = resolveStreamConfig({finality: FINALITY});
 		expect(await get(addressFor(tag, SOURCE, first).cursor)).toBeDefined();
 
-		await indexer.updateIndexer({streamConfig: {finality: FINALITY, alwaysFetchTimestamps: true}});
+		await indexer.updateIndexer({streamConfig: {finality: FINALITY + 1}});
 		await indexToTip(indexer);
 
-		const second = resolveStreamConfig({finality: FINALITY, alwaysFetchTimestamps: true});
+		const second = resolveStreamConfig({finality: FINALITY + 1});
 		expect(await get(addressFor(tag, SOURCE, second).cursor)).toBeDefined();
 		// the stream the previous config was fetched under is still on disk, whole:
 		// a reconfigure is not an outage, and this is the half of it the address

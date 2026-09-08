@@ -57,6 +57,12 @@ describe('a stream that reached the fold without passing a fetcher', () => {
 		expect(message).toContain('block 100');
 		expect(message).toContain('0xA');
 		expect(message).toContain('execution-apis#639');
+		// ...and it does NOT send the operator to a flag that no longer exists. It used
+		// to recommend `stream: {alwaysFetchTimestamps: true}` as the escape hatch;
+		// that flag and the fallback under it are DELETED (ADR-0073), so advice to set
+		// it would be advice to set nothing. It still REFUSES rather than guessing.
+		expect(message).not.toContain('alwaysFetchTimestamps');
+		expect(message).toContain('refuses to guess');
 	});
 
 	it('folds the same stream once the capture carries the timestamps a node would have put on it', async () => {

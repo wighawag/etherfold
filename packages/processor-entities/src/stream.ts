@@ -66,10 +66,10 @@ export function blockPointer<ABI extends Abi>(block: BlockOfEvents<ABI>): BlockP
 				`itself. Reaching this means the node did not: it predates the change, or it is a Hardhat version ` +
 				`bundling an older EDR (3.16.0 still ships edr 0.19.0 -- override @nomicfoundation/edr to >=0.20.0 ` +
 				`rather than waiting for the bump), or it is forking a node that predates it, or it is answering ` +
-				`from an EDR RPC cache written before the change. Upgrade the node, or set ` +
-				`\`stream: {alwaysFetchTimestamps: true}\` on the indexer to fall back to fetching the block, or ` +
-				`populate blockTimestamp before feeding. This refuses to guess, because a wrong timestamp breaks ` +
-				`the time axis silently.`,
+				`from an EDR RPC cache written before the change. Upgrade the node, or populate blockTimestamp ` +
+				`before feeding this stream in. There is no fallback to fetch the block with: the engine reads ` +
+				`the timestamp off the log and makes no other data call (ADR-0073). This refuses to guess, ` +
+				`because a wrong timestamp breaks the time axis silently.`,
 		);
 	}
 	return {

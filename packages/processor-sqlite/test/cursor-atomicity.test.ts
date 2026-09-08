@@ -70,7 +70,7 @@ const STREAM = [
 	transfer(102, '0xC', {from: '0xbob', to: '0xcarol', id: 1n}),
 ];
 
-const STREAM_CONFIG = {finality, alwaysFetchTimestamps: true};
+const STREAM_CONFIG = {finality};
 const WHOLE_STREAM = lastSync({latestBlock: 102, lastToBlock: 102, lastFromBlock: 90});
 
 /** What the store says it holds, and what the cursor claims, as two numbers. */
