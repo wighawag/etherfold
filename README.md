@@ -35,6 +35,11 @@ Every folding shape counts the reorgs it concluded, and all three write the same
 - written in typescript, run both in a browser context and node
 - modular : you can use the part you want
 - designed to run in-browser and relies only on [EIP-1193](https://eips.ethereum.org/EIPS/eip-1193)
+
+<!-- provider-surface: the paragraph below is CHECKED against `ENGINE_PROVIDER_METHODS` by `packages/core/test/theEngineDeclaresItsMethodSet.test.ts`. Every `eth_*` method it names must be declared and every declared method must be named, so keep method names out of the prose here unless they are part of the claim (an ADR is where the history of a deleted call belongs). -->
+
+  The engine's whole chain-facing surface is four of that interface's methods: `eth_getLogs` for the logs, `eth_blockNumber` for the tip, `eth_chainId` for the identity guard, and `eth_getBlockByNumber` at `earliest` once per load when a source declares a `genesisHash`. One data call, the rest identity and tip, and no configuration adds a fifth: the engine holds its provider behind the declared set and refuses anything else, so a per-block or per-transaction request cannot come back unnoticed ([ADR-0073](docs/adr/0073-the-engine-makes-one-data-call-and-eth-getlogs-is-it.md)).
+
 - one processor, several storage backends behind one seam: SQLite on a server, versioned rows in IndexedDB in a tab, or a light patch store
 - as-of reads and an explicit retention window, so a historical question gets an answer or a refusal and never a tip read
 - Supports Reorg

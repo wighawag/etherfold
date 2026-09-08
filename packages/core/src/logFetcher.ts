@@ -18,6 +18,7 @@ import {
 	type ReorgDetection,
 } from './internal/engine/utils.js';
 import {resolveRetryPolicy, withRetries, type ResolvedRetryPolicy, type RetryPolicy} from './internal/utils/retry.js';
+import {declaredMethodsOnly, type MethodDeclaringProvider} from './providerSurface.js';
 import {assertWellFormed} from './streamBuilder.js';
 import type {
 	FetchConfig,
@@ -218,10 +219,13 @@ const passThrough = <T>(promise: Promise<T>) => promise;
  *
  * ## Chain-bound, deliberately
  *
- * Every chain call in the deployment is here (`eth_chainId`, `eth_blockNumber`,
- * `eth_getLogs`, and the block/transaction reads a stream config asks for). The
- * receiver makes none, so the chain identity check is one only this side can
- * perform, and it is made both before fetching and before pushing.
+ * Every chain call in the deployment is here, and there are three of them:
+ * `eth_chainId` for identity, `eth_blockNumber` for the tip and `eth_getLogs`
+ * for the logs. No configuration adds a fourth -- the provider is held behind
+ * the engine's declared surface (`declaredMethodsOnly`, ADR-0073), so a
+ * reintroduced per-block read is refused here rather than paid for. The
+ * receiver makes NO chain call at all, so the chain identity check is one only
+ * this side can perform, and it is made both before fetching and before pushing.
  */
 export class LogFetcher<ABI extends Abi> {
 	/** The `{source, config}` every batch asserts. Computed exactly as the receiver computes it. */
@@ -240,16 +244,25 @@ export class LogFetcher<ABI extends Abi> {
 	 */
 	private expectedFromBlockHint: number | undefined;
 
+	/**
+	 * The node, behind the engine's declared surface (ADR-0073). The chain-facing
+	 * half of a split deployment is where every call is, so it is where the guard
+	 * belongs; the log fetcher below is built from this field so that ONE wrapper
+	 * sees the tip read, the identity read and every range.
+	 */
+	private readonly provider: MethodDeclaringProvider;
+
 	constructor(
-		private readonly provider: EIP1193ProviderWithoutEvents,
+		provider: EIP1193ProviderWithoutEvents,
 		private readonly source: IndexingSource<ABI>,
 		private readonly target: IngestionTarget,
 		private readonly config: ProvidedLogFetcherConfig = {},
 	) {
+		this.provider = declaredMethodsOnly(provider);
 		this.streamConfig = resolveStreamConfig(config.stream);
 		this.context = wireContextOf(source, this.streamConfig);
 		this.logEventFetcher = new LogEventFetcher<ABI>(
-			provider,
+			this.provider,
 			source.contracts as never,
 			config.fetch ?? {},
 			config.stream?.parse,
