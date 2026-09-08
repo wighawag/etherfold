@@ -543,7 +543,6 @@ export type FetchConfig = Omit<LogFetcherConfig, 'filters'>;
 export type ProvidedIndexerConfig<ABI extends Abi> = {
 	fetch?: FetchConfig;
 	stream?: ProvidedStreamConfig;
-	providerSupportsETHBatch?: boolean;
 	feedBatchSize?: number;
 	keepStream?: ExistingStream<ABI>;
 	/**

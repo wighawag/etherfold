@@ -95,7 +95,6 @@ export type ProvidedLogFetcherConfig = {
 	 */
 	stream?: ProvidedStreamConfig;
 	fetch?: FetchConfig;
-	providerSupportsETHBatch?: boolean;
 	/**
 	 * The result count at which a fetch is treated as SUSPECT rather than complete.
 	 *

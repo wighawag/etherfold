@@ -74,7 +74,6 @@ Every variable below is read from the environment. Anything can also be passed t
 | `MAX_EVENTS_PER_FETCH` | no | How many events one fetch aims for. Default `10000`. |
 | `MAX_BLOCKS_PER_FETCH` | no | The widest block range one fetch may cover. |
 | `STREAM_FINALITY` | no | Must match the server's, since `{source, config}` is the wire identity. |
-| `PROVIDER_SUPPORTS_ETH_BATCH` | no | Whether the node answers `eth_batch`. |
 | `REQUESTS_PER_SECOND` | no | Rate limit for the JSON-RPC provider. |
 | `POLL_INTERVAL_MS` | no | Wait after a cycle that reached the tip, or found nothing. Default `4000`. |
 | `CATCH_UP_DELAY_MS` | no | Wait after a cycle that pushed and is still behind. Default `0`. |
