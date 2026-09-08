@@ -18,6 +18,65 @@ type InternalLogFetcherConfig = {
 
 export type LogsResult = {logs: IncludedEIP1193Log[]; toBlockUsed: number};
 
+/**
+ * What a range fetcher has LEARNED about how wide a range one provider will
+ * answer: the WHOLE of its adaptive state, as a value a human can read.
+ *
+ * Three numbers, and they are three different claims. The `ceiling` is a width
+ * this provider has REFUSED (or written out in a refusal), so it is the one
+ * backed by evidence and the one that only ever lowers. The `safeSpan` is the
+ * widest span that has actually been ANSWERED. `nextSize` is what the next
+ * request will ask for, which is the bisection between the other two and is the
+ * only one always present -- a fetcher that has learned nothing yet still knows
+ * what it is about to ask for.
+ *
+ * A field is ABSENT rather than zero where nothing has been learned, because a
+ * ceiling of `0` reads as "this provider serves nothing" and that is not what
+ * "nothing learned yet" means.
+ *
+ * It is REPORTED (`LogFetcher.limits`, and the `fetcher` field of the server's
+ * `/status`) and it can be handed back as {@link LogFetcherConfig.learnedRange}
+ * on a later run. Nothing PERSISTS it: the fetching half of ADR-0003 holds no
+ * state worth losing, and losing this costs performance and nothing else, so the
+ * memory belongs to whoever is already durable rather than to a store invented
+ * inside a stateless component (ADR-0074).
+ */
+export type LearnedRange = {
+	/** Blocks. The narrowest width this provider has refused, or stated as its cap. Only ever lowers. */
+	ceiling?: number;
+	/** Blocks. The widest span this provider has actually answered. */
+	safeSpan?: number;
+	/** Blocks. What the next `eth_getLogs` will ask for. */
+	nextSize: number;
+};
+
+/**
+ * A {@link LearnedRange} as CONFIGURATION: what a previous run reported, handed
+ * back to the next one.
+ *
+ * Every field is optional, so a reported range is assignable here unchanged
+ * (that symmetry is the whole feature) and a deployment that only knows its
+ * provider's cap can say just that. Each is honoured as a STARTING POINT and
+ * never as a promise: adaptation runs on top of it exactly as it does over a
+ * discovered one, so a value that has gone stale costs a retry.
+ */
+export type ProvidedLearnedRange = Partial<LearnedRange>;
+
+/**
+ * One CONFIGURED span as a count of blocks, or `undefined` for anything that
+ * could not be one.
+ *
+ * Zero and negatives bound the fetcher to nothing that can be asked for and a
+ * fraction is not a count, so neither is believed. Ignoring rather than refusing
+ * is the whole posture of {@link LogFetcherConfig.learnedRange}: it is a hint
+ * that travelled through a human or a supervisor, and a process that would not
+ * start because a six-month-old dashboard value is malformed is worse than one
+ * that rediscovers.
+ */
+function configuredSpan(value: number | undefined): number | undefined {
+	return value === undefined || !Number.isInteger(value) || value < 1 ? undefined : value;
+}
+
 export type LogFetcherConfig = {
 	numBlocksToFetchAtStart?: number;
 	maxBlocksPerFetch?: number;
@@ -25,6 +84,18 @@ export type LogFetcherConfig = {
 	maxEventsPerFetch?: number;
 	numRetry?: number;
 	filters?: ExtraFilters;
+	/**
+	 * What a PREVIOUS run learned about this provider, so this one starts there
+	 * instead of re-paying the discovery from `numBlocksToFetchAtStart` upwards.
+	 *
+	 * Read it off a run's report ({@link LearnedRange}) and hand it back. It is a
+	 * PERFORMANCE hint and nothing else: every number in it is bounded by this
+	 * deployment's own `maxBlocksPerFetch`, anything that could not be a count of
+	 * blocks is ignored rather than refused, and a provider that refuses what it
+	 * suggests lowers it on the first round trip. A run that configures none behaves
+	 * exactly as it always did.
+	 */
+	learnedRange?: ProvidedLearnedRange;
 };
 
 /**
@@ -606,6 +677,74 @@ export class RangeLogFetcher {
 			conf,
 		);
 		this.numBlocksToFetch = Math.min(this.config.numBlocksToFetchAtStart, this.config.maxBlocksPerFetch);
+		this.seedLearnedRange(conf.learnedRange);
+	}
+
+	/**
+	 * Start from what a previous run REPORTED, rather than rediscovering it.
+	 *
+	 * The whole of "configured back in", and it is deliberately the only way this
+	 * state ever arrives from outside: nothing reads a store, and a fetcher told
+	 * nothing is byte-for-byte the fetcher it was before this existed.
+	 *
+	 * Three rules, and each is about a report being WRONG rather than about it being
+	 * absent, because a hint travelling through an operator, a supervisor or a
+	 * six-month-old dashboard has every opportunity to go stale:
+	 *
+	 * - a number that could not be a count of blocks is IGNORED, not refused. This
+	 *   is a performance hint, and failing a process start over one would make a
+	 *   deployment worse than the one that configured nothing;
+	 * - the ceiling goes in through {@link RangeLogFetcher.lowerBlockCeilingTo}, the
+	 *   ONE writer, so a configured ceiling is bounded by `maxBlocksPerFetch` for
+	 *   free and can never be raised later by anything;
+	 * - a `safeSpan` that is not BELOW the ceiling is dropped. A span cannot be both
+	 *   known-safe and at-or-above a width that was refused, and the ceiling is the
+	 *   half a refusal backs. (A report can genuinely carry that pair: a provider
+	 *   that tightens its cap mid-run lowers the ceiling under a span that had
+	 *   already succeeded.)
+	 *
+	 * What it does NOT do is validate the range against itself any further, or
+	 * refuse a `nextSize` above the ceiling. Adaptation is what answers a stale
+	 * value: the provider refuses, the ceiling lowers, and the next request is
+	 * smaller -- one retry, and never a wedge.
+	 */
+	private seedLearnedRange(seed: ProvidedLearnedRange | undefined): void {
+		if (!seed) {
+			return;
+		}
+		this.lowerBlockCeilingTo(configuredSpan(seed.ceiling));
+		const safeSpan = configuredSpan(seed.safeSpan);
+		if (safeSpan !== undefined && safeSpan < (this.foundNumBlockToHigh ?? Number.POSITIVE_INFINITY)) {
+			this.safeNumBlock = Math.min(safeSpan, this.config.maxBlocksPerFetch);
+		}
+		const nextSize = configuredSpan(seed.nextSize);
+		if (nextSize !== undefined) {
+			this.numBlocksToFetch = Math.min(nextSize, this.config.maxBlocksPerFetch);
+		}
+	}
+
+	/**
+	 * What this fetcher has learned about how wide a range THIS provider will
+	 * answer, as an operator reads it off the status surface.
+	 *
+	 * A snapshot of the adaptive state and not a promise about the next request:
+	 * it moves on every refusal and on every answer. What it is FOR is being handed
+	 * back to a later run as {@link LogFetcherConfig.learnedRange}, which is how the
+	 * memory survives a restart without this component holding anything durable
+	 * (ADR-0074).
+	 *
+	 * The `safeSpan` it reports may sit at or above the `ceiling`, and that is
+	 * honest rather than a bug: a provider that tightens its cap after a wide span
+	 * has already succeeded produces exactly that pair, and laundering it here would
+	 * report a number this fetcher does not hold. The configuration side drops the
+	 * span in that case; see {@link RangeLogFetcher.seedLearnedRange}.
+	 */
+	get learnedRange(): LearnedRange {
+		return {
+			...(this.foundNumBlockToHigh === undefined ? {} : {ceiling: this.foundNumBlockToHigh}),
+			...(this.safeNumBlock === undefined ? {} : {safeSpan: this.safeNumBlock}),
+			nextSize: this.numBlocksToFetch,
+		};
 	}
 
 	/**

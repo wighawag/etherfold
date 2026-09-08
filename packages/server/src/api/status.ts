@@ -6,6 +6,7 @@ import {setup} from '../setup.js';
 import {applySchema, readSchemaState, SCHEMA_VERSION} from '../schema.js';
 import {readReorgCounters, type ReorgCounters} from '../reorgs.js';
 import {reportCursor, type StatusCursor} from '../cursor.js';
+import {reportFetcherLimits, type StatusFetcher} from '../fetcherLimits.js';
 
 const logger = logs('@etherfold/server');
 
@@ -88,12 +89,26 @@ export function getStatusAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 			const reporter = options.getCursorReport;
 			const cursor: StatusCursor | undefined = reporter ? await reportCursor(() => reporter(c as never)) : undefined;
 
+			// What the CHAIN-FACING half believes about the node it reads: how wide a range
+			// it has learned this provider will answer, and which suspect result count is in
+			// force (ADR-0074). Injected for the same reason the cursor is -- only the process
+			// that HOLDS a fetcher can say -- and absent on the hosts that hold none, which is
+			// most of them: a receiver makes no chain call at all.
+			//
+			// Reported so it can be handed BACK as configuration on a later run, which is how
+			// a restart resumes where discovery left off while the fetcher stays stateless.
+			const limits = options.getFetcherLimits;
+			const fetcher: StatusFetcher | undefined = limits
+				? await reportFetcherLimits(() => limits(c as never))
+				: undefined;
+
 			return c.json(
 				{
 					healthy,
 					database: {reachable, error: reachabilityError},
 					reorgs,
 					cursor,
+					fetcher,
 					schema: schema.applied
 						? {applied: true, version: schema.version, expected: schema.expected, matches: schema.matches}
 						: {applied: false, expected: SCHEMA_VERSION, reason: schema.reason},

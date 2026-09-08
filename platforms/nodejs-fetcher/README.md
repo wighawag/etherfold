@@ -73,6 +73,7 @@ Every variable below is read from the environment. Anything can also be passed t
 | `SUSPECT_RESULT_COUNT` | **read this** | Your node's real `eth_getLogs` result cap. Discovered from the provider where it reports one, otherwise `10000`. See below. |
 | `MAX_EVENTS_PER_FETCH` | no | How many events one fetch aims for. Default `10000`. |
 | `MAX_BLOCKS_PER_FETCH` | no | The widest block range one fetch may cover. |
+| `LEARNED_RANGE` | no | What a PREVIOUS run reported it had learned about this provider, as JSON: `{"ceiling":2000,"safeSpan":1999,"nextSize":1999}`. Skips re-paying the discovery. See below. |
 | `STREAM_FINALITY` | no | Must match the server's, since `{source, config}` is the wire identity. |
 | `REQUESTS_PER_SECOND` | no | Rate limit for the JSON-RPC provider. |
 | `POLL_INTERVAL_MS` | no | Wait after a cycle that reached the tip, or found nothing. Default `4000`. |
@@ -99,6 +100,22 @@ If your node caps at 5000 and this says 10000, the guard never fires: a short ra
 Which of the three is in force is not left to be inferred: the startup line says whether the count is CONFIGURED or the DEFAULT, a discovered cap taking effect is logged (as is a configured one overriding a report), and a truncation that cannot be halved away names the source in its error. Leaving the variable unset asserts that your node caps at exactly 10000, does not cap silently at all, or reports its cap when it refuses.
 
 Do **not** try to reach the same effect by raising `MAX_EVENTS_PER_FETCH`. That widens the span each fetch asks for, which makes truncation more likely rather than less. The two knobs mean different things: one is what this fetcher asks for, the other is what the node will silently refuse to exceed.
+
+### `LEARNED_RANGE`: hand back what the last run learned
+
+There is no portable page size for `eth_getLogs`: providers cap it by block SPAN or by RESULT COUNT, and the numbers differ by more than an order of magnitude. So this fetcher DISCOVERS the limit at runtime, by asking, being refused, and adapting. It tracks three numbers, all in blocks:
+
+- `ceiling` -- the width it has been refused at, or that the provider wrote out in its refusal. It only ever lowers;
+- `safeSpan` -- the widest span this provider has actually answered;
+- `nextSize` -- what the next request will ask for, which is the bisection between the two.
+
+Those three are **held in memory and nowhere else**, and that is a design decision rather than an oversight (ADR-0074): the chain-facing half holds no cursor, no database and nothing worth losing, which is what lets you kill it at any moment and run two of them. Writing a performance hint down here would trade that property away.
+
+So the memory lives with whoever is already durable -- you, your deployment config, or a supervisor. A running process REPORTS what it has learned (`/status`, as `fetcher.learnedRange`, on a process that also serves; `etherfold run` is that shape), and you hand the same object back through `LEARNED_RANGE` on the next start. Then the first request asks for what the last run found to work, instead of walking up from the 50-block starting range again.
+
+It is a **starting point and never a promise**. A provider that has tightened its cap since refuses the configured size, the ceiling comes down on that first round trip, and the fetch lands: a stale value costs a retry and can never wedge. Every number in it is still bounded by `MAX_BLOCKS_PER_FETCH`, a partial object is fine (`{"ceiling":2000}` alone is a legitimate thing to know), and a key this build does not recognise is ignored, so a newer report pasted into an older binary starts rather than refusing. What IS refused, at startup and naming the field, is a value that cannot be read at all: not JSON, not an object, or a member that is not a positive whole number of blocks.
+
+Setting none leaves this deployment behaving exactly as it did before the variable existed.
 
 ## What it logs, and what it never logs
 

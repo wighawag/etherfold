@@ -37,6 +37,7 @@ export {
 	describeFetcherHostConfig,
 	FetcherConfigError,
 	parseIndexingSource,
+	parseLearnedRange,
 	redactUrl,
 	resolveFetcherHostConfig,
 	streamConfigFromEnv,

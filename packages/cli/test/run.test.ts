@@ -106,6 +106,13 @@ async function statusCursor(url: string): Promise<StoreCursorReport | undefined>
 	return body.cursor?.reported ? body.cursor.value : undefined;
 }
 
+/** What `/status` says the FETCHER believes about the node, as an operator reads it. */
+async function statusFetcher(url: string): Promise<Record<string, any> | undefined> {
+	const res = await fetch(`${url}/status`);
+	const body = (await res.json()) as {fetcher?: Record<string, any>};
+	return body.fetcher;
+}
+
 /** Poll something the running process publishes until it says what we are waiting for. */
 async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, what: string): Promise<T> {
 	const deadline = Date.now() + 10_000;
@@ -227,6 +234,52 @@ describe('the store and the server share ONE database handle', () => {
 			() => statusCursor(running!.url),
 			(cursor) => (cursor?.lastToBlock ?? 0) > START_BLOCK,
 			'a cursor read back through the shared handle',
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// WHAT THE FETCHING HALF LEARNED IS ON THE SAME PAGE AS THE FOLD'S PROGRESS
+// ---------------------------------------------------------------------------------------------------
+// `run` is the shape that holds BOTH halves, so it is the one that can report
+// what the chain-facing half believes about the node (ADR-0074). It is reported
+// so it can be handed BACK on the next start -- the fetcher persists nothing,
+// and this is what stops every restart re-paying the discovery from the small
+// starting range upwards.
+// ---------------------------------------------------------------------------------------------------
+describe('the range the fetcher learned is readable, and configurable back in', () => {
+	it('reports what it believes about the provider beside the cursor it already reports', async () => {
+		running = await run(RUN, depsFor(fakeChain().serve(SPREAD, TIP), oneDatabase()));
+
+		const fetcher = await until(
+			() => statusFetcher(running!.url),
+			(reported) => reported?.reported === true,
+			'the fetcher limits on /status',
+		);
+
+		// the deployment's own bound on what it asks for (`MAX_BLOCKS_PER_FETCH: 20`),
+		// which is where a fetcher that has been refused nothing sits
+		expect(fetcher!.learnedRange).toEqual({safeSpan: expect.any(Number), nextSize: 20});
+		expect(fetcher!.suspectResultCount).toEqual({count: 10000, source: 'default'});
+	});
+
+	it('starts from a range the environment remembers, rather than from the starting range', async () => {
+		// exactly what the previous test read off `/status`, handed back the way an
+		// operator or a supervisor hands it back
+		running = await run(
+			RUN,
+			depsFor(fakeChain().serve(SPREAD, TIP), oneDatabase(), {
+				env: {...SMALL_RANGES, LEARNED_RANGE: '{"ceiling":20,"safeSpan":15,"nextSize":19}'},
+			}),
+		);
+
+		expect(running.host.fetcher.limits.learnedRange).toEqual({ceiling: 20, safeSpan: 15, nextSize: 19});
+
+		// and it is a starting point, not a cage: the fold still reaches the tip
+		await until(
+			() => statusCursor(running!.url),
+			(cursor) => cursor?.lastToBlock === TIP,
+			'the cursor to reach the tip from a remembered range',
 		);
 	});
 });

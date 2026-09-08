@@ -1,3 +1,4 @@
+import type {FetcherLimits} from '@etherfold/core';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
@@ -14,6 +15,17 @@ import type {IndexerResolver} from './registry.js';
 export type CursorReporter<Env extends Bindings = Bindings> = (
 	c: Context<{Bindings: Env}>,
 ) => StatusReport | undefined | Promise<StatusReport | undefined>;
+
+/**
+ * How a host tells `/status` what its FETCHER believes about the node it reads.
+ *
+ * Allowed to be async purely so a host is not forced to be synchronous; the
+ * values themselves are read out of memory, since a log-fetcher persists nothing
+ * (ADR-0003, ADR-0074).
+ */
+export type FetcherLimitsReporter<Env extends Bindings = Bindings> = (
+	c: Context<{Bindings: Env}>,
+) => FetcherLimits | undefined | Promise<FetcherLimits | undefined>;
 
 export type ServerOptions<Env extends Bindings = Bindings> = {
 	/**
@@ -90,4 +102,23 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 * changes `healthy`.
 	 */
 	getCursorReport?: CursorReporter<Env>;
+	/**
+	 * What this deployment's log-fetcher has learned about the node it reads, if
+	 * this deployment HAS one.
+	 *
+	 * Injected like every other capability this package does not construct, and
+	 * absent on most hosts by design: the RECEIVING half of ADR-0003 makes no chain
+	 * call at all, so `index`, `serve` and the Workers host have no provider to have
+	 * learned anything about and their `/status` carries no `fetcher` field. The
+	 * shape that injects one is the COMBINED process (`run`), which holds both halves.
+	 *
+	 * What it reports is a PERFORMANCE hint an operator may hand back to a later run
+	 * as `fetch.learnedRange` (ADR-0074), plus which suspect result count is in force
+	 * and where it came from. Nothing persists it; that is the point of reporting it.
+	 *
+	 * Failing is safe, exactly as it is for the cursor reporter: throwing, rejecting
+	 * or having nothing to report yields an absent-with-a-reason field, never a failed
+	 * request and never an unhealthy server.
+	 */
+	getFetcherLimits?: FetcherLimitsReporter<Env>;
 };

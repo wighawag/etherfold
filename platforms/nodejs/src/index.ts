@@ -77,6 +77,16 @@ export type StartOptions = {
 	 * an invented one.
 	 */
 	getCursorReport?: ServerOptions<NodeEnv>['getCursorReport'];
+	/**
+	 * What this process's log-fetcher has learned about the node it reads, if this
+	 * process HOLDS one, handed to the app unchanged.
+	 *
+	 * Passthrough for the third time, and absent on almost every host: only the
+	 * COMBINED shape (`etherfold run`) holds both halves of ADR-0003 in one process,
+	 * so a receiving or read-only server injects none and `/status` carries no
+	 * `fetcher` field rather than an invented one (ADR-0074).
+	 */
+	getFetcherLimits?: ServerOptions<NodeEnv>['getFetcherLimits'];
 };
 
 export type RunningServer = {
@@ -121,11 +131,11 @@ export async function ensureFixedSchema(db: RemoteSQL, describedAs?: string): Pr
 /**
  * Start the indexer-server on Node.
  *
- * This is the whole adapter: it decides what `getDB`, `getEnv`, `getIndexer`
- * and `getCursorReport` return and hands them to the platform-agnostic app. No
- * route, no chain logic and no storage decision lives here, and the two
- * capabilities are carried through untouched because only a HOST can build them
- * and only this file can reach the app on Node.
+ * This is the whole adapter: it decides what `getDB`, `getEnv`, `getIndexer`,
+ * `getCursorReport` and `getFetcherLimits` return and hands them to the
+ * platform-agnostic app. No route, no chain logic and no storage decision lives
+ * here, and the capabilities are carried through untouched because only a HOST
+ * can build them and only this file can reach the app on Node.
  */
 export async function startServer(options: StartOptions = {}): Promise<RunningServer> {
 	const processEnv = process.env as Partial<NodeEnv>;
@@ -154,6 +164,7 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		getEnv: () => env,
 		getIndexer: options.getIndexer,
 		getCursorReport: options.getCursorReport,
+		getFetcherLimits: options.getFetcherLimits,
 	});
 
 	const server = serve({fetch: app.fetch, port, hostname});

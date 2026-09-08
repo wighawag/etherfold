@@ -175,6 +175,15 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// successor and two while it catches up: the shape of `/status` does not
 			// depend on how many a deployment happens to hold.
 			getCursorReport: () => foldingStatusReport(prepared.container),
+			// The other half of the pipeline, on the same page: what the CHAIN-FACING half
+			// has learned about the node it reads (ADR-0074). `run` is the shape that can
+			// report it at all, because it is the one that holds both halves -- `index` and
+			// `serve` inject none and their `/status` carries no `fetcher` field.
+			//
+			// Reported so an operator can hand it BACK through `LEARNED_RANGE` on the next
+			// start. Nothing here persists it: the fetcher holds no state worth losing, and
+			// this is what moves the memory to whoever is already durable.
+			getFetcherLimits: () => prepared.host.fetcher.limits,
 		});
 
 		const close = async () => {
