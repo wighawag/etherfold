@@ -55,6 +55,9 @@ function makeProvider() {
 						{
 							blockNumber: '0x5',
 							blockHash: '0xb05',
+							// as every supported node serves it (`execution-apis#639`): a range
+							// holding a log without one is refused at the fetch boundary (ADR-0073)
+							blockTimestamp: '0x6553f100',
 							transactionIndex: '0x0',
 							removed: false,
 							address: ADDRESS,

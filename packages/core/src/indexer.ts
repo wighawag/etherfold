@@ -29,6 +29,7 @@ import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
 import type {Abi} from 'abitype';
 import {
 	assertAscendingByBlock,
+	assertLogsCarryTimestamps,
 	batchStreamForDelivery,
 	defaultFromBlockOf,
 	generateStreamFromReplay,
@@ -1803,6 +1804,19 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// answer means something between here and the chain reordered them, and the
 		// engine would silently drop whatever arrived late.
 		assertAscendingByBlock(eventsFetched as LogEvent<ABI>[], `the node's answer for [${fromBlock}, ${toBlock}]`);
+
+		// ...and for the TIME AXIS, which the node now puts on the log itself
+		// (execution-apis#639). Refused HERE, one round trip in, rather than after the
+		// range has been enriched, folded and stored -- and naming the node, because
+		// every cause of an absent timestamp is node-level (ADR-0073).
+		//
+		// Skipped while `alwaysFetchTimestamps` is set, because then there is nothing
+		// to refuse: the fallback below fetches the block and resolves it. That flag,
+		// and therefore this condition, is deleted by a later task in this spec; the
+		// refusal itself is permanent.
+		if (!this.config.stream.alwaysFetchTimestamps) {
+			assertLogsCarryTimestamps(eventsFetched as LogEvent<ABI>[], `the node's answer for [${fromBlock}, ${toBlock}]`);
+		}
 
 		// the timestamps and transactions the logs themselves did not carry. Shared
 		// with the split shape's `LogFetcher`, which is the only other thing allowed

@@ -16,7 +16,13 @@ import {
 	type BlockTimestampCache,
 } from './internal/engine/enrich.js';
 import {getBlockNumber, getChainId} from './internal/engine/ethereum.js';
-import {resolveStreamConfig, sameWireContext, wireContextOf, type ReorgDetection} from './internal/engine/utils.js';
+import {
+	assertLogsCarryTimestamps,
+	resolveStreamConfig,
+	sameWireContext,
+	wireContextOf,
+	type ReorgDetection,
+} from './internal/engine/utils.js';
 import {resolveRetryPolicy, withRetries, type ResolvedRetryPolicy, type RetryPolicy} from './internal/utils/retry.js';
 import {assertWellFormed} from './streamBuilder.js';
 import type {
@@ -295,6 +301,20 @@ export class LogFetcher<ABI extends Abi> {
 			}
 
 			const {events, toBlock} = await this.fetchCompleteRange(fromBlock, latestBlock);
+
+			// The TIME AXIS, checked on the node's own answer before anything is pushed:
+			// a receiver makes no chain calls (ADR-0003), so a timestampless range crossing
+			// the wire is one only this side could have caught, and it would be refused at
+			// the fold instead, a whole range later and naming the block rather than the
+			// node that produced it (ADR-0073).
+			//
+			// Deliberately OUTSIDE the retrying fetch below: no node grows the field on a
+			// second ask. Skipped while `alwaysFetchTimestamps` is set, because the enrich
+			// call below then resolves it; that flag and this condition go together, in a
+			// later task of this spec.
+			if (!this.streamConfig.alwaysFetchTimestamps) {
+				assertLogsCarryTimestamps(events, `the node's answer for [${fromBlock}, ${toBlock}]`);
+			}
 
 			// after the fetch and BEFORE the push, because this is the last moment at
 			// which logs from another chain can still be stopped from being indexed

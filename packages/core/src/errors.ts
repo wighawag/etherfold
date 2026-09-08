@@ -206,6 +206,64 @@ export class SuspectedTruncationError extends Error {
 }
 
 /**
+ * A NODE that answered a fetch with a log carrying no readable `blockTimestamp`.
+ *
+ * `blockTimestamp` on the log is `ethereum/execution-apis#639`, and the engine
+ * reads it off the log rather than paying a request per event-bearing block for
+ * it (ADR-0073). A node that does not serve it is REFUSED here rather than
+ * silently compensated for, and the refusal names the NODE because every cause
+ * is node-level and each one has a DIFFERENT fix -- which is why the message is
+ * this long. "missing blockTimestamp" alone sends an operator to the wrong one.
+ *
+ * ## Why this is permanent machinery and not a transitional guard
+ *
+ * Two causes survive any version bump and neither improves with time: a node
+ * being FORKED may predate the spec change (EDR types the field `Option<u64>`
+ * precisely so an absent timestamp stays distinguishable from a real one, and
+ * passes it through rather than defaulting it), and EDR's on-disk RPC response
+ * cache is version-segmented, so entries written before the change keep
+ * answering without the field until `rpc_cache` is dropped.
+ *
+ * ## Why it does not replace the fold-time refusal
+ *
+ * `blockPointer` (`@etherfold/processor-entities`) refuses the same absence at
+ * the FOLD, naming the BLOCK, and that one cannot be dropped in favour of this:
+ * a stream can reach a fold without passing a fetcher at all -- a seed install
+ * writes through the keeper seam (ADR-0063), a fixture reader replays a captured
+ * stream (ADR-0059) -- and this check would never see either. Two entry points,
+ * two guards, deliberately.
+ *
+ * Neither of them guesses. A zero or interpolated timestamp does not fail, it
+ * answers confidently about the wrong block for as long as the store lives, and
+ * an as-of read has no way to tell a caller it was lied to.
+ */
+export class TimestamplessLogError extends Error {
+	readonly name = 'TimestamplessLogError';
+	/** A node does not grow a field while a scheduler waits. The fix is an operator's. */
+	readonly retryable = false;
+
+	constructor(
+		/** The block the timestampless log sat in. */
+		readonly blockNumber: number,
+		/** Its block hash, so the claim is checkable against the node. */
+		readonly blockHash: string,
+		/** What was fetched, e.g. `the node's answer for [100, 200]`. */
+		source: string,
+	) {
+		super(
+			`${source} carries a log at block ${blockNumber} (${blockHash}) with no readable blockTimestamp. Nodes ` +
+				`implementing execution-apis#639 (geth >= 1.16.0, reth, besu, erigon, anvil, and ` +
+				`@nomicfoundation/edr >= 0.20.0) put it on the log itself, so this is a fact about the NODE: it ` +
+				`predates the change, or it is a Hardhat version bundling an older EDR (3.16.0 still ships edr 0.19.0 ` +
+				`-- override @nomicfoundation/edr to >=0.20.0 rather than waiting for the bump), or it is forking a ` +
+				`node that predates it, or it is answering from an EDR RPC response cache written before the change ` +
+				`(drop its rpc_cache). Nothing is folded, stored or pushed: the engine refuses here rather than ` +
+				`guessing a timestamp, because a wrong one breaks the time axis silently.`,
+		);
+	}
+}
+
+/**
  * A range fetch that reported covering less than the block it started at.
  *
  * Should be unreachable: `RangeLogFetcher` either answers for `[fromBlock, N]`
