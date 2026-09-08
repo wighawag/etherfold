@@ -169,7 +169,7 @@ describe('the fingerprint survives the cursor codec', () => {
 		await p.process([transfer(100, '0xAAA', {from: '0x0', to: '0xalice', id: 1n})], cursor);
 
 		const restarted = new VersionedStateEventProcessor(db, processor);
-		const loaded = await restarted.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		const loaded = await restarted.load(SOURCE, {finality});
 		expect(loaded!.lastSync.context.processorFingerprint).toBe(p.getCodeFingerprint());
 		// and it really is in the row, not only in some in-memory copy. The cursor is
 		// the store's `_cursor` table now (an opaque string under a key), not this
@@ -185,7 +185,7 @@ describe('the fingerprint survives the cursor codec', () => {
 		await p.process([transfer(100, '0xAAA', {from: '0x0', to: '0xalice', id: 1n})], lastSync({lastToBlock: 100}));
 
 		const restarted = new VersionedStateEventProcessor(db, processor);
-		const loaded = await restarted.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		const loaded = await restarted.load(SOURCE, {finality});
 		expect(loaded!.lastSync.context.processorFingerprint).toBeUndefined();
 	});
 });

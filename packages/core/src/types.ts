@@ -535,7 +535,6 @@ export type UsedStreamConfig = ProvidedStreamConfig & {
 
 export type ProvidedStreamConfig = {
 	finality?: number;
-	alwaysFetchTimestamps?: boolean;
 	parse?: LogParseConfig;
 };
 

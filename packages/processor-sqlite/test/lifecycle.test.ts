@@ -21,7 +21,7 @@ import {
 describe('the sync cursor', () => {
 	it('is absent before the first sync, so the core starts fresh', async () => {
 		const p = new VersionedStateEventProcessor(createTestDB(), processor);
-		expect(await p.load(SOURCE, {finality, alwaysFetchTimestamps: true})).toBeUndefined();
+		expect(await p.load(SOURCE, {finality})).toBeUndefined();
 	});
 
 	it('survives a restart against the same database, with the state it points at', async () => {
@@ -33,7 +33,7 @@ describe('the sync cursor', () => {
 		);
 
 		const restarted = new VersionedStateEventProcessor(db, processor);
-		const loaded = await restarted.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		const loaded = await restarted.load(SOURCE, {finality});
 		expect(loaded?.lastSync.lastToBlock).toBe(100);
 		expect(loaded?.lastSync.lastFromBlock).toBe(88);
 		expect(loaded?.lastSync.context).toEqual(lastSync().context);
@@ -55,14 +55,14 @@ describe('the sync cursor', () => {
 
 		const v2: SQLProcessor<TestABI> = {...processor, version: '2.0.0'};
 		const upgraded = new VersionedStateEventProcessor(db, v2);
-		const loaded = await upgraded.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		const loaded = await upgraded.load(SOURCE, {finality});
 		expect(loaded).toBeDefined();
 		expect(loaded!.lastSync.context.processor).not.toBe(upgraded.getVersionHash());
 
 		// ...and the core's response to that mismatch leaves nothing behind
 		await upgraded.clear();
 		expect(await rows(db, `SELECT * FROM token`)).toEqual([]);
-		expect(await upgraded.load(SOURCE, {finality, alwaysFetchTimestamps: true})).toBeUndefined();
+		expect(await upgraded.load(SOURCE, {finality})).toBeUndefined();
 	});
 
 	it('survives the BigInt args a real decoded event carries', async () => {
@@ -84,7 +84,7 @@ describe('the sync cursor', () => {
 		);
 
 		const restarted = new VersionedStateEventProcessor(db, processor);
-		const loaded = await restarted.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		const loaded = await restarted.load(SOURCE, {finality});
 		const arg = (loaded!.lastSync.unconfirmedBlocks[0].events[0] as any).args.id;
 		// and it comes back a BigInt, not the string it was stored as: a cursor that
 		// round-trips into a different TYPE would silently change what a replayed
@@ -168,11 +168,11 @@ describe('reset and clear', () => {
 });
 
 describe('the blockTimestamp requirement', () => {
-	it('loads without `alwaysFetchTimestamps`, because the log usually carries the time', async () => {
-		// Nodes implementing execution-apis#639 put `blockTimestamp` on the log, so
-		// demanding the flag would force a second round-trip per block for nothing
-		// on geth, reth, besu, erigon and anvil. The flag is the FALLBACK, for the
-		// nodes that do not (Hardhat's EDR as of 3.14.0), not the entry ticket.
+	it('loads on a stream config of nothing but `finality`, because the log carries the time', async () => {
+		// Nodes implementing execution-apis#639 put `blockTimestamp` on the log, and
+		// there is no longer any flag that could buy one otherwise: the fallback that
+		// fetched the block is deleted (ADR-0073). So the time axis is never something
+		// a deployment has to opt into here.
 		const p = new VersionedStateEventProcessor(createTestDB(), processor);
 		await expect(p.load(SOURCE, {finality})).resolves.toBeUndefined();
 	});

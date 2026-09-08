@@ -75,7 +75,7 @@ CREATE INDEX _blocks_timestamp ON _blocks (timestamp);
 
 Timestamps come free **on most clients**: `blockTimestamp` is returned directly on logs, standardised in `execution-apis#639` (merged 2025-08-25). Normalise on ingestion, since at least one client returns it decimal rather than hex.
 
-It is not universal, so ingestion is opportunistic rather than assuming: take the timestamp off the log, and fall back to `eth_getBlockByHash` only for the blocks whose logs carried none. Verified by running each client, since the answer changes with releases:
+It is not universal, so ingestion normalises what arrives rather than assuming an encoding. **Superseded on the fallback half:** this paragraph originally said to fall back to `eth_getBlockByHash` for the blocks whose logs carried none. There is no such fallback any more (ADR-0073): the EDR holdout below closed in `@nomicfoundation/edr@0.20.0`, so the engine reads the timestamp off the log and REFUSES a node that does not serve it. The table is kept as the empirical record it was, dates and all:
 
 | client | `blockTimestamp` on logs | since |
 |---|---|---|

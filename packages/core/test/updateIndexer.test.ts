@@ -78,7 +78,7 @@ const SOURCE_PLUS_VIEW = sourceWith([transfer, balanceOf]);
  */
 const TIP = 1000;
 
-/** Timestamps ride on the logs, so `alwaysFetchTimestamps` costs the fake chain no call. */
+/** Timestamps ride on the logs, which is the only way the engine ever gets one. */
 const LOGS: StoredLogEvent[] = [makeLog(100, '0xa100'), makeLog(200, '0xa200'), makeLog(900, '0xa900')].map((log) => ({
 	...log,
 	blockTimestamp: log.blockNumber,
@@ -166,13 +166,14 @@ describe('a reconfigure passing an EQUIVALENT but unresolved stream config', () 
 
 	it('is still a no-op when something else about the reconfigure DID change', async () => {
 		// The caller is not re-passing an identical object: the source gained a view
-		// function (free, ADR-0034) and the config carries a second field. What is
-		// compared is the RESOLVED form, not two objects that happen to be equal.
-		const w = await indexedToTip({alwaysFetchTimestamps: true});
+		// function (free, ADR-0034) and the config carries a non-default `finality` and
+		// a second key. What is compared is the RESOLVED form, not two objects that
+		// happen to be equal.
+		const w = await indexedToTip({finality: 5, parse: {}});
 
 		const outcome = await w.indexer.updateIndexer({
 			source: SOURCE_PLUS_VIEW,
-			streamConfig: {alwaysFetchTimestamps: true},
+			streamConfig: {parse: {}, finality: 5},
 		});
 
 		expect(outcome.stateDiscarded).toBe(false);
@@ -211,7 +212,6 @@ describe('a reconfigure passing an EQUIVALENT but unresolved stream config', () 
 
 describe('a reconfigure whose stream config GENUINELY moved', () => {
 	for (const [what, streamConfig] of [
-		['alwaysFetchTimestamps', {alwaysFetchTimestamps: true}],
 		['parse.filters', {parse: {filters: [{event: 'Transfer', match: [[ADDRESS as `0x${string}`]]}]}}],
 		['an explicitly different finality', {finality: 5}],
 	] as [string, ProvidedStreamConfig][]) {
@@ -229,7 +229,7 @@ describe('a reconfigure whose stream config GENUINELY moved', () => {
 	it('clears the cached stream and re-fetches from the start block', async () => {
 		const w = await indexedToTip({});
 
-		await w.indexer.updateIndexer({streamConfig: {alwaysFetchTimestamps: true}});
+		await w.indexer.updateIndexer({streamConfig: {finality: 5}});
 		attach(w.indexer, w.chain);
 		await indexToTip(w.indexer);
 
@@ -289,19 +289,19 @@ describe('the resolve-then-hash step', () => {
 	it('resolves before it hashes, so an unset default and the default written out are one digest', () => {
 		expect(streamConfigHashOf(undefined)).toBe(streamConfigHashOf({}));
 		expect(streamConfigHashOf({})).toBe(streamConfigHashOf({finality: 17}));
-		expect(streamConfigHashOf({alwaysFetchTimestamps: true})).toBe(
-			streamConfigHashOf({finality: 17, alwaysFetchTimestamps: true}),
-		);
+		expect(streamConfigHashOf({parse: {}})).toBe(streamConfigHashOf({finality: 17, parse: {}}));
 		// and a config that genuinely moved is still a different digest
 		expect(streamConfigHashOf({finality: 5})).not.toBe(streamConfigHashOf({}));
-		expect(streamConfigHashOf({alwaysFetchTimestamps: true})).not.toBe(streamConfigHashOf({}));
+		expect(streamConfigHashOf({parse: {filters: [{event: 'Transfer', match: [[ADDRESS as `0x${string}`]]}]}})).not.toBe(
+			streamConfigHashOf({}),
+		);
 	});
 
 	it('is IDEMPOTENT over the resolve, so the wire identity keeps the bytes it always had', () => {
 		// The wire's `config` is a `UsedStreamConfig` already, so routing it through
 		// here must not move one byte: the two halves of a split deployment compare
 		// these digests and a batch under a digest neither side can read is refused.
-		for (const provided of [undefined, {}, {finality: 17}, {finality: 5}, {alwaysFetchTimestamps: true}] as (
+		for (const provided of [undefined, {}, {finality: 17}, {finality: 5}, {parse: {}}] as (
 			| ProvidedStreamConfig
 			| undefined
 		)[]) {
@@ -317,6 +317,7 @@ describe('the resolve-then-hash step', () => {
 		// canonicalisation, so they are pinned as literals rather than as a property.
 		expect(simple_hash({finality: 17})).toBe('h10lkzm2');
 		expect(simple_hash({})).toBe('h28y');
-		expect(simple_hash({finality: 17, alwaysFetchTimestamps: true})).toBe('ht6tzx8');
+		// a TWO-key config, so the canonicalisation of more than one key is pinned too
+		expect(simple_hash({finality: 17, parse: {}})).toBe('hg7dav3');
 	});
 });

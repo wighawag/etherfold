@@ -151,7 +151,7 @@ describe('process before load', () => {
 			p.process([transfer(100, '0xA', {from: '0x0', to: '0xa', id: 1n})], lastSync({latestBlock: 100})),
 		).rejects.toThrow(/finality not set/);
 		// and it works once loaded, so the guard is about ordering and nothing else
-		await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality});
 		await expect(
 			p.process([transfer(100, '0xA', {from: '0x0', to: '0xa', id: 1n})], lastSync({latestBlock: 100})),
 		).resolves.toBeDefined();

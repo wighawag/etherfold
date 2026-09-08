@@ -37,7 +37,7 @@ import {finality, lastSync, processor, SOURCE, timestampOf, transfer, type TestA
  */
 
 const SNAPSHOT_BLOCK = 12_000;
-const STREAM_CONFIG = {finality, alwaysFetchTimestamps: true};
+const STREAM_CONFIG = {finality};
 
 function rowsAt(owner: string): Mutation[] {
 	return [

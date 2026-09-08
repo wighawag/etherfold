@@ -20,7 +20,7 @@ import {finality, lastSync, processor, SOURCE, transfer} from './utils/fixtures.
 // worse than no convenience class.
 // ---------------------------------------------------------------------------------------------------
 
-const CONFIG = {finality, alwaysFetchTimestamps: true} as const;
+const CONFIG = {finality} as const;
 
 describe('the convenience class passes a table namespace through to the store it builds', () => {
 	it('keeps two generations over ONE handle in their own tables', async () => {

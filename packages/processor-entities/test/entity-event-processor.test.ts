@@ -45,7 +45,7 @@ const STREAM = [
 	transfer(102, '0xC', {from: '0x0', to: '0xdan', id: 3n}),
 ];
 
-const STREAM_CONFIG = {finality, alwaysFetchTimestamps: true};
+const STREAM_CONFIG = {finality};
 
 describe('one processor definition, every shipped backend', () => {
 	const states: Record<string, Record<string, unknown>> = {};

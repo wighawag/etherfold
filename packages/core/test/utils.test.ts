@@ -92,7 +92,7 @@ describe('resolveStreamConfig', () => {
 	it('fills the default when the config is absent, empty, or leaves finality unset', () => {
 		expect(resolveStreamConfig(undefined)).toEqual({finality: 17});
 		expect(resolveStreamConfig({})).toEqual({finality: 17});
-		expect(resolveStreamConfig({alwaysFetchTimestamps: true})).toEqual({finality: 17, alwaysFetchTimestamps: true});
+		expect(resolveStreamConfig({parse: {}})).toEqual({finality: 17, parse: {}});
 	});
 
 	it('treats an explicit `undefined` finality as ABSENT, not as a value', () => {
@@ -100,18 +100,18 @@ describe('resolveStreamConfig', () => {
 		// the shape a JSON round-trip produces, and the shape an options object
 		// forwarding an unset flag produces
 		expect(resolveStreamConfig(JSON.parse(JSON.stringify({finality: undefined})))).toEqual({finality: 17});
-		expect(resolveStreamConfig({finality: undefined, alwaysFetchTimestamps: true})).toEqual({
+		expect(resolveStreamConfig({finality: undefined, parse: {}})).toEqual({
 			finality: 17,
-			alwaysFetchTimestamps: true,
+			parse: {},
 		});
 	});
 
 	it('drops any other explicitly-undefined key rather than carrying it', () => {
 		// asserted on the KEYS, not with `toEqual`: `toEqual` ignores undefined-valued
 		// properties, so it would pass just as happily on a config that carried them
-		expect(Object.keys(resolveStreamConfig({alwaysFetchTimestamps: undefined}))).toEqual(['finality']);
+		expect(Object.keys(resolveStreamConfig({parse: undefined}))).toEqual(['finality']);
 		expect(Object.keys(resolveStreamConfig({finality: undefined, parse: undefined}))).toEqual(['finality']);
-		expect(resolveStreamConfig({alwaysFetchTimestamps: undefined})).toStrictEqual({finality: 17});
+		expect(resolveStreamConfig({parse: undefined})).toStrictEqual({finality: 17});
 		// a carried `undefined` is not merely untidy: `canonical_form` drops it, so the
 		// object and its digest would disagree about which keys the config has
 		expect(Object.keys(resolveStreamConfig({finality: undefined}))).toEqual(['finality']);
@@ -121,11 +121,10 @@ describe('resolveStreamConfig', () => {
 		expect(resolveStreamConfig({finality: 5})).toEqual({finality: 5});
 		// 0 is a value, not an absence: a chain with no reorgs is a legitimate config
 		expect(resolveStreamConfig({finality: 0})).toEqual({finality: 0});
-		expect(resolveStreamConfig({alwaysFetchTimestamps: false})).toEqual({finality: 17, alwaysFetchTimestamps: false});
 	});
 
 	it('is IDEMPOTENT, so resolving an already-resolved config moves nothing', () => {
-		for (const provided of [undefined, {}, {finality: undefined}, {finality: 5}, {alwaysFetchTimestamps: true}]) {
+		for (const provided of [undefined, {}, {finality: undefined}, {finality: 5}, {parse: {}}]) {
 			expect(resolveStreamConfig(resolveStreamConfig(provided))).toEqual(resolveStreamConfig(provided));
 		}
 	});

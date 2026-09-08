@@ -66,9 +66,9 @@ function padded(value: string): string {
  *
  * `blockTimestamp` is on it, as it is on every node the engine supports since
  * `execution-apis#639`: a fetched range holding a log without one is refused at
- * the fetch boundary (ADR-0073). A node that predates the change is modelled by
- * `makeChain({servesTimestamps: false})`, which is what the
- * `alwaysFetchTimestamps` fallback below exists for.
+ * the fetch boundary (ADR-0073), with no fallback to fetch the block instead.
+ * `aTimestamplessLogIsRefusedAtTheFetchBoundary.test.ts` is where a node that
+ * does not serve it is modelled.
  */
 function rawLog(blockNumber: number, blockHash: string, id: number, logIndex = 0, to = ZERO) {
 	return {
@@ -90,9 +90,6 @@ type ChainOptions = {
 	latestBlock: number;
 	/** every log the chain holds, by block number */
 	logsPerBlock?: {[blockNumber: number]: ReturnType<typeof rawLog>[]};
-	blockTimestamps?: {[blockHash: string]: number};
-	/** A node PREDATING `execution-apis#639`, which serves no `blockTimestamp` on a log. */
-	servesTimestamps?: boolean;
 	/** called on every eth_getLogs; return a substitute behaviour to simulate a node's limits */
 	onGetLogs?: (range: {
 		fromBlock: number;
@@ -119,12 +116,6 @@ function makeChain(options: ChainOptions) {
 					return `0x${parseInt(state.chainId, 10).toString(16)}`;
 				case 'eth_blockNumber':
 					return `0x${state.latestBlock.toString(16)}`;
-				case 'eth_getBlockByHash': {
-					const hash = args.params[0] as string;
-					const timestamp = options.blockTimestamps?.[hash];
-					if (timestamp === undefined) throw new Error(`unexpected eth_getBlockByHash for ${hash}`);
-					return {hash, timestamp: `0x${timestamp.toString(16)}`};
-				}
 				case 'eth_getLogs': {
 					getLogsCalls++;
 					const filter = args.params[0];
@@ -139,9 +130,6 @@ function makeChain(options: ChainOptions) {
 					const result = [];
 					for (let block = fromBlock; block <= upTo; block++) {
 						result.push(...(state.logsPerBlock[block] ?? []));
-					}
-					if (options.servesTimestamps === false) {
-						return result.map(({blockTimestamp: _blockTimestamp, ...log}) => log);
 					}
 					return result;
 				}
@@ -637,33 +625,29 @@ describe('what only this side can check', () => {
 		expect(chain.calls.filter((c) => c.method === 'eth_getLogs')).toHaveLength(0);
 	});
 
-	it('pays for the timestamps its stream config promises, since the receiver cannot', async () => {
-		const chain = makeChain({
-			latestBlock: 110,
-			logsPerBlock: {101: [rawLog(101, '0xa101', 1)]},
-			// the node the fallback exists for: it predates the change, so the timestamp
-			// comes back from `eth_getBlockByHash` or not at all
-			servesTimestamps: false,
-			blockTimestamps: {'0xa101': 1_700_000_000},
-		});
+	it('carries the timestamps its stream config promises, straight off the logs', async () => {
+		const chain = makeChain({latestBlock: 110, logsPerBlock: {101: [rawLog(101, '0xa101', 1)]}});
 		// the receiver runs the SAME stream config, so the identity matches
-		const withTimestamps = {finality: FINALITY, alwaysFetchTimestamps: true};
+		const ownFinality = {finality: FINALITY + 1};
 		const receiver = fakeReceiver({
 			expectedFromBlock: START_BLOCK,
-			context: {source: CONTEXT.source, config: simple_hash(withTimestamps)},
+			context: {source: CONTEXT.source, config: simple_hash(ownFinality)},
 		});
 		const fetcher = new LogFetcher<TestABI>(chain.provider, SOURCE, receiver.target, {
-			stream: withTimestamps,
+			stream: ownFinality,
 			retry: {wait: async () => {}},
 		});
 
 		await fetcher.fetchAndPush();
 
-		expect((receiver.received[0].logs[0] as any).blockTimestamp).toBe(1_700_000_000);
+		// the receiver makes no chain call at all (ADR-0003), so the field either
+		// crossed the wire on the log or it is gone: nothing downstream can recover it
+		expect((receiver.received[0].logs[0] as any).blockTimestamp).toBe(1_700_000_000 + 101 * 12);
+		expect(chain.calls.filter((c) => c.method === 'eth_getBlockByHash')).toHaveLength(0);
 		// and the identity reflects the config it is honouring, so a receiver
-		// configured without it refuses the batch rather than storing events that
-		// silently lack a field
-		expect(fetcher.context.config).toBe(simple_hash(withTimestamps));
+		// configured differently refuses the batch rather than storing events fetched
+		// under a config that is not its own
+		expect(fetcher.context.config).toBe(simple_hash(ownFinality));
 		expect(fetcher.context.config).not.toBe(CONTEXT.config);
 	});
 });
@@ -826,7 +810,6 @@ describe('the sending side names no host and keeps no state', () => {
 		'../src/ingestClient.ts',
 		'../src/directIngestion.ts',
 		'../src/internal/utils/retry.ts',
-		'../src/internal/engine/enrich.ts',
 		'../src/internal/engine/RangeLogFetcher.ts',
 	].map((path) => ({
 		path,

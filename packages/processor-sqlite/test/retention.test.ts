@@ -15,7 +15,7 @@ import {SOURCE, finality, lastSync, ownerOf, processor, transfer, type TestABI} 
 
 async function loaded(options: ConstructorParameters<typeof VersionedStateEventProcessor>[2] = {}) {
 	const p = new VersionedStateEventProcessor<TestABI>(createTestDB(), processor, options);
-	await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+	await p.load(SOURCE, {finality});
 	return p;
 }
 
@@ -86,7 +86,7 @@ describe('the retention floor and the stream that reorgs against it', () => {
 			retention: {blocks: 4},
 			finalityDepth: 4,
 		});
-		await expect(p.load(SOURCE, {finality: 12, alwaysFetchTimestamps: true})).rejects.toThrow(/4[\s\S]*12|12[\s\S]*4/);
+		await expect(p.load(SOURCE, {finality: 12})).rejects.toThrow(/4[\s\S]*12|12[\s\S]*4/);
 	});
 
 	it('accepts a floor at or above the stream finality', async () => {
@@ -94,7 +94,7 @@ describe('the retention floor and the stream that reorgs against it', () => {
 			retention: {blocks: 128},
 			finalityDepth: 64,
 		});
-		await expect(p.load(SOURCE, {finality: 12, alwaysFetchTimestamps: true})).resolves.toBeUndefined();
+		await expect(p.load(SOURCE, {finality: 12})).resolves.toBeUndefined();
 		// and the window IS claimed, because the store enforces it: refused on read,
 		// and dropped from storage by `prune`.
 		expect(p.state.capabilities.retention).toEqual({kind: 'window', blocks: 128});
@@ -116,7 +116,7 @@ describe('a deployment enforcing its window against the storage', () => {
 			retention: {blocks: 64},
 			finalityDepth: 64,
 		});
-		await p.load(SOURCE, {finality: 64, alwaysFetchTimestamps: true});
+		await p.load(SOURCE, {finality: 64});
 		await p.process(
 			[
 				transfer(1_000, '0xA', {from: '0x0', to: '0xalice', id: 1n}),

@@ -54,8 +54,8 @@ const STREAM_DIGEST_RULE = 'etherfold/stream/1';
  * ## Why the CONFIG is in it
  *
  * The filter is not the only thing that decides what a stream CONTAINS.
- * `alwaysFetchTimestamps` and `parse.filters` each
- * change WHAT IS STORED, and `sourceInvalidationOf` already invalidates the
+ * `parse.filters` narrows which events are parsed and kept at all, so it
+ * changes WHAT IS STORED, and `sourceInvalidationOf` already invalidates the
  * STREAM half from block 0 whenever the config hash moves. Keyed on the filter
  * alone, two different configs would map to ONE stream and a generation would
  * adopt logs the verdict has already declared invalid -- with the only existing

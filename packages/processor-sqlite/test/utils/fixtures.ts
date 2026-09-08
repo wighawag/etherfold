@@ -104,16 +104,16 @@ export const SOURCE = {
  * A loaded processor over a fresh in-memory database.
  *
  * `load` must precede `process` (it sets `finality` and runs the migration),
- * exactly as in the in-memory fixture. `alwaysFetchTimestamps` is set because
- * that is where `event.blockTimestamp` comes from today; see the note on
- * `load`.
+ * exactly as in the in-memory fixture. `event.blockTimestamp` comes off the LOG
+ * and there is no configuration that fetches one (ADR-0073), so the stream
+ * config here is `finality` and nothing else.
  */
 export async function freshProcessor(db: RemoteSQL = createTestDB()): Promise<{
 	db: RemoteSQL;
 	p: VersionedStateEventProcessor<TestABI>;
 }> {
 	const p = new VersionedStateEventProcessor<TestABI>(db, processor);
-	await p.load(SOURCE, {finality, alwaysFetchTimestamps: true});
+	await p.load(SOURCE, {finality});
 	return {db, p};
 }
 

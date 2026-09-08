@@ -1,21 +1,9 @@
-import {
-	EIP1193Account,
-	EIP1193Block,
-	EIP1193DATA,
-	EIP1193GenericRequest,
-	EIP1193Log,
-	EIP1193ProviderWithoutEvents,
-} from 'eip-1193';
+import {EIP1193Account, EIP1193DATA, EIP1193Log, EIP1193ProviderWithoutEvents} from 'eip-1193';
 
 import {logs} from 'named-logs';
 import type {ArgumentFilter, IncludedEIP1193Log} from '../../types.js';
 import {UnlessCancelledFunction} from '../utils/promises.js';
 const namedLogger = logs('@etherfold/core:ethereum');
-
-export type ExtendedEIP1193Provider = EIP1193ProviderWithoutEvents &
-	Partial<{
-		request(args: {method: 'eth_batch'; params: EIP1193GenericRequest[]}): Promise<unknown[]>;
-	}>;
 
 export async function getBlockNumber(provider: EIP1193ProviderWithoutEvents): Promise<number> {
 	const blockAsHexString = await provider.request({method: 'eth_blockNumber'});
@@ -25,42 +13,6 @@ export async function getBlockNumber(provider: EIP1193ProviderWithoutEvents): Pr
 export async function getChainId(provider: EIP1193ProviderWithoutEvents): Promise<string> {
 	const blockAsHexString = await provider.request({method: 'eth_chainId'});
 	return parseInt(blockAsHexString.slice(2), 16).toString();
-}
-
-// NOTE: only interested in the timestamp for now
-export async function getBlockData(
-	provider: EIP1193ProviderWithoutEvents,
-	hash: EIP1193DATA,
-): Promise<{timestamp: number}> {
-	const blockWithHexStringFields = await provider.request({method: 'eth_getBlockByHash', params: [hash, false]});
-	if (!blockWithHexStringFields) {
-		throw new Error(`could not fetch block`);
-	}
-	return {
-		timestamp: parseInt(blockWithHexStringFields.timestamp.slice(2), 16),
-	};
-}
-
-// NOTE: only interested in the timestamp for now
-export async function getBlockDataFromMultipleHashes(
-	provider: EIP1193ProviderWithoutEvents,
-	hashes: string[],
-): Promise<{timestamp: number}[]> {
-	const requests: EIP1193GenericRequest[] = [];
-	for (const hash of hashes) {
-		requests.push({
-			method: 'eth_getBlockByHash',
-			params: [hash, false],
-		});
-	}
-	const blocksWithHexStringFields = await (provider as ExtendedEIP1193Provider).request({
-		method: 'eth_batch',
-		params: requests,
-	});
-
-	return (blocksWithHexStringFields as EIP1193Block[]).map((block) => ({
-		timestamp: parseInt(block.timestamp.slice(2), 16),
-	}));
 }
 
 export type LogRequest = {

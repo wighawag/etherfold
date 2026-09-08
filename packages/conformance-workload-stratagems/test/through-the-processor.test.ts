@@ -39,7 +39,7 @@ import type {StratagemsABI} from '../vendor/stratagems/abi.js';
 import {BACKENDS} from './utils/backends.js';
 
 const SOURCE = {chainId: '8453', contracts: []} as never;
-const STREAM_CONFIG = {finality: 12, alwaysFetchTimestamps: true};
+const STREAM_CONFIG = {finality: 12};
 
 function cursorAt(lastToBlock: number): LastSync<StratagemsABI> {
 	return {
