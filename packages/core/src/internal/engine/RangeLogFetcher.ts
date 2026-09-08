@@ -1,5 +1,6 @@
 import {EIP1193Account, EIP1193DATA, EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
+import {ArchiveRefusedError} from '../../errors.js';
 import {IncludedEIP1193Log} from '../../types.js';
 import {UnlessCancelledFunction} from '../utils/promises.js';
 import {canOccurIn, type TopicBlockRanges} from './eventRanges.js';
@@ -37,7 +38,9 @@ export type LogFetcherConfig = {
  * BOGUS one: a bracketed pair lifted out of an unrelated message becomes a
  * `toBlock` the fetcher then retries against, for a refusal no range size can
  * ever satisfy. Widening the accepted CODES (below) is therefore not a licence
- * to widen these two markers.
+ * to widen these two markers. That same archive refusal is now also RECOGNISED,
+ * by {@link archiveRefusalFromError}, and reported as terminal instead of being
+ * halved at; this gate is what keeps the two from ever reading it as a range.
  *
  * Pinned by `packages/core/test/rangeLogFetcher.test.ts`.
  */
@@ -166,6 +169,75 @@ export function getNewToBlockFromError(error: any): number | undefined {
 }
 
 /**
+ * The ENTITLEMENT half of an archive refusal: the words a provider uses when it
+ * is saying that history is behind a credential or a plan, rather than that its
+ * archive is having a bad day.
+ *
+ * Required IN ADDITION to the word `archive`, and that conjunction is the whole
+ * width of the classifier. `archive` alone is too eager: "archive node is
+ * syncing" and "archive backend temporarily unavailable" are TRANSIENT, and
+ * calling either terminal stops an indexer for a blip -- which is a worse
+ * failure than the grinding this exists to fix, because grinding is slow and
+ * visible while a false terminal is fast and wrong. An entitlement word alone is
+ * too eager in the other direction: `rpc.ankr.com` refuses an unauthenticated
+ * request with "You must authenticate your request with an API key", which is
+ * about the endpoint rather than about serving history, and every deployment
+ * that briefly loses its key would become terminal.
+ */
+const ARCHIVE_ACCESS_GATE = /\b(tokens?|api ?keys?|plans?|upgrade|unsupported|not supported|not enabled)\b/;
+
+/** Whether one piece of provider text says history is GATED rather than unavailable. */
+function looksLikeArchiveRefusal(text: unknown): text is string {
+	if (typeof text !== 'string') {
+		return false;
+	}
+	const lowered = text.toLowerCase();
+	return lowered.indexOf('archive') !== -1 && ARCHIVE_ACCESS_GATE.test(lowered);
+}
+
+/**
+ * The provider's own words, when it refused because the HISTORY asked for needs
+ * an archive node it will not give this connection -- and `undefined` for every
+ * refusal that is anything else, including every refusal we merely cannot
+ * classify.
+ *
+ * The companion of {@link getNewToBlockFromError}, and the two never overlap by
+ * construction: this reads a refusal that is not about a range at all, which is
+ * why `looksLikeRangeHint` already REJECTS the captured archive body (a `-32602`
+ * mentioning neither `results` nor `block range`). A hit here is TERMINAL for the
+ * endpoint -- `RangeLogFetcher.getLogs` stops rather than halving, and
+ * `ArchiveRefusedError` says so with `retryable: false` -- so the bar for a hit
+ * is a refusal that IDENTIFIES ITSELF (see {@link ARCHIVE_ACCESS_GATE}) and
+ * everything ambiguous is left to the halving path it has always taken.
+ *
+ * The text is read from `data` before the message, exactly as the range hint is,
+ * because that is where a Nethermind-style node puts its whole complaint while
+ * leaving the message at a bare `"invalid params"`. It is returned rather than
+ * merely detected so the refusal can be quoted back to the operator verbatim,
+ * instead of the fetcher paraphrasing a node.
+ *
+ * No error CODE is required, and that is deliberate: the captured refusal is a
+ * `-32602`, but the codes providers put this behind are as inconsistent as the
+ * ones they put range complaints behind (the spike found range refusals under
+ * seven different codes), and the identifying evidence here is the text.
+ *
+ * Captured refusal shapes, their providers and their dates:
+ * `work/notes/findings/what-nodes-answer-when-a-getlogs-range-is-too-big.md` and
+ * `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`.
+ */
+export function archiveRefusalFromError(error: any): string | undefined {
+	if (!error) {
+		return undefined;
+	}
+	for (const text of [error.data, error.data?.message, error.message]) {
+		if (looksLikeArchiveRefusal(text)) {
+			return text;
+		}
+	}
+	return undefined;
+}
+
+/**
  * `eth_getLogs` over a block range, adapting the range to what the node will
  * actually answer.
  *
@@ -266,6 +338,14 @@ export class RangeLogFetcher {
 				);
 			}
 		} catch (err: any) {
+			const archiveRefusal = archiveRefusalFromError(err);
+			if (archiveRefusal !== undefined) {
+				// Checked BEFORE the retry budget and before any hint is read: this is the one
+				// refusal a smaller range cannot answer, so halving into it burns the budget and
+				// then reports the wrong cause. It is checked on the LAST attempt too, so an
+				// endpoint that starts gating history mid-backfill still names the real reason.
+				throw new ArchiveRefusedError(fromBlock, toBlock, archiveRefusal);
+			}
 			if (retry <= 0) {
 				throw err;
 			}

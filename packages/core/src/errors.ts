@@ -206,6 +206,59 @@ export class SuspectedTruncationError extends Error {
 }
 
 /**
+ * An endpoint that will not serve the HISTORY being asked for, whatever range it
+ * is asked for it in.
+ *
+ * Serving logs for old blocks needs an archive node, and public endpoints
+ * commonly token-gate it: `ethereum-rpc.publicnode.com` answers a backfill with
+ * `-32602 "Archive requests require a personal token. Get one at: ..."`, captured
+ * 2026-06-30 and again, byte-identical, on 2026-09-08
+ * (`docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`).
+ *
+ * Every other refusal the fetcher meets is a RANGE complaint, answered by asking
+ * for less. This one is not: no range size satisfies it, so halving spends the
+ * whole retry budget shrinking a window the endpoint was never going to serve,
+ * and then fails with whatever the last error happened to be -- which is a range
+ * error, about the wrong thing entirely. The operator reads "the range was too
+ * big" and tunes `maxBlocksPerFetch`, when what they have is an endpoint that
+ * does not serve history.
+ *
+ * So the class is recognised where the range hints are read and reported HERE,
+ * naming the cause. `retryable` is `false` for the literal reason the flag
+ * exists: waiting changes nothing, because nothing about this endpoint changes
+ * until an operator points somewhere else or pays for a token.
+ *
+ * ## Why this is deliberately narrow
+ *
+ * The classifier matches only a refusal that IDENTIFIES itself as an archive or
+ * history ACCESS problem (see `archiveRefusalFromError`), and everything else
+ * keeps halving. A false terminal is worse than the grinding it replaces:
+ * grinding is slow and visible, while a transient outage mistaken for a terminal
+ * refusal stops an indexer fast, wrongly, and for good.
+ */
+export class ArchiveRefusedError extends Error {
+	readonly name = 'ArchiveRefusedError';
+	/** The endpoint does not grow an archive while a scheduler waits. The fix is an operator's. */
+	readonly retryable = false;
+
+	constructor(
+		/** The block the refused fetch started at. */
+		readonly fromBlock: number,
+		/** The block it asked to reach. */
+		readonly toBlock: number,
+		/** What the provider said, verbatim, so the claim is checkable against the node. */
+		readonly providerMessage: string,
+	) {
+		super(
+			`the provider refused [${fromBlock}, ${toBlock}] because serving that history needs ARCHIVE access it will ` +
+				`not give this connection: "${providerMessage}". This is not a range problem and no range size fixes it, ` +
+				`so nothing is retried and the range is not halved. Either point this source at an archive endpoint (or an ` +
+				`authenticated plan on this one), or start indexing from a block this endpoint still serves.`,
+		);
+	}
+}
+
+/**
  * A NODE that answered a fetch with a log carrying no readable `blockTimestamp`.
  *
  * `blockTimestamp` on the log is `ethereum/execution-apis#639`, and the engine

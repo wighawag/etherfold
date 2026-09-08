@@ -1,5 +1,9 @@
 import {describe, expect, it} from 'vitest';
-import {getNewToBlockFromError, RangeLogFetcher} from '../src/internal/engine/RangeLogFetcher.js';
+import {
+	archiveRefusalFromError,
+	getNewToBlockFromError,
+	RangeLogFetcher,
+} from '../src/internal/engine/RangeLogFetcher.js';
 
 /**
  * Every input in the "real refusals" blocks below is a response a real provider
@@ -276,6 +280,88 @@ describe('getNewToBlockFromError', () => {
 	});
 });
 
+describe('archiveRefusalFromError', () => {
+	describe('a refusal that IDENTIFIES itself as an archive gate is terminal', () => {
+		it('recognises the captured publicnode refusal', () => {
+			// ethereum-rpc.publicnode.com, captured 2026-09-08, byte-identical to the
+			// 2026-06-30 capture in the finding. The one shape this classifier is built on.
+			const err = rpcError(
+				-32602,
+				'Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode',
+			);
+			expect(archiveRefusalFromError(err)).toBe(err.message);
+		});
+
+		it('reads the same refusal out of `data`, as the range parser does', () => {
+			// CONSTRUCTED, and labelled: no captured archive refusal puts its text in `data`.
+			// It is read there anyway because that is where Nethermind puts the whole of a
+			// range hint (Gnosis, Fraxtal, captured 2026-09-08) while leaving the message at
+			// "invalid params", so a refusal reaching only `data` is a shape this codebase has
+			// already met once.
+			const asString = rpcError(-32602, 'invalid params', 'Archive requests require a personal token.');
+			expect(archiveRefusalFromError(asString)).toBe('Archive requests require a personal token.');
+			const nested = rpcError(-32603, 'internal error', {message: 'archive data is not enabled on this endpoint'});
+			expect(archiveRefusalFromError(nested)).toBe('archive data is not enabled on this endpoint');
+		});
+	});
+
+	describe('anything AMBIGUOUS keeps today\u2019s behaviour', () => {
+		it('does not classify a refusal that merely mentions an archive', () => {
+			// CONSTRUCTED. This is the false-terminal hazard in one line: an archive node
+			// that is catching up answers again in an hour, and calling that terminal stops
+			// an indexer for a blip. Nothing here says the history is GATED, so it halves
+			// and retries exactly as before.
+			expect(archiveRefusalFromError(rpcError(-32000, 'archive node is syncing, try again later'))).toBeUndefined();
+			expect(archiveRefusalFromError(rpcError(-32603, 'archive backend temporarily unavailable'))).toBeUndefined();
+		});
+
+		it('does not classify a credential refusal that says nothing about history', () => {
+			// rpc.ankr.com/eth, captured 2026-09-08. A real token refusal, and deliberately
+			// NOT this: it is about the endpoint as a whole rather than about serving
+			// history, and widening to it would make every unauthenticated blip terminal.
+			const ankr = rpcError(
+				-32000,
+				'Unauthorized: You must authenticate your request with an API key. Create an account on https://www.ankr.com/rpc/ and generate your personal API key for free.',
+			);
+			expect(archiveRefusalFromError(ankr)).toBeUndefined();
+		});
+
+		it('does not classify a range refusal, which is what halving is for', () => {
+			// All captured 2026-09-08: zkevm-rpc.com, 1rpc.io/eth, evm.cronos.org,
+			// rpc.mevblocker.io (whose narrower spans answered with this).
+			expect(archiveRefusalFromError(rpcError(-32000, 'block range too large, max range: 10000'))).toBeUndefined();
+			expect(
+				archiveRefusalFromError(rpcError(-32602, 'eth_getLogs is limited to 0 - 50 blocks range')),
+			).toBeUndefined();
+			expect(archiveRefusalFromError(rpcError(-32000, 'maximum [from, to] blocks distance: 2000'))).toBeUndefined();
+			expect(archiveRefusalFromError(rpcError(-32603, 'service temporarily unavailable'))).toBeUndefined();
+		});
+
+		it('does not classify a transport failure, which carries no provider text at all', () => {
+			expect(archiveRefusalFromError(new Error('socket hang up'))).toBeUndefined();
+			expect(archiveRefusalFromError(new Error('fetch failed'))).toBeUndefined();
+		});
+
+		it('does not throw on a malformed or absent error', () => {
+			expect(archiveRefusalFromError({} as any)).toBeUndefined();
+			expect(archiveRefusalFromError(rpcError(-32602))).toBeUndefined();
+			expect(archiveRefusalFromError(undefined as any)).toBeUndefined();
+			expect(archiveRefusalFromError(null as any)).toBeUndefined();
+		});
+	});
+
+	it('leaves the range parser alone: an archive refusal still yields NO range hint', () => {
+		// The two functions read the same error and must not overlap. The gate test above
+		// pins the other half of this.
+		const err = rpcError(
+			-32602,
+			'Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode',
+		);
+		expect(getNewToBlockFromError(err)).toBeUndefined();
+		expect(archiveRefusalFromError(err)).toBe(err.message);
+	});
+});
+
 const passThrough = <T>(p: Promise<T>) => p;
 
 /**
@@ -321,6 +407,66 @@ describe('what the fetcher does with a refusal', () => {
 
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 499, 249]);
 		expect(result.toBlockUsed).toBe(249);
+	});
+
+	it('stops on an ARCHIVE refusal instead of halving through the retry budget', async () => {
+		// ethereum-rpc.publicnode.com, captured 2026-09-08 and byte-identical to the
+		// 2026-06-30 capture. `answersUpTo: 0` is the endpoint's real behaviour for a
+		// backfill: it refuses EVERY span, because the complaint is about the history
+		// being behind a token and not about the width of the window asked for.
+		const {provider, spans} = refusingProvider(
+			rpcError(-32602, 'Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode'),
+			0,
+		);
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		const failure = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough).catch((err) => err);
+
+		// ONE request: the budget is not burned halving 1000 -> 499 -> 249 for a refusal
+		// no range size satisfies.
+		expect(spans.length).toBe(1);
+		expect(failure.name).toBe('ArchiveRefusedError');
+		// the operator reads the real cause rather than the last range error
+		expect(failure.message).toMatch(/archive/i);
+		expect(failure.message).toContain('Archive requests require a personal token');
+		// structurally non-retryable, which is what stops the host retrying it with backoff
+		expect(failure.retryable).toBe(false);
+	});
+
+	it('still halves against an archive mention it cannot classify', async () => {
+		// CONSTRUCTED, and the near-miss that decides the width of the classifier: an
+		// archive node catching up answers again shortly, so this must keep TODAY's
+		// behaviour end to end -- halve, retry, and deliver what the endpoint would serve.
+		const {provider, spans} = refusingProvider(rpcError(-32000, 'archive node is syncing, try again later'), 300);
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
+
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 499, 249]);
+		expect(result.toBlockUsed).toBe(249);
+	});
+
+	it('lets a transient NETWORK failure exhaust the budget and stay retryable', async () => {
+		// The hazard of this classifier is the opposite one: a false terminal stops an
+		// indexer fast and wrongly, where grinding is merely slow and visible. A dropped
+		// socket carries no opinion, so it must reach the caller as it always did.
+		const spans: number[] = [];
+		const provider = {
+			async request(args: {method: string; params?: any}): Promise<any> {
+				spans.push(args.params[0].fromBlock);
+				throw new Error('socket hang up');
+			},
+		} as any;
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		const failure = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough).catch((err) => err);
+
+		expect(failure.name).toBe('Error');
+		expect(failure.message).toBe('socket hang up');
+		// no `retryable` at all, which every reader in this repo takes as "retry it"
+		expect((failure as {retryable?: boolean}).retryable).toBeUndefined();
+		// the whole budget was spent: one attempt plus the default three retries
+		expect(spans.length).toBe(4);
 	});
 
 	it('shrinks to the range the provider named, rather than halving, when it named one', async () => {
