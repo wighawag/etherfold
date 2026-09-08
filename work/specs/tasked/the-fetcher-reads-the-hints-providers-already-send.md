@@ -5,6 +5,8 @@ slug: the-fetcher-reads-the-hints-providers-already-send
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
 
+> **TASKED** into six tasks (`spec: the-fetcher-reads-the-hints-providers-already-send`). The captured error shapes, provider names and dated sources that drove every story live in `work/notes/findings/what-nodes-answer-when-a-getlogs-range-is-too-big.md`, which is the durable reference; the per-task detail is in the tasks.
+
 ## Problem Statement
 
 `eth_getLogs` has no portable page size. Providers cap it in two incompatible ways (block span or result count) and the numbers differ by more than an order of magnitude: measured across public Ethereum endpoints, 50 blocks, 1,000 blocks, and 10,000 results. So a fetcher must discover the limit at runtime, and etherfold's does, by halving on refusal.
