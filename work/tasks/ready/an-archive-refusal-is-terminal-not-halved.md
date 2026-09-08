@@ -37,6 +37,8 @@ This is deliberately narrow. Only refusals that clearly identify themselves as a
 >
 > The judgement to get right is the width of the classifier. Being too eager turns a transient outage into a stopped indexer, which is worse than the grinding this fixes, because grinding is visible and slow while a false terminal is fast and wrong. Match narrowly on refusals that identify themselves, and let anything ambiguous fall through to today's behaviour.
 >
+> FORWARD-POINTER on the FINDING you are told to read. It has PARTLY GONE STALE and a fresher, wider capture now sits beside it: `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/refusal-shapes.md` (a full re-run dated 2026-09-08, with `capture-refusals.sh` next to it). Read BOTH, and prefer the spike where they disagree. Specifically, `work/notes/observations/the-getlogs-refusal-finding-has-partly-gone-stale.md` records that `rpc.mevblocker.io` no longer answers with the structured `{from, to, limit}` shape (it enforces a 10,000-BLOCK span cap now and answers `-32602`) and that `eth.merkle.io` no longer serves `eth_getLogs` at all, so two rows of the finding's cap table no longer reproduce. The archive-refusal capture, by contrast, is byte-identical three months on. Do NOT amend the finding as part of your task: that is its own item and is already recorded.
+>
 > FIRST, check this task against current reality (it is a launch snapshot and may have DRIFTED): confirm the blocking task landed and that the retryable-error mechanism still works as described.
 >
 > RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT. Do no git, do not edit the task body, and do not open an observation note for decisions.
