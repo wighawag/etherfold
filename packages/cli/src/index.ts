@@ -45,6 +45,7 @@ export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch
 export {index, indexMain, type IndexDependencies, type RunningReceiver} from './indexCommand.js';
 export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
+import {newlyStalledFollowers} from './followers.js';
 
 const logger = logs('etherfold');
 
@@ -379,10 +380,25 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 	 * shape of a rebuild running beside a live fold. It costs one in-memory check on
 	 * a process holding no follower, which is every process until something adds one.
 	 */
+	/** Which followers have already been reported as stalled, so it is said once and not per cycle. */
+	const reportedStalled = new Set<string>();
+
 	const advanceFollowers: Sleep = async (ms, signal) => {
 		if (!stopAtTip && container.followers().length > 0) {
 			try {
-				await container.rebuildMore();
+				for (const stalled of newlyStalledFollowers(await container.rebuildMore(), reportedStalled)) {
+					// `console.error` and NOT the named-logs logger, for the reason
+					// `processorSetup.ts` already documents at its own diagnostic: this
+					// package captures `logs('etherfold')` at module scope and only the
+					// `fetch` and `index` commands ever import `named-logs-console`, so on
+					// the commands that reach this loop a `logger.error` is a silent no-op.
+					// A permanent stall reported into nothing is the defect, not the fix.
+					console.error(
+						`the rebuild of generation ${stalled.id} cannot advance (${stalled.reason}) and retrying will not ` +
+							`change that. It stays behind and never becomes level, so it will not take over writing its ` +
+							`stream. This needs a look; the canonical generation is unaffected and goes on answering.`,
+					);
+				}
 			} catch (err) {
 				logger.error(`a rebuild chunk failed; the canonical generation is unaffected and the next cycle retries`, err);
 			}

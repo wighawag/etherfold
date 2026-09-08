@@ -334,8 +334,9 @@ describe('one container, SEVERAL live wire contexts', () => {
 		// (ADR-0044) -- unlike a processor-change successor, which re-folds one already
 		// stored
 		expect(successor.writesStream).toBe(true);
-		// two generations, on two streams (the listing's order ties on `createdAt`
-		// within one millisecond, so what is asserted is the SET)
+		// two generations, on two streams. `createdAt` is strictly increasing since
+		// ADR-0072, so the listing's order is defined now rather than tied -- but what
+		// this case is about is MEMBERSHIP, so what is asserted is still the SET.
 		expect((await incumbent.generations()).map((record) => record.stream).sort()).toEqual(
 			[incumbent.streamDigest, successor.streamDigest].sort(),
 		);

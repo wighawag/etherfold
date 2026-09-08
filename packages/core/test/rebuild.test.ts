@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import {DEFAULT_MAX_EMISSIONS_PER_CHUNK, retryCanAdvance, type RebuildReport} from '../src/generation/rebuild.js';
 import {openReceivingIndexer} from '../src/receivingContainer.js';
 import type {MemoryStore, TestABI} from './utils/receivingWorld.js';
@@ -46,6 +46,52 @@ import {
 // ---------------------------------------------------------------------------------------------------
 
 describe('a successor on a SHARED stream is a FOLLOWER, determined and never configured', () => {
+	it('stays ONE writer when both generations register in the same millisecond', async () => {
+		// `writerOf` names the oldest surviving generation on a stream, and `createdAt`
+		// used to be a bare `Date.now()` -- milliseconds, with `byAge` breaking a tie on
+		// the processor HASH. Two generations registered in one millisecond therefore
+		// ordered by hash rather than by registration, and `writerOf` could name the
+		// SUCCESSOR as the writer of a stream the incumbent already wrote. Measured:
+		// TWO writers on one stream, which is the invariant ADR-0044 exists to hold.
+		//
+		// The fixtures are named so the successor's hash sorts FIRST, and the clock is
+		// frozen so the tie is guaranteed rather than raced for. Named the other way
+		// round this passes against the broken ordering too (ADR-0072).
+		const w = world();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const incumbent = await w.open('zzz-incumbent', 1);
+		const successor = await incumbent.add(w.specFor('aaa-successor', 10));
+		clock.mockRestore();
+
+		expect(successor.follows).toBe(true);
+		expect(successor.writesStream).toBe(false);
+		expect(incumbent.writesStream).toBe(true);
+
+		// and the registry ORDERED them by registration rather than by hash, which is
+		// what makes the above true rather than lucky
+		const records = await w.port.read();
+		const created = records.generations.map((record) => record.createdAt);
+		expect(new Set(created).size).toBe(created.length);
+	});
+
+	it('orders across STREAMS too, not only within one', async () => {
+		// The maximum `create` takes is over EVERY record, not the ones sharing a
+		// stream. A per-stream maximum would order each stream correctly and still let
+		// two records tie globally -- and `byAge`, which is what a listing an operator
+		// reads is sorted by, compares globally. Pinned because the weaker form passes
+		// every other case in this suite.
+		const w = world();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const incumbent = await w.open('zzz-incumbent', 1);
+		await incumbent.add(w.specFor('aaa-successor', 10));
+		await incumbent.add({...w.specFor('mmm-other-stream', 5), source: {...SOURCE, chainId: '999'}});
+		clock.mockRestore();
+
+		const created = (await w.port.read()).generations.map((record) => record.createdAt);
+		expect(created).toHaveLength(3);
+		expect(new Set(created).size).toBe(3);
+	});
+
 	it('gets a rebuild over the stored stream and NO receiver, because a stream is one address', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();
 
