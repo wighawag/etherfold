@@ -361,19 +361,22 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		expect(separate.indexer.generations.map((held) => held.follows)).toEqual([false, false]);
 	});
 
-	it('keeps ONE writer whichever way the two processor hashes sort', async () => {
-		// This case used to turn on a same-millisecond TIE, which is how the chain-facing
-		// container was caught handing out two writers: `follows` derived from
-		// `writerOf` per generation at add time let both see themselves named. Two
-		// things fixed that, and this asserts the surviving one.
+	it('keeps ONE writer whichever way the two processor hashes sort (a PRECONDITION, see the note)', async () => {
+		// READ THIS BEFORE ADDING A CASE HERE. This asserts a PRECONDITION, and it
+		// cannot distinguish the container's rule from the one ADR-0071 rejected --
+		// swapping `container.ts` back to `writerOf`-per-generation leaves this file, and
+		// the whole core suite, green.
 		//
-		// ADR-0072 removed the tie at its source -- `createdAt` is strictly increasing
-		// within a registry now, so two generations cannot share one -- and the tie case
-		// itself lives in `rebuild.test.ts`, over the receiving container. What remains
-		// HERE is the container's own rule (ADR-0071): it asks the durable registry
-		// whether anyone else is already registered on this stream, rather than reading
-		// the order of its own in-memory array. The fixtures still sort against
-		// registration order, because that is the input that told the rules apart.
+		// That is not an oversight, it is the consequence of the fix. The two rules used
+		// to differ only under a same-millisecond TIE, and ADR-0072 made ties impossible
+		// (`createdAt` is strictly increasing within a registry), so the input that told
+		// them apart can no longer be constructed through the public API. What survives
+		// is a live tie case over the RECEIVING container in `rebuild.test.ts`, which
+		// pins the ordering itself; if that ever goes, this file silently stops meaning
+		// anything.
+		//
+		// The fixtures still sort against registration order, because that is the input
+		// that used to discriminate and costs nothing to keep.
 		const shared = await openWorld([{name: 'zzz-first'}, {name: 'aaa-second'}]);
 
 		expect(shared.indexer.generations.map((held) => held.follows)).toEqual([false, true]);

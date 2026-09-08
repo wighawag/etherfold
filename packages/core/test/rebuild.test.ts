@@ -74,6 +74,24 @@ describe('a successor on a SHARED stream is a FOLLOWER, determined and never con
 		expect(new Set(created).size).toBe(created.length);
 	});
 
+	it('orders across STREAMS too, not only within one', async () => {
+		// The maximum `create` takes is over EVERY record, not the ones sharing a
+		// stream. A per-stream maximum would order each stream correctly and still let
+		// two records tie globally -- and `byAge`, which is what a listing an operator
+		// reads is sorted by, compares globally. Pinned because the weaker form passes
+		// every other case in this suite.
+		const w = world();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const incumbent = await w.open('zzz-incumbent', 1);
+		await incumbent.add(w.specFor('aaa-successor', 10));
+		await incumbent.add({...w.specFor('mmm-other-stream', 5), source: {...SOURCE, chainId: '999'}});
+		clock.mockRestore();
+
+		const created = (await w.port.read()).generations.map((record) => record.createdAt);
+		expect(created).toHaveLength(3);
+		expect(new Set(created).size).toBe(3);
+	});
+
 	it('gets a rebuild over the stored stream and NO receiver, because a stream is one address', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();
 

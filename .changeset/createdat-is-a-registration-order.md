@@ -3,7 +3,7 @@
 'etherfold': patch
 ---
 
-**A generation's `createdAt` is now strictly increasing within a registry, so two generations can never tie** (ADR-0072).
+**A generation's `createdAt` is now strictly increasing within a registry, so no two generations CREATED by this code can tie** (ADR-0072). A registry written by an earlier build can still hold a tied pair; nothing repairs those on open, and they keep resolving by hash as before. Nothing is published, so that set is empty today.
 
 It was a bare `Date.now()` — milliseconds — and `byAge` broke a tie on the processor HASH. `writerOf` names a stream's writer as the oldest surviving generation registered on it, so two generations registered in the same millisecond were ordered by hash rather than by registration, and a SUCCESSOR could be named the writer of a stream its incumbent already wrote. Measured on `ReceivingIndexer` with a frozen clock: **two folds with `writesStream: true`**, against one for the same fixtures named the other way round. That is the one-writer rule (ADR-0044) broken by a clock resolution, and consecutive `add` calls land in one millisecond routinely.
 

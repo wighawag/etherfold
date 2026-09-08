@@ -16,6 +16,12 @@ The obvious alternative is a monotonic sequence field on the record. That is a d
 
 `create` already holds `current.generations` inside the same `commit`, so the maximum is free and the increment is atomic with the write. The identity tie-break in `byAge` stays, for totality across records that did not come from one registry; it can no longer be reached by two records that did.
 
+## What it does NOT do: repair a registry an earlier build wrote
+
+The guarantee is about records this code CREATES. A registry written before this change can still hold two records that tie, and opening it repairs nothing: `writerOf` resolves such a pair by hash, deterministically and stably, exactly as it always did. So on an upgraded deployment holding a legacy tied pair, the named writer may be the later-registered generation.
+
+That set is empty today -- nothing is published (`CONTEXT.md`), and the reference deployment holds no state this project must preserve -- which is why this ships as a forward guarantee rather than a migration. A repair on open is the mechanism if that ever stops being true, and it is not built.
+
 ## What this does NOT change
 
 `writerOf` still means "the oldest SURVIVING generation registered on this stream", and it is still the shared model both containers consult. What changed is that "oldest" is now a fact rather than an approximation. ADR-0071 left this open explicitly, having found that deriving the chain-facing container's `follows` from `writerOf` per generation produced two writers there too; that container asks the registry a set question instead, and that is unchanged and still correct.
@@ -25,3 +31,5 @@ The obvious alternative is a monotonic sequence field on the record. That is a d
 ADR-0070 gave `RebuildReport` a `stopped` reason and `retryCanAdvance`, so a host could tell "call again" from "calling again will do exactly this for ever". Nothing in this repository read it: the CLI called `rebuildMore()` and discarded the result, which is the loop ADR-0070's cost story is about.
 
 It now reports a follower that cannot advance ONCE, naming the reason, and stays quiet while it can. Saying it every cycle would be its own kind of silence. A capability with no consumer is a claim, not a feature, and this was the one host we ship.
+
+Two details that are the difference between a message and a message that arrives. It goes to `console.error` and NOT to the package's `named-logs` logger: `packages/cli/src/index.ts` captures `logs('etherfold')` at module scope, and only the `fetch` and `index` commands ever import `named-logs-console`, so on the commands that reach this loop a `logger.error` is a silent no-op -- a defect `processorSetup.ts` already documents and works around the same way. And the decision is a separate pure function (`newlyStalledFollowers`), because driving a whole CLI to a stalled rebuild is expensive and the version that was not separated could be inverted wholesale with the CLI suite still green.

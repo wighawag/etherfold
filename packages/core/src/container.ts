@@ -676,16 +676,24 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// stream", which is the container's form of the one-writer rule: it never
 		// REASSIGNS the duty, so the first generation registered on a stream keeps it.
 		//
-		// Deliberately NOT `writerOf(...)`, and this is the subtle part. `writerOf` is a
-		// function of the whole record SET at a moment, while `follows` is frozen per
-		// generation at ADD time -- `readOnlyStream` is baked into the engine's config,
-		// so it cannot be recomputed later the way `reconcileWriters` recomputes it on
-		// the receiving side. Evaluating a set-function per element at different moments
-		// is not the same as evaluating it once, and here it is actively wrong:
-		// `createdAt` has millisecond resolution and `byAge` breaks a tie on the
-		// processor HASH, so two generations added in one millisecond can each see
-		// `writerOf` name THEMSELVES and both come out as writers. Measured, not
-		// theorised (ADR-0071).
+		// Deliberately NOT `writerOf(...)`, and the reason has two halves.
+		//
+		// It USED to be unsafe: `writerOf` is a function of the whole record SET at a
+		// moment, while `follows` is frozen per generation at ADD time -- `readOnlyStream`
+		// is baked into the engine's config, so it cannot be recomputed later the way
+		// `reconcileWriters` recomputes it on the receiving side. Evaluating a
+		// set-function per element at different moments let two generations added in one
+		// millisecond each see `writerOf` name THEMSELVES, and one stream got two
+		// writers (ADR-0071, measured).
+		//
+		// ADR-0072 removed that: `createdAt` is strictly increasing within a registry, so
+		// a record being added always sorts LAST and `writerOf` can never name it while
+		// others exist. The two questions now give the same answer here, always. This
+		// one is kept anyway because it is the one that does not DEPEND on that: "is
+		// anyone else already registered on this stream" is correct whatever the
+		// ordering, where the `writerOf` form is correct only while the ordering holds.
+		// Having just paid for that distinction once, the robust form is worth its two
+		// lines.
 		const alreadyOnThisStream = (await this.registry.list()).filter(
 			(other) => other.stream === record.stream && !sameGeneration(other, record),
 		);

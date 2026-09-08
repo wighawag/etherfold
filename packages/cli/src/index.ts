@@ -1,8 +1,6 @@
 import {
 	createDirectIngestion,
-	generationDigestOf,
 	resolveStreamConfig,
-	retryCanAdvance,
 	type Abi,
 	type EventProcessor,
 	type IndexingSource,
@@ -47,6 +45,7 @@ export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch
 export {index, indexMain, type IndexDependencies, type RunningReceiver} from './indexCommand.js';
 export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
+import {newlyStalledFollowers} from './followers.js';
 
 const logger = logs('etherfold');
 
@@ -381,31 +380,21 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 	 * shape of a rebuild running beside a live fold. It costs one in-memory check on
 	 * a process holding no follower, which is every process until something adds one.
 	 */
-	/**
-	 * Which followers this loop has already reported as unable to advance, so a
-	 * permanent condition is said ONCE rather than on every cycle for ever.
-	 */
-	const stalled = new Set<string>();
+	/** Which followers have already been reported as stalled, so it is said once and not per cycle. */
+	const reportedStalled = new Set<string>();
 
 	const advanceFollowers: Sleep = async (ms, signal) => {
 		if (!stopAtTip && container.followers().length > 0) {
 			try {
-				for (const report of await container.rebuildMore()) {
-					const id = generationDigestOf(report.generation);
-					// A rebuild that merely has more to do, or nothing to do yet, is the
-					// ordinary case and says nothing. A rebuild that CANNOT advance is
-					// different in kind: the same three reasons recur on every call, so
-					// polling never resolves them and the follower never becomes level --
-					// it will never inherit a vacant write duty and never promote. Silence
-					// there is what made this an invisible permanent stall (ADR-0070).
-					if (retryCanAdvance(report.stopped)) {
-						stalled.delete(id);
-						continue;
-					}
-					if (stalled.has(id)) continue;
-					stalled.add(id);
-					logger.error(
-						`the rebuild of generation ${id} cannot advance (${report.stopped.reason}) and retrying will not ` +
+				for (const stalled of newlyStalledFollowers(await container.rebuildMore(), reportedStalled)) {
+					// `console.error` and NOT the named-logs logger, for the reason
+					// `processorSetup.ts` already documents at its own diagnostic: this
+					// package captures `logs('etherfold')` at module scope and only the
+					// `fetch` and `index` commands ever import `named-logs-console`, so on
+					// the commands that reach this loop a `logger.error` is a silent no-op.
+					// A permanent stall reported into nothing is the defect, not the fix.
+					console.error(
+						`the rebuild of generation ${stalled.id} cannot advance (${stalled.reason}) and retrying will not ` +
 							`change that. It stays behind and never becomes level, so it will not take over writing its ` +
 							`stream. This needs a look; the canonical generation is unaffected and goes on answering.`,
 					);

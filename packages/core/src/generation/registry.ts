@@ -70,8 +70,14 @@ export type GenerationRecord = GenerationId & {
 	 * millisecond used to tie -- after which `byAge` broke the tie on the processor
 	 * HASH and `writerOf` could name a SUCCESSOR as the writer of a stream its
 	 * incumbent already wrote, giving one stream two writers (ADR-0072). The
-	 * identity tie-break below is kept for totality and can no longer be reached
-	 * by two records of one registry.
+	 * identity tie-break below is KEPT, and not only for totality: a registry
+	 * WRITTEN BY AN EARLIER BUILD can still hold two records that tie, and nothing
+	 * repairs those on open. So the guarantee is precise -- no two records CREATED by
+	 * this code can tie -- and a legacy tie still resolves by hash, deterministically
+	 * and stably, which is what it always did. Nothing is published yet
+	 * (`CONTEXT.md`), so that legacy set is empty today; a deployment that predates
+	 * this and holds a tied pair is the case that would want a repair-on-open, and it
+	 * does not exist.
 	 */
 	readonly createdAt: number;
 };
