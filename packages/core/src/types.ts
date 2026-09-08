@@ -540,6 +540,18 @@ export type ProvidedStreamConfig = {
 
 export type FetchConfig = Omit<LogFetcherConfig, 'filters'>;
 
+/**
+ * THE LEARNED RANGE, published because both ends of it are a deployment's.
+ *
+ * `LearnedRange` is what a run REPORTS about the provider it is reading (through
+ * `LogFetcher.limits`, and the `fetcher` field of the server's `/status`), and
+ * `ProvidedLearnedRange` is the same value handed BACK as `fetch.learnedRange` on
+ * a later run. Nothing persists it, which is the decision ADR-0074 records: the
+ * fetching half of ADR-0003 holds no state worth losing, so the memory lives with
+ * whoever is already durable.
+ */
+export type {LearnedRange, ProvidedLearnedRange} from './internal/engine/RangeLogFetcher.js';
+
 export type ProvidedIndexerConfig<ABI extends Abi> = {
 	fetch?: FetchConfig;
 	stream?: ProvidedStreamConfig;

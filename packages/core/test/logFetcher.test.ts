@@ -609,6 +609,54 @@ describe('the suspect result count is discovered from the provider, not guessed'
 	});
 });
 
+describe('what this fetcher believes about its provider is readable', () => {
+	it('reports the learned range and the suspect count together, and claims nothing it has not learned', async () => {
+		// The pair a host puts on its status surface. Before a fetch there is no ceiling
+		// and no safe span -- only the size the next request will ask for -- and the count
+		// is whatever tier is in force.
+		const chain = makeChain({latestBlock: 110});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+		const fetcher = fetcherOn(chain.provider, receiver.target, {fetch: {numBlocksToFetchAtStart: 20}});
+
+		expect(fetcher.limits).toEqual({
+			learnedRange: {nextSize: 20},
+			suspectResultCount: {count: 10000, source: 'default'},
+		});
+
+		await fetcher.fetchAndPush();
+
+		// a provider that refused nothing teaches no ceiling; what it did teach is how
+		// wide a span it answered, which here is the eleven blocks [100, 110] the chain
+		// had rather than the twenty this fetcher was willing to ask for
+		expect(fetcher.limits.learnedRange.ceiling).toBeUndefined();
+		expect(fetcher.limits.learnedRange.safeSpan).toBe(11);
+	});
+
+	it('starts from a range a previous run reported, and still tells a truncation apart from an answer', async () => {
+		// The two halves of the report are configured through DIFFERENT doors, and this is
+		// what that buys: the range comes back verbatim as a performance hint, while the
+		// suspect count stays an assertion about the node. Neither touches the other.
+		const chain = makeChain({latestBlock: 110});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+		const fetcher = fetcherOn(chain.provider, receiver.target, {
+			fetch: {numBlocksToFetchAtStart: 20, learnedRange: {ceiling: 2000, safeSpan: 1999, nextSize: 1999}},
+			suspectResultCount: 5000,
+		});
+
+		expect(fetcher.limits).toEqual({
+			learnedRange: {ceiling: 2000, safeSpan: 1999, nextSize: 1999},
+			suspectResultCount: {count: 5000, source: 'configured'},
+		});
+
+		// and it is a STARTING POINT rather than a claim about the chain: a configured
+		// range of 1999 blocks does not make this cycle claim more than the tip the node
+		// reported
+		const outcome = await fetcher.fetchAndPush();
+		expect(outcome.status).toBe('pushed');
+		expect((outcome as {toBlock: number}).toBlock).toBe(110);
+	});
+});
+
 describe('no reorg information crosses the wire', () => {
 	it('re-delivers the replaced blocks as raw logs and leaves the conclusion to the receiver', async () => {
 		// block 108 is inside the unconfirmed window the next round re-scans

@@ -799,13 +799,6 @@ function refusingProviderInTurn(refusals: any[], answersUpTo: number) {
 	return {provider: provider as any, spans};
 }
 
-/** Reads the discovered ceiling, which is otherwise visible only through arithmetic. */
-class CeilingProbe extends RangeLogFetcher {
-	get discoveredCeiling(): number | undefined {
-		return this.foundNumBlockToHigh;
-	}
-}
-
 /**
  * The other half of the claim: the parser above is only worth anything through the
  * range the RETRY then asks for. Both cases live here because they are the same
@@ -914,7 +907,7 @@ describe('what the fetcher does with a refusal', () => {
 		// the 2K BLOCK one, so following the suggestion alone asks for 13.6M blocks against
 		// an endpoint that has just said 2,000 is its maximum. `answersUpTo` is that real cap.
 		const {provider, spans} = refusingProvider(rpcError(-32602, ALCHEMY_TWO_CAPS), 2000);
-		const fetcher = new CeilingProbe(provider, null, null, {
+		const fetcher = new RangeLogFetcher(provider, null, null, {
 			numBlocksToFetchAtStart: 10_000_000,
 			maxBlocksPerFetch: 10_000_000,
 		});
@@ -924,7 +917,7 @@ describe('what the fetcher does with a refusal', () => {
 		// the suggestion alone would have asked for 80% of 13,649,337 blocks; the ceiling
 		// bounds it to one block under the cap the same message stated.
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([10_000_000, 1999]);
-		expect(fetcher.discoveredCeiling).toBe(2000);
+		expect(fetcher.learnedRange.ceiling).toBe(2000);
 		expect(result.toBlockUsed).toBe(1998);
 	});
 
@@ -941,20 +934,20 @@ describe('what the fetcher does with a refusal', () => {
 			],
 			1500,
 		);
-		const fetcher = new CeilingProbe(provider, null, null, {
+		const fetcher = new RangeLogFetcher(provider, null, null, {
 			numBlocksToFetchAtStart: 100_000,
 			maxBlocksPerFetch: 100_000,
 		});
 
 		await fetcher.getLogs({fromBlock: 1, toBlock: 1_000_000}, passThrough);
-		expect(fetcher.discoveredCeiling).toBe(2000);
+		expect(fetcher.learnedRange.ceiling).toBe(2000);
 
 		// and the NEXT cycle is still bounded by 2000: had the second refusal raised the
 		// ceiling to 10000, the bisection above it would have asked for 5,499 blocks here.
 		await fetcher.getLogs({fromBlock: 1000, toBlock: 1_000_000}, passThrough);
 
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([100_000, 1999, 999, 1499]);
-		expect(fetcher.discoveredCeiling).toBe(2000);
+		expect(fetcher.learnedRange.ceiling).toBe(2000);
 	});
 
 	it('leaves a refusal that states NO cap halving exactly as before', async () => {
@@ -965,13 +958,13 @@ describe('what the fetcher does with a refusal', () => {
 			rpcError(-32000, 'query returned more than allowed number of logs, try with smaller block range'),
 			300,
 		);
-		const fetcher = new CeilingProbe(provider, null, null, {numBlocksToFetchAtStart: 1000});
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
 
 		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
 
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 499, 249]);
 		expect(result.toBlockUsed).toBe(249);
-		expect(fetcher.discoveredCeiling).toBeUndefined();
+		expect(fetcher.learnedRange.ceiling).toBeUndefined();
 	});
 
 	it('remembers the RESULT cap a refusal reported, and never raises it', async () => {
@@ -1017,12 +1010,164 @@ describe('what the fetcher does with a refusal', () => {
 		// blocks, which inverts it), and an inverted range is a request no node can answer
 		// and a bug hunt for whoever meets it.
 		const {provider, spans} = refusingProvider(rpcError(-32602, 'eth_getLogs is limited to 0 - 1 blocks range'), 1);
-		const fetcher = new CeilingProbe(provider, null, null, {numBlocksToFetchAtStart: 1000});
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
 
 		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
 
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 1]);
 		expect(result.toBlockUsed).toBe(1);
-		expect(fetcher.discoveredCeiling).toBe(1);
+		expect(fetcher.learnedRange.ceiling).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// THE LEARNED RANGE: REPORTED, AND ACCEPTED BACK AS CONFIGURATION
+// ---------------------------------------------------------------------------
+// The three numbers this fetcher adapts by -- the ceiling it has been refused
+// at, the widest span that has actually been answered, and the size the next
+// request will ask for -- used to be invisible from outside and gone on
+// restart, so every process start re-paid the discovery from the small starting
+// range upwards.
+//
+// They are now READABLE (`learnedRange`) and CONFIGURABLE (`conf.learnedRange`),
+// and deliberately NOT PERSISTED: the fetching half of ADR-0003 holds no state
+// worth losing, so the memory lives with whoever is already durable. A run that
+// configures nothing rediscovers exactly as it always did, which is what the
+// spans in the block above pin.
+// ---------------------------------------------------------------------------
+describe('the learned range is reported, and can be configured back in', () => {
+	it('reports the size it will ask for, and claims nothing it has not learned', () => {
+		const {provider} = refusingProvider(rpcError(-32005, 'limit exceeded'), 300);
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		// the KEYS as well as the values: a ceiling of `0` or a safe span of `0` would
+		// read as "this provider serves nothing", which is not what "nothing learned yet"
+		// means
+		expect(fetcher.learnedRange).toEqual({nextSize: 1000});
+	});
+
+	it('reports the ceiling, the safe span and the next size once it has adapted', async () => {
+		// Alchemy's two-cap refusal again (ethers-io/ethers.js#4703), which is the shape
+		// that teaches the fetcher all three numbers in one round trip.
+		const {provider} = refusingProvider(rpcError(-32602, ALCHEMY_TWO_CAPS), 2000);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 10_000_000,
+			maxBlocksPerFetch: 10_000_000,
+		});
+
+		await fetcher.getLogs({fromBlock: 0, toBlock: 13_649_336}, passThrough);
+
+		// what an operator reads off the status surface, and what they may hand back to
+		// the next run: refused at 2000, answered 1999, asking for 1999 next
+		expect(fetcher.learnedRange).toEqual({ceiling: 2000, safeSpan: 1999, nextSize: 1999});
+	});
+
+	it('starts from a range a previous run reported, instead of re-paying the discovery', async () => {
+		// The same endpoint, on the next process start. What the configured fetcher does
+		// NOT do is walk up from the starting range: it asks for what it was told worked,
+		// and the provider answers it.
+		const {provider, spans} = refusingProvider(rpcError(-32602, ALCHEMY_TWO_CAPS), 2000);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 50,
+			learnedRange: {ceiling: 2000, safeSpan: 1999, nextSize: 1999},
+		});
+
+		const result = await fetcher.getLogs({fromBlock: 0, toBlock: 13_649_336}, passThrough);
+
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1999]);
+		expect(result.toBlockUsed).toBe(1998);
+
+		// the SAME provider and the SAME first call, told nothing: it covers 50 blocks
+		// where the configured one covered 1999, which is the discovery being re-paid
+		const {provider: fresh} = refusingProvider(rpcError(-32602, ALCHEMY_TWO_CAPS), 2000);
+		const rediscovering = new RangeLogFetcher(fresh, null, null, {numBlocksToFetchAtStart: 50});
+		expect((await rediscovering.getLogs({fromBlock: 0, toBlock: 13_649_336}, passThrough)).toBlockUsed).toBe(49);
+	});
+
+	it('still adapts DOWN from a configured size the provider refuses', async () => {
+		// rpc.pulsechain.com's phrasing, captured 2026-09-08: a range complaint carrying
+		// no number. The configured size is a HINT and never a promise, so a provider
+		// that has tightened since the run that reported it costs a retry and nothing
+		// more -- the halving path takes over exactly as it does for a fetcher that
+		// configured nothing.
+		const {provider, spans} = refusingProvider(
+			rpcError(-32000, 'query returned more than allowed number of logs, try with smaller block range'),
+			300,
+		);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 50,
+			learnedRange: {ceiling: 500, safeSpan: 399, nextSize: 400},
+		});
+
+		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
+
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([400, 199]);
+		expect(result.toBlockUsed).toBe(199);
+		// and it goes on adapting from there rather than from the configured numbers
+		expect(fetcher.learnedRange).toEqual({ceiling: 500, safeSpan: 399, nextSize: 449});
+	});
+
+	it('lowers a configured CEILING the provider refuses, and never wedges on a stale one', async () => {
+		// rpc.merlinchain.io's phrasing with the cap it really states (2000), against a
+		// configuration remembering a far more generous endpoint. A configured ceiling is
+		// subject to the same only-ever-lower rule as a discovered one, so the stated cap
+		// replaces it on the first refusal.
+		const {provider, spans} = refusingProvider(rpcError(-32000, 'block range too large, max range: 2000'), 2000);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 50,
+			maxBlocksPerFetch: 100_000,
+			learnedRange: {ceiling: 50_000, safeSpan: 40_000, nextSize: 40_000},
+		});
+
+		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 1_000_000}, passThrough);
+
+		expect(fetcher.learnedRange.ceiling).toBe(2000);
+		// It LANDS, which is the criterion: a stale configured value costs a retry and
+		// never wedges. The one-block second request is the EXISTING bisection meeting a
+		// safe span the new ceiling has just contradicted, not something the seeding
+		// introduced -- see `work/notes/observations/a-tightened-ceiling-leaves-a-safe-span-above-it.md`.
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([40_000, 1]);
+		expect(result.toBlockUsed).toBe(1);
+	});
+
+	it('ignores configured numbers that could not be a count of blocks', () => {
+		const {provider} = refusingProvider(rpcError(-32005, 'limit exceeded'), 300);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 1000,
+			// zero and negative bound the fetcher to nothing that can be asked for, and a
+			// fraction is not a count of blocks. Ignored rather than refused: this value
+			// comes back from a previous run through an operator or a supervisor, and it is
+			// a performance hint, so nothing about it is worth failing a start over.
+			learnedRange: {ceiling: 0, safeSpan: -1, nextSize: 1.5},
+		});
+
+		expect(fetcher.learnedRange).toEqual({nextSize: 1000});
+	});
+
+	it('ignores a configured safe span that is not below the configured ceiling', () => {
+		// A span cannot be both KNOWN-SAFE and at-or-above a width that was REFUSED, and
+		// the pair does occur in a real report: a provider that tightens its cap mid-run
+		// lowers the ceiling under a span that had already succeeded. The ceiling is the
+		// half backed by a refusal, so it is the half that is kept.
+		const {provider} = refusingProvider(rpcError(-32005, 'limit exceeded'), 300);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 50,
+			learnedRange: {ceiling: 2000, safeSpan: 4999, nextSize: 1999},
+		});
+
+		expect(fetcher.learnedRange).toEqual({ceiling: 2000, nextSize: 1999});
+	});
+
+	it('never asks for more than this deployment allows, whatever was configured', () => {
+		// `maxBlocksPerFetch` is a bound this deployment sets on its own requests, so a
+		// configured range read off a run that allowed more does not widen it.
+		const {provider} = refusingProvider(rpcError(-32005, 'limit exceeded'), 300);
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 50,
+			maxBlocksPerFetch: 1000,
+			learnedRange: {ceiling: 10_000_000, safeSpan: 900_000, nextSize: 800_000},
+		});
+
+		expect(fetcher.learnedRange).toEqual({ceiling: 1000, nextSize: 1000});
 	});
 });

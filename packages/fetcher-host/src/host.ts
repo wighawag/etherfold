@@ -171,6 +171,10 @@ export class FetcherHost<ABI extends Abi> {
 			fetch: {
 				maxEventsPerFetch: config.maxEventsPerFetch,
 				...(config.maxBlocksPerFetch !== undefined ? {maxBlocksPerFetch: config.maxBlocksPerFetch} : {}),
+				// What a PREVIOUS run reported, so this one starts there instead of walking up
+				// from the starting range again (ADR-0074). Nothing here wrote it down: it came
+				// back through the environment.
+				...(config.learnedRange !== undefined ? {learnedRange: config.learnedRange} : {}),
 			},
 			// The suspect count is passed as an ASSERTION only when this deployment made
 			// one. An unstated one goes in as this host's DEFAULT instead, which leaves the

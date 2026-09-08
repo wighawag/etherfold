@@ -41,13 +41,15 @@ It is optional because an indexer-server is useful before it ingests anything: `
 
 `getCursorReport` is optional for the same kind of reason: only the process that OWNS the store can read a cursor, and this package has no store dependency. A host with none (the Cloudflare Worker host is one) injects no reporter and `/status` carries no `cursor` field, rather than an invented one.
 
+`getFetcherLimits` is optional on the same ground, one half of the pipeline further out: it reports what this deployment's LOG-FETCHER has learned about the node it reads, and almost no host has one. The receiving half of ADR-0003 makes no chain call at all, so `etherfold index`, `etherfold serve` and the Workers host inject none and `/status` carries no `fetcher` field; the COMBINED shape (`etherfold run`) holds both halves and is the one that reports it. What it carries is `{reported: true, learnedRange: {ceiling?, safeSpan?, nextSize}, suspectResultCount: {count, source}}`, or `{reported: false, reason}` when a reporter cannot answer. Unlike the cursor it is TYPED here rather than opaque: a learned range is `@etherfold/core`'s, it is three numbers, and it hides behind no storage seam -- so a dashboard reading `fetcher.learnedRange.ceiling` is reading a documented field. It is reported so an operator can hand it BACK as configuration on the next start, which is how a restart resumes where discovery left off while the fetcher itself persists nothing (ADR-0074).
+
 **What a reporter owes the server: a SMALL, JSON-serialisable summary, and never the store's raw serialized cursor.** That value is a serialized `LastSync` carrying an unconfirmed window of DECODED EVENTS, so handing it over whole would put an unbounded blob on the one page an operator refreshes while something is wrong. The constraint lives on the seam because `/status` reports what the reporter returns VERBATIM: the server does not parse it (the cursor is opaque behind the storage seam, ADR-0027, and only the processor knows what one means), so it cannot bound it afterwards either.
 
 ## The routes
 
 | route | |
 | --- | --- |
-| `GET /status` | health, database reachability, the fixed-schema version against the one this build expects, the reorg counters, the injected cursor report and the last error this PROCESS saw. `503` when the database is unreachable or the schema is not the expected version |
+| `GET /status` | health, database reachability, the fixed-schema version against the one this build expects, the reorg counters, the injected cursor report, what the fetcher (if this host holds one) has learned about its node, and the last error this PROCESS saw. `503` when the database is unreachable or the schema is not the expected version |
 | `POST /admin/setup` | apply the fixed-table schema |
 | `POST /{indexer}/ingest` | a `WireBatch` from a log-fetcher (ADR-0004), for ONE named indexer |
 | `POST /{indexer}/ingest/expected-from-block` | where the next batch must start, as one `{context, expectedFromBlock}` per LIVE wire context that named indexer holds |

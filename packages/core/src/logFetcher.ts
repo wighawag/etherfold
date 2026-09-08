@@ -23,6 +23,7 @@ import {assertWellFormed} from './streamBuilder.js';
 import type {
 	FetchConfig,
 	IndexingSource,
+	LearnedRange,
 	LogEvent,
 	ProvidedStreamConfig,
 	UsedStreamConfig,
@@ -212,6 +213,31 @@ export type SuspectResultCountSource = 'configured' | 'reported' | 'default';
 /** The count a fetch is being judged against right now, and where it came from. */
 export type ResolvedSuspectResultCount = {count: number; source: SuspectResultCountSource};
 
+/**
+ * EVERYTHING THIS FETCHER BELIEVES ABOUT ITS PROVIDER, in one value: how wide a
+ * range it will answer, and how many logs it will return before the answer stops
+ * being believable.
+ *
+ * The two halves are learned the same way (by being refused, and by reading what
+ * the refusal said) and they are NOT the same number: a block-span cap says
+ * nothing about how many logs those blocks hold, which is why they are reported
+ * side by side rather than folded together. Both are things an operator could
+ * previously only infer -- the range from timings, the count from a log line --
+ * and both are what a host reports on its status surface.
+ *
+ * Only ONE half is durable-by-configuration in both directions: `learnedRange`
+ * may be handed back verbatim as `fetch.learnedRange`, while a suspect count is
+ * configured through `suspectResultCount`, where it becomes an ASSERTION that
+ * outranks anything a provider reports. That asymmetry is deliberate and is why
+ * this type carries the SOURCE of the count and not of the range: a range is a
+ * performance hint whichever tier it came from, and a suspect count is the
+ * sharpest correctness knob in the fetcher.
+ */
+export type FetcherLimits = {
+	learnedRange: LearnedRange;
+	suspectResultCount: ResolvedSuspectResultCount;
+};
+
 const passThrough = <T>(promise: Promise<T>) => promise;
 
 /**
@@ -239,6 +265,19 @@ const passThrough = <T>(promise: Promise<T>) => promise;
  * when it is wrong, the `409` that follows is not an error but the normal
  * correction path. Losing it costs one extra request and nothing else, which is
  * the test for whether a piece of state is safe to hold here.
+ *
+ * The LEARNED RANGE (`learnedRange`) is the one thing held here that FAILS that
+ * test, and the way it is handled is the answer to it rather than an exception.
+ * Losing it costs more than one request: the range fetcher re-pays the walk up
+ * from the small starting range, being refused as it goes. It is still only
+ * performance, so the response is not to give this class a store -- which would
+ * hand it a copy it could be restored from when stale, a lifecycle to own and a
+ * place to put the next block number, which is the split brain ADR-0004 removes
+ * -- but to move the MEMORY out: it is REPORTED (`limits`, and a host's status
+ * surface) and CONFIGURED BACK IN (`fetch.learnedRange`), so a deployment that
+ * wants a restart to resume where discovery left off keeps that value wherever
+ * it already keeps configuration (ADR-0074). Nothing here writes it down, and a
+ * run that configures none rediscovers exactly as before.
  *
  * ## The one thing it must never get wrong
  *
@@ -319,6 +358,34 @@ export class LogFetcher<ABI extends Abi> {
 	/** What the receiver last said, or `undefined` when this fetcher has yet to be told. */
 	get cursorHint(): number | undefined {
 		return this.expectedFromBlockHint;
+	}
+
+	/**
+	 * How wide a range this provider has been found to answer: the ceiling it has
+	 * refused at, the widest span it has answered, and what the next request will ask
+	 * for.
+	 *
+	 * Reported so it can be CONFIGURED BACK IN (`fetch.learnedRange`) on a later run,
+	 * which is how a restart resumes where discovery left off without this class
+	 * persisting anything (ADR-0074). Losing it costs more than one request -- it
+	 * re-pays the walk up from the small starting range -- which is exactly why it is
+	 * not kept here: the class docblock's test for state this fetcher may hold is
+	 * that losing it costs ONE extra request and nothing else.
+	 */
+	get learnedRange(): LearnedRange {
+		return this.logEventFetcher.learnedRange;
+	}
+
+	/**
+	 * What this fetcher believes about its provider, for a host's status surface.
+	 *
+	 * One read rather than two, because the two numbers are read together and mean
+	 * different things: an operator diagnosing a slow backfill wants the range, one
+	 * diagnosing a suspected truncation wants the count and its source, and one
+	 * looking at a status page wants to see that they disagree with the node.
+	 */
+	get limits(): FetcherLimits {
+		return {learnedRange: this.learnedRange, suspectResultCount: this.suspectResultCount};
 	}
 
 	/**

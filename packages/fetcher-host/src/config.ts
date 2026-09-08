@@ -1,4 +1,4 @@
-import type {Abi, IndexingSource, ProvidedStreamConfig, RetryPolicy} from '@etherfold/core';
+import type {Abi, IndexingSource, ProvidedLearnedRange, ProvidedStreamConfig, RetryPolicy} from '@etherfold/core';
 import {resolveBackoff, type BackoffConfig, type ResolvedBackoff} from './backoff.js';
 
 /**
@@ -139,6 +139,28 @@ export type FetcherHostConfig<ABI extends Abi> = {
 	 * smaller.
 	 */
 	maxBlocksPerFetch?: number;
+	/**
+	 * What a PREVIOUS run of this deployment learned about the same provider
+	 * (`LEARNED_RANGE`), so this one does not re-pay the discovery.
+	 *
+	 * A fetcher works out how wide a range its node will answer by being refused,
+	 * and it holds the answer in memory: nothing here writes it down, because the
+	 * chain-facing half of ADR-0003 holds no state worth losing and a store invented
+	 * inside it for a performance hint would trade that property away (ADR-0074). So
+	 * the memory lives with whoever is already durable: a run REPORTS what it learned
+	 * (`/status`, `fetcher.learnedRange`), and an operator or a supervisor hands the
+	 * same object back here.
+	 *
+	 * It is a STARTING POINT and never a promise. A provider that has tightened since
+	 * refuses the configured size, which lowers it on the first round trip, so a
+	 * stale value costs a retry. Configure none and this deployment behaves exactly
+	 * as it did before the option existed.
+	 *
+	 * It is NOT `maxBlocksPerFetch`, which is a bound this deployment SETS on its own
+	 * requests and which bounds this too: a remembered range read off a run that
+	 * allowed wider fetches does not widen them here.
+	 */
+	learnedRange?: ProvidedLearnedRange;
 	/** MUST match the receiver's, since `{source, config}` is hashed into the wire identity. */
 	stream: ProvidedStreamConfig;
 	/** Rate limit applied to the JSON-RPC provider this host builds. */
@@ -221,6 +243,57 @@ export function parseIndexingSource<ABI extends Abi>(json: string, variable = 'I
 	return source;
 }
 
+/**
+ * Parse a {@link FetcherHostConfig.learnedRange} out of the JSON a deployment
+ * hands back from a previous run's report.
+ *
+ * ONE variable carrying the whole object, rather than three, because that is the
+ * shape the round trip has: a status page reports
+ * `{ceiling, safeSpan, nextSize}` and a supervisor pastes THAT back. Three
+ * variables would make an operator take a value apart and put it together again,
+ * and would let two thirds of one report arrive.
+ *
+ * The strictness is deliberately asymmetric, and both halves follow from what
+ * this value IS -- a performance hint that travelled through a human:
+ *
+ * - a value that cannot be READ (not JSON, not an object, a member that is not a
+ *   number, a number that could not be a count of blocks) is REFUSED at startup,
+ *   naming the variable and the field. It is a misconfiguration an operator can
+ *   fix, and doing nothing quietly would leave them watching a deployment
+ *   rediscover while believing it did not have to;
+ * - a key this build does not KNOW is ignored. A report that grows a field must
+ *   not turn a supervisor that pastes it into an outage, and unrecognised
+ *   environment input is already ignored everywhere else in this host.
+ */
+export function parseLearnedRange(json: string, variable = 'LEARNED_RANGE'): ProvidedLearnedRange {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch (err) {
+		throw new FetcherConfigError(`${variable} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw new FetcherConfigError(
+			`${variable} must be a JSON object, as a run reports it: {"ceiling":2000,"safeSpan":1999,"nextSize":1999}`,
+		);
+	}
+	const reported = parsed as Record<string, unknown>;
+	const range: ProvidedLearnedRange = {};
+	for (const field of ['ceiling', 'safeSpan', 'nextSize'] as const) {
+		const value = reported[field];
+		if (value === undefined || value === null) {
+			continue;
+		}
+		if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+			throw new FetcherConfigError(
+				`${variable}.${field} must be a positive whole number of blocks, as reported by a previous run`,
+			);
+		}
+		range[field] = value;
+	}
+	return range;
+}
+
 function required(value: string | undefined, variable: string, what: string): string {
 	if (value === undefined || value.trim() === '') {
 		throw new FetcherConfigError(`${variable} is unset, and it is ${what}.`);
@@ -294,6 +367,11 @@ export function resolveFetcherHostConfig<ABI extends Abi>(
 	// while the receiver resolved the default and the two could never talk.
 	const stream: ProvidedStreamConfig = overrides.stream ?? streamConfigFromEnv(env);
 
+	// ABSENT rather than empty when nothing is configured: what core receives must be
+	// indistinguishable from what it received before this option existed, which is
+	// the criterion a run that configures nothing is held to.
+	const learnedRange = overrides.learnedRange ?? (env.LEARNED_RANGE ? parseLearnedRange(env.LEARNED_RANGE) : undefined);
+
 	return {
 		source,
 		// NOT `required(...)`: whether a wire needs configuring depends on something
@@ -310,6 +388,7 @@ export function resolveFetcherHostConfig<ABI extends Abi>(
 		suspectResultCountSource: statedSuspectResultCount !== undefined ? 'configured' : 'default',
 		maxEventsPerFetch,
 		maxBlocksPerFetch: overrides.maxBlocksPerFetch ?? readNumber(env, 'MAX_BLOCKS_PER_FETCH'),
+		...(learnedRange === undefined ? {} : {learnedRange}),
 		stream,
 		retry: overrides.retry ?? {
 			...(retryAttempts !== undefined ? {attempts: retryAttempts} : {}),
@@ -371,5 +450,14 @@ export function describeFetcherHostConfig<ABI extends Abi>(config: FetcherHostCo
 				`node's REAL eth_getLogs cap, or that it does not cap silently; a cap the provider REPORTS in a refusal ` +
 				`replaces it, and SUSPECT_RESULT_COUNT overrides both)`,
 		`maxEventsPerFetch=${config.maxEventsPerFetch}`,
+		// Said out loud because it changes what the FIRST request asks for, so an
+		// operator reading an unexpected first span can see whether it came from a
+		// remembered range or from discovery. A stale one costs a retry and nothing more.
+		...(config.learnedRange
+			? [
+					`learnedRange=${JSON.stringify(config.learnedRange)} (REMEMBERED from a previous run and adapted from ` +
+						`there, never persisted by this process)`,
+				]
+			: []),
 	].join('; ');
 }

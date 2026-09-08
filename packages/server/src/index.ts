@@ -16,7 +16,7 @@ import {getFeedAPI} from './api/feed.js';
 import {getAdminAPI} from './api/admin.js';
 
 export type {Env, ServerOptions};
-export type {CursorReporter} from './types.js';
+export type {CursorReporter, FetcherLimitsReporter} from './types.js';
 export {indexerEntryOn, indexerRegistry, singleContextEntry} from './registry.js';
 export type {IndexerRegistryEntry, IndexerResolver} from './registry.js';
 /**
@@ -27,6 +27,14 @@ export type {IndexerRegistryEntry, IndexerResolver} from './registry.js';
  * already watches.
  */
 export type {CursorReport, GenerationReport, ReportedGeneration, StatusCursor, StatusReport} from './cursor.js';
+/**
+ * THE `/status` FETCHER FIELD (ADR-0074): what the chain-facing half of this
+ * deployment has learned about the node it reads, reported so an operator can
+ * hand it back as configuration instead of a stateless component persisting it.
+ *
+ * Absent on every host that holds no fetcher, which is every RECEIVING one.
+ */
+export type {StatusFetcher} from './fetcherLimits.js';
 export {SCHEMA_VERSION, applySchema, readSchemaState} from './schema.js';
 export type {SchemaState} from './schema.js';
 export type {Config} from './setup.js';
