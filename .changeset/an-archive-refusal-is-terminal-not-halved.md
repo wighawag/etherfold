@@ -1,0 +1,16 @@
+---
+'@etherfold/core': minor
+'@etherfold/fetcher-host': patch
+---
+
+An endpoint that refuses to serve HISTORY is now terminal for that endpoint, instead of being halved at until the retry budget runs out.
+
+Serving logs for old blocks needs an archive node, and public endpoints commonly token-gate it: `ethereum-rpc.publicnode.com` answers a backfill with `{"code":-32602,"message":"Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode"}` (captured 2026-06-30 and again, byte-identical, on 2026-09-08). Every other refusal the range fetcher meets is a complaint about the RANGE, answered by asking for less, so that is what it did here too: it halved 1000 -> 499 -> 249, spent the whole budget shrinking a window the endpoint was never going to serve, and then failed with whatever the last error happened to be. An operator read a range error and tuned `maxBlocksPerFetch`, when what they had was an endpoint that does not serve history at all.
+
+**`RangeLogFetcher` now stops on the first such refusal and throws the new `ArchiveRefusedError`**, which names archive access as the cause, quotes the provider's own words verbatim, and says what to do about it (point at an archive endpoint, authenticate this one, or start from a block it still serves). It carries `retryable: false`, so it is read STRUCTURALLY by the same mechanism every other refusal in `@etherfold/core` is read by: the log-fetcher's retry loop and `@etherfold/fetcher-host`'s backoff both stop rather than waiting out a delay for an endpoint whose answer will not change. Nothing matches on message text.
+
+**The classifier is deliberately narrow, and its width is the whole judgement here.** A refusal qualifies only when it IDENTIFIES itself: the text must mention `archive` AND carry an entitlement word (a token, an API key, a plan, an upgrade, "not supported", "not enabled"). Both halves are load-bearing. `archive` alone would swallow "archive node is syncing" and "archive backend temporarily unavailable", which are transient; an entitlement word alone would swallow `rpc.ankr.com`'s "You must authenticate your request with an API key", which is about the endpoint rather than about serving history. A false terminal is a worse failure than the grinding this replaces -- grinding is slow and visible, a false terminal is fast and wrong -- so **anything ambiguous keeps today's behaviour and still halves**, asserted end to end rather than assumed, including a dropped socket, which still spends its retries and still reaches the caller carrying no `retryable` opinion at all.
+
+The text is read from `error.data` before `error.message`, the same order the range-hint parser reads them in, because a Nethermind-style node puts its whole complaint in `data` behind a message that says only `"invalid params"`. No error CODE is required: the captured refusal is a `-32602`, but providers are as inconsistent about the code they put this behind as they are about range complaints (the 2026-09-08 sweep found those under seven different codes), so the identifying evidence is the text.
+
+`getNewToBlockFromError` is untouched, and the two functions cannot overlap: `looksLikeRangeHint` already rejects the archive body, which is the case that gate earns its keep on.

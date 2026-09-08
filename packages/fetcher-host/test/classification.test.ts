@@ -1,4 +1,5 @@
 import {
+	ArchiveRefusedError,
 	IngestionRefusedError,
 	IngestionUnavailableError,
 	InvalidBatchError,
@@ -42,6 +43,11 @@ describe('retryability is read off the error and never re-derived', () => {
 		['UnexpectedFromBlockError (the cursor refusal)', new UnexpectedFromBlockError(10, 5), false],
 		['InvalidBatchError (a malformed envelope)', new InvalidBatchError('bad'), false],
 		['NoFetchProgressError (a range fetcher going backwards)', new NoFetchProgressError(10, 5), false],
+		[
+			'ArchiveRefusedError (an endpoint that will not serve history at any range)',
+			new ArchiveRefusedError(1, 1000, 'Archive requests require a personal token.'),
+			false,
+		],
 	];
 
 	for (const [what, error, retryable] of cases) {

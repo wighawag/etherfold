@@ -287,7 +287,7 @@ export class LogFetcher<ABI extends Abi> {
 	 * NOT a normal outcome throws, and the error's own `retryable` says whether a
 	 * host should try again later (`IngestionUnavailableError`, provider trouble) or
 	 * stop and tell somebody (`IngestionRefusedError`, `WireContextMismatchError`,
-	 * `UnexpectedChainError`, `SuspectedTruncationError`).
+	 * `UnexpectedChainError`, `SuspectedTruncationError`, `ArchiveRefusedError`).
 	 */
 	async fetchAndPush(): Promise<FetchCycleOutcome> {
 		await this.assertChain('before');
