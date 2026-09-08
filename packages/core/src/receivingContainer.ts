@@ -933,9 +933,14 @@ export class ReceivingIndexer<
 	 * arbitrarily long, and putting it on the write path would stall whichever batch
 	 * happened to arrive during an upgrade, for work that batch did not cause.
 	 *
-	 * A scheduler loops while any report has `complete: false`, and stops when they
-	 * are all true; a serverless host re-invokes itself instead. Nothing here
-	 * invents a cadence, and a call with nothing to do costs one read per follower.
+	 * A scheduler loops while a report is `complete: false` AND `retryCanAdvance`
+	 * says another call can help; a serverless host re-invokes itself instead. Both
+	 * halves are load-bearing: three of the six `RebuildStop` reasons recur
+	 * identically on every call, so looping on `complete === false` alone polls them
+	 * for ever at full rate while the follower never becomes level (ADR-0070). A
+	 * report that is incomplete and cannot advance needs a human, not another call.
+	 * Nothing here invents a cadence, and a call with nothing to do costs one read
+	 * per follower.
 	 *
 	 * The pointer is settled AFTER the chunks, once, so a successor that became
 	 * level during this call is promoted in the same call rather than on the next

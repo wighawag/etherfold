@@ -178,9 +178,51 @@ export type ReplayChunk<ABI extends Abi> = {
  * one-writer rule (ADR-0044) said in the shape of a type rather than in a no-op.
  */
 export type ReplaySource<ABI extends Abi> = {
-	/** The slice, or ABSENT: nothing stored under this stream, or a history that does not reach back. */
-	readChunk(query: ReplayChunkQuery): Promise<ReplayChunk<ABI> | undefined>;
+	/** The slice, or the VERDICT that says why there is not one. */
+	readChunk(query: ReplayChunkQuery): Promise<ReplayRead<ABI>>;
 };
+
+/**
+ * WHAT A BOUNDED READ HANDS BACK, as a verdict rather than a nullable.
+ *
+ * The same correction ADR-0069 made to `ExistingStream.fetchFrom`, applied to its
+ * BOUNDED sibling, which was left behind (ADR-0070). These are the same
+ * `_emissions` rows read two ways, so answering the same question two ways was
+ * never defensible -- and the shipped implementation proved it was not
+ * theoretical: `storedEmissionReplaySource` returned `undefined` both for
+ * "nothing has ever been stored here" and for "a perfectly good stream that
+ * starts ABOVE where this fold resumes".
+ *
+ * The difference is the whole scheduling decision. Nothing-stored is TRANSIENT --
+ * the writing generation simply has not appended yet, and calling again is
+ * exactly right. Does-not-reach-back is PERMANENT for this fold: it recurs on
+ * every call, for ever, and no amount of polling fixes it. Collapsed into one
+ * value, a host could only keep calling, burning a scheduled invocation per
+ * follower with no signal that anything was wrong (`retryCanAdvance`).
+ */
+export type ReplayRead<ABI extends Abi> =
+	/** A slice to fold. */
+	| ({readonly status: 'chunk'} & ReplayChunk<ABI>)
+	/** Nothing is stored under this stream yet. TRANSIENT: the writer may append later. */
+	| {readonly status: 'absent'}
+	/**
+	 * A stream that starts ABOVE the block this fold resumes at.
+	 *
+	 * Nothing is wrong with it -- a fold resuming higher would be served -- which is
+	 * why it is its own verdict and not damage, exactly as in `StreamRead`. For THIS
+	 * fold it is terminal: a partial history replayed as though it were whole leaves
+	 * the blocks under it simply absent from the rebuilt state, silently.
+	 */
+	| {readonly status: 'does-not-reach-back'; readonly startBlock: number}
+	/**
+	 * Something is stored and it does not hold together.
+	 *
+	 * No in-repo implementation reports this today (the SQL reader's rows are either
+	 * claimed or they are not). It exists because a third party implementing this
+	 * port over its own store has damage it can see and, without this, nowhere to
+	 * put it -- which is how the conflation this type removes got started.
+	 */
+	| {readonly status: 'inconsistent'; readonly reason: string};
 
 /**
  * How many stored emissions ONE call replays when the host names no budget.
@@ -215,7 +257,7 @@ export type RebuildReport = {
 	readonly generation: GenerationId;
 	/** The block this chunk resumed at: `getFromBlock` over the durable checkpoint. */
 	readonly fromBlock: number;
-	/** How far the fold now claims to cover, or `undefined` when there was no stream to read. */
+	/** How far the fold now claims to cover, or `undefined` when nothing was folded. */
 	readonly toBlock: number | undefined;
 	/** How many stored emissions were read. The bound on this call's work, made visible. */
 	readonly scanned: number;
@@ -228,21 +270,93 @@ export type RebuildReport = {
 	/**
 	 * Whether the fold has consumed the whole stream as it stood at this call.
 	 *
-	 * `false` only when the budget stopped it, or when there was nothing to read
-	 * (`absent`). A scheduler loops while this is false, exactly as it does on
-	 * `PairCompactionReport.complete`.
+	 * ONE question, the same one `PairCompactionReport.complete` and
+	 * `PruneReport.complete` answer. WHY it stopped is `stopped`, and a scheduler
+	 * that only loops while this is false is the caller ADR-0070 exists for: three
+	 * of the six stop reasons recur for ever.
 	 */
 	readonly complete: boolean;
 	/**
-	 * No stream to fold: nothing has ever been stored under it, or what is stored
-	 * does not reach back to where this fold resumes.
+	 * WHY this call stopped, stated rather than left to be re-derived.
 	 *
-	 * Reported rather than thrown, because it is not this generation's to repair:
-	 * the stream belongs to the generation still appending to it, and the honest
-	 * answer is that this rebuild cannot proceed yet.
+	 * This replaces an `absent: boolean` that answered two questions at once and a
+	 * `complete: false` that answered three, so the only way to tell "call again" from
+	 * "calling again will do exactly this for ever" was an undocumented
+	 * `toBlock === undefined && !absent`. See `retryCanAdvance`.
 	 */
-	readonly absent: boolean;
+	readonly stopped: RebuildStop;
 };
+
+/**
+ * WHY a rebuild chunk stopped. Six reasons, three of which a retry cannot fix.
+ *
+ * Reported rather than thrown throughout, because none of it is this generation's
+ * to repair: the stream belongs to the generation still appending to it, and a
+ * follower owns neither those rows nor their cursor.
+ */
+export type RebuildStop =
+	/** The fold reached the end of the stream as it stood. `complete` is true. */
+	| {readonly reason: 'stream-consumed'}
+	/** The chunk budget cut it short. More is waiting NOW; call again. */
+	| {readonly reason: 'budget'}
+	/** Nothing is stored under this stream yet. The writer may append later; call again later. */
+	| {readonly reason: 'nothing-stored'}
+	/**
+	 * The stored stream starts above where this fold resumes.
+	 *
+	 * RECURS FOR EVER: the resume point is derived from this fold's own durable
+	 * checkpoint, so nothing about calling again changes the comparison. A seeded
+	 * generation is the shape that produces it. It needs a seed reaching further
+	 * back, a lower resume point, or a re-index -- never another poll.
+	 */
+	| {readonly reason: 'does-not-reach-back'; readonly startBlock: number}
+	/**
+	 * A stored emission has no raw log to decode, so the chunk cannot be replayed on
+	 * trust (ADR-0034). RECURS FOR EVER: the same rows are read again next call.
+	 */
+	| {readonly reason: 'undecodable'}
+	/** The source reported its stored stream does not hold together. RECURS FOR EVER. */
+	| {readonly reason: 'inconsistent'; readonly detail: string};
+
+/** The read's verdict, as the reason a chunk did not happen. */
+function stopFor(read: Exclude<ReplayRead<Abi>, {status: 'chunk'}>): RebuildStop {
+	switch (read.status) {
+		case 'absent':
+			return {reason: 'nothing-stored'};
+		case 'does-not-reach-back':
+			return {reason: 'does-not-reach-back', startBlock: read.startBlock};
+		case 'inconsistent':
+			return {reason: 'inconsistent', detail: read.reason};
+	}
+}
+
+/** The stop reason in words, for the one log line that has to explain itself. */
+function describe(stopped: RebuildStop): string {
+	switch (stopped.reason) {
+		case 'does-not-reach-back':
+			return `the stored stream starts at block ${stopped.startBlock}`;
+		case 'undecodable':
+			return `a stored emission has no raw log to decode`;
+		case 'inconsistent':
+			return `the stored stream does not hold together (${stopped.detail})`;
+		default:
+			return stopped.reason;
+	}
+}
+
+/**
+ * Whether calling `more()` again can make progress, or whether this needs a human.
+ *
+ * The one derivation every scheduler would otherwise write for itself, and get
+ * subtly wrong: `budget` means more is waiting right now, `nothing-stored` and
+ * `stream-consumed` mean the writer may add more later, and the other three recur
+ * identically on every call until something outside this loop changes. A host that
+ * loops on `complete === false` alone spins at full rate on all three, for ever,
+ * with only a log line to say why -- which is the defect ADR-0070 removes.
+ */
+export function retryCanAdvance(stopped: RebuildStop): boolean {
+	return stopped.reason === 'budget' || stopped.reason === 'nothing-stored' || stopped.reason === 'stream-consumed';
+}
 
 /** What the rebuild needs besides the fold itself. */
 export type GenerationRebuildOptions<ABI extends Abi> = {
@@ -374,12 +488,9 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 			foldedThrough: lastSync.lastToBlock,
 			maxEmissions: budget,
 		});
-		if (!chunk) {
-			namedLogger.info(
-				`the rebuild of {stream: ${generation.stream}, processor: ${generation.processor}} found no stored stream ` +
-					`to replay from block ${fromBlock}. Nothing is cleared and nothing advances; the next call asks again.`,
-			);
-			return {
+		if (chunk.status !== 'chunk') {
+			const stopped = stopFor(chunk);
+			const idle = {
 				generation,
 				fromBlock,
 				toBlock: undefined,
@@ -388,8 +499,25 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 				retracted: 0,
 				highWater: 0,
 				complete: false,
-				absent: true,
-			};
+				stopped,
+			} as const;
+			if (retryCanAdvance(stopped)) {
+				namedLogger.info(
+					`the rebuild of {stream: ${generation.stream}, processor: ${generation.processor}} found no stored ` +
+						`stream to replay from block ${fromBlock}. Nothing is cleared and nothing advances; the next call ` +
+						`asks again.`,
+				);
+			} else {
+				// LOUD, because this one does not clear itself: the resume point comes from
+				// this fold's own durable checkpoint, so every later call reads the same
+				// answer. A host looping on `complete === false` would poll for ever.
+				namedLogger.error(
+					`the rebuild of {stream: ${generation.stream}, processor: ${generation.processor}} cannot advance from ` +
+						`block ${fromBlock}: ${describe(stopped)}. Calling again will not change this -- it needs a stream ` +
+						`that reaches further back, a lower resume point, or a re-index.`,
+				);
+			}
+			return idle;
 		}
 
 		// Re-decoded on the way through, exactly as every other replay path does:
@@ -410,7 +538,8 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 				retracted: 0,
 				highWater: chunk.highWater,
 				complete: false,
-				absent: false,
+				// the same rows are read again next call, so this recurs identically
+				stopped: {reason: 'undecodable'},
 			};
 		}
 
@@ -451,7 +580,7 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 			retracted: eventStream.filter((event) => event.removed).length,
 			highWater: chunk.highWater,
 			complete: !chunk.truncated,
-			absent: false,
+			stopped: chunk.truncated ? {reason: 'budget'} : {reason: 'stream-consumed'},
 		};
 	}
 

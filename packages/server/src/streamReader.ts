@@ -6,7 +6,7 @@ import {
 	type ExistingStream,
 	type IndexingSource,
 	type LogEvent,
-	type ReplayChunk,
+	type ReplayRead,
 	type ReplayChunkQuery,
 	type ReplaySource,
 	type StoredLogEvent,
@@ -250,7 +250,7 @@ async function readStoredStream(
  */
 export function storedEmissionReplaySource<ABI extends Abi>(db: RemoteSQL, indexer: string): ReplaySource<ABI> {
 	return {
-		async readChunk(query: ReplayChunkQuery): Promise<ReplayChunk<ABI> | undefined> {
+		async readChunk(query: ReplayChunkQuery): Promise<ReplayRead<ABI>> {
 			const {stream, fromBlock, foldedThrough, maxEmissions} = query;
 
 			// PRESENCE is the COVERAGE CLAIM and never "there are rows", exactly as the
@@ -259,15 +259,16 @@ export function storedEmissionReplaySource<ABI extends Abi>(db: RemoteSQL, index
 			// reach.
 			const coverage = await readStreamCoverage(db, {indexer, stream});
 			if (!coverage) {
-				return undefined;
+				return {status: 'absent'};
 			}
 			if (coverage.startBlock > fromBlock) {
 				logger.info(
 					`the stored emission stream of '${indexer}' at ${stream} starts at block ${coverage.startBlock} and ` +
-						`does not reach back to ${fromBlock}, so a rebuild is told there is nothing to replay rather than ` +
-						`being handed a partial history to fold as if it were whole.`,
+						`does not reach back to ${fromBlock}, so the rebuild is told SO rather than being handed a partial ` +
+						`history to fold as if it were whole. This recurs on every call until the fold resumes higher or ` +
+						`the stream reaches further back (ADR-0070).`,
 				);
-				return undefined;
+				return {status: 'does-not-reach-back', startBlock: coverage.startBlock};
 			}
 
 			// REPORTED beside the slice, because a follower's completeness is a stream-space
@@ -287,6 +288,7 @@ export function storedEmissionReplaySource<ABI extends Abi>(db: RemoteSQL, index
 			const lastToBlock = Math.min(coverage.lastToBlock, Math.max(budgetCut, floor));
 
 			return {
+				status: 'chunk',
 				eventStream: await readRange<ABI>(db, {indexer, stream, fromBlock, toBlock: lastToBlock}),
 				lastFromBlock: fromBlock,
 				// on the un-truncated path this is the STREAM's own claim, which reaches past

@@ -297,6 +297,45 @@ describe('choosing between published locations', () => {
 		expect(outcome).toMatchObject({status: 'bootstrapped', at: 13_000});
 	});
 
+	it('tells an UNREADABLE document from an unreachable host, because the remedies differ', async () => {
+		// These were one reason until ADR-0071, and an app renders this to a user. A
+		// host that did not answer may answer next time, or another mirror may, so
+		// retrying is right. A document this build cannot read means the app or the
+		// publisher is out of date, and retrying never helps -- so calling it "the
+		// mirror is down" sends the user to do the one thing that cannot work.
+		const store = await freshStore();
+		const {fetch} = network({[A]: {not: 'a snapshot envelope'} as never});
+
+		const outcome = await bootstrapFromSnapshot(store, [A], {processor: 'proc-v1', fetch});
+
+		expect(outcome).toEqual({status: 'not-bootstrapped', reason: 'unreadable-format'});
+	});
+
+	it('still says UNREACHABLE when the host genuinely did not answer', async () => {
+		const store = await freshStore();
+		const {fetch} = network({});
+
+		expect(await bootstrapFromSnapshot(store, [A], {processor: 'proc-v1', fetch})).toEqual({
+			status: 'not-bootstrapped',
+			reason: 'unreachable',
+		});
+	});
+
+	it('prefers the reason about a document it READ over one about a host that never answered', async () => {
+		// `pickReason` reports ONE reason for a walk that tried several locations, so its
+		// precedence is a real decision. Most specific first: a mirror that served a
+		// document this build cannot read tells a user more than a mirror that was
+		// simply down, and the two are both present here. Untested, the ordering is a
+		// line anyone could reverse without a failure (ADR-0071).
+		const store = await freshStore();
+		const {fetch} = network({[B]: {not: 'a snapshot envelope'} as never});
+
+		// A is unreachable (nothing routed), B is reachable and unreadable
+		const outcome = await bootstrapFromSnapshot(store, [A, B], {processor: 'proc-v1', fetch});
+
+		expect(outcome).toEqual({status: 'not-bootstrapped', reason: 'unreadable-format'});
+	});
+
 	it('reports that no location was given rather than pretending it tried', async () => {
 		const store = await freshStore();
 		expect(await bootstrapFromSnapshot(store, [], {processor: 'proc-v1'})).toEqual({

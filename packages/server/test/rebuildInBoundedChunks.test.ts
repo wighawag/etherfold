@@ -10,6 +10,7 @@ import {
 	type LastSync,
 	type LogEvent,
 	type RebuildReport,
+	type ReplayRead,
 	type WireBatch,
 } from '@etherfold/core';
 import {RemoteLibSQL} from 'remote-sql-libsql';
@@ -23,6 +24,14 @@ import {
 	EMISSION_STREAM_TABLE,
 	STREAM_COVERAGE_TABLE,
 } from '../src/index.js';
+
+/** The slice a read was expected to hand back, or a failure naming the verdict instead (ADR-0070). */
+function chunkOf<ABI extends Abi>(read: ReplayRead<ABI>): Extract<ReplayRead<ABI>, {status: 'chunk'}> {
+	if (read.status !== 'chunk') {
+		throw new Error(`expected a chunk, got '${read.status}'`);
+	}
+	return read;
+}
 
 // ---------------------------------------------------------------------------
 // THE REBUILD READS `_emissions` IN BOUNDED SLICES, AND FOLDS THEM RESUMABLY
@@ -246,12 +255,14 @@ describe('the bounded read cuts on a BLOCK boundary, never inside a block', () =
 	it('serves the whole tail and the stream`s own claim when the budget does not bite', async () => {
 		await foldTheFixture(db, 'alpha');
 
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: START_BLOCK,
-			foldedThrough: START_BLOCK - 1,
-			maxEmissions: 100,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: START_BLOCK,
+				foldedThrough: START_BLOCK - 1,
+				maxEmissions: 100,
+			}),
+		);
 
 		expect(marksOf(chunk?.eventStream ?? [])).toEqual([
 			'+101:0xa101',
@@ -272,12 +283,14 @@ describe('the bounded read cuts on a BLOCK boundary, never inside a block', () =
 		await foldTheFixture(db, 'alpha');
 
 		// the budget stops inside block 104, which carries three emissions
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: START_BLOCK,
-			foldedThrough: START_BLOCK - 1,
-			maxEmissions: 2,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: START_BLOCK,
+				foldedThrough: START_BLOCK - 1,
+				maxEmissions: 2,
+			}),
+		);
 
 		expect(marksOf(chunk?.eventStream ?? [])).toEqual(['+101:0xa101']);
 		expect(chunk?.truncated).toBe(true);
@@ -289,12 +302,14 @@ describe('the bounded read cuts on a BLOCK boundary, never inside a block', () =
 	it('spends a budget that lands inside ONE block on the whole block rather than half of it', async () => {
 		await foldTheFixture(db, 'alpha');
 
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: 104,
-			foldedThrough: 103,
-			maxEmissions: 1,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: 104,
+				foldedThrough: 103,
+				maxEmissions: 1,
+			}),
+		);
 
 		// all three rows of 104, in `seq` order: the application, the retraction that
 		// took it back, and the replacement. Serving one of them and claiming block 104
@@ -306,12 +321,14 @@ describe('the bounded read cuts on a BLOCK boundary, never inside a block', () =
 	it('hands the slice back in `seq` order, which is the order the fold concluded it in', async () => {
 		await foldTheFixture(db, 'alpha');
 
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: START_BLOCK,
-			foldedThrough: START_BLOCK - 1,
-			maxEmissions: 100,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: START_BLOCK,
+				foldedThrough: START_BLOCK - 1,
+				maxEmissions: 100,
+			}),
+		);
 
 		// the retraction sits AFTER the emission it takes back and BEFORE the
 		// replacement: any other order would have a processor revert past what it had
@@ -333,12 +350,14 @@ describe('the bounded read cuts on a BLOCK boundary, never inside a block', () =
 		// back that lets a replay see a retraction appended below its own cursor. With a
 		// budget of one, a cut on the budget alone would land at 108, the fold would
 		// claim nothing new, and the very same chunk would be asked for for ever.
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: 107,
-			foldedThrough: 109,
-			maxEmissions: 1,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: 107,
+				foldedThrough: 109,
+				maxEmissions: 1,
+			}),
+		);
 
 		expect(chunk?.lastToBlock).toBeGreaterThan(109);
 		expect(chunk?.truncated).toBe(false);
@@ -353,12 +372,14 @@ describe('the bounded read cuts on a BLOCK boundary, never inside a block', () =
 		// retraction gone, the surrounding numbers exactly where they were
 		await db.prepare(`DELETE FROM ${EMISSION_STREAM_TABLE} WHERE indexer = ?1 AND seq IN (2, 3)`).bind('alpha').all();
 
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: START_BLOCK,
-			foldedThrough: START_BLOCK - 1,
-			maxEmissions: 100,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: START_BLOCK,
+				foldedThrough: START_BLOCK - 1,
+				maxEmissions: 100,
+			}),
+		);
 
 		expect(marksOf(chunk?.eventStream ?? [])).toEqual(['+101:0xa101', '+104:0xb104', '+106:0xa106']);
 		expect(chunk?.lastToBlock).toBe(110);
@@ -376,14 +397,16 @@ describe('the bounded read sees its OWN (indexer, stream) and nothing else', () 
 		await foldTheFixture(db, 'alpha');
 		await receiverOn(db, 'beta').push({toBlock: 105, latestBlock: 105, logs: [log(103, '0xbeta103')]});
 
-		const chunk = await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
-			stream: STREAM_DIGEST,
-			fromBlock: START_BLOCK,
-			foldedThrough: START_BLOCK - 1,
-			maxEmissions: 100,
-		});
+		const chunk = chunkOf(
+			await storedEmissionReplaySource<TestABI>(db, 'alpha').readChunk({
+				stream: STREAM_DIGEST,
+				fromBlock: START_BLOCK,
+				foldedThrough: START_BLOCK - 1,
+				maxEmissions: 100,
+			}),
+		);
 
-		expect(chunk?.eventStream.some((event) => event.blockHash === '0xbeta103')).toBe(false);
+		expect(chunk.eventStream.some((event) => event.blockHash === '0xbeta103')).toBe(false);
 	});
 
 	it('reports ABSENT for a stream nothing has ever been stored under', async () => {
@@ -397,7 +420,7 @@ describe('the bounded read sees its OWN (indexer, stream) and nothing else', () 
 				foldedThrough: START_BLOCK - 1,
 				maxEmissions: 10,
 			}),
-		).toBeUndefined();
+		).toEqual({status: 'absent'});
 		expect(
 			await storedEmissionReplaySource<TestABI>(db, 'gamma').readChunk({
 				stream: STREAM_DIGEST,
@@ -405,10 +428,10 @@ describe('the bounded read sees its OWN (indexer, stream) and nothing else', () 
 				foldedThrough: START_BLOCK - 1,
 				maxEmissions: 10,
 			}),
-		).toBeUndefined();
+		).toEqual({status: 'absent'});
 	});
 
-	it('reports ABSENT rather than serving a history that does not reach back far enough', async () => {
+	it('reports DOES-NOT-REACH-BACK, which is NOT absent, for a history that starts too high', async () => {
 		const writer = receiverOn(db, 'alpha');
 		await writer.push({toBlock: 105, latestBlock: 105, logs: [AT_101]});
 
@@ -421,8 +444,13 @@ describe('the bounded read sees its OWN (indexer, stream) and nothing else', () 
 
 		// replaying this as though it were the whole history would silently drop
 		// everything under it, and nothing is deleted in response: this reader owns
-		// none of these rows
-		expect(chunk).toBeUndefined();
+		// none of these rows.
+		//
+		// It is deliberately NOT `absent` (ADR-0070). Nothing-stored is transient -- the
+		// writer may append -- while this recurs on every call for ever, because the
+		// resume point comes from the fold's own durable checkpoint. Collapsed into one
+		// value, a scheduler could only keep polling.
+		expect(chunk).toEqual({status: 'does-not-reach-back', startBlock: START_BLOCK});
 		const rows = await db.prepare(`SELECT COUNT(*) AS records FROM ${EMISSION_STREAM_TABLE}`).all<{records: number}>();
 		expect(Number(rows.results[0]?.records)).toBe(1);
 	});

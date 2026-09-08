@@ -1,6 +1,7 @@
 import {
 	assertListingLimit,
 	assertRetained,
+	assertFinalityDepth,
 	BlockNotRetainedError,
 	boundedListing,
 	compareIds,
@@ -481,13 +482,4 @@ function assertRevertOnly(retention: unknown): void {
 			`sparse stream (event-bearing blocks median 429 blocks apart) a window of 64 blocks holds one event-bearing ` +
 			`block anyway. Use @etherfold/state-store-sqlite, or MemoryStateStore, where history must be readable.`,
 	);
-}
-
-/** The same shape of check `resolveRetention` makes, in the same words. */
-function assertFinalityDepth(finalityDepth: number | undefined): number | undefined {
-	if (finalityDepth === undefined) return undefined;
-	if (!Number.isInteger(finalityDepth) || finalityDepth < 0) {
-		throw new Error(`invalid finality depth: ${JSON.stringify(finalityDepth)}. Expected a non-negative integer.`);
-	}
-	return finalityDepth;
 }
