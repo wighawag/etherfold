@@ -115,7 +115,7 @@ describe('a deployment sets retention, in block numbers', () => {
 		expect(resolveRetention('revert-only', {finalityDepth: 12})).toEqual({kind: 'revert-only'});
 		expect(resolveRetention('revert-only', {})).toEqual({kind: 'revert-only'});
 		expect(resolveRetention('unbounded', {})).toEqual({kind: 'unbounded'});
-		expect(resolveRetention(undefined, {})).toEqual(resolveRetention(undefined, {}));
+		expect(resolveRetention(undefined, {})).toEqual({kind: 'unbounded'});
 	});
 
 	it('is the ONE implementation of that rule: no backend keeps its own copy', () => {

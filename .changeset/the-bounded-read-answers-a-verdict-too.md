@@ -19,4 +19,4 @@ type ReplayRead<ABI> =
 
 **If you implement `ReplaySource`:** return the verdict. `inconsistent` has no in-repo producer and exists so a third-party store has somewhere to report damage.
 
-**If you schedule `rebuildMore`:** loop on `retryCanAdvance(report.stopped)`, not on `complete === false` alone. The latter spins for ever on three of the six reasons.
+**If you schedule `rebuildMore`:** loop while `!report.complete && retryCanAdvance(report.stopped)`. Both halves matter -- `complete === false` alone spins for ever on three of the six reasons, and `retryCanAdvance` alone never stops, since it is true once the stream is consumed too.

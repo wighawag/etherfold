@@ -1,5 +1,5 @@
 import type {Abi} from 'abitype';
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import {openIndexer, type AnyGenerationSpec, type Indexer} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
 import {sameGeneration, writerOf, type GenerationRecord} from '../src/generation/registry.js';
@@ -361,23 +361,37 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		expect(separate.indexer.generations.map((held) => held.follows)).toEqual([false, false]);
 	});
 
-	it('agrees with the registry`s `writerOf`, rather than with this process`s array order', async () => {
-		// Two rules for one question, until ADR-0071. The registry names the writer as
-		// the OLDEST SURVIVING record by `createdAt` -- durable, and what the receiving
-		// container has always used -- while this container derived `follows` from the
-		// order its own `held` array happened to be in. They agree on the ordinary path,
-		// which is why nothing caught it, and they are still not the same rule: `held`
-		// order is whatever order a caller passed its specs in.
-		const shared = await openWorld([{name: 'A'}, {name: 'B'}]);
-		const records = await shared.registry.list();
-		const stream = shared.indexer.generations[0].record.stream;
-		const writer = writerOf(records, stream);
+	it('keeps ONE writer even when the second generation`s hash sorts before the first`s', async () => {
+		// The case that must DISAGREE with the alternatives, which is the only kind of
+		// case that can tell them apart. `createdAt` is milliseconds and `byAge` breaks
+		// a tie on the processor HASH, so two generations added in one millisecond are
+		// ordered by hash and not by registration. A `follows` derived from
+		// `writerOf(...)` per generation at ADD time then lets BOTH see themselves named
+		// -- measured at 20/20 runs -- and two engines write one stream through a real
+		// keeper. The fixtures here are named so the SECOND sorts first, which is what
+		// makes this case discriminating; named the other way round it passes against
+		// every candidate rule (ADR-0071).
+		// the clock is FROZEN so the tie is guaranteed rather than raced for: the two
+		// registrations are milliseconds apart in an unstubbed run, which is exactly how
+		// this hazard hides
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const shared = await openWorld([{name: 'zzz-first'}, {name: 'aaa-second'}]);
+		clock.mockRestore();
 
-		// exactly one non-follower on the stream, and it is the one the SHARED rule names
-		const writers = shared.indexer.generations.filter((held) => !held.follows);
-		expect(writers).toHaveLength(1);
-		expect(writer).toBeDefined();
-		expect(sameGeneration(writers[0].record, writer as GenerationRecord)).toBe(true);
+		expect(shared.indexer.generations.map((held) => held.follows)).toEqual([false, true]);
+		// one stream, and exactly one generation may append to it
+		expect(shared.indexer.generations[0].record.stream).toBe(shared.indexer.generations[1].record.stream);
+		expect(shared.indexer.generations.filter((held) => !held.follows)).toHaveLength(1);
+
+		// and the disagreement is REAL rather than assumed, or this case asserts nothing:
+		// the tie holds, and `writerOf` names the generation added SECOND while the
+		// container correctly keeps the one added FIRST as the writer. A rule that
+		// followed `writerOf` per generation would make both writers here.
+		const records = await shared.registry.list();
+		expect(records[0].createdAt).toBe(records[1].createdAt);
+		const named = writerOf(records, records[0].stream) as GenerationRecord;
+		expect(sameGeneration(named, shared.indexer.generations[1].record)).toBe(true);
+		expect(sameGeneration(named, shared.indexer.generations[0].record)).toBe(false);
 	});
 
 	it('RE-FOLDS the stored stream from the start when it is added to a running indexer', async () => {

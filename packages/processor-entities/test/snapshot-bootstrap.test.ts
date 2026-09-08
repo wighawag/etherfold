@@ -321,6 +321,21 @@ describe('choosing between published locations', () => {
 		});
 	});
 
+	it('prefers the reason about a document it READ over one about a host that never answered', async () => {
+		// `pickReason` reports ONE reason for a walk that tried several locations, so its
+		// precedence is a real decision. Most specific first: a mirror that served a
+		// document this build cannot read tells a user more than a mirror that was
+		// simply down, and the two are both present here. Untested, the ordering is a
+		// line anyone could reverse without a failure (ADR-0071).
+		const store = await freshStore();
+		const {fetch} = network({[B]: {not: 'a snapshot envelope'} as never});
+
+		// A is unreachable (nothing routed), B is reachable and unreadable
+		const outcome = await bootstrapFromSnapshot(store, [A, B], {processor: 'proc-v1', fetch});
+
+		expect(outcome).toEqual({status: 'not-bootstrapped', reason: 'unreadable-format'});
+	});
+
 	it('reports that no location was given rather than pretending it tried', async () => {
 		const store = await freshStore();
 		expect(await bootstrapFromSnapshot(store, [], {processor: 'proc-v1'})).toEqual({

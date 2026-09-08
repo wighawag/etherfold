@@ -2,18 +2,27 @@
 
 Two independent corrections found by auditing the published surface before it is published, sharing one shape: **a rule with two homes, or a word meaning two things.**
 
-1. `Indexer` (`container.ts`) now derives which generation FOLLOWS a stream from the shared `writerOf`, instead of from the order of its own in-memory array.
+1. `Indexer` (`container.ts`) now derives which generation FOLLOWS a stream from the durable REGISTRY, instead of from the order of its own in-memory array -- and deliberately not from `writerOf`, which produces two writers here.
 2. `NotBootstrappedReason` gains `unreadable-format`, so a snapshot document that was fetched and cannot be read is no longer reported as `unreachable`.
 
-## 1. The one-writer rule had two definitions
+## 1. The container asked the wrong SOURCE, and `writerOf` is not the answer either
 
-`writerOf` (`generation/registry.ts`) defines the writer of a stream as **the oldest SURVIVING record by `createdAt`**, and its docstring is explicit that this is what makes succession atomic with a delete and durable across a restart. `ReceivingIndexer` consumes it, and its own documentation says so: *"the value it is derived from is the shared `writerOf`, not a second copy of the rule."*
+`Indexer.add` decided whether a new generation FOLLOWS its stream from `this.held.some((entry) => entry.record.stream === record.stream)` -- **this process's array order**, which is whatever order the caller passed its specs in and does not survive a restart. The durable registry is the honest source, so the question is now asked of it: *is any OTHER generation already registered on this stream?*
 
-That sentence was true of the receiving container and false of the chain-facing one it compares itself to. `Indexer.add` never imported `writerOf`. It decided `follows` from `this.held.some((entry) => entry.record.stream === record.stream)` -- **this process's array order**, which is whatever order the caller passed its specs in.
+**The obvious fix is wrong, and it was measured wrong before it was written down.** The tempting change is `writerOf(await registry.list(), stream)` and `follows = !sameGeneration(writer, record)`, which reads as the unification this ADR is about: one rule, shared with `ReceivingIndexer`. It creates TWO WRITERS.
 
-The two agree on the ordinary path, which is why nothing caught it: the first generation held on a stream is normally also the oldest registered on it. They are still not the same rule. A host that lists its specs differently after a reload would hand the append duty to a different engine than the registry names, and nothing reconciles the two -- the container has no writer succession at all, where the receiving one needed sixty lines of it.
+`writerOf` is a function of the whole record SET at a moment. `follows` is frozen per generation at ADD time, because `readOnlyStream` is baked into the engine's config and cannot be recomputed later the way `reconcileWriters` recomputes it on the receiving side. Evaluating a set-function per element at different moments is not the same as evaluating it once -- and `createdAt` has MILLISECOND resolution while `byAge` breaks a tie on the processor HASH, so:
 
-This is one line of code and it is not a tidy-up: it is the difference between one rule and two, on the rule that decides who may write a stream. A test now asserts the container's non-follower is the generation `writerOf` names.
+- `add(A)`: registry `{A}`, `writerOf` names A, `follows = false`
+- `add(B)` in the same millisecond, B's hash sorting lower: registry `{A, B}`, `writerOf` names **B**, `follows = false`
+
+Both keep the real keeper and both call `indexMore()`. Measured at 20/20 runs in a warm process, with the fold writing 8 stored events where 4 are correct. It also disables the "never drop the writer of a stream another generation follows" guard, which reads `entry.follows`.
+
+So the container asks the set question directly -- "is anyone else already registered here" -- which is tie-free, registry-backed, and exactly the container's form of the one-writer rule: it never REASSIGNS the duty, so the first generation registered on a stream keeps it.
+
+**What this does NOT claim.** It is not the same expression as `writerOf`, and pretending otherwise is what produced the bug. `writerOf` decides WHICH of several records writes and is re-evaluated live; the container decides ONCE, at construction, and never revisits it. Under a same-millisecond tie the two can name different records, and that is tolerable precisely because the container never reassigns: what matters is that exactly one of its generations is not a follower, which is now true by construction rather than by ordering luck. Making them literally one expression needs `writerOf` to be stable in REGISTRATION order (a monotonic sequence on the record, not a millisecond clock with a hash tie-break) plus reconciliation in the chain-facing container. Both are real, neither is a one-liner, and this ADR does not do them.
+
+The test that matters names its fixtures so the second sorts FIRST. Named the other way round -- which is how they were -- it passes against every candidate rule, including the broken one.
 
 ## 2. `unreachable` meant two things, on the path an app renders to a user
 
@@ -31,4 +40,4 @@ Adding a member to a published union breaks every consumer with an exhaustive `s
 
 ## What was deliberately NOT done
 
-The same audit found the two containers share `generation/registry.ts` and `generation/promotion.ts` genuinely, with `PromotionView<T>` as a working seam, and that their raw line counts (1331/1220) are mostly prose over 565/450 code lines. **Merging them would be a net loss** -- what is left duplicated is ~10% of application shell whose rules are already shared, and a common base parameterised over five callbacks would make both hosts harder to read to save sixty lines. Only the `writerOf` divergence above was a rule with two answers; the rest is two hosts over one model, exactly as `CONTEXT.md` claims.
+The same audit found the two containers share `generation/registry.ts` and `generation/promotion.ts` genuinely, with `PromotionView<T>` as a working seam, and that their raw line counts (1331/1220) are mostly prose over 565/450 code lines. **Merging them would be a net loss** -- what is left duplicated is ~10% of application shell whose rules are already shared, and a common base parameterised over five callbacks would make both hosts harder to read to save sixty lines. Only the SOURCE the container asked was wrong; the rest is two hosts over one model, exactly as `CONTEXT.md` claims. Whether `writerOf` should be stable in registration order is a real question this ADR names and leaves open.

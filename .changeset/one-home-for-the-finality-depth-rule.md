@@ -1,5 +1,5 @@
 ---
-'@etherfold/state-store': patch
+'@etherfold/state-store': minor
 '@etherfold/state-store-patch': patch
 ---
 
