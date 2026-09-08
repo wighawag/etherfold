@@ -64,7 +64,7 @@ Neither gate is set. The spec launched with an open question about how a new con
 
 - **`eth_blockNumber`.** The third round trip in a cycle is a tip read, load-bearing, and not a guard.
 
-- **The genesis-hash check.** Live at load, gated by `skipGenesisCheck`, and untouched here. A separate per-cycle genesis check exists as a commented-out block beside the calls this spec deletes, and reviving it is its own decision with its own per-cycle cost. Some concerns about the live one's failure behaviour are captured in `work/notes/observations/the-genesis-check-cannot-tell-three-failures-apart.md`.
+- **The genesis-hash check.** Live at load, gated by `skipGenesisCheck`, and untouched here. A separate per-cycle genesis check exists as a commented-out block beside the calls this spec deletes, and reviving it is its own decision with its own per-cycle cost. Its `earliest`-instead-of-block-0 bug, confirmed since, is fixed by `work/tasks/backlog/the-genesis-check-asks-for-block-zero-not-the-earliest-tag.md`.
 
 ## Further Notes
 
