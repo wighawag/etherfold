@@ -70,6 +70,8 @@ Note the same shape exists one line earlier for the `eth_chainId` check, which i
 >
 > Verify the fix does not merely move the problem: a node that will not serve block `0x0` either should produce a message about not being able to CHECK, not one about being on the wrong chain. That distinction is the adjacent defect this task also asks you to address, and the two fixes belong together because they are the same handful of lines.
 >
+> FORWARD-POINTER, on the OPTIONAL `eth_chainId` half only. `work/specs/proposed/one-chain-identity-check-per-cycle-not-two.md` DELETES the before-fetch `eth_chainId` call and keeps the after-fetch one as the permanent guard, and it also asks (its story 4) that the surviving refusal name what it expected and what it got. So if you take up this task's optional offer to extend the three-way error separation to the neighbouring chain-id check, put that work on the AFTER-fetch call, not the before-fetch one, which is slated for deletion. Do NOT delete the before-fetch call here: that is the other spec's decision to make, not yours. This does not affect the genesis check itself, which that spec explicitly leaves untouched.
+>
 > FIRST, check this task against current reality (it is a launch snapshot and may have DRIFTED): confirm both call sites still exist as described, and re-grep for `earliest` in case a third has appeared.
 >
 > RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT, in particular whether you extended the fix to the neighbouring `eth_chainId` check and whether you judged the comment sufficient or wrote an ADR. Do no git, do not edit the task body, and do not open an observation note for decisions.
