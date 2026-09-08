@@ -40,10 +40,39 @@ import {
 import {sourceHashesOf} from './internal/engine/eventRanges.js';
 import {CancellablePromiseCancelled, CancelOperations, createAction} from './internal/utils/promises.js';
 import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
-import {InvalidBatchError, isOutOfSpace} from './errors.js';
+import {
+	GenesisBlockNotServedError,
+	GenesisCheckUnavailableError,
+	GenesisHashMismatchError,
+	InvalidBatchError,
+	isOutOfSpace,
+} from './errors.js';
 import {declaredMethodsOnly, type MethodDeclaringProvider} from './providerSurface.js';
 
 const namedLogger = logs('@etherfold/core');
+
+/**
+ * GENESIS, NAMED AS A BLOCK NUMBER AND NEVER AS THE `earliest` TAG.
+ *
+ * `earliest` reads like the expressive way to ask for genesis, and `0x0` reads
+ * like a magic number, so this constant exists to stop the obvious tidy-up.
+ * They are not the same question: the JSON-RPC tag means the lowest block the
+ * CLIENT HAS, which is genesis only when the client has genesis.
+ *
+ * Two ordinary deployments where it is not. A PRUNED or partially-synced node's
+ * lowest block is wherever its history begins. A chain that has had a REGENESIS
+ * has nodes whose earliest block IS the regenesis point, by design, and several
+ * L2s have done exactly that. In both, the tag answers with a real block whose
+ * hash is not the genesis hash -- so the identity check refused to start
+ * against a healthy node on the RIGHT chain, and said it was connected to a
+ * DIFFERENT one. A false positive on the one check whose entire job is to be
+ * trustworthy about identity.
+ *
+ * `0x0` asks for the bottom of the CHAIN rather than the bottom of this node's
+ * history. A node that does not have it answers with nothing, which is an
+ * honest absence and is reported as one (`GenesisBlockNotServedError`).
+ */
+const GENESIS_BLOCK = '0x0';
 
 /**
  * Whether two entries of an emission stream are the same emission.
@@ -1096,6 +1125,38 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		return true;
 	}
 
+	/**
+	 * The stronger half of the load-time identity guard: the chain's genesis
+	 * block is the one this source declares.
+	 *
+	 * ## Three conditions, three refusals
+	 *
+	 * The check can fail in three unrelated ways and a caller does something
+	 * DIFFERENT about each: a wrong chain is a configuration error (stop), a node
+	 * that will not serve block 0 is an availability fact about the NODE (point
+	 * elsewhere, or set `skipGenesisCheck`), and a failed request is transience
+	 * (retry). They used to be one uncaught throw and one message, so a flaky
+	 * endpoint at startup was indistinguishable from being pointed at the wrong
+	 * chain -- and both of them announced a WRONG CHAIN, which is a claim only the
+	 * first one is entitled to make.
+	 */
+	protected async checkGenesisHash(expectedGenesisHash: string): Promise<void> {
+		let genesisBlock: {hash: string} | null | undefined;
+		try {
+			genesisBlock = await this.provider.request({method: 'eth_getBlockByNumber', params: [GENESIS_BLOCK, false]});
+		} catch (error) {
+			// nothing was learnt about the chain, so nothing is claimed about it
+			throw new GenesisCheckUnavailableError(expectedGenesisHash, error);
+		}
+		const genesisHash = genesisBlock?.hash;
+		if (!genesisHash) {
+			throw new GenesisBlockNotServedError(expectedGenesisHash);
+		}
+		if (genesisHash !== expectedGenesisHash) {
+			throw new GenesisHashMismatchError(expectedGenesisHash, genesisHash);
+		}
+	}
+
 	protected async promiseToLoad(): Promise<LastSync<ABI>> {
 		const chainId = await this.provider.request({method: 'eth_chainId'});
 		if (parseInt(chainId.slice(2), 16).toString() !== this.source.chainId) {
@@ -1104,17 +1165,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			);
 		}
 		if (this.source.genesisHash && !this.config.skipGenesisCheck) {
-			const genesisBlock = await this.provider.request({method: 'eth_getBlockByNumber', params: ['earliest', false]});
-			if (!genesisBlock) {
-				throw new Error(`Cannot fetch genesis Hash. Expected genesisHash === ${this.source.genesisHash}`);
-			} else {
-				const genesisHash = genesisBlock.hash;
-				if (genesisHash !== this.source.genesisHash) {
-					throw new Error(
-						`Connected to a different chain (genesisHash: ${genesisHash}). Expected genesisHash === ${this.source.genesisHash}`,
-					);
-				}
-			}
+			await this.checkGenesisHash(this.source.genesisHash);
 		}
 
 		let currentLastSync: LastSync<ABI> | undefined = undefined;
@@ -1639,16 +1690,13 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			throw new Error(`chainId changed before fetch`);
 		}
 
-		// TODO ?
-		// if (!this.config.skipGenesisCheck && this.source.genesisHash) {
-		// 	// as precautious measure, we check genesisHash in case the provider is now pointing to a new chain
-		// 	// while this is valid use, it is important to warn the indexer as soon as possible via chainChanged event
-		// 	// and pausing the call to index until the correct chain is connected again
-		// 	const before_fetch_genesisBlock = (await unlessCancelled(this.provider.request({method: 'eth_getBlockByNumber', params: ["earliest", false]})))?.hash;
-		// 	if (before_fetch_genesisBlock !== this.source.genesisHash) {
-		// 		throw new Error(`genesis hash changed before fetch`);
-		// 	}
-		// }
+		// A per-cycle genesis check used to sit here, commented out, carrying the
+		// `earliest`-means-genesis bug this file no longer has. It is DELETED rather
+		// than repaired: dead code cannot be tested, so it would have gone stale
+		// again, and reviving a per-cycle genesis read is a decision about cost per
+		// cycle (`work/specs/proposed/one-chain-identity-check-per-cycle-not-two.md`)
+		// rather than a line to uncomment. `checkGenesisHash` above is the one place
+		// this question is asked, and whoever revives it calls that.
 
 		const previousLastSync = this.lastSync as LastSync<ABI>;
 		const {lastSync: newLastSync, eventStream} = await this.fetchLogsFromProvider(previousLastSync, unlessCancelled);

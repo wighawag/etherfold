@@ -570,6 +570,24 @@ export type ProvidedIndexerConfig<ABI extends Abi> = {
 		 */
 		delaySeconds?: number;
 	};
+	/**
+	 * Skip the load-time GENESIS-HASH check, leaving `eth_chainId` as this
+	 * deployment's whole identity guard.
+	 *
+	 * The genesis check is the STRONGER of the two, because two chains can share
+	 * a chain id and cannot share a genesis block, so turning it off is a real
+	 * loss and not a tuning knob: a fork answering the right `eth_chainId` is
+	 * then indexed as the chain it claims to be. It exists for the deployment
+	 * that cannot pass it for reasons that are not about identity at all -- a
+	 * node that does not serve block 0 (`GenesisBlockNotServedError`), or a
+	 * private chain whose genesis hash nobody has written down.
+	 *
+	 * Only has an effect where the source declares a `genesisHash`; with none
+	 * declared there is no check to skip. It sits here, beside
+	 * `strictProcessorDrift`, because it is the same kind of thing: a load-time
+	 * safety gate belonging to the deployment rather than to the processor an
+	 * author ships.
+	 */
 	skipGenesisCheck?: boolean;
 	/**
 	 * Turn a processor-drift report into a refusal to start (`load()` rejects).

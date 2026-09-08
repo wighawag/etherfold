@@ -10,7 +10,7 @@ The engine now DECLARES the provider methods it asks for, and holds itself to th
 
 Why a refusal rather than a note. Deleting the enrichment path made the claim true; nothing in a deletion keeps it true. A reintroduced `eth_getBlockByHash` breaks nothing and returns the right answer. It just costs a round trip per block against a provider a browser user is rate-limited on, so it surfaces in a profile months later rather than in CI in seconds. Refusing at the seam is what makes it fail wherever it is added, over any node or test double that would have answered it.
 
-The one method that can read a block is narrowed further, by the same argument: `eth_getBlockByNumber` is allowed at the chain's FIRST block (`earliest` or `0x0`) and refused at a height, because a block read at a height is the deleted per-block cost wearing a different method name.
+The one method that can read a block is narrowed further, by the same argument: `eth_getBlockByNumber` is allowed at the chain's FIRST block (`0x0`) and refused at a height, because a block read at a height is the deleted per-block cost wearing a different method name.
 
 What a caller has to know:
 

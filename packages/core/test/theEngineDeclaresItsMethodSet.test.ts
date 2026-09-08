@@ -258,15 +258,18 @@ describe('a reintroduced per-block call is refused where it is added', () => {
 		const {provider} = anAccommodatingNode();
 		const guarded = declaredMethodsOnly(provider);
 
-		// the identity read: one fixed question, once per load. BOTH spellings of the
-		// chain's first block, because `the-genesis-check-asks-for-block-zero-not-the-earliest-tag`
-		// replaces the tag with the number and that fix must not have to edit this guard.
-		await expect(
-			guarded.request({method: 'eth_getBlockByNumber', params: ['earliest', false]} as never),
-		).resolves.toBeTruthy();
+		// the identity read: one fixed question, once per load, in the one spelling
+		// that means the bottom of the CHAIN
 		await expect(
 			guarded.request({method: 'eth_getBlockByNumber', params: ['0x0', false]} as never),
 		).resolves.toBeTruthy();
+
+		// and NOT the `earliest` tag, which means the lowest block this NODE has and
+		// is therefore a question the engine stopped asking
+		// (`the-genesis-check-asks-for-block-zero-not-the-earliest-tag`)
+		await expect(
+			guarded.request({method: 'eth_getBlockByNumber', params: ['earliest', false]} as never),
+		).rejects.toBeInstanceOf(UnexpectedProviderMethodError);
 
 		// the same METHOD at a height is the deleted enrichment path under another
 		// name, and the declared set would not catch it on the name alone

@@ -61,19 +61,17 @@ export function isEngineProviderMethod(method: string): method is EngineProvider
 }
 
 /**
- * The two spellings of "the chain's first block", which is the only block the
- * engine ever names.
+ * "The chain's first block", which is the only block the engine ever names, and
+ * there is exactly one spelling of it.
  *
- * `earliest` is what the load path asks for today. `0x0` is what
- * `work/tasks/ready/the-genesis-check-asks-for-block-zero-not-the-earliest-tag.md`
- * changes it to, because the tag means the lowest block the CLIENT HAS and that
- * is genesis only when the client has genesis. Both are accepted here so that
- * fix lands as the one-line change it is, and accepting both costs nothing that
- * matters: the property this predicate defends is that the read is of the
- * BOTTOM of the chain rather than of a block a log named, and both spellings
- * have it.
+ * It briefly accepted the `earliest` tag as well, because the load path asked
+ * with it. It no longer does: the tag means the lowest block the CLIENT HAS,
+ * which is genesis only when the client has genesis (see `GENESIS_BLOCK` in
+ * `indexer.ts`). So `earliest` is not a question this engine asks, and a call
+ * carrying it is a call this module has never seen before -- which is precisely
+ * what the predicate is for.
  */
-const GENESIS_BLOCK_TAGS: ReadonlySet<unknown> = new Set(['earliest', '0x0']);
+const GENESIS_BLOCK: ReadonlySet<unknown> = new Set(['0x0']);
 
 /**
  * Whether an `eth_getBlockByNumber` call is the genesis probe.
@@ -89,7 +87,7 @@ const GENESIS_BLOCK_TAGS: ReadonlySet<unknown> = new Set(['earliest', '0x0']);
  * between identity and data said in the only place it can be said.
  */
 export function isGenesisProbe(params: unknown): boolean {
-	return Array.isArray(params) && GENESIS_BLOCK_TAGS.has(params[0]);
+	return Array.isArray(params) && GENESIS_BLOCK.has(params[0]);
 }
 
 /**

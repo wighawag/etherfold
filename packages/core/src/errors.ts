@@ -389,6 +389,108 @@ export class UnexpectedChainError extends Error {
 }
 
 /**
+ * A provider serving a chain whose GENESIS BLOCK is not the one the source
+ * declares.
+ *
+ * The stronger of the two identity checks the load path makes, and the reason
+ * it exists: two chains can share a `chainId` and cannot share a genesis block,
+ * so a node that passed `eth_chainId` can still be the wrong node. Indexing a
+ * fork's logs into a state that claims to be the canonical chain's is silent
+ * and permanent, so this refuses at LOAD, before a single log is fetched.
+ *
+ * It carries both hashes, because "these two differ" is not actionable and the
+ * numbers are what an operator compares against their contracts file. This is
+ * the ONLY one of the three genesis-check refusals that is a claim about WHICH
+ * CHAIN the node is on; the other two (`GenesisBlockNotServedError`,
+ * `GenesisCheckUnavailableError`) mean the check could not be MADE, and saying
+ * so in this one's wording is what used to send operators hunting for a
+ * misconfiguration that was not there.
+ */
+export class GenesisHashMismatchError extends Error {
+	readonly name = 'GenesisHashMismatchError';
+	/** A node does not wander onto another chain's genesis while a caller waits. */
+	readonly retryable = false;
+
+	constructor(
+		/** The `genesisHash` the source declares. */
+		readonly expectedGenesisHash: string,
+		/** The hash the node answered for block `0x0`. */
+		readonly receivedGenesisHash: string,
+	) {
+		super(
+			`this provider is serving a different chain: block 0 hashes to ${receivedGenesisHash}, and this source ` +
+				`declares genesisHash ${expectedGenesisHash}. A chain id can be shared and a genesis block cannot, so ` +
+				`this is the check that settles it. Nothing is indexed: point at a node for the chain this source names, ` +
+				`or correct the source's genesisHash if the node is the one you meant.`,
+		);
+	}
+}
+
+/**
+ * A provider that answered the genesis read with NO BLOCK.
+ *
+ * Not a verdict about the chain: the node did not say it has a different
+ * genesis, it said it does not have block 0 to show. That is ordinary on a
+ * pruned or partially-synced node, and it is the failure the `earliest` tag
+ * used to hide -- the tag means the lowest block the client HAS, so such a node
+ * answered with a real block whose hash could not match and the check reported
+ * a WRONG CHAIN. Asking for `0x0` turns that into an honest absence, which is
+ * this error, and the wording is deliberately about not being able to CHECK.
+ *
+ * `retryable` is `false` because a node does not acquire history while a caller
+ * waits: the remedies are an archive/full node, or `skipGenesisCheck` for a
+ * deployment that accepts `eth_chainId` alone as the identity guard.
+ */
+export class GenesisBlockNotServedError extends Error {
+	readonly name = 'GenesisBlockNotServedError';
+	/** A pruned node does not grow its history back while a caller waits. */
+	readonly retryable = false;
+
+	constructor(
+		/** The `genesisHash` the source declares, which is what could not be checked. */
+		readonly expectedGenesisHash: string,
+	) {
+		super(
+			`this provider served no block 0, so the genesis hash could not be CHECKED against the declared ` +
+				`${expectedGenesisHash}. This says nothing about which chain the node is on: a pruned or ` +
+				`partially-synced node simply does not hold genesis. Point at a node that serves block 0, or set ` +
+				`skipGenesisCheck to accept the chainId check alone as this deployment's identity guard.`,
+		);
+	}
+}
+
+/**
+ * A genesis read that never completed: a timeout, a rate limit, a dropped
+ * connection, a JSON-RPC error.
+ *
+ * The third of the three, and the common one. It used to propagate out of the
+ * load path as a bare failure indistinguishable from a real mismatch, which
+ * means a flaky endpoint at startup read as "you are pointed at the wrong
+ * chain". Nothing was learnt about the chain here, so nothing is claimed about
+ * it, and unlike its two siblings this one IS worth another attempt -- the same
+ * position `IngestionUnavailableError` holds on the ingestion path.
+ */
+export class GenesisCheckUnavailableError extends Error {
+	readonly name = 'GenesisCheckUnavailableError';
+	/** Nothing was learnt about the chain, and the endpoint may well answer next time. */
+	readonly retryable = true;
+
+	constructor(
+		/** The `genesisHash` the source declares, which is what could not be checked. */
+		readonly expectedGenesisHash: string,
+		/** What the provider (or the transport) threw, kept so the cause is not retold as prose. */
+		readonly cause: unknown,
+	) {
+		super(
+			`the genesis read failed, so the genesis hash could not be CHECKED against the declared ` +
+				`${expectedGenesisHash}: ${cause instanceof Error ? cause.message : String(cause)}. This says nothing ` +
+				`about which chain the node is on -- a timeout, a rate limit or a dropped connection all land here -- ` +
+				`so it is worth another attempt.`,
+		);
+	}
+}
+
+/**
  * A refusal from the receiver that no re-send will fix.
  *
  * The counterpart of `UnexpectedFromBlockError`, and the distinction is the
