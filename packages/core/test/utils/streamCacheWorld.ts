@@ -32,6 +32,17 @@ export const SOURCE: IndexingSource<Abi> = {
 };
 
 /**
+ * The time a block carries here, derived from its height so that two fixtures
+ * quoting one block quote one timestamp.
+ *
+ * Twelve seconds apart, from a round epoch: nothing depends on the numbers, only
+ * on their being PRESENT and stable.
+ */
+export function timestampOf(blockNumber: number): number {
+	return 1_700_000_000 + blockNumber * 12;
+}
+
+/**
  * A log, as the fake chain serves it and as the stream stores it: the RAW half
  * and nothing else, which is why it is typed as what a keeper takes.
  *
@@ -39,11 +50,19 @@ export const SOURCE: IndexingSource<Abi> = {
  * and a stored one are the same object here. The tests where the DECODED half is
  * the subject put one on deliberately (`savedStreamIsRawOnly.test.ts`), which is
  * also the only place the difference between the two shapes is observable.
+ *
+ * It carries `blockTimestamp`, as every supported node does since
+ * `execution-apis#639`: a fetched range holding a log WITHOUT one is refused at
+ * the fetch boundary (ADR-0073), so a fixture omitting it would be modelling a
+ * node the engine does not support and would be asserting the engine's
+ * behaviour on traffic it now refuses. The refusal itself is pinned in
+ * `aTimestamplessLogIsRefusedAtTheFetchBoundary.test.ts`.
  */
 export function makeLog(blockNumber: number, blockHash: string, logIndex = 0): StoredLogEvent {
 	return {
 		blockNumber,
 		blockHash,
+		blockTimestamp: timestampOf(blockNumber),
 		transactionIndex: 0,
 		removed: false,
 		address: ADDRESS,

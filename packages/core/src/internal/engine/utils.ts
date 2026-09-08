@@ -1,6 +1,6 @@
 import type {Abi} from 'abitype';
 import {logs} from 'named-logs';
-import {InvalidBatchError, UnexpectedFromBlockError} from '../../errors.js';
+import {InvalidBatchError, TimestamplessLogError, UnexpectedFromBlockError} from '../../errors.js';
 import type {
 	AllContractData,
 	ArgumentFilter,
@@ -596,6 +596,39 @@ export function assertAscendingByBlock<ABI extends Abi>(logs: readonly LogEvent<
 					`one is dropped rather than folded. This is refused instead of sorted because a node returning logs out ` +
 					`of order means something upstream reordered them, and silently repairing it hides that.`,
 			);
+		}
+	}
+}
+
+/**
+ * Every log a fetch returned carries a `blockTimestamp`, and a range holding one
+ * that does not is REFUSED at the fetch boundary.
+ *
+ * This is the fetch-boundary half of the two-place refusal of ADR-0073, and it
+ * is here -- beside `assertAscendingByBlock` -- because it is the same kind of
+ * check: ONE property of the node's answer, asserted once, by both deployment
+ * shapes of ADR-0003 (the single-process `IndexerGeneration` and the split
+ * `LogFetcher`, which is the only side of a split that talks to a chain).
+ *
+ * It refuses ONE ROUND TRIP IN, before the range is enriched, folded, stored or
+ * pushed, and it names the NODE rather than the block, because every cause is
+ * node-level and the operator's fix differs per cause (see
+ * `TimestamplessLogError`, which carries the four).
+ *
+ * `blockTimestamp` is read TOLERANTLY on the way in (`parseLogBlockTimestamp`:
+ * hex or decimal quantity, and anything else dropped rather than coerced), so
+ * "the node sent nothing" and "the node sent something unreadable" arrive here
+ * as ONE outcome, `undefined`. That is deliberate and must stay: neither may
+ * become a number, and this is the place that turns the absence into a refusal
+ * rather than into a guess.
+ *
+ * It does NOT replace `blockPointer`'s fold-time refusal, which sees streams
+ * this never can (a seed install, a fixture replay). See `TimestamplessLogError`.
+ */
+export function assertLogsCarryTimestamps<ABI extends Abi>(logs: readonly LogEvent<ABI>[], source: string): void {
+	for (const log of logs) {
+		if (log.blockTimestamp === undefined) {
+			throw new TimestamplessLogError(log.blockNumber, log.blockHash, source);
 		}
 	}
 }

@@ -111,9 +111,14 @@ export interface NumberifiedLog {
 	 * by geth >= 1.16.0, reth, besu, erigon, anvil and EDR >= 0.20.0. Optional
 	 * because it is still not universal IN PRACTICE: the holdout is now a release
 	 * lag rather than a missing implementation (hardhat 3.16.0 bundles edr 0.19.0),
-	 * and a node being forked that predates the change yields a log without it. So
-	 * a caller that needs a timestamp for every log still needs the
-	 * `alwaysFetchTimestamps` fallback for those nodes.
+	 * and a node being forked that predates the change yields a log without it.
+	 *
+	 * What the ENGINE does about such a node is REFUSE it at the fetch boundary,
+	 * naming it (`assertLogsCarryTimestamps` / `TimestamplessLogError`, ADR-0073) --
+	 * unless `alwaysFetchTimestamps` is set, which is the legacy fallback that pays
+	 * a request per event-bearing block for what the log should have carried. The
+	 * field stays optional at the TYPE level either way, because the wire genuinely
+	 * does not guarantee it and this type says what the wire does.
 	 */
 	blockTimestamp?: number;
 }

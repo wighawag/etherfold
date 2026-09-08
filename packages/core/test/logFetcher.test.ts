@@ -61,11 +61,20 @@ function padded(value: string): string {
 	return `0x${value.replace(/^0x/, '').padStart(64, '0')}`;
 }
 
-/** A raw `eth_getLogs` result, in the JSON-RPC shape a node really returns. */
+/**
+ * A raw `eth_getLogs` result, in the JSON-RPC shape a node really returns.
+ *
+ * `blockTimestamp` is on it, as it is on every node the engine supports since
+ * `execution-apis#639`: a fetched range holding a log without one is refused at
+ * the fetch boundary (ADR-0073). A node that predates the change is modelled by
+ * `makeChain({servesTimestamps: false})`, which is what the
+ * `alwaysFetchTimestamps` fallback below exists for.
+ */
 function rawLog(blockNumber: number, blockHash: string, id: number, logIndex = 0, to = ZERO) {
 	return {
 		blockNumber: `0x${blockNumber.toString(16)}`,
 		blockHash,
+		blockTimestamp: `0x${(1_700_000_000 + blockNumber * 12).toString(16)}`,
 		transactionIndex: '0x0',
 		removed: false,
 		address: CONTRACT,
@@ -82,6 +91,8 @@ type ChainOptions = {
 	/** every log the chain holds, by block number */
 	logsPerBlock?: {[blockNumber: number]: ReturnType<typeof rawLog>[]};
 	blockTimestamps?: {[blockHash: string]: number};
+	/** A node PREDATING `execution-apis#639`, which serves no `blockTimestamp` on a log. */
+	servesTimestamps?: boolean;
 	/** called on every eth_getLogs; return a substitute behaviour to simulate a node's limits */
 	onGetLogs?: (range: {
 		fromBlock: number;
@@ -128,6 +139,9 @@ function makeChain(options: ChainOptions) {
 					const result = [];
 					for (let block = fromBlock; block <= upTo; block++) {
 						result.push(...(state.logsPerBlock[block] ?? []));
+					}
+					if (options.servesTimestamps === false) {
+						return result.map(({blockTimestamp: _blockTimestamp, ...log}) => log);
 					}
 					return result;
 				}
@@ -627,6 +641,9 @@ describe('what only this side can check', () => {
 		const chain = makeChain({
 			latestBlock: 110,
 			logsPerBlock: {101: [rawLog(101, '0xa101', 1)]},
+			// the node the fallback exists for: it predates the change, so the timestamp
+			// comes back from `eth_getBlockByHash` or not at all
+			servesTimestamps: false,
 			blockTimestamps: {'0xa101': 1_700_000_000},
 		});
 		// the receiver runs the SAME stream config, so the identity matches
