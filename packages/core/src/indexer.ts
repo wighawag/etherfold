@@ -41,6 +41,7 @@ import {sourceHashesOf} from './internal/engine/eventRanges.js';
 import {CancellablePromiseCancelled, CancelOperations, createAction} from './internal/utils/promises.js';
 import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
 import {InvalidBatchError, isOutOfSpace} from './errors.js';
+import {declaredMethodsOnly, type MethodDeclaringProvider} from './providerSurface.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -288,7 +289,16 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	// ------------------------------------------------------------------------------------------------------------------
 	// INTERNAL VARIABLES
 	// ------------------------------------------------------------------------------------------------------------------
-	protected provider!: EIP1193ProviderWithoutEvents;
+	/**
+	 * The node, behind the engine's declared surface (ADR-0073, ADR-0002).
+	 *
+	 * Wrapped rather than held raw so that every call this class and everything it
+	 * builds makes is seen by ONE guard: `logEventFetcher` is constructed from this
+	 * field, so the log path is covered by the same wrapper as the tip and identity
+	 * reads. A method outside the declared set is REFUSED here rather than answered
+	 * by whatever double or node happens to be underneath.
+	 */
+	protected provider!: MethodDeclaringProvider;
 	protected source!: IndexingSource<ABI>;
 
 	protected config!: UsedIndexerConfig<ABI>;
@@ -437,7 +447,9 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	reinit(provider: EIP1193ProviderWithoutEvents, source: IndexingSource<ABI>, config: ProvidedIndexerConfig<ABI>) {
-		this.provider = provider;
+		// THE seam. Idempotent, so a reconfigure re-entering here does not stack
+		// wrappers, and everything built from `this.provider` below inherits the guard.
+		this.provider = declaredMethodsOnly(provider);
 
 		this.source = source;
 		// One entry per event per NORMALISED live range, ordered so that an append
@@ -791,7 +803,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		const newConfigHash = update.streamConfig ? streamConfigHashOf(update.streamConfig) : this.streamConfigHash;
 
 		const newSourceHashes = update.source ? sourceHashesOf(update.source) : this.sourceHashes;
-		const newProvider = update.provider || this.provider;
+		// Guarded HERE and not only at the `reinit` below, because the chain-identity
+		// check a few lines down speaks to it BEFORE the reinit happens: a provider the
+		// engine talks to is a provider behind the declared surface, with no window
+		// where it is not (the wrapper is idempotent, so `this.provider` passes through).
+		const newProvider = declaredMethodsOnly(update.provider || this.provider);
 		const oldSource = this.source;
 
 		// The CURSOR, and not 0. Whether an appended entry can be absorbed is exactly

@@ -4,6 +4,7 @@ import {LogEventFetcher} from '../internal/decoding/LogEventFetcher.js';
 import {sourceHashesOf} from '../internal/engine/eventRanges.js';
 import {streamConfigHashOf} from '../internal/engine/utils.js';
 import type {FetchConfig, IndexingSource, LogEvent, LogParseConfig, ProvidedStreamConfig} from '../types.js';
+import {declaredMethodsOnly} from '../providerSurface.js';
 import {STREAM_FIXTURE_FORMAT, type StreamFixture} from './fixture.js';
 
 export type CaptureStreamOptions = {
@@ -74,7 +75,15 @@ export async function captureStream<ABI extends Abi>(
 	const contractsData = Array.isArray(source.contracts)
 		? (source.contracts as readonly {address: `0x${string}`; abi: ABI}[])
 		: ({abi: (source.contracts as {abi: ABI}).abi} as {abi: ABI});
-	const fetcher = new LogEventFetcher<ABI>(provider, contractsData as any, options.fetch ?? {}, options.parse);
+	// The one place in the replay path that talks to a node, and it talks to it
+	// through the same declared surface the live path does (ADR-0073): a capture is
+	// still the engine asking, so `eth_getLogs` is still the whole of what it asks.
+	const fetcher = new LogEventFetcher<ABI>(
+		declaredMethodsOnly(provider),
+		contractsData as any,
+		options.fetch ?? {},
+		options.parse,
+	);
 
 	const passThrough = <T>(promise: Promise<T>) => promise;
 	const eventStream: LogEvent<ABI>[] = [];

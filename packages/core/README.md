@@ -4,6 +4,11 @@ The engine. It fetches a contract's logs, decides what a reorg did to them, and 
 
 It names no host and no database: a browser tab, a Node process and a Worker all run this same code, and WHERE the derived state lives arrives from outside (the storage seam is [`@etherfold/state-store`](https://github.com/wighawag/etherfold/tree/main/packages/state-store), reached through [`@etherfold/processor-entities`](https://github.com/wighawag/etherfold/tree/main/packages/processor-entities)).
 
+<!-- provider-surface: the paragraph below is CHECKED against `ENGINE_PROVIDER_METHODS` by `test/theEngineDeclaresItsMethodSet.test.ts`. Every `eth_*` method it names must be declared and every declared method must be named, so keep method names out of the prose here unless they are part of the claim (an ADR is where the history of a deleted call belongs). -->
+
+**The whole provider surface, and it is checked rather than promised.** The engine asks an EIP-1193 provider for four things and nothing else: `eth_getLogs` for the logs, `eth_blockNumber` for the tip, `eth_chainId` for the identity guard, and `eth_getBlockByNumber` at `earliest` once per load, when a source declares a `genesisHash`. One of those is a DATA call and the rest are identity and tip, which is what ADR-0073 means by a fold over logs; the block read is the genesis probe, so nothing here costs a request per block or per transaction. No configuration widens it: the engine holds its provider behind `declaredMethodsOnly`, so anything outside `ENGINE_PROVIDER_METHODS` is refused at the call rather than paid for, and a reintroduced per-block call fails in CI instead of turning up in a profile months later.
+
+
 ## When you want this package, and when you do not
 
 Most applications never import it directly:

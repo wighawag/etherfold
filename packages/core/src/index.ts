@@ -1,5 +1,16 @@
 export * from './types.js';
 export * from './errors.js';
+/**
+ * THE ENGINE'S DECLARED PROVIDER SURFACE: the methods it asks a node for, and
+ * the wrapper that holds it to them.
+ *
+ * Exported rather than kept internal because the claim is what ADR-0002 rests
+ * on and what ADR-0073 states in one sentence: a deployment reasoning about what
+ * its provider will be asked for, or a proxy deciding what to allow through,
+ * reads the SET rather than a sentence in a README. It is also what the tests
+ * read, so that the list exists once.
+ */
+export * from './providerSurface.js';
 export * from './indexer.js';
 export * from './streamBuilder.js';
 /**
