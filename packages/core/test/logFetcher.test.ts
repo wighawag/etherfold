@@ -450,6 +450,165 @@ describe('a partial range is never pushed', () => {
 	});
 });
 
+/**
+ * A node that refuses a wide range by REPORTING its result cap, and then caps
+ * silently at that same number.
+ *
+ * The cap is five so a test can reach it; the phrasing is
+ * mainnet.era.zksync.io's, captured 2026-09-08, with the number changed. The
+ * silent half is the dangerous one: exactly the cap back, no error, and a
+ * `toBlockUsed` covering blocks whose logs are not in the answer.
+ */
+const REPORTED_CAP = 5;
+const REPORTS_ITS_CAP = {code: -32602, message: `Query returned more than ${REPORTED_CAP} results.`};
+
+function chainThatReportsThenCapsSilently() {
+	const logsPerBlock: {[block: number]: any[]} = {};
+	for (let block = 100; block <= 130; block++) {
+		logsPerBlock[block] = [rawLog(block, `0x${block.toString(16)}`, block)];
+	}
+	return makeChain({
+		latestBlock: 130,
+		logsPerBlock,
+		onGetLogs: ({fromBlock, toBlock}) => {
+			const span = toBlock - fromBlock + 1;
+			if (span > 8) {
+				return {kind: 'error', error: REPORTS_ITS_CAP};
+			}
+			return span > REPORTED_CAP ? {kind: 'truncate', upTo: fromBlock + REPORTED_CAP - 1} : undefined;
+		},
+	});
+}
+
+describe('the suspect result count is discovered from the provider, not guessed', () => {
+	it('treats a REPORTED cap as the suspect count, catching a truncation the default would have missed', async () => {
+		const chain = chainThatReportsThenCapsSilently();
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+		const fetcher = fetcherOn(chain.provider, receiver.target);
+
+		// nothing is known before the node has said anything
+		expect(fetcher.suspectResultCount).toEqual({count: 10000, source: 'default'});
+
+		const outcome = await fetcher.fetchAndPush();
+
+		expect(fetcher.suspectResultCount).toEqual({count: REPORTED_CAP, source: 'reported'});
+		expect(outcome.status).toBe('pushed');
+		const batch = receiver.received[0];
+		// Under the DEFAULT this batch would have claimed [100, 106] while holding the five
+		// logs of [100, 104]: a short range delivered as a complete one, which the receiver
+		// reads as an absence, concludes as a reorg, and pays for by deleting state.
+		expect(batch.toBlock).toBe(103);
+		const expectedBlocks = [];
+		for (let block = batch.fromBlock; block <= batch.toBlock; block++) expectedBlocks.push(block);
+		expect(batch.logs.map((l: any) => l.blockNumber)).toEqual(expectedBlocks);
+	});
+
+	it('lets an explicitly configured count WIN over the one the provider reported', async () => {
+		// The same node, saying the same thing, against a deployment that has asserted
+		// something about it. A configured value is an assertion; a number parsed out of an
+		// error message is weaker evidence than that, so it may fill a gap and never
+		// override one.
+		const chain = chainThatReportsThenCapsSilently();
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+		const fetcher = fetcherOn(chain.provider, receiver.target, {suspectResultCount: 4});
+
+		await fetcher.fetchAndPush();
+
+		expect(fetcher.suspectResultCount).toEqual({count: 4, source: 'configured'});
+		// and the BEHAVIOUR follows the configured 4 rather than the reported 5: the
+		// four-log answer for [100, 103] the previous test pushed is halved again here
+		expect(receiver.received[0].toBlock).toBe(101);
+	});
+
+	it('falls back to the existing default when nothing is configured and nothing is reported', async () => {
+		const chain = makeChain({latestBlock: 110});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+
+		const fetcher = fetcherOn(chain.provider, receiver.target);
+		await fetcher.fetchAndPush();
+
+		expect(fetcher.suspectResultCount).toEqual({count: 10000, source: 'default'});
+		// unchanged: told nothing else, core still falls back to what this fetcher ASKS for
+		expect(fetcherOn(chain.provider, receiver.target, {fetch: {maxEventsPerFetch: 500}}).suspectResultCount).toEqual({
+			count: 500,
+			source: 'default',
+		});
+		// and a host that resolves its own default says so WITHOUT asserting it, which is
+		// what keeps the gap open for a reported cap to fill (`@etherfold/fetcher-host`
+		// defaults to 10000 rather than to `maxEventsPerFetch`, and says why at length)
+		expect(
+			fetcherOn(chain.provider, receiver.target, {
+				fetch: {maxEventsPerFetch: 500},
+				defaultSuspectResultCount: 10000,
+			}).suspectResultCount,
+		).toEqual({count: 10000, source: 'default'});
+	});
+
+	it('ignores a reported cap that cannot be a result count', async () => {
+		// CONSTRUCTED on the Infura descriptor (ethers-io/ethers.js#4703) with a `limit` of
+		// zero. A suspect count of zero would treat every answer as truncated and stop the
+		// fetcher on the first block it read, so the report is dropped and logged rather
+		// than believed.
+		const logsPerBlock: {[block: number]: any[]} = {};
+		for (let block = 100; block <= 130; block++) {
+			logsPerBlock[block] = [rawLog(block, `0x${block.toString(16)}`, block)];
+		}
+		const chain = makeChain({
+			latestBlock: 130,
+			logsPerBlock,
+			onGetLogs: ({fromBlock, toBlock}) =>
+				toBlock - fromBlock + 1 > 8
+					? {kind: 'error', error: {code: -32005, data: {from: '0x64', limit: 0, to: '0x6a'}}}
+					: undefined,
+		});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+		const fetcher = fetcherOn(chain.provider, receiver.target);
+
+		const outcome = await fetcher.fetchAndPush();
+
+		expect(fetcher.suspectResultCount).toEqual({count: 10000, source: 'default'});
+		expect(outcome.status).toBe('pushed');
+	});
+
+	it('names where the count CAME FROM when a single block still lands on it', async () => {
+		// The reported cap and a block that really holds that many logs are the one case
+		// with no honest answer, and the operator's fix depends on where the number came
+		// from: a REPORTED one is overridden by configuring it, which is the opposite of
+		// the advice for a configured one.
+		const chain = makeChain({
+			latestBlock: 130,
+			logsPerBlock: {
+				100: [
+					rawLog(100, '0xa100', 1, 0),
+					rawLog(100, '0xa100', 2, 1),
+					rawLog(100, '0xa100', 3, 2),
+					rawLog(100, '0xa100', 4, 3),
+					rawLog(100, '0xa100', 5, 4),
+				],
+			},
+			onGetLogs: ({fromBlock, toBlock}) => {
+				const span = toBlock - fromBlock + 1;
+				if (span > 8) {
+					return {kind: 'error', error: REPORTS_ITS_CAP};
+				}
+				return {kind: 'truncate', upTo: fromBlock};
+			},
+		});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+
+		const failure = await fetcherOn(chain.provider, receiver.target)
+			.fetchAndPush()
+			.catch((err) => err);
+
+		expect(failure).toBeInstanceOf(SuspectedTruncationError);
+		expect(failure.source).toBe('reported');
+		expect(failure.message).toContain('suspectResultCount');
+		// the node's own report, named as such, and the fix that follows from it
+		expect(failure.message).toMatch(/reported/i);
+		expect(receiver.sends).toBe(0);
+	});
+});
+
 describe('no reorg information crosses the wire', () => {
 	it('re-delivers the replaced blocks as raw logs and leaves the conclusion to the receiver', async () => {
 		// block 108 is inside the unconfirmed window the next round re-scans
@@ -579,7 +738,7 @@ describe('the two refusal families are told apart', () => {
 		const broken: IngestionTarget = {
 			async expectedFromBlock() {
 				asks++;
-				throw new SuspectedTruncationError(100, 10000);
+				throw new SuspectedTruncationError(100, 10000, 'configured');
 			},
 			async send() {
 				throw new Error('never reached');

@@ -252,13 +252,30 @@ const STATED_BLOCK_CAP_PATTERNS: RegExp[] = [
 const MIN_PLAUSIBLE_BLOCK_CAP = 1;
 const MAX_PLAUSIBLE_BLOCK_CAP = 10_000_000;
 
-function plausibleBlockCap(token: string): number | undefined {
+/**
+ * One cap TOKEN as a number: `10,000` -> 10000, `2K` -> 2000, `-1` -> -1.
+ *
+ * Reads the notation and judges nothing, because a number that is implausible as
+ * a BLOCK span is not the same number that is implausible as a RESULT count. Each
+ * caller applies its own bounds to what comes back.
+ */
+function capToken(token: string): number | undefined {
 	const trimmed = token.trim();
 	const suffix = trimmed.slice(-1);
 	const multiplier = suffix === 'k' || suffix === 'K' ? 1000 : suffix === 'm' || suffix === 'M' ? 1_000_000 : 1;
 	const digits = (multiplier === 1 ? trimmed : trimmed.slice(0, -1)).replace(/[,_\s]/g, '');
 	const value = parseFloat(digits) * multiplier;
-	if (!Number.isInteger(value) || value < MIN_PLAUSIBLE_BLOCK_CAP || value > MAX_PLAUSIBLE_BLOCK_CAP) {
+	return isNaN(value) ? undefined : value;
+}
+
+function plausibleBlockCap(token: string): number | undefined {
+	const value = capToken(token);
+	if (
+		value === undefined ||
+		!Number.isInteger(value) ||
+		value < MIN_PLAUSIBLE_BLOCK_CAP ||
+		value > MAX_PLAUSIBLE_BLOCK_CAP
+	) {
 		return undefined;
 	}
 	return value;
@@ -328,6 +345,148 @@ export function statedBlockCapFromError(error: any): number | undefined {
 	let lowest: number | undefined;
 	for (const text of [error.data, error.data?.message, error.message]) {
 		const cap = statedBlockCapFromText(text);
+		if (cap !== undefined && (lowest === undefined || cap < lowest)) {
+			lowest = cap;
+		}
+	}
+	return lowest;
+}
+
+/**
+ * The phrasings in which a provider REPORTS the number of logs it will return,
+ * each one taken from a refusal a real endpoint really sent.
+ *
+ * The mirror image of {@link STATED_BLOCK_CAP_PATTERNS}, and the reason the two
+ * lists exist separately rather than as one: providers cap this method by block
+ * SPAN or by RESULT COUNT, the two differ by orders of magnitude, and the
+ * sentences look alike. Every pattern here anchors on the word for what is being
+ * COUNTED (`results`, `logs`), so `exceeded maximum block range: 5000` cannot
+ * reach this reader and `logs matched by query exceeds limit of 10000` -- which
+ * {@link STATED_BLOCK_CAP_PATTERNS} deliberately refuses -- is exactly what does.
+ *
+ * Captured 2026-09-08 unless noted:
+ * `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`.
+ */
+const REPORTED_RESULT_CAP_PATTERNS: RegExp[] = [
+	// Infura (ethers-io/ethers.js#4703) "query returned more than 10000 results", and
+	// the same sentence live on rpc.gnosischain.com (50000), rpc.chiadochain.net,
+	// rpc.frax.com (20000), mainnet.era.zksync.io and api.mainnet.abs.xyz (10000).
+	// rpc.pulsechain.com's "more than allowed number of logs" names no number, and
+	// therefore matches nothing.
+	new RegExp(String.raw`more than ${CAP_NUMBER}\s*(?:results|logs)\b`, 'i'),
+	// arb1.arbitrum.io/rpc and nova.arbitrum.io/rpc "logs matched by query exceeds
+	// limit of 10000". Anchored on the LOGS in front of the verb, which is what tells
+	// this apart from Ronin's "block range 16777217 exceeds the limit of 200".
+	new RegExp(String.raw`logs matched by query exceeds (?:the )?limit of ${CAP_NUMBER}`, 'i'),
+	// Alchemy (ethers-io/ethers.js#4703) "you can request any block range with a cap of
+	// 10K logs in the response", stated in the same sentence as its 2K BLOCK cap.
+	new RegExp(String.raw`cap of ${CAP_NUMBER}\s*logs`, 'i'),
+];
+
+/**
+ * A result cap is a COUNT OF LOGS, so a number a provider could not have meant as
+ * one is dropped rather than believed -- and LOUDLY, because what it would have
+ * become is the sharpest correctness knob in the fetcher.
+ *
+ * Zero and negatives would make every answer suspect (and a single block holding
+ * any log at all unfetchable), a fraction is not a count, and the upper bound is
+ * the same order-of-magnitude sanity check the block cap takes: the largest
+ * result cap in the whole captured corpus is 50,000.
+ */
+const MIN_PLAUSIBLE_RESULT_CAP = 1;
+const MAX_PLAUSIBLE_RESULT_CAP = 10_000_000;
+
+function plausibleResultCap(value: number): number | undefined {
+	if (!Number.isInteger(value) || value < MIN_PLAUSIBLE_RESULT_CAP || value > MAX_PLAUSIBLE_RESULT_CAP) {
+		namedLogger.error(
+			`a provider reported an eth_getLogs result cap of ${value}, which cannot be a count of logs: the report is ` +
+				`IGNORED and the fetcher keeps the suspect count it already had. If that number is real, configure ` +
+				`suspectResultCount, which wins over anything read off a refusal.`,
+		);
+		return undefined;
+	}
+	return value;
+}
+
+/**
+ * The result cap a provider stated as STRUCTURED data: the `limit` of a
+ * `{from, to, limit}` descriptor.
+ *
+ * `to` is REQUIRED here for the same reason `limit` is required by
+ * {@link suggestedToBlockFromStructuredData}, with the roles swapped: the two
+ * fields identify a REFUSAL DESCRIPTOR together, and neither is safe alone. A
+ * bare `limit` is the field a provider ALSO uses for a request-rate allowance,
+ * and reading a rate limit as a result cap would make the fetcher suspect every
+ * answer holding that many logs and stop outright on a block that holds exactly
+ * that many.
+ */
+function reportedResultCapFromStructuredData(data: any): number | undefined {
+	if (!data || typeof data !== 'object') {
+		return undefined;
+	}
+	if (typeof data.to !== 'string' || typeof data.limit !== 'number') {
+		return undefined;
+	}
+	return plausibleResultCap(data.limit);
+}
+
+/** The lowest plausible result cap reported anywhere in one piece of provider text. */
+function reportedResultCapFromText(text: unknown): number | undefined {
+	if (typeof text !== 'string') {
+		return undefined;
+	}
+	let lowest: number | undefined;
+	for (const pattern of REPORTED_RESULT_CAP_PATTERNS) {
+		const match = pattern.exec(text);
+		if (!match) {
+			continue;
+		}
+		const token = capToken(match[1]);
+		const cap = token === undefined ? undefined : plausibleResultCap(token);
+		if (cap !== undefined && (lowest === undefined || cap < lowest)) {
+			lowest = cap;
+		}
+	}
+	return lowest;
+}
+
+/**
+ * The number of LOGS a provider said it will return, read off its own refusal, or
+ * `undefined` when it reported no such number.
+ *
+ * The fourth reader of one refusal, and the only one whose answer is not about a
+ * range at all. What it produces is a candidate for `suspectResultCount`, the
+ * count at which the log-fetcher treats a result set as SUSPECT rather than
+ * complete -- the knob that decides whether a SILENT truncation is noticed, since
+ * a capped answer and a complete one differ in nothing but their size. An
+ * operator has had to guess that number by hand while some providers report it in
+ * every refusal.
+ *
+ * Two shapes are read, structured before prose as everywhere else in this file:
+ * the `limit` of a `{from, to, limit}` descriptor (Infura), and a count written
+ * out in words next to what it counts ({@link REPORTED_RESULT_CAP_PATTERNS}). The
+ * LOWEST plausible candidate wins, which makes the answer independent of pattern
+ * order and lands on the safe side of an asymmetric mistake: a suspect count
+ * BELOW the node's real cap costs a re-fetched half-range, while one ABOVE it
+ * misses the truncation entirely, and the receiver reads the missing logs as an
+ * absence, concludes a reorg and deletes state (ADR-0004).
+ *
+ * No error CODE gates it, exactly as none gates {@link statedBlockCapFromError}
+ * or {@link archiveRefusalFromError}: the sweep found result caps under `-32005`,
+ * `-32602`, `-32000` and `-32600`, and what identifies one is the descriptor or
+ * the words beside the number.
+ *
+ * Captured refusal shapes, their providers and their dates:
+ * `work/notes/findings/what-nodes-answer-when-a-getlogs-range-is-too-big.md` and
+ * `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`.
+ */
+export function reportedResultCapFromError(error: any): number | undefined {
+	if (!error) {
+		return undefined;
+	}
+	let lowest = reportedResultCapFromStructuredData(error.data);
+	for (const text of [error.data, error.data?.message, error.message]) {
+		const cap = reportedResultCapFromText(text);
 		if (cap !== undefined && (lowest === undefined || cap < lowest)) {
 			lowest = cap;
 		}
@@ -424,6 +583,7 @@ export class RangeLogFetcher {
 	protected numBlocksToFetch: number;
 	protected foundNumBlockToHigh: number | undefined;
 	protected safeNumBlock: number | undefined;
+	private lowestReportedResultCap: number | undefined;
 	constructor(
 		protected provider: EIP1193ProviderWithoutEvents,
 		protected contractAddresses: EIP1193Account[] | null,
@@ -497,6 +657,40 @@ export class RangeLogFetcher {
 		this.foundNumBlockToHigh = Math.min(this.foundNumBlockToHigh ?? this.config.maxBlocksPerFetch, cap);
 	}
 
+	/**
+	 * The `eth_getLogs` RESULT cap this provider has reported about itself, or
+	 * `undefined` while it has reported none.
+	 *
+	 * Read by the log-fetcher above as a candidate `suspectResultCount`, which is a
+	 * question this class deliberately holds no opinion about: a result cap says
+	 * nothing about how many BLOCKS to ask for (the only thing sizing here is
+	 * measured in), and what to do with a count landing exactly on the cap is a
+	 * sending decision under ADR-0004 rather than a fetching one.
+	 */
+	get reportedResultCap(): number | undefined {
+		return this.lowestReportedResultCap;
+	}
+
+	/**
+	 * The ONLY writer of the reported result cap, and the reason a report can never
+	 * RAISE what an earlier one established.
+	 *
+	 * The same only-ever-lower rule as {@link RangeLogFetcher.lowerBlockCeilingTo},
+	 * with a sharper asymmetry behind it. A suspect count BELOW the node's real cap
+	 * costs a re-fetched half-range; one ABOVE it means a silently capped answer is
+	 * never noticed, so a short range is delivered as a complete one, and the
+	 * receiver reads the missing logs as an absence, concludes a reorg and DELETES
+	 * state. One URL can also front several backends with different caps, and the
+	 * smallest of those is the only number that is safe against all of them.
+	 */
+	protected recordReportedResultCap(cap: number | undefined): void {
+		if (cap === undefined || (this.lowestReportedResultCap !== undefined && cap >= this.lowestReportedResultCap)) {
+			return;
+		}
+		namedLogger.info(`this provider reported an eth_getLogs result cap of ${cap} logs`);
+		this.lowestReportedResultCap = cap;
+	}
+
 	async getLogs(
 		options: {fromBlock: number; toBlock: number; retry?: number},
 		unlessCancelled: UnlessCancelledFunction,
@@ -541,6 +735,13 @@ export class RangeLogFetcher {
 				// endpoint that starts gating history mid-backfill still names the real reason.
 				throw new ArchiveRefusedError(fromBlock, toBlock, archiveRefusal);
 			}
+			// BEFORE the retry budget is consulted, unlike every other hint here: what the
+			// node said about its own result cap is true whether or not this call has an
+			// attempt left, it is not a hint about the range to ask for next, and it outlives
+			// this call -- so a refusal arriving on the LAST attempt still teaches the fetcher
+			// the number instead of making the next cycle rediscover it.
+			this.recordReportedResultCap(reportedResultCapFromError(err));
+
 			if (retry <= 0) {
 				throw err;
 			}

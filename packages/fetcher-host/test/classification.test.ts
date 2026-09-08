@@ -39,7 +39,11 @@ describe('retryability is read off the error and never re-derived', () => {
 		['IngestionRefusedError (401: the token is wrong)', new IngestionRefusedError(401, 'unauthorized', 'no'), false],
 		['WireContextMismatchError (another indexer)', new WireContextMismatchError(context, context), false],
 		['UnexpectedChainError (the wrong node)', new UnexpectedChainError('1', '137', 'before'), false],
-		['SuspectedTruncationError (a cap that cannot be halved away)', new SuspectedTruncationError(1, 10000), false],
+		[
+			'SuspectedTruncationError (a cap that cannot be halved away)',
+			new SuspectedTruncationError(1, 10000, 'configured'),
+			false,
+		],
 		['UnexpectedFromBlockError (the cursor refusal)', new UnexpectedFromBlockError(10, 5), false],
 		['InvalidBatchError (a malformed envelope)', new InvalidBatchError('bad'), false],
 		['NoFetchProgressError (a range fetcher going backwards)', new NoFetchProgressError(10, 5), false],
@@ -279,6 +283,21 @@ describe('configuration a deployment gets wrong', () => {
 			expect(resolveFetcherHostConfig({...complete, SUSPECT_RESULT_COUNT: '5000'}).suspectResultCount).toBe(5000);
 		});
 
+		it('keeps WHICH of the two the number is, because core cannot infer it', () => {
+			// A stated count is an ASSERTION about this node and outranks a cap the provider
+			// reports about itself; an unstated one is a gap such a report may fill. Passing
+			// the default on as though it were an assertion would close that gap for every
+			// deployment, which is the guessing this exists to stop.
+			expect(resolveFetcherHostConfig(complete).suspectResultCountSource).toBe('default');
+			expect(resolveFetcherHostConfig({...complete, SUSPECT_RESULT_COUNT: '5000'}).suspectResultCountSource).toBe(
+				'configured',
+			);
+			// an OVERRIDE is a deployment stating one just as much as the variable is
+			expect(resolveFetcherHostConfig(complete, {suspectResultCount: 5000}).suspectResultCountSource).toBe(
+				'configured',
+			);
+		});
+
 		it('refuses a suspect count that is not a positive whole number of logs', () => {
 			expect(() => resolveFetcherHostConfig({...complete, SUSPECT_RESULT_COUNT: '0'})).toThrow(/positive whole number/);
 			expect(() => resolveFetcherHostConfig({...complete, SUSPECT_RESULT_COUNT: 'lots'})).toThrow(/must be a number/);
@@ -291,8 +310,20 @@ describe('configuration a deployment gets wrong', () => {
 				resolveFetcherHostConfig({...complete, MAX_EVENTS_PER_FETCH: '500', SUSPECT_RESULT_COUNT: '5000'}),
 				{provider: chain.provider, fetch: receiver.fetch},
 			);
-			const inner = host.fetcher as unknown as {suspectResultCount: number};
-			expect(inner.suspectResultCount).toBe(5000);
+			expect(host.fetcher.suspectResultCount).toEqual({count: 5000, source: 'configured'});
+		});
+
+		it('hands an UNSTATED count over as this host\u2019s default, not as an assertion', async () => {
+			const receiver = await deployReceiver();
+			const chain = fakeChain();
+			const host = createFetcherHost(resolveFetcherHostConfig({...complete, MAX_EVENTS_PER_FETCH: '500'}), {
+				provider: chain.provider,
+				fetch: receiver.fetch,
+			});
+			// 10000 and not 500 (core's own fallback is `maxEventsPerFetch`), and `default`
+			// and not `configured`, which is what leaves the gap open for a cap the provider
+			// reports about itself to fill at runtime
+			expect(host.fetcher.suspectResultCount).toEqual({count: COMMON_RESULT_CAP, source: 'default'});
 		});
 	});
 
@@ -308,9 +339,13 @@ describe('configuration a deployment gets wrong', () => {
 		// an RPC URL is a credential at every hosted provider: `.../v2/<key>`
 		expect(described).toContain('https://eth.example');
 		expect(described).toContain('/…');
-		// and the thing an operator most needs to see IS said, in full
+		// and the thing an operator most needs to see IS said, in full -- including which
+		// of the three tiers this number is, since an unstated one is a gap a provider's
+		// own reported cap may fill
 		expect(described).toContain('suspectResultCount=10000');
 		expect(described).toMatch(/REAL eth_getLogs cap/);
+		expect(described).toContain('the DEFAULT');
+		expect(described).toMatch(/REPORTS in a refusal/);
 	});
 });
 

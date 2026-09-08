@@ -3,6 +3,7 @@ import {
 	archiveRefusalFromError,
 	getNewToBlockFromError,
 	RangeLogFetcher,
+	reportedResultCapFromError,
 	statedBlockCapFromError,
 } from '../src/internal/engine/RangeLogFetcher.js';
 
@@ -576,6 +577,177 @@ describe('statedBlockCapFromError', () => {
 	});
 });
 
+describe('reportedResultCapFromError', () => {
+	describe('a cap a provider reports about its own RESULT count is read', () => {
+		it('reads `limit` out of a structured refusal descriptor', () => {
+			// Infura, quoted verbatim in ethers-io/ethers.js#4703. `limit` is the node's own
+			// result cap, and it is the number `suspectResultCount` currently asks an operator
+			// to guess.
+			expect(
+				reportedResultCapFromError({
+					code: -32005,
+					data: {from: '0xBDE5F8', limit: 10000, to: '0x102DBCC'},
+					message: 'query returned more than 10000 results. Try with this block range [0xBDE5F8, 0x102DBCC].',
+				}),
+			).toBe(10000);
+		});
+
+		it('reads a cap a provider COUNTS OUT in prose, in the message or in `data`', () => {
+			// rpc.gnosischain.com (Nethermind), captured 2026-09-08: the whole hint is in
+			// `data` behind a bare "invalid params", and the count is this node's real cap.
+			expect(
+				reportedResultCapFromError(
+					rpcError(
+						-32602,
+						'invalid params',
+						'Query returned more than 50000 results. Try with this block range [0x1000000, 0x1080000].',
+					),
+				),
+			).toBe(50000);
+			// rpc.frax.com (Nethermind), captured 2026-09-08.
+			expect(
+				reportedResultCapFromError(
+					rpcError(
+						-32602,
+						'invalid params',
+						'Query returned more than 20000 results. Try with this block range [0x100000, 0x81dfec].',
+					),
+				),
+			).toBe(20000);
+			// mainnet.era.zksync.io, captured 2026-09-08.
+			expect(
+				reportedResultCapFromError(
+					rpcError(-32602, 'Query returned more than 10000 results. Try with this block range [0x100000, 0x1000bb].'),
+				),
+			).toBe(10000);
+			// arb1.arbitrum.io/rpc and nova.arbitrum.io/rpc, captured 2026-09-08. Deliberately
+			// NOT read as a block span by `statedBlockCapFromError`; it is a RESULT cap, which
+			// is exactly what this reader is for.
+			expect(reportedResultCapFromError(rpcError(-32000, 'logs matched by query exceeds limit of 10000'))).toBe(10000);
+			// Alchemy, quoted verbatim in ethers-io/ethers.js#4703: the 10K LOG cap stated
+			// beside the 2K BLOCK one, unit suffix included.
+			expect(reportedResultCapFromError(rpcError(-32602, ALCHEMY_TWO_CAPS))).toBe(10000);
+		});
+
+		it('takes the LOWEST cap when a refusal reports more than one', () => {
+			// CONSTRUCTED from two captured phrasings (rpc.gnosischain.com and
+			// mainnet.era.zksync.io, both 2026-09-08). Reading several and keeping the smallest
+			// makes the answer independent of pattern order, and lands on the safe side: a
+			// count that is too LOW re-fetches a halved range, a count that is too HIGH misses
+			// a truncation and the receiver deletes state.
+			const err = rpcError(-32602, 'Query returned more than 50000 results.');
+			err.data = 'Query returned more than 10000 results. Try with this block range [0x100000, 0x1000bb].';
+			expect(reportedResultCapFromError(err)).toBe(10000);
+		});
+	});
+
+	describe('a BLOCK cap is never read as a result cap', () => {
+		it('reads nothing from a refusal that counts blocks rather than logs', () => {
+			// Every one of these states a real cap, captured 2026-09-08, and every one of them
+			// is a SPAN. Read as a result count they would make `suspectResultCount` a number
+			// about the wrong quantity, which is the one mistake this knob cannot afford.
+			// rpc.immutable.com.
+			expect(reportedResultCapFromError(rpcError(-32000, 'exceeded maximum block range: 5000'))).toBeUndefined();
+			// 1rpc.io/eth.
+			expect(
+				reportedResultCapFromError(rpcError(-32602, 'eth_getLogs is limited to 0 - 50 blocks range')),
+			).toBeUndefined();
+			// rpc.mevblocker.io, which enforces a 10,000-BLOCK span cap now.
+			expect(reportedResultCapFromError(rpcError(-32602, 'range 47440 exceeds limit of 10000'))).toBeUndefined();
+			// api.roninchain.com/rpc, hint in `data`.
+			expect(
+				reportedResultCapFromError(
+					rpcError(
+						-32602,
+						'Invalid params',
+						'requested block range 16777217 exceeds the limit of 200; narrow your fromBlock/toBlock',
+					),
+				),
+			).toBeUndefined();
+			// evm.cronos.org, whose bracketed pair is a parameter-name list.
+			expect(
+				reportedResultCapFromError(rpcError(-32000, 'maximum [from, to] blocks distance: 2000', null)),
+			).toBeUndefined();
+			// api.avax.network/ext/bc/C/rpc.
+			expect(
+				reportedResultCapFromError(
+					rpcError(-32000, 'requested too many blocks from 50331648 to 51380224, maximum is set to 2048'),
+				),
+			).toBeUndefined();
+		});
+
+		it('reads nothing from a refusal that names no number, or is not about ranges at all', () => {
+			// rpc.pulsechain.com, captured 2026-09-08: a result complaint with no count in it.
+			expect(
+				reportedResultCapFromError(
+					rpcError(-32000, 'query returned more than allowed number of logs, try with smaller block range'),
+				),
+			).toBeUndefined();
+			// bsc-dataseed.bnbchain.org, captured 2026-09-08.
+			expect(reportedResultCapFromError(rpcError(-32005, 'limit exceeded'))).toBeUndefined();
+			// ethereum-rpc.publicnode.com, captured 2026-09-08: terminal, and nothing in it is
+			// a cap of any kind.
+			expect(
+				reportedResultCapFromError(
+					rpcError(
+						-32602,
+						'Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode',
+					),
+				),
+			).toBeUndefined();
+		});
+
+		it('ignores a `data` object that describes no refused range', () => {
+			// aurora-is-near/aurora-relayer#326: a -32005 whose `data` echoes the request. The
+			// `to` field gates the `limit` exactly as the `limit` gates the `to` in
+			// `getNewToBlockFromError`: the two fields identify a REFUSAL DESCRIPTOR together.
+			expect(
+				reportedResultCapFromError({
+					code: -32005,
+					message: 'limit exceeded',
+					data: {
+						host: '192.168.1.2',
+						'cf-ray': '726f01a2e50317ca-MEL',
+						request_body: {method: 'eth_getLogs', params: [{fromBlock: '0x0', toBlock: 'latest'}]},
+					},
+				}),
+			).toBeUndefined();
+			// CONSTRUCTED, and the reason the descriptor is required: `limit` is also what a
+			// provider calls its REQUEST RATE allowance. Read as a result cap it would make a
+			// fetcher suspect every answer of 100 logs and stop on a block holding exactly that
+			// many.
+			expect(
+				reportedResultCapFromError({code: -32005, message: 'rate limit exceeded', data: {limit: 100, window: '1s'}}),
+			).toBeUndefined();
+		});
+	});
+
+	describe('a number that cannot be a result count is ignored rather than trusted', () => {
+		it('ignores zero, negative, fractional and absurd counts', () => {
+			// CONSTRUCTED on the captured Infura descriptor. A suspect count of zero treats
+			// EVERY answer as truncated, and a negative one is not a count at all.
+			const descriptor = (limit: any) => ({code: -32005, data: {from: '0xBDE5F8', limit, to: '0x102DBCC'}});
+			expect(reportedResultCapFromError(descriptor(0))).toBeUndefined();
+			expect(reportedResultCapFromError(descriptor(-10000))).toBeUndefined();
+			expect(reportedResultCapFromError(descriptor(2.5))).toBeUndefined();
+			expect(reportedResultCapFromError(descriptor(4294967296))).toBeUndefined();
+			expect(reportedResultCapFromError(descriptor(Number.NaN))).toBeUndefined();
+			// CONSTRUCTED on the captured zkSync phrasing: the same rule for a counted-out one.
+			expect(reportedResultCapFromError(rpcError(-32602, 'Query returned more than 0 results.'))).toBeUndefined();
+		});
+	});
+
+	describe('malformed errors do not throw', () => {
+		it('does not throw on an empty error, a missing message, or nothing at all', () => {
+			expect(reportedResultCapFromError({} as any)).toBeUndefined();
+			expect(reportedResultCapFromError(rpcError(-32005))).toBeUndefined();
+			expect(reportedResultCapFromError(undefined as any)).toBeUndefined();
+			expect(reportedResultCapFromError(null as any)).toBeUndefined();
+			expect(reportedResultCapFromError(new Error('socket hang up'))).toBeUndefined();
+		});
+	});
+});
+
 const passThrough = <T>(p: Promise<T>) => p;
 
 /**
@@ -800,6 +972,43 @@ describe('what the fetcher does with a refusal', () => {
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 499, 249]);
 		expect(result.toBlockUsed).toBe(249);
 		expect(fetcher.discoveredCeiling).toBeUndefined();
+	});
+
+	it('remembers the RESULT cap a refusal reported, and never raises it', async () => {
+		// The first body is arb1.arbitrum.io/rpc, captured 2026-09-08; the second is the
+		// same phrasing with a bigger number, CONSTRUCTED, and it arrives on the next
+		// halving attempt of the same call. A later, HIGHER report must not raise what was
+		// learned, for the same reason the block ceiling only ever lowers -- except that
+		// here the asymmetry is sharper: a suspect count ABOVE the node's real cap misses a
+		// truncation entirely, and the receiver reads the missing logs as a reorg and
+		// deletes state.
+		const {provider} = refusingProviderInTurn(
+			[
+				rpcError(-32000, 'logs matched by query exceeds limit of 10000'),
+				rpcError(-32000, 'logs matched by query exceeds limit of 50000'),
+			],
+			300,
+		);
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		expect(fetcher.reportedResultCap).toBeUndefined();
+		await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
+
+		expect(fetcher.reportedResultCap).toBe(10000);
+	});
+
+	it('reports nothing at all for a provider that reports no result cap', async () => {
+		// rpc.pulsechain.com, captured 2026-09-08. The majority case: nothing is discovered,
+		// and the suspect count stays whatever the deployment resolved it to.
+		const {provider} = refusingProvider(
+			rpcError(-32000, 'query returned more than allowed number of logs, try with smaller block range'),
+			300,
+		);
+		const fetcher = new RangeLogFetcher(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
+
+		expect(fetcher.reportedResultCap).toBeUndefined();
 	});
 
 	it('asks for at least one block, even for a provider that states a one-block cap', async () => {

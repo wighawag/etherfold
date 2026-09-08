@@ -70,7 +70,7 @@ Every variable below is read from the environment. Anything can also be passed t
 | `INDEXER_NAME` | split only | The NAMED INDEXER to push into: one indexed answer set over one chain (ADR-0036), and the first segment of every ingest route. Never defaulted -- a receiving host registers the names it was built with, and any other is refused with a `404`. |
 | `INGEST_TOKEN` | split only | The server's `INGEST_TOKEN`. Sent as a bearer token, and never logged or included in an error. |
 | `ETH_NODE_URI` | yes | The JSON-RPC endpoint to read the chain from. Treated as a credential: only its host is ever logged. |
-| `SUSPECT_RESULT_COUNT` | **read this** | Your node's real `eth_getLogs` result cap. Defaults to `10000`. See below. |
+| `SUSPECT_RESULT_COUNT` | **read this** | Your node's real `eth_getLogs` result cap. Discovered from the provider where it reports one, otherwise `10000`. See below. |
 | `MAX_EVENTS_PER_FETCH` | no | How many events one fetch aims for. Default `10000`. |
 | `MAX_BLOCKS_PER_FETCH` | no | The widest block range one fetch may cover. |
 | `STREAM_FINALITY` | no | Must match the server's, since `{source, config}` is the wire identity. |
@@ -88,7 +88,15 @@ This is the sharpest edge in the deployment, and it cannot be closed in code.
 
 A node that caps `eth_getLogs` **silently** returns exactly N logs and no error, and nothing distinguishes that from a range that genuinely holds N. The only detection there is is matching N exactly. The fetcher treats a result set landing on `SUSPECT_RESULT_COUNT` as suspect, halves the range and re-fetches until the answer comes back under it.
 
-If your node caps at 5000 and this says 10000, the guard never fires: a short range is pushed as a complete one, the server reads the missing logs as an absence, an absence is a reorg, and a reorg deletes state. Leaving the default asserts that your node caps at exactly 10000, or does not cap silently at all.
+If your node caps at 5000 and this says 10000, the guard never fires: a short range is pushed as a complete one, the server reads the missing logs as an absence, an absence is a reorg, and a reorg deletes state.
+
+**It is DISCOVERED where your provider reports it.** Several providers state their real result cap in every refusal, structurally (`{"code":-32005,"data":{"from":"0xBDE5F8","limit":10000,"to":"0x102DBCC"}}`, Infura) or in words (`Query returned more than 50000 results`, a Nethermind node such as Gnosis; `logs matched by query exceeds limit of 10000`, Arbitrum). The fetcher reads that number and uses it, so the count comes from the node rather than from a guess. The three tiers, most specific first, are:
+
+1. `SUSPECT_RESULT_COUNT`, when you set it. It **wins**, always: setting it is an assertion about your node, and a number parsed out of an error message is weaker evidence than that.
+2. a cap the provider reported in a refusal, which only ever fills the gap an unset variable leaves. A report that could not be a count of logs (zero, negative, fractional, absurd) is ignored and logged, and a later, higher report never raises an earlier, lower one.
+3. `10000`, the most common cap.
+
+Which of the three is in force is not left to be inferred: the startup line says whether the count is CONFIGURED or the DEFAULT, a discovered cap taking effect is logged (as is a configured one overriding a report), and a truncation that cannot be halved away names the source in its error. Leaving the variable unset asserts that your node caps at exactly 10000, does not cap silently at all, or reports its cap when it refuses.
 
 Do **not** try to reach the same effect by raising `MAX_EVENTS_PER_FETCH`. That widens the span each fetch asks for, which makes truncation more likely rather than less. The two knobs mean different things: one is what this fetcher asks for, the other is what the node will silently refuse to exceed.
 
