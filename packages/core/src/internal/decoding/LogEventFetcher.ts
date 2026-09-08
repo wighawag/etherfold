@@ -108,9 +108,11 @@ export interface NumberifiedLog {
 	 * Seconds since the epoch, when the node put it on the log itself.
 	 *
 	 * Standardised by `ethereum/execution-apis#639` (merged 2025-08-25) and served
-	 * by geth >= 1.16.0, reth, besu, erigon and anvil. Optional because it is NOT
-	 * universal: Hardhat's EDR does not emit it as of hardhat 3.14.0 / edr 0.3.8,
-	 * so a caller that needs a timestamp for every log still needs the
+	 * by geth >= 1.16.0, reth, besu, erigon, anvil and EDR >= 0.20.0. Optional
+	 * because it is still not universal IN PRACTICE: the holdout is now a release
+	 * lag rather than a missing implementation (hardhat 3.16.0 bundles edr 0.19.0),
+	 * and a node being forked that predates the change yields a log without it. So
+	 * a caller that needs a timestamp for every log still needs the
 	 * `alwaysFetchTimestamps` fallback for those nodes.
 	 */
 	blockTimestamp?: number;

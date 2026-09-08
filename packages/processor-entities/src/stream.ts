@@ -62,10 +62,14 @@ export function blockPointer<ABI extends Abi>(block: BlockOfEvents<ABI>): BlockP
 	if (!withTimestamp || withTimestamp.blockTimestamp === undefined) {
 		throw new Error(
 			`no blockTimestamp on any event of block ${block.number} (${block.hash}). Nodes implementing ` +
-				`execution-apis#639 (geth >= 1.16.0, reth, besu, erigon, anvil) put it on the log itself, but some do ` +
-				`not: Hardhat's EDR does not as of hardhat 3.14.0. Set \`stream: {alwaysFetchTimestamps: true}\` on the ` +
-				`indexer to fall back to fetching the block, or populate blockTimestamp before feeding. This refuses to ` +
-				`guess, because a wrong timestamp breaks the time axis silently.`,
+				`execution-apis#639 (geth >= 1.16.0, reth, besu, erigon, anvil, and EDR >= 0.20.0) put it on the log ` +
+				`itself. Reaching this means the node did not: it predates the change, or it is a Hardhat version ` +
+				`bundling an older EDR (3.16.0 still ships edr 0.19.0 -- override @nomicfoundation/edr to >=0.20.0 ` +
+				`rather than waiting for the bump), or it is forking a node that predates it, or it is answering ` +
+				`from an EDR RPC cache written before the change. Upgrade the node, or set ` +
+				`\`stream: {alwaysFetchTimestamps: true}\` on the indexer to fall back to fetching the block, or ` +
+				`populate blockTimestamp before feeding. This refuses to guess, because a wrong timestamp breaks ` +
+				`the time axis silently.`,
 		);
 	}
 	return {
