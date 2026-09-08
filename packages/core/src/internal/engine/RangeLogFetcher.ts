@@ -169,6 +169,173 @@ export function getNewToBlockFromError(error: any): number | undefined {
 }
 
 /**
+ * A number token as a provider writes a cap: `5000`, `10,000`, `2K`, `-1`.
+ *
+ * The sign is CAPTURED rather than excluded so that a negative cap arrives at
+ * {@link plausibleBlockCap} and is REFUSED there, instead of a leading `-` being
+ * skipped and `-5000` read as `5000`. The unit suffix must END a word, or the `m`
+ * of Mantle's "block range greater than 10000 max" reads as a million.
+ */
+const CAP_NUMBER = String.raw`(-?\d[\d,_.]*(?:\s*[kKmM]\b)?)`;
+
+/**
+ * The phrasings in which a provider STATES the block span it will serve, each one
+ * taken from a refusal a real endpoint really sent.
+ *
+ * Every pattern names its own UNIT, and that is the whole safety argument for
+ * reading prose at all: providers cap this method by block span OR by result
+ * count, the two differ by orders of magnitude, and the sentences look alike
+ * (`exceeded maximum block range: 5000` against `logs matched by query exceeds
+ * limit of 10000`). So a number is read only where the words next to it say
+ * BLOCKS -- never on proximity to a bare `limit`, which is how Arbitrum states a
+ * RESULT cap, and never from a `Try with this block range [0x.., 0x..]`
+ * suggestion, which is {@link getNewToBlockFromError}'s job.
+ *
+ * The patterns are deliberately tight rather than general. A false positive is
+ * not free: the ceiling only ever LOWERS, so a number lifted out of an unrelated
+ * sentence pins the fetcher to a small range for the rest of the process, which
+ * is slow and invisible. A MISS costs nothing but the halving path we would have
+ * taken anyway, which is why shapes whose unit is unstated are left unread
+ * (`range 16777216 exceeds limit of 10000`, Linea; `GetLogs query must be smaller
+ * than size 1024`, Harmony).
+ *
+ * Captured 2026-09-08 unless noted:
+ * `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`.
+ */
+const STATED_BLOCK_CAP_PATTERNS: RegExp[] = [
+	// Alchemy "up to a 2K block range" (ethers-io/ethers.js#4703), and the same
+	// sentence live on eth-mainnet.g.alchemy.com/public (100) and
+	// eth-mainnet.public.blastapi.io (10).
+	new RegExp(String.raw`up to (?:a |an )?${CAP_NUMBER}[ -]?blocks? range`, 'i'),
+	// rpc.immutable.com "exceeded maximum block range: 5000", ethers-io/ethers.js#1816
+	// "Exceed maximum block range: 5000", forno.celo.org "max block range 5000, got
+	// 16777216", zkevm-rpc.com and rpc.merlinchain.io "block range too large, max
+	// range: 10000", cloudflare-eth.com "'fromBlock'-'toBlock' range too large. Max
+	// range: 800".
+	new RegExp(String.raw`max(?:imum)?(?: block)? range[:=]?\s*${CAP_NUMBER}`, 'i'),
+	// rpc.mantle.xyz "block range greater than 10000 max".
+	new RegExp(String.raw`blocks? range (?:greater|larger|more|bigger) than ${CAP_NUMBER}`, 'i'),
+	// api.roninchain.com/rpc "requested block range 16777217 exceeds the limit of 200",
+	// where the number BEFORE `exceeds` is the refused span, so the one after it is a
+	// span too. Arbitrum's "logs matched by query exceeds limit of 10000" has no such
+	// span in front of it and is deliberately not matched.
+	new RegExp(String.raw`blocks? range \d[\d,_]*\s*exceeds (?:the )?limit of ${CAP_NUMBER}`, 'i'),
+	// 1rpc.io/eth "eth_getLogs is limited to 0 - 50 blocks range", mainnet.base.org
+	// "eth_getLogs is limited to a 10,000 range", QuickNode "eth_getLogs is limited to
+	// a 5 range, upgrade from discover plan...". Anchored on the METHOD NAME, which is
+	// what makes the unit unambiguous in the two that do not say `block`.
+	new RegExp(
+		String.raw`eth_?getlogs is limited to (?:a |an )?(?:\d[\d,_]*\s*-\s*)?${CAP_NUMBER}[ -]?(?:blocks? )?range`,
+		'i',
+	),
+	// evm.cronos.org and evm.kava.io "maximum [from, to] blocks distance: 2000".
+	new RegExp(String.raw`blocks? distance:?\s*${CAP_NUMBER}`, 'i'),
+	// api.avax.network "requested too many blocks from 50331648 to 51380224, maximum is
+	// set to 2048", flare-api.flare.network (30). Anchored at BOTH ends, because
+	// "maximum is set to" alone says nothing about what is being counted.
+	new RegExp(String.raw`too many blocks[\s\S]*?maximum is set to ${CAP_NUMBER}`, 'i'),
+	// rpc.soniclabs.com "too wide blocks range, the limit is 100".
+	new RegExp(String.raw`too wide blocks? range,? the limit is ${CAP_NUMBER}`, 'i'),
+];
+
+/**
+ * A block-span cap is a COUNT OF BLOCKS, so anything a provider could not have
+ * meant as one is dropped rather than believed.
+ *
+ * The upper bound is what a cap of this kind is FOR: the widest span any endpoint
+ * in the 2026-09-08 sweep allowed was 10,000, the whole corpus fits in four
+ * digits, and this fetcher's own default ceiling is 100,000 -- so a seven-figure
+ * "cap" is not a cap being stated, it is a block number, a byte count or a result
+ * total that a pattern happened to sit next to. Zero and negatives bound the
+ * fetcher to nothing at all, and a fraction is not a count.
+ */
+const MIN_PLAUSIBLE_BLOCK_CAP = 1;
+const MAX_PLAUSIBLE_BLOCK_CAP = 10_000_000;
+
+function plausibleBlockCap(token: string): number | undefined {
+	const trimmed = token.trim();
+	const suffix = trimmed.slice(-1);
+	const multiplier = suffix === 'k' || suffix === 'K' ? 1000 : suffix === 'm' || suffix === 'M' ? 1_000_000 : 1;
+	const digits = (multiplier === 1 ? trimmed : trimmed.slice(0, -1)).replace(/[,_\s]/g, '');
+	const value = parseFloat(digits) * multiplier;
+	if (!Number.isInteger(value) || value < MIN_PLAUSIBLE_BLOCK_CAP || value > MAX_PLAUSIBLE_BLOCK_CAP) {
+		return undefined;
+	}
+	return value;
+}
+
+/** The lowest plausible cap stated anywhere in one piece of provider text. */
+function statedBlockCapFromText(text: unknown): number | undefined {
+	if (typeof text !== 'string') {
+		return undefined;
+	}
+	let lowest: number | undefined;
+	for (const pattern of STATED_BLOCK_CAP_PATTERNS) {
+		const match = pattern.exec(text);
+		if (!match) {
+			continue;
+		}
+		const cap = plausibleBlockCap(match[1]);
+		if (cap !== undefined && (lowest === undefined || cap < lowest)) {
+			lowest = cap;
+		}
+	}
+	return lowest;
+}
+
+/**
+ * The number of blocks a provider SAID it will serve, written out in its refusal,
+ * or `undefined` when it stated no such number.
+ *
+ * The third reader of one refusal, beside {@link getNewToBlockFromError} (how far
+ * to shrink THIS retry) and {@link archiveRefusalFromError} (stop, this endpoint
+ * serves no history). What this one produces is neither: it is a CEILING on every
+ * range the fetcher will ask this provider for from now on, fed to the same field
+ * a too-wide-range refusal already lowers, and it is emphatically not the size of
+ * the next request -- a block-span cap says nothing about how many LOGS those
+ * blocks hold, which is what the requested size is computed from.
+ *
+ * Two rules shape it, and they are the design rather than defensive dressing.
+ *
+ * **Only the words decide, and only where they name the unit.** Every pattern in
+ * {@link STATED_BLOCK_CAP_PATTERNS} carries its own BLOCK anchor, because the
+ * hazard is not failing to find a number, it is finding the WRONG KIND: a result
+ * cap read as a block cap. The LOWEST plausible candidate wins, so the answer
+ * does not depend on the order the patterns are tried in, and a message stating
+ * two caps (Alchemy states a 2K block span and a 10K log count in one sentence)
+ * yields the block one and not whichever matched first.
+ *
+ * **No error CODE gates this**, for the reason {@link archiveRefusalFromError}
+ * takes no code either: the sweep found stated caps under `-32000`, `-32602`,
+ * `-32614`, `-32600` and `-32047`, and the identifying evidence is the text. That
+ * is affordable HERE, where it would not be for a suggested `toBlock`, because
+ * the value can only ever LOWER a ceiling: a wrong read costs round trips, and
+ * the caller (see {@link RangeLogFetcher.lowerBlockCeilingTo}) makes raising one
+ * unexpressible.
+ *
+ * Read from `data` before the message, like both of its siblings, because that is
+ * where a Nethermind-style node puts its whole complaint (api.roninchain.com
+ * states its 200-block cap there behind a bare `"Invalid params"`).
+ *
+ * Captured refusal shapes, their providers and their dates:
+ * `work/notes/findings/what-nodes-answer-when-a-getlogs-range-is-too-big.md` and
+ * `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`.
+ */
+export function statedBlockCapFromError(error: any): number | undefined {
+	if (!error) {
+		return undefined;
+	}
+	let lowest: number | undefined;
+	for (const text of [error.data, error.data?.message, error.message]) {
+		const cap = statedBlockCapFromText(text);
+		if (cap !== undefined && (lowest === undefined || cap < lowest)) {
+			lowest = cap;
+		}
+	}
+	return lowest;
+}
+
+/**
  * The ENTITLEMENT half of an archive refusal: the words a provider uses when it
  * is saying that history is behind a credential or a plan, rather than that its
  * archive is having a bad day.
@@ -302,6 +469,34 @@ export class RangeLogFetcher {
 		);
 	}
 
+	/**
+	 * The ONLY writer of `foundNumBlockToHigh`, and the reason a discovered ceiling
+	 * can never be widened by anything -- a parsed number, a later refusal, or a
+	 * future caller.
+	 *
+	 * The ceiling is the upper bound the fetcher has been REFUSED at, learned two
+	 * ways: a span that was actually refused (a `-32603` "block range too wide"),
+	 * and a cap the provider WROTE OUT ({@link statedBlockCapFromError}). The second
+	 * is a guess, so the asymmetry of a wrong one is what shapes this method:
+	 * guessing LOW costs a few extra round trips and corrects itself as the fetcher
+	 * succeeds and bisects back up; guessing HIGH produces a request the provider
+	 * refuses, and the same limit is then discovered again the slow way. Making that
+	 * structural rather than merely intended is why every write goes through one
+	 * `Math.min` instead of each site remembering to compare.
+	 *
+	 * A stated cap becomes the ceiling DIRECTLY rather than the cap plus one, so the
+	 * fetcher asks for one block less than a provider says it allows. That one block
+	 * buys not having to know whether a provider's "up to a 2K block range" is
+	 * inclusive, which no message says.
+	 */
+	protected lowerBlockCeilingTo(cap: number | undefined): void {
+		if (cap === undefined || cap < 1) {
+			// a ceiling below one block bounds nothing that can be asked for
+			return;
+		}
+		this.foundNumBlockToHigh = Math.min(this.foundNumBlockToHigh ?? this.config.maxBlocksPerFetch, cap);
+	}
+
 	async getLogs(
 		options: {fromBlock: number; toBlock: number; retry?: number},
 		unlessCancelled: UnlessCancelledFunction,
@@ -349,6 +544,12 @@ export class RangeLogFetcher {
 			if (retry <= 0) {
 				throw err;
 			}
+			// A cap the provider STATED lowers the ceiling before any branch below runs,
+			// because it bounds all of them: the halving fallback AND a suggested range,
+			// which providers do compute against a DIFFERENT cap than the one they state
+			// (Alchemy's suggestion honours its 10K log cap and ignores the 2K block one).
+			this.lowerBlockCeilingTo(statedBlockCapFromError(err));
+
 			let numBlocksToFetchThisTime = this.numBlocksToFetch;
 			// ----------------------------------------------------------------------
 			// compute the new number of block to fetch this time:
@@ -365,16 +566,10 @@ export class RangeLogFetcher {
 				if (err.code === -32603 && err.data && err.data.message) {
 					if (err.data.message.indexOf('block range is too wide') !== -1) {
 						// found on polygon rpc
-						this.foundNumBlockToHigh = Math.min(
-							this.foundNumBlockToHigh || this.config.maxBlocksPerFetch,
-							totalNumOfBlocksThatWasFetched,
-						);
+						this.lowerBlockCeilingTo(totalNumOfBlocksThatWasFetched);
 					} else if (err.data.message.indexOf('block range too large') !== -1) {
 						// found on base rpc
-						this.foundNumBlockToHigh = Math.min(
-							this.foundNumBlockToHigh || this.config.maxBlocksPerFetch,
-							totalNumOfBlocksThatWasFetched,
-						);
+						this.lowerBlockCeilingTo(totalNumOfBlocksThatWasFetched);
 					}
 				}
 
@@ -388,13 +583,16 @@ export class RangeLogFetcher {
 
 			this.numBlocksToFetch = numBlocksToFetchThisTime;
 			if (this.foundNumBlockToHigh && this.foundNumBlockToHigh < this.numBlocksToFetch) {
+				// never below ONE block: a ceiling of 1 (a provider that states a one-block cap,
+				// or a one-block span that was itself refused) otherwise computes a zero-width,
+				// BACKWARDS range, which is a request no node can answer.
 				if (this.safeNumBlock) {
-					this.numBlocksToFetch = Math.min(
-						Math.floor((this.foundNumBlockToHigh - this.safeNumBlock) / 2),
-						this.foundNumBlockToHigh - 1,
+					this.numBlocksToFetch = Math.max(
+						1,
+						Math.min(Math.floor((this.foundNumBlockToHigh - this.safeNumBlock) / 2), this.foundNumBlockToHigh - 1),
 					);
 				} else {
-					this.numBlocksToFetch = this.foundNumBlockToHigh - 1;
+					this.numBlocksToFetch = Math.max(1, this.foundNumBlockToHigh - 1);
 				}
 			}
 
@@ -420,13 +618,17 @@ export class RangeLogFetcher {
 		this.safeNumBlock = Math.max(this.safeNumBlock || 0, totalNumOfBlocksThatWasFetched);
 
 		if (this.foundNumBlockToHigh) {
+			// as above, never below ONE block
 			if (this.safeNumBlock) {
-				this.numBlocksToFetch = Math.min(
-					this.safeNumBlock + Math.floor((this.foundNumBlockToHigh - this.safeNumBlock) / 2),
-					this.foundNumBlockToHigh - 1,
+				this.numBlocksToFetch = Math.max(
+					1,
+					Math.min(
+						this.safeNumBlock + Math.floor((this.foundNumBlockToHigh - this.safeNumBlock) / 2),
+						this.foundNumBlockToHigh - 1,
+					),
 				);
 			} else {
-				this.numBlocksToFetch = this.foundNumBlockToHigh - 1;
+				this.numBlocksToFetch = Math.max(1, this.foundNumBlockToHigh - 1);
 			}
 		} else {
 			if (logs.length === 0) {
