@@ -8,7 +8,17 @@ covers: []
 
 ## What to build
 
-The release half of ADR-0017. The rename landed in the tree; nothing has been published. This is the ordered sequence that puts the `@etherfold` packages on npm, migrates the two consumers we own, and retires the old names.
+The release half of ADR-0017. This is the ordered sequence that puts the `@etherfold` packages on npm, migrates the two consumers we own, and retires the old names.
+
+> **DRIFT CORRECTION (verified 2026-09-08, the third correction to this file): STEP 1 IS DONE. "Nothing has been published" is no longer true, and this task is now much smaller than it reads.**
+>
+> All FIFTEEN publishable packages are live on npm at real versions, not placeholders: `etherfold@0.7.0` (and `npm view etherfold bin` reports `{etherfold: 'dist/cli.js'}`, so the placeholder-supersede check in step 1 has passed), `@etherfold/browser@0.8.0`, `@etherfold/core@0.7.0`, `@etherfold/utils@0.7.0`, and `@etherfold/fetcher-host`, `@etherfold/platform-nodejs`, `@etherfold/platform-nodejs-fetcher`, `@etherfold/processor-entities`, `@etherfold/processor-sqlite`, `@etherfold/server`, `@etherfold/state-store`, `@etherfold/state-store-conformance`, `@etherfold/state-store-indexeddb`, `@etherfold/state-store-patch`, `@etherfold/state-store-sqlite` at `0.1.0`.
+>
+> **STEP 3 IS ENTIRELY OUTSTANDING.** Zero of the seven old names carry a deprecation: `npm view <name> deprecated` is empty for all of `ethereum-indexer`, `-browser`, `-utils`, `-cli`, `-js-processor`, `-fs` and `-fs-cache`. That is the substance of what is left.
+>
+> **STEP 2 IS UNVERIFIED** from inside this repo, since it lands in `wighawag/stratagems` and `wighawag/stratagems-snapshots`. Check those before assuming either way.
+>
+> Re-derive all of it anyway rather than trusting this box: it is a dated snapshot like everything else here, and this file's whole history is of counts and premises going stale. The publish-ordering `blockedBy` edges below have already been overtaken by the publish having happened, which is itself worth noticing before acting on them.
 
 `humanOnly` because it publishes to npm and touches other repositories: it needs credentials and cross-repo judgement, and it is not reversible by a revert.
 
@@ -98,7 +108,7 @@ effect of this one.
 
 ## Acceptance criteria
 
-- [ ] **Every** non-private package under `packages/*` and `platforms/*` is on npm under its new name — the list DERIVED at publish time, not read off this file (18 at the time of writing) — and `npm view etherfold bin` reports the `etherfold` bin. A criterion naming a fixed count can pass while packages newer than the count go unpublished, which is the failure this wording exists to prevent.
+- [ ] **Every** non-private package under `packages/*` and `platforms/*` is on npm under its new name, the list DERIVED at publish time and never read off this file, and `npm view etherfold bin` reports the `etherfold` bin. A criterion naming a fixed count can pass while packages newer than the count go unpublished, which is the failure this wording exists to prevent. (Verified satisfied 2026-09-08 at fifteen packages; re-derive, because the set grows.)
 - [ ] `stratagems` and `stratagems-snapshots` build and pass CI against the new names, with no `ei` invocation left.
 - [ ] All seven old names are deprecated, and each message tells the TRUTH about its name: the four
       RENAMED ones name their replacement package, and the three RETIRED ones (`-js-processor`, `-fs`,
