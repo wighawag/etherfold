@@ -26,30 +26,140 @@ export type LogFetcherConfig = {
 	filters?: ExtraFilters;
 };
 
-export function getNewToBlockFromError(error: any): number | undefined {
-	const message: string | undefined = error.message;
-	// -32005: limit exceeded (provider returned too many results)
-	// -32602: invalid params, but some providers use it to signal a too-large range.
-	//   We only treat it as a range hint when the message actually mentions a result/range limit,
-	//   otherwise a generic "invalid params" error could be mis-parsed into a bogus toBlock.
-	const looksLikeRangeHint = !!message && (message.indexOf('results') !== -1 || message.indexOf('block range') !== -1);
-	if (error.code === -32005 || (error.code === -32602 && looksLikeRangeHint)) {
-		if (message && message.startsWith('query returned more than 10000 results.')) {
-			// query returned more than 10000 results. Try with this block range [0xEC23E8, 0xEC23F5].
-			namedLogger.error(message);
-		}
-		const regex = /\[.*\]/gm;
-		const result = message ? regex.exec(message) : null;
-		let values: number[] | undefined;
-		if (result && result[0]) {
-			values = result[0]
-				.slice(1, result[0].length - 1)
-				.split(', ')
-				.map((v) => parseInt(v.slice(2), 16));
-		}
+/**
+ * Whether a piece of provider text is complaining about a RANGE at all.
+ *
+ * This gate looks redundant and is not: `-32602` and `-32000` are GENERIC codes,
+ * so a refusal arriving under one may be about anything. The case it earns its
+ * keep on is a real one -- `ethereum-rpc.publicnode.com` refuses history with
+ * `-32602 "Archive requests require a personal token..."`, which mentions
+ * neither marker -- and the cost of getting it wrong is not a missed hint but a
+ * BOGUS one: a bracketed pair lifted out of an unrelated message becomes a
+ * `toBlock` the fetcher then retries against, for a refusal no range size can
+ * ever satisfy. Widening the accepted CODES (below) is therefore not a licence
+ * to widen these two markers.
+ *
+ * Pinned by `packages/core/test/rangeLogFetcher.test.ts`.
+ */
+function looksLikeRangeHint(text: unknown): text is string {
+	return typeof text === 'string' && (text.indexOf('results') !== -1 || text.indexOf('block range') !== -1);
+}
 
-		if (values && !isNaN(values[1])) {
-			return values[1];
+/**
+ * The `toBlock` a provider SUGGESTED in prose, as `[0x..., 0x...]`.
+ *
+ * `"query returned more than 10000 results. Try with this block range [0xEC23E8, 0xEC23F5]."`
+ * -> `0xEC23F5`. Only ever called on text that passed {@link looksLikeRangeHint},
+ * or under a code that means nothing else.
+ */
+function suggestedToBlockFromProse(text: string): number | undefined {
+	const regex = /\[.*\]/gm;
+	const result = regex.exec(text);
+	if (!result || !result[0]) {
+		return undefined;
+	}
+	const values = result[0]
+		.slice(1, result[0].length - 1)
+		.split(', ')
+		.map((v) => parseInt(v.slice(2), 16));
+	return isNaN(values[1]) ? undefined : values[1];
+}
+
+/**
+ * The `toBlock` a provider stated as STRUCTURED data: `{from, to, limit}`.
+ *
+ * Infura sends exactly this alongside the same information in English
+ * (`{"code":-32005,"data":{"from":"0xBDE5F8","limit":10000,"to":"0x102DBCC"},...}`,
+ * quoted verbatim in ethers-io/ethers.js#4703), and it is the one shape that says
+ * what to do next without a regex over prose.
+ *
+ * `limit` is REQUIRED even though only `to` is read, and that is the gate of this
+ * path rather than a formality: `limit` is the node's own cap, so an object
+ * carrying it is DESCRIBING A REFUSAL, while an object carrying a bare `to` might
+ * just as well be a provider echoing the request back (some do put the request
+ * body in `data`). Reading `to` out of an echo would hand the retry the very
+ * range that was refused. `from` is not needed and is not required.
+ */
+function suggestedToBlockFromStructuredData(data: any): number | undefined {
+	if (!data || typeof data !== 'object') {
+		return undefined;
+	}
+	if (typeof data.to !== 'string' || typeof data.limit !== 'number') {
+		return undefined;
+	}
+	const to = parseInt(data.to.slice(0, 2).toLowerCase() === '0x' ? data.to.slice(2) : data.to, 16);
+	return isNaN(to) ? undefined : to;
+}
+
+/**
+ * How far a refused `eth_getLogs` range should shrink, according to the node that
+ * refused it, or `undefined` when the node said nothing usable and the caller
+ * should fall back to halving.
+ *
+ * A node REFUSES an oversized query rather than truncating it, and it bounds the
+ * method in one of two incompatible ways -- a BLOCK SPAN or a RESULT COUNT -- which
+ * is why no fixed page size works and why the caller adapts. What it says while
+ * refusing is read from the most reliable place first:
+ *
+ * 1. `error.data` as a `{from, to, limit}` descriptor (Infura), which is the
+ *    answer without a regex;
+ * 2. `error.data` as PROSE, which is where Nethermind puts the whole hint while
+ *    leaving the message at a bare `"invalid params"` (Gnosis, Fraxtal), so a
+ *    reader that only looked at the message discarded it entirely;
+ * 3. the message.
+ *
+ * Three codes are accepted. `-32005` (limit exceeded) means one thing, so it needs
+ * no gate. `-32602` (invalid params) and `-32000` (a widely used generic server
+ * error, which several providers put range complaints behind: Polygon zkEVM,
+ * PulseChain, Merlin, Immutable) are GENERIC, so each piece of text is read only
+ * if it passes {@link looksLikeRangeHint} ON ITS OWN -- never on the strength of
+ * the other, or a hint in `data` would license lifting a bracketed pair out of an
+ * unrelated message. The STRUCTURED path takes no hint gate, because that gate is
+ * for disambiguating PROSE and a `{to, limit}` descriptor is not prose; what
+ * guards it is the required `limit`, above.
+ *
+ * Everything here is additive to the caller's halving fallback, which is what
+ * makes the fetcher work against an endpoint that says nothing useful at all.
+ *
+ * Captured refusal shapes, their providers and their dates:
+ * `work/notes/findings/what-nodes-answer-when-a-getlogs-range-is-too-big.md` and
+ * `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/`.
+ */
+export function getNewToBlockFromError(error: any): number | undefined {
+	if (!error) {
+		return undefined;
+	}
+	const code = error.code;
+	if (code !== -32005 && code !== -32602 && code !== -32000) {
+		return undefined;
+	}
+	// -32005 says "limit exceeded" and nothing else; the other two are generic codes
+	// that carry a range complaint only when the text says so.
+	const needsAHint = code !== -32005;
+
+	const message: string | undefined = error.message;
+	if (message && message.startsWith('query returned more than 10000 results.')) {
+		// query returned more than 10000 results. Try with this block range [0xEC23E8, 0xEC23F5].
+		namedLogger.error(message);
+	}
+
+	const structured = suggestedToBlockFromStructuredData(error.data);
+	if (structured !== undefined) {
+		return structured;
+	}
+
+	// `data` before `message`: a provider that fills both in says the same thing
+	// twice, and a provider that fills in only `data` (Nethermind) says it only there.
+	for (const text of [error.data, message]) {
+		if (typeof text !== 'string') {
+			continue;
+		}
+		if (needsAHint && !looksLikeRangeHint(text)) {
+			continue;
+		}
+		const toBlock = suggestedToBlockFromProse(text);
+		if (toBlock !== undefined) {
+			return toBlock;
 		}
 	}
 	return undefined;
