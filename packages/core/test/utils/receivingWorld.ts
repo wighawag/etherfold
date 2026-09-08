@@ -2,7 +2,7 @@ import type {Abi} from 'abitype';
 import type {EmissionWrite, StreamCoverage} from '../../src/emissionStream.js';
 import {generationDigestOf} from '../../src/generation/identity.js';
 import {createMemoryGenerationRegistryPort} from '../../src/generation/memory.js';
-import type {ReplayChunk, ReplaySource} from '../../src/generation/rebuild.js';
+import type {ReplayRead, ReplaySource} from '../../src/generation/rebuild.js';
 import type {GenerationRegistryPort} from '../../src/generation/registry.js';
 import {openReceivingIndexer, type ReceivingIndexer} from '../../src/receivingContainer.js';
 import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../../src/types.js';
@@ -111,6 +111,15 @@ export function storedStream() {
 		},
 		/** A byte comparison, so "the re-fold wrote nothing" is not a row count. */
 		snapshot: () => JSON.stringify({rows, coverage}),
+		/**
+		 * Move the stream's OWN start block up, which is what a SEEDED stream looks
+		 * like: it opens at the capture's `fromBlock` rather than at the source's first
+		 * block. A follower resuming from a fresh checkpoint then asks from lower than
+		 * the stream reaches, which is the shape ADR-0070 exists for.
+		 */
+		opensAt(startBlock: number): void {
+			if (coverage) coverage = {...coverage, startBlock};
+		},
 		append(write: EmissionWrite): void {
 			coverage = coverage
 				? {...write.coverage, startBlock: coverage.startBlock}
@@ -143,8 +152,13 @@ export function storedStream() {
 		 */
 		source(): ReplaySource<TestABI> {
 			return {
-				async readChunk({fromBlock, foldedThrough, maxEmissions}): Promise<ReplayChunk<TestABI> | undefined> {
-					if (!coverage || coverage.startBlock > fromBlock) return undefined;
+				async readChunk({fromBlock, foldedThrough, maxEmissions}): Promise<ReplayRead<TestABI>> {
+					// the two answers this double used to collapse into `undefined`, which is
+					// why nothing caught the port collapsing them either (ADR-0070)
+					if (!coverage) return {status: 'absent'};
+					if (coverage.startBlock > fromBlock) {
+						return {status: 'does-not-reach-back', startBlock: coverage.startBlock};
+					}
 					const highWater = rows.length === 0 ? 0 : (rows[rows.length - 1] as StoredRow).seq;
 					const above = rows
 						.filter((row) => blockOf(row) >= fromBlock)
@@ -154,6 +168,7 @@ export function storedStream() {
 						above.length > maxEmissions ? blockOf(above[maxEmissions] as StoredRow) - 1 : coverage.lastToBlock;
 					const lastToBlock = Math.min(coverage.lastToBlock, Math.max(budgetCut, floor));
 					return {
+						status: 'chunk',
 						eventStream: eventsOf(above.filter((row) => blockOf(row) <= lastToBlock)),
 						lastFromBlock: fromBlock,
 						lastToBlock,

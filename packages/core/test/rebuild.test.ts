@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {DEFAULT_MAX_EMISSIONS_PER_CHUNK} from '../src/generation/rebuild.js';
+import {DEFAULT_MAX_EMISSIONS_PER_CHUNK, retryCanAdvance, type RebuildReport} from '../src/generation/rebuild.js';
 import {openReceivingIndexer} from '../src/receivingContainer.js';
 import type {MemoryStore, TestABI} from './utils/receivingWorld.js';
 import {
@@ -157,7 +157,7 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		expect(reports.length).toBeGreaterThan(1);
 		expect(reports.slice(0, -1).every((report) => report.complete === false)).toBe(true);
 		// the report is what a scheduler acts on, and it names the position it reached
-		expect(reports[0]).toMatchObject({fromBlock: START_BLOCK, absent: false});
+		expect(reports[0]).toMatchObject({fromBlock: START_BLOCK, stopped: {reason: 'budget'}});
 		expect(reports[reports.length - 1]).toMatchObject({complete: true, toBlock: 110});
 		// and it reports the stream-space size it is folding against
 		expect(reports[reports.length - 1]?.highWater).toBe(w.stream.rows.length);
@@ -183,6 +183,35 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		expect(Math.max(...scans)).toBeGreaterThan(1);
 	});
 
+	it('says DOES-NOT-REACH-BACK, and says a retry cannot fix it, for a stream that opens too high', async () => {
+		// The defect ADR-0070 removes, and the case that would have caught it. A SEEDED
+		// stream opens at the capture's `fromBlock` rather than at the source's first
+		// block, so a follower resuming from a fresh checkpoint asks from lower than the
+		// stream reaches -- on this call and on every call after it, because the resume
+		// point comes from its own durable checkpoint.
+		//
+		// Collapsed into `absent` (as it was), a host could only keep polling: it would
+		// burn a scheduled invocation per follower for ever, and `origin.level` would
+		// stay false so the follower could never inherit a vacant write duty. A silent,
+		// permanent stall reported as an ordinary "not finished yet".
+		const {world: w, incumbent} = await anIncumbentThatHasFolded();
+		w.stream.opensAt(START_BLOCK + 50);
+		await incumbent.add(w.specFor('v2', 10));
+
+		const reports = await incumbent.rebuildMore();
+		const follower = reports.find((report) => report.generation.processor !== incumbent.generation.processor);
+
+		expect(follower?.stopped).toEqual({reason: 'does-not-reach-back', startBlock: START_BLOCK + 50});
+		// the half that matters to a scheduler: this is NOT the transient one
+		expect(retryCanAdvance((follower as RebuildReport).stopped)).toBe(false);
+		expect(follower?.complete).toBe(false);
+		// and calling again reports exactly the same thing rather than progressing
+		const again = await incumbent.rebuildMore();
+		expect(again.find((r) => r.generation.processor !== incumbent.generation.processor)?.stopped).toEqual(
+			follower?.stopped,
+		);
+	});
+
 	it('refuses a budget of zero rather than reading it as "do nothing"', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();
 		await incumbent.add(w.specFor('v2', 10));
@@ -191,14 +220,18 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		expect(DEFAULT_MAX_EMISSIONS_PER_CHUNK).toBeGreaterThan(0);
 	});
 
-	it('reports ABSENT rather than completing, where there is no stored stream to fold', async () => {
+	it('reports NOTHING-STORED rather than completing, where there is no stored stream to fold', async () => {
 		const w = world();
 		// nothing has ever been folded, so nothing has been stored
 		const incumbent = await w.open('v1', 1);
 		await incumbent.add(w.specFor('v2', 10));
 
 		const [report] = await incumbent.rebuildMore();
-		expect(report).toMatchObject({absent: true, complete: false, scanned: 0});
+		expect(report).toMatchObject({stopped: {reason: 'nothing-stored'}, complete: false, scanned: 0});
+		// TRANSIENT: the writer simply has not appended yet, so calling again is right.
+		// This is the half that must stay distinguishable from `does-not-reach-back`,
+		// which recurs for ever (ADR-0070).
+		expect(retryCanAdvance((report as RebuildReport).stopped)).toBe(true);
 		// and the pointer did not move onto a generation that has folded nothing
 		expect(await incumbent.canonical()).toMatchObject(incumbent.generation);
 	});
