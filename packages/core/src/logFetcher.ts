@@ -9,12 +9,7 @@ import {
 	type RetryableError,
 } from './errors.js';
 import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
-import {
-	blockFetcherFor,
-	enrichEvents,
-	transactionFetcherFor,
-	type BlockTimestampCache,
-} from './internal/engine/enrich.js';
+import {blockFetcherFor, enrichEvents, type BlockTimestampCache} from './internal/engine/enrich.js';
 import {getBlockNumber, getChainId} from './internal/engine/ethereum.js';
 import {
 	assertLogsCarryTimestamps,
@@ -327,7 +322,6 @@ export class LogFetcher<ABI extends Abi> {
 					latestBlock,
 					cache: this.blockTimestampCache,
 					getBlocks: blockFetcherFor(this.provider, this.config.providerSupportsETHBatch),
-					getTransactions: transactionFetcherFor(this.provider, this.config.providerSupportsETHBatch),
 				},
 				passThrough,
 			);

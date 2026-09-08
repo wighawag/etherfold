@@ -11,8 +11,8 @@ import {streamConfigFor} from '../src/folding.js';
 // the receiver refuses the batch with a `WireContextMismatchError`, which is not
 // retryable, so the process exits rather than degrading.
 //
-// The environment owns three stream settings (`STREAM_FINALITY`,
-// `STREAM_ALWAYS_FETCH_TIMESTAMPS`, `STREAM_ALWAYS_FETCH_TRANSACTIONS`) and the
+// The environment owns the stream settings (`STREAM_FINALITY`,
+// `STREAM_ALWAYS_FETCH_TIMESTAMPS`) and the
 // commands that hold BOTH halves in one process (`run`, `build`) have to hand
 // the same resolved config to each. The failure this pins is that they did not:
 // the sender derived its config from the environment while the receiver was
@@ -65,13 +65,10 @@ describe('the sending and receiving halves agree on the stream config', () => {
 		expect(streamConfigHashOf(sender)).toBe(streamConfigHashOf(receiver));
 	});
 
-	it('agree on the two boolean settings as well', () => {
-		const {receiver, sender} = bothHalves(
-			envWith({STREAM_ALWAYS_FETCH_TIMESTAMPS: 'true', STREAM_ALWAYS_FETCH_TRANSACTIONS: 'true'}),
-		);
+	it('agree on the boolean setting as well', () => {
+		const {receiver, sender} = bothHalves(envWith({STREAM_ALWAYS_FETCH_TIMESTAMPS: 'true'}));
 		expect(streamConfigHashOf(sender)).toBe(streamConfigHashOf(receiver));
 		expect(resolveStreamConfig(receiver).alwaysFetchTimestamps).toBe(true);
-		expect(resolveStreamConfig(receiver).alwaysFetchTransactions).toBe(true);
 	});
 
 	it('reach the SAME digest that a split deployment reaches from the same environment', () => {

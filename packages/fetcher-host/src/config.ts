@@ -236,16 +236,13 @@ function required(value: string | undefined, variable: string, what: string): st
  * Exported because the commands that hold BOTH halves of the wire in one process
  * have to hand the identical config to each, and the way to get that wrong is to
  * derive it twice. A caller that needs the same config the fetcher host would
- * have used asks for it here rather than re-reading three variables.
+ * have used asks for it here rather than re-reading two variables.
  */
 export function streamConfigFromEnv(env: EnvRecord): ProvidedStreamConfig {
 	return {
 		...(readNumber(env, 'STREAM_FINALITY') !== undefined ? {finality: readNumber(env, 'STREAM_FINALITY')} : {}),
 		...(readBoolean(env, 'STREAM_ALWAYS_FETCH_TIMESTAMPS') !== undefined
 			? {alwaysFetchTimestamps: readBoolean(env, 'STREAM_ALWAYS_FETCH_TIMESTAMPS')}
-			: {}),
-		...(readBoolean(env, 'STREAM_ALWAYS_FETCH_TRANSACTIONS') !== undefined
-			? {alwaysFetchTransactions: readBoolean(env, 'STREAM_ALWAYS_FETCH_TRANSACTIONS')}
 			: {}),
 	};
 }

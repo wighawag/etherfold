@@ -110,9 +110,7 @@ describe('resolveStreamConfig', () => {
 		// asserted on the KEYS, not with `toEqual`: `toEqual` ignores undefined-valued
 		// properties, so it would pass just as happily on a config that carried them
 		expect(Object.keys(resolveStreamConfig({alwaysFetchTimestamps: undefined}))).toEqual(['finality']);
-		expect(Object.keys(resolveStreamConfig({alwaysFetchTransactions: undefined, parse: undefined}))).toEqual([
-			'finality',
-		]);
+		expect(Object.keys(resolveStreamConfig({finality: undefined, parse: undefined}))).toEqual(['finality']);
 		expect(resolveStreamConfig({alwaysFetchTimestamps: undefined})).toStrictEqual({finality: 17});
 		// a carried `undefined` is not merely untidy: `canonical_form` drops it, so the
 		// object and its digest would disagree about which keys the config has

@@ -212,7 +212,6 @@ describe('a reconfigure passing an EQUIVALENT but unresolved stream config', () 
 describe('a reconfigure whose stream config GENUINELY moved', () => {
 	for (const [what, streamConfig] of [
 		['alwaysFetchTimestamps', {alwaysFetchTimestamps: true}],
-		['alwaysFetchTransactions', {alwaysFetchTransactions: true}],
 		['parse.filters', {parse: {filters: [{event: 'Transfer', match: [[ADDRESS as `0x${string}`]]}]}}],
 		['an explicitly different finality', {finality: 5}],
 	] as [string, ProvidedStreamConfig][]) {
