@@ -176,8 +176,10 @@ function topic0sOf(request: {topics?: (string | string[] | null)[]}, declaredTop
  * one CHECKED for the positional-shape defect above.
  *
  * The COUNT is an assertion of its own: with argument filters configured the
- * fetcher issues one request per (topic x filter), sequentially, so a topic that
- * cannot occur in the range costs its own round trips.
+ * fetcher issues one request per (topic x filter), so a topic that cannot occur
+ * in the range costs its own round trips. They are issued concurrently, bounded
+ * (`theRequestListIsIssuedConcurrently.test.ts`), which changes how much LATENCY
+ * that costs and not how many requests it is.
  */
 async function requestsMade(
 	contractsData: any,
