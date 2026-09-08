@@ -172,9 +172,14 @@ export class FetcherHost<ABI extends Abi> {
 				maxEventsPerFetch: config.maxEventsPerFetch,
 				...(config.maxBlocksPerFetch !== undefined ? {maxBlocksPerFetch: config.maxBlocksPerFetch} : {}),
 			},
-			// passed EXPLICITLY, never left to default to `maxEventsPerFetch`: the two
-			// are independent, and `config.ts` says why at length
-			suspectResultCount: config.suspectResultCount,
+			// The suspect count is passed as an ASSERTION only when this deployment made
+			// one. An unstated one goes in as this host's DEFAULT instead, which leaves the
+			// gap open for a cap the provider reports about itself (core resolves
+			// `configured -> reported -> default`) -- and it is still passed EXPLICITLY
+			// rather than left to core's own fallback, which is `maxEventsPerFetch`: the two
+			// are independent, and `config.ts` says why at length.
+			...(config.suspectResultCountSource === 'configured' ? {suspectResultCount: config.suspectResultCount} : {}),
+			defaultSuspectResultCount: config.suspectResultCount,
 			...(config.maxCorrectionsPerCycle !== undefined ? {maxCorrectionsPerCycle: config.maxCorrectionsPerCycle} : {}),
 		});
 	}

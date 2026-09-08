@@ -97,19 +97,30 @@ export type ProvidedLogFetcherConfig = {
 	stream?: ProvidedStreamConfig;
 	fetch?: FetchConfig;
 	/**
-	 * The result count at which a fetch is treated as SUSPECT rather than complete.
+	 * The result count at which a fetch is treated as SUSPECT rather than complete,
+	 * ASSERTED by this deployment.
 	 *
-	 * **SET THIS TO YOUR NODE'S REAL `eth_getLogs` CAP.** It defaults to
-	 * `fetch.maxEventsPerFetch` (itself 10000, the most common cap), and the default
-	 * only detects a node that caps at exactly that number. A node capping SILENTLY
-	 * at, say, 5000 returns 5000 logs, which is under the default, so the guard
-	 * never fires and a short range is pushed as a complete one -- the receiver then
-	 * reads the missing logs as an absence, concludes a reorg, and deletes state.
+	 * **SET THIS TO YOUR NODE'S REAL `eth_getLogs` CAP** if you know it. The
+	 * detection is exact-count matching and cannot be otherwise -- a capped answer
+	 * and a complete one differ in nothing else -- so a node capping SILENTLY at,
+	 * say, 5000 while this says 10000 returns 5000 logs, which is under the count,
+	 * so the guard never fires and a short range is pushed as a complete one: the
+	 * receiver then reads the missing logs as an absence, concludes a reorg, and
+	 * deletes state.
 	 *
-	 * The detection is exact-count matching and cannot be otherwise: a capped answer
-	 * and a complete one differ in nothing else. So this knob is the whole of it,
-	 * and a deployment that leaves it at the default is asserting that its node caps
-	 * at 10000 or does not cap silently at all.
+	 * It is the MOST SPECIFIC of three tiers, and the resolution is
+	 * `configured -> reported -> default` (read {@link LogFetcher.suspectResultCount}
+	 * for what is in force and where it came from):
+	 *
+	 * 1. this value, when it is set. It stays the winner even against a provider that
+	 *    reports something else, because setting it is an ASSERTION about your node
+	 *    and a number parsed out of an error message is weaker evidence than that;
+	 * 2. a cap the PROVIDER reported in a refusal, which several do in every one
+	 *    (`{from, to, limit}` from Infura, `Query returned more than 50000 results`
+	 *    from a Nethermind node). Discovered rather than guessed, and it can only
+	 *    fill this gap, never override it;
+	 * 3. {@link ProvidedLogFetcherConfig.defaultSuspectResultCount}, itself defaulting
+	 *    to `fetch.maxEventsPerFetch` (which is 10000, the most common cap).
 	 *
 	 * Do NOT try to reach the same effect by raising `fetch.maxEventsPerFetch`: that
 	 * also raises the span each fetch asks for (it targets 80% of it), which makes
@@ -118,6 +129,19 @@ export type ProvidedLogFetcherConfig = {
 	 * silently refuse to exceed.
 	 */
 	suspectResultCount?: number;
+	/**
+	 * What to treat as suspect when this deployment asserts nothing AND the provider
+	 * has reported nothing. Defaults to `fetch.maxEventsPerFetch ?? 10000`.
+	 *
+	 * It exists for a HOST that resolves its own default and must not have that
+	 * default read as an operator's assertion -- which is precisely what it would
+	 * be, and what it was, if the host passed it as `suspectResultCount`, since an
+	 * assertion outranks a provider's own report. `@etherfold/fetcher-host` defaults
+	 * it to 10000 rather than to `maxEventsPerFetch`, because lowering how much a
+	 * fetcher ASKS for (its only lever over batch size) must never lower what it
+	 * treats as a silently capped answer.
+	 */
+	defaultSuspectResultCount?: number;
 	/**
 	 * How many `409` corrections one cycle will follow before giving up and letting
 	 * the next cycle start over. Default 2.
@@ -174,6 +198,20 @@ function isRetryable(error: unknown): boolean {
 	return (error as RetryableError | undefined)?.retryable !== false;
 }
 
+/**
+ * WHERE the suspect result count in force came from, which is what lets an
+ * operator diagnosing a truncation tell an assertion from a discovery.
+ *
+ * `configured` is a number this deployment stated, `reported` is one the provider
+ * stated about itself in a refusal, and `default` is neither. The order is also
+ * the precedence: a report may FILL the gap an unconfigured deployment leaves and
+ * may never override a stated one.
+ */
+export type SuspectResultCountSource = 'configured' | 'reported' | 'default';
+
+/** The count a fetch is being judged against right now, and where it came from. */
+export type ResolvedSuspectResultCount = {count: number; source: SuspectResultCountSource};
+
 const passThrough = <T>(promise: Promise<T>) => promise;
 
 /**
@@ -214,8 +252,11 @@ const passThrough = <T>(promise: Promise<T>) => promise;
  *
  * The half of that a DEPLOYMENT owns is `suspectResultCount`: a node that caps
  * silently is caught by matching its cap exactly, so a node capping at anything
- * other than the default 10000 must say so in configuration. See that option; it
- * is the sharpest edge on this class.
+ * other than the default 10000 must be known about. It is DISCOVERED where the
+ * provider reports its cap in a refusal and CONFIGURED where it does not, in that
+ * order of precedence -- an operator's stated number always wins over a parsed
+ * one. See that option and `suspectResultCount` below; it is the sharpest edge on
+ * this class.
  *
  * ## Chain-bound, deliberately
  *
@@ -234,7 +275,9 @@ export class LogFetcher<ABI extends Abi> {
 
 	private readonly logEventFetcher: LogEventFetcher<ABI>;
 	private readonly retryPolicy: ResolvedRetryPolicy;
-	private readonly suspectResultCount: number;
+	private readonly configuredSuspectResultCount: number | undefined;
+	private readonly defaultSuspectResultCount: number;
+	private announcedSuspectResultCount: (ResolvedSuspectResultCount & {reported: number | undefined}) | undefined;
 	private readonly maxCorrectionsPerCycle: number;
 
 	/**
@@ -268,13 +311,39 @@ export class LogFetcher<ABI extends Abi> {
 			config.stream?.parse,
 		);
 		this.retryPolicy = resolveRetryPolicy(config.retry);
-		this.suspectResultCount = config.suspectResultCount ?? config.fetch?.maxEventsPerFetch ?? 10000;
+		this.configuredSuspectResultCount = config.suspectResultCount;
+		this.defaultSuspectResultCount = config.defaultSuspectResultCount ?? config.fetch?.maxEventsPerFetch ?? 10000;
 		this.maxCorrectionsPerCycle = config.maxCorrectionsPerCycle ?? 2;
 	}
 
 	/** What the receiver last said, or `undefined` when this fetcher has yet to be told. */
 	get cursorHint(): number | undefined {
 		return this.expectedFromBlockHint;
+	}
+
+	/**
+	 * The count a result set is being judged against RIGHT NOW, and where it came
+	 * from -- the sharpest correctness knob in the fetcher, made readable instead of
+	 * left to be inferred from behaviour.
+	 *
+	 * It is resolved on every fetch rather than fixed at construction, because the
+	 * middle tier is DISCOVERED: a provider that reports its own cap in a refusal
+	 * teaches this fetcher the number mid-run, and the very fetch that provoked the
+	 * refusal is already judged against it. The two ends do not move.
+	 *
+	 * Read it from a host to report what this fetcher believes about your node; read
+	 * the `source` to tell an assertion apart from a discovery, which is the
+	 * difference between "my configuration is wrong" and "my provider says this".
+	 */
+	get suspectResultCount(): ResolvedSuspectResultCount {
+		if (this.configuredSuspectResultCount !== undefined) {
+			return {count: this.configuredSuspectResultCount, source: 'configured'};
+		}
+		const reported = this.logEventFetcher.reportedResultCap;
+		if (reported !== undefined) {
+			return {count: reported, source: 'reported'};
+		}
+		return {count: this.defaultSuspectResultCount, source: 'default'};
 	}
 
 	/**
@@ -431,21 +500,61 @@ export class LogFetcher<ABI extends Abi> {
 				throw new NoFetchProgressError(fromBlock, toBlockUsed);
 			}
 
-			if (events.length < this.suspectResultCount) {
+			const {count: suspectResultCount, source} = this.suspectResultCountInForce();
+
+			if (events.length < suspectResultCount) {
 				return {events, toBlock: toBlockUsed};
 			}
 
 			if (toBlockUsed <= fromBlock) {
-				throw new SuspectedTruncationError(fromBlock, events.length);
+				throw new SuspectedTruncationError(fromBlock, events.length, source);
 			}
 
 			requestedToBlock = fromBlock + Math.floor((toBlockUsed - fromBlock) / 2);
 			namedLogger.error(
 				`[${fromBlock}, ${toBlockUsed}] returned exactly ${events.length} logs, the count this fetcher treats as ` +
-					`suspect: a silently capped answer looks exactly like this. Re-fetching [${fromBlock}, ${requestedToBlock}] ` +
-					`rather than pushing a range that may be short.`,
+					`suspect (${source}): a silently capped answer looks exactly like this. Re-fetching ` +
+					`[${fromBlock}, ${requestedToBlock}] rather than pushing a range that may be short.`,
 			);
 		}
+	}
+
+	/**
+	 * {@link LogFetcher.suspectResultCount}, saying out loud when the answer MOVES.
+	 *
+	 * A discovered value that changed nothing visible would be the worst of both
+	 * worlds: an operator diagnosing a stopped fetcher, or a run of halved
+	 * re-fetches, would have no way to tell a number their deployment stated from
+	 * one read off a provider's refusal. Both transitions are worth a line -- a
+	 * report taking effect, and a report being OVERRIDDEN by configuration -- and
+	 * neither repeats while nothing changes.
+	 */
+	private suspectResultCountInForce(): ResolvedSuspectResultCount {
+		const resolved = this.suspectResultCount;
+		const reported = this.logEventFetcher.reportedResultCap;
+		const announced = this.announcedSuspectResultCount;
+		if (
+			announced?.count === resolved.count &&
+			announced.source === resolved.source &&
+			announced.reported === reported
+		) {
+			return resolved;
+		}
+		this.announcedSuspectResultCount = {...resolved, reported};
+		if (resolved.source === 'reported') {
+			namedLogger.info(
+				`this provider reported an eth_getLogs result cap of ${resolved.count} logs, so a fetch returning exactly ` +
+					`that many is now treated as suspect rather than complete (suspectResultCount, DISCOVERED; it was ` +
+					`${this.defaultSuspectResultCount}, the default). Configure suspectResultCount to override it.`,
+			);
+		} else if (reported !== undefined && resolved.source === 'configured') {
+			namedLogger.info(
+				`this provider reported an eth_getLogs result cap of ${reported} logs, and this deployment has configured ` +
+					`suspectResultCount=${resolved.count}, which WINS: a configured value is an assertion about your node, ` +
+					`and a number parsed out of a refusal is weaker evidence than that.`,
+			);
+		}
+		return resolved;
 	}
 
 	private async push(batch: WireBatch<ABI>): Promise<IngestionResponse> {

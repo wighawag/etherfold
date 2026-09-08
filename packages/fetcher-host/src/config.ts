@@ -89,13 +89,30 @@ export type FetcherHostConfig<ABI extends Abi> = {
 	 * absence -- an absence is a reorg, and a reorg deletes state.
 	 *
 	 * Leaving it at the default asserts that your node caps at exactly 10000 or does
-	 * not cap silently at all. If you do not know, ask your provider; if you cannot
-	 * find out, set it low enough to be certain, at the cost of extra re-fetches.
+	 * not cap silently at all -- UNLESS your provider reports its own cap in its
+	 * refusals, in which case that number is discovered at runtime and fills the gap
+	 * (see {@link FetcherHostConfig.suspectResultCountSource}). If you do not know,
+	 * ask your provider; if you cannot find out, set it low enough to be certain, at
+	 * the cost of extra re-fetches.
 	 *
 	 * It is NOT `maxEventsPerFetch`, and it is deliberately resolved independently
 	 * of it (see that option).
 	 */
 	suspectResultCount: number;
+	/**
+	 * Whether the number above was STATED by this deployment or is merely this
+	 * host's default, which is a distinction core needs and cannot infer.
+	 *
+	 * A stated value is an ASSERTION about your node and outranks anything a
+	 * provider reports about itself; an unstated one is a gap a reported cap may
+	 * fill (`configured -> reported -> default`, resolved in `@etherfold/core`).
+	 * Passing the default as though it were an assertion would close that gap for
+	 * every deployment, which is exactly the guessing this exists to stop. There is
+	 * no `'reported'` here on purpose: nothing at CONFIGURATION time can know what a
+	 * provider will say, so that third value only ever appears at runtime, on
+	 * `LogFetcher.suspectResultCount`.
+	 */
+	suspectResultCountSource: 'configured' | 'default';
 	/**
 	 * How many events one `eth_getLogs` aims for, which is what sets the SPAN each
 	 * fetch asks for (the range fetcher targets ~80% of this).
@@ -261,8 +278,8 @@ export function resolveFetcherHostConfig<ABI extends Abi>(
 	// second: a suspect count under the node's real cap makes every fetch that
 	// lands on it re-fetch a halved range for no reason, and a single block that
 	// holds exactly that many stops the fetcher outright.
-	const suspectResultCount =
-		overrides.suspectResultCount ?? readNumber(env, 'SUSPECT_RESULT_COUNT') ?? COMMON_RESULT_CAP;
+	const statedSuspectResultCount = overrides.suspectResultCount ?? readNumber(env, 'SUSPECT_RESULT_COUNT');
+	const suspectResultCount = statedSuspectResultCount ?? COMMON_RESULT_CAP;
 
 	if (!Number.isInteger(suspectResultCount) || suspectResultCount <= 0) {
 		throw new FetcherConfigError(`SUSPECT_RESULT_COUNT must be a positive whole number of logs`);
@@ -287,6 +304,10 @@ export function resolveFetcherHostConfig<ABI extends Abi>(
 		token: overrides.token ?? env.INGEST_TOKEN,
 		nodeUrl: overrides.nodeUrl ?? required(env.ETH_NODE_URI, 'ETH_NODE_URI', "the chain's JSON-RPC endpoint"),
 		suspectResultCount,
+		// WHICH of the two it is, kept rather than collapsed into the number: a default
+		// passed on as an assertion would outrank a cap the provider reports about
+		// itself, and no deployment could ever discover one.
+		suspectResultCountSource: statedSuspectResultCount !== undefined ? 'configured' : 'default',
 		maxEventsPerFetch,
 		maxBlocksPerFetch: overrides.maxBlocksPerFetch ?? readNumber(env, 'MAX_BLOCKS_PER_FETCH'),
 		stream,
@@ -331,7 +352,9 @@ export function redactUrl(url: string): string {
  *
  * The `suspectResultCount` line is spelled out rather than merely reported,
  * because a default that is silently wrong for your node is the one failure here
- * that corrupts state instead of stopping.
+ * that corrupts state instead of stopping. It says which of the two it is, since
+ * an unstated one is a gap a provider's own reported cap may fill at runtime and
+ * a stated one is an assertion nothing overrides.
  */
 export function describeFetcherHostConfig<ABI extends Abi>(config: FetcherHostConfig<ABI>): string {
 	const contracts = Array.isArray(config.source.contracts)
@@ -341,8 +364,12 @@ export function describeFetcherHostConfig<ABI extends Abi>(config: FetcherHostCo
 		`chain ${config.source.chainId}, ${contracts}`,
 		`node ${redactUrl(config.nodeUrl)}`,
 		config.endpoint ? `pushing to ${redactUrl(config.endpoint)}` : `delivering in-process, with no wire`,
-		`suspectResultCount=${config.suspectResultCount} (this deployment asserts that is your node's REAL eth_getLogs ` +
-			`cap, or that it does not cap silently; set SUSPECT_RESULT_COUNT if it is not)`,
+		config.suspectResultCountSource === 'configured'
+			? `suspectResultCount=${config.suspectResultCount} (CONFIGURED: this deployment asserts that is your node's ` +
+				`REAL eth_getLogs cap, and it wins over any cap the provider reports about itself)`
+			: `suspectResultCount=${config.suspectResultCount} (the DEFAULT, so this deployment asserts that is your ` +
+				`node's REAL eth_getLogs cap, or that it does not cap silently; a cap the provider REPORTS in a refusal ` +
+				`replaces it, and SUSPECT_RESULT_COUNT overrides both)`,
 		`maxEventsPerFetch=${config.maxEventsPerFetch}`,
 	].join('; ');
 }

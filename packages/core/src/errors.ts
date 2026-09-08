@@ -1,3 +1,4 @@
+import type {SuspectResultCountSource} from './logFetcher.js';
 import type {WireContext} from './types.js';
 
 /**
@@ -182,6 +183,11 @@ export class InvalidBatchError extends Error {
  * The operator's fix is to raise the fetcher's `maxEventsPerFetch` above the
  * node's real cap (so a full answer no longer LOOKS like a capped one) or to use
  * a node that does not cap silently.
+ *
+ * It names WHERE the count came from, because the fix depends on it: a count this
+ * deployment CONFIGURED is wrong and should be corrected, while a count the
+ * PROVIDER reported about itself is the node's own claim about its cap, and
+ * overriding that means configuring one (configuration wins over a report).
  */
 export class SuspectedTruncationError extends Error {
 	readonly name = 'SuspectedTruncationError';
@@ -191,19 +197,34 @@ export class SuspectedTruncationError extends Error {
 	constructor(
 		readonly blockNumber: number,
 		readonly logCount: number,
+		readonly source: SuspectResultCountSource,
 	) {
 		super(
-			`block ${blockNumber} alone returned exactly ${logCount} logs, which is the count this fetcher was configured ` +
-				`to treat as suspect (suspectResultCount). A capped answer cannot be told apart from a complete one, and ` +
-				`delivering a short range as a complete one makes the receiver read the missing logs as a reorg and DELETE ` +
-				`state. The range cannot be lowered any further, so nothing is pushed. Either this block genuinely holds ` +
-				`${logCount} logs, in which case set suspectResultCount to the node's REAL cap (do not raise ` +
+			`block ${blockNumber} alone returned exactly ${logCount} logs, which is the count this fetcher treats as ` +
+				`suspect (suspectResultCount, ${WHERE_THE_SUSPECT_COUNT_CAME_FROM[source]}). A capped answer cannot be told ` +
+				`apart from a complete one, and delivering a short range as a complete one makes the receiver read the ` +
+				`missing logs as a reorg and DELETE state. The range cannot be lowered any further, so nothing is pushed. ` +
+				`Either this block genuinely holds ${logCount} logs, in which case ${THE_FIX_FOR[source]} (do not raise ` +
 				`maxEventsPerFetch to get there: that also widens the span each fetch asks for, which makes truncation more ` +
 				`likely, not less), or the node is capping and this source needs one that reports truncation instead of ` +
 				`applying it silently.`,
 		);
 	}
 }
+
+/** How the count above is described to whoever has to act on it. */
+const WHERE_THE_SUSPECT_COUNT_CAME_FROM: {[source in SuspectResultCountSource]: string} = {
+	configured: 'configured by this deployment',
+	reported: 'REPORTED by this provider as its own eth_getLogs result cap, this deployment having configured none',
+	default: 'this fetcher default, which nothing configured and no provider reported',
+};
+
+/** What to do about it, which differs only for a count that was DISCOVERED. */
+const THE_FIX_FOR: {[source in SuspectResultCountSource]: string} = {
+	configured: `set suspectResultCount to the node's REAL cap`,
+	reported: `set suspectResultCount explicitly, which WINS over anything a provider reports`,
+	default: `set suspectResultCount to the node's REAL cap`,
+};
 
 /**
  * An endpoint that will not serve the HISTORY being asked for, whatever range it
