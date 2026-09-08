@@ -1,8 +1,10 @@
 ---
 title: 'The indexing loop is round-trip bound end to end, and nothing overlaps anything'
 slug: the-indexing-loop-is-round-trip-bound
-needsAnswers: true
+reason: 'split into three specs at different confidence tiers, per TASKING-PROTOCOL 2a: it was never tasked and must not be, because tasking a confident subset of it would have silently committed the project to a sequencing decision. Successors: measure-the-indexing-loop-before-optimising-it (exploration), the-fetcher-reads-the-hints-providers-already-send (build, independent), the-fold-packs-blocks-into-round-trips (build, gated on the measurement). Story 22 (aligned buckets) moved to work/notes/ideas/a-shared-log-cache-in-front-of-the-node.md, where its precondition lives.'
 ---
+
+> **SPLIT, not dropped for lack of merit.** Kept as the reading that produced three successors, because the analysis is still the best single account of why the loop is shaped as it is. Every conclusion here survives in one of them; nothing was abandoned. See `reason:` above.
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
 
