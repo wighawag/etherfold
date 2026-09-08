@@ -3,6 +3,7 @@ import {
 	archiveRefusalFromError,
 	getNewToBlockFromError,
 	RangeLogFetcher,
+	statedBlockCapFromError,
 } from '../src/internal/engine/RangeLogFetcher.js';
 
 /**
@@ -362,6 +363,219 @@ describe('archiveRefusalFromError', () => {
 	});
 });
 
+/**
+ * Alchemy's refusal, quoted verbatim in ethers-io/ethers.js#4703 and used in
+ * several places below. It is the shape the whole cap-extraction exists for: it
+ * states TWO caps in one sentence -- a 2K BLOCK span and a 10K LOG count -- and
+ * then suggests a range that honours only the second.
+ */
+const ALCHEMY_TWO_CAPS =
+	'Log response size exceeded. You can make eth_getLogs requests with up to a 2K block range and no limit on the response size, or you can request any block range with a cap of 10K logs in the response. Based on your parameters and the response size limit, this block range should work: [0x0, 0xd043b8]';
+
+describe('statedBlockCapFromError', () => {
+	describe('a cap stated in PROSE is extracted', () => {
+		it('reads the two shapes the finding named, unit suffix included', () => {
+			// Alchemy, quoted verbatim in ethers-io/ethers.js#4703. `2K` is the block span;
+			// the `10K logs` beside it is a RESULT cap and must not be read as one.
+			expect(statedBlockCapFromError(rpcError(-32602, ALCHEMY_TWO_CAPS))).toBe(2000);
+			// Quoted in ethers-io/ethers.js#1816, and live today on rpc.immutable.com as
+			// "exceeded maximum block range: 5000" (captured 2026-09-08).
+			expect(statedBlockCapFromError(rpcError(-32602, 'Exceed maximum block range: 5000'))).toBe(5000);
+		});
+
+		it('reads the -32000 shapes that state their cap in prose and nowhere else', () => {
+			// zkevm-rpc.com, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32000, 'block range too large, max range: 10000'))).toBe(10000);
+			// rpc.merlinchain.io, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32000, 'block range too large, max range: 2000'))).toBe(2000);
+			// rpc.immutable.com, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32000, 'exceeded maximum block range: 5000'))).toBe(5000);
+			// api.avax.network/ext/bc/C/rpc, captured 2026-09-08. The two block NUMBERS in
+			// front of the cap are the range that was refused, not a cap.
+			expect(
+				statedBlockCapFromError(
+					rpcError(-32000, 'requested too many blocks from 50331648 to 51380224, maximum is set to 2048'),
+				),
+			).toBe(2048);
+			// flare-api.flare.network/ext/C/rpc, captured 2026-09-08.
+			expect(
+				statedBlockCapFromError(
+					rpcError(-32000, 'requested too many blocks from 1048576 to 17825792, maximum is set to 30'),
+				),
+			).toBe(30);
+			// rpc.soniclabs.com, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32000, 'too wide blocks range, the limit is 100'))).toBe(100);
+			// evm.cronos.org, captured 2026-09-08, `data` genuinely null on the wire. The
+			// bracketed pair is a parameter-name list, which is why the range parser refuses
+			// this message and the cap reader still gets its number out of it.
+			expect(statedBlockCapFromError(rpcError(-32000, 'maximum [from, to] blocks distance: 2000', null))).toBe(2000);
+			// evm.kava.io, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32000, 'maximum [from, to] blocks distance: 10000'))).toBe(10000);
+		});
+
+		it('reads a cap stated under any other code, including ones nothing else reads', () => {
+			// 1rpc.io/eth, captured 2026-09-08: the cap is the SECOND number, the first being
+			// the bottom of the stated interval.
+			expect(statedBlockCapFromError(rpcError(-32602, 'eth_getLogs is limited to 0 - 50 blocks range'))).toBe(50);
+			// forno.celo.org, captured 2026-09-08: the cap and the refused span in one line.
+			expect(
+				statedBlockCapFromError(
+					rpcError(-32602, 'query exceeds range, retry smaller (max block range 5000, got 16777216)'),
+				),
+			).toBe(5000);
+			// rpc.mantle.xyz, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32602, 'block range greater than 10000 max'))).toBe(10000);
+			// mainnet.base.org, captured 2026-09-08, under -32614 -- a code no other path here
+			// accepts. A cap is identified by its TEXT, so the code is not a gate.
+			expect(statedBlockCapFromError(rpcError(-32614, 'eth_getLogs is limited to a 10,000 range'))).toBe(10000);
+			// eth-mainnet.g.alchemy.com/public, captured 2026-09-08, under -32600.
+			expect(
+				statedBlockCapFromError(
+					rpcError(
+						-32600,
+						'You can make eth_getLogs requests with up to a 100 block range. Based on your parameters, this block range should work: [0x100000, 0x100063]',
+					),
+				),
+			).toBe(100);
+			// eth-mainnet.public.blastapi.io, captured 2026-09-08, under -32600.
+			expect(
+				statedBlockCapFromError(
+					rpcError(
+						-32600,
+						'You can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x18b0000, 0x18b0009]',
+					),
+				),
+			).toBe(10);
+			// cloudflare-eth.com, captured 2026-09-08, under -32047.
+			expect(
+				statedBlockCapFromError(
+					rpcError(-32047, "Invalid eth_getLogs request. 'fromBlock'-'toBlock' range too large. Max range: 800"),
+				),
+			).toBe(800);
+		});
+
+		it('reads a cap out of `data`, as the other two readers do', () => {
+			// api.roninchain.com/rpc, captured 2026-09-08: a Nethermind-style refusal whose
+			// whole complaint is in `data` behind a bare "Invalid params". The range parser
+			// finds nothing machine-readable here; the stated 200 is the whole hint.
+			const ronin = rpcError(
+				-32602,
+				'Invalid params',
+				'requested block range 16777217 exceeds the limit of 200; narrow your fromBlock/toBlock',
+			);
+			expect(statedBlockCapFromError(ronin)).toBe(200);
+			// polygon rpc's -32603, whose text is nested one level deeper. It states no
+			// number, so it stays what it is today: a ceiling lowered to the span refused.
+			expect(statedBlockCapFromError(rpcError(-32603, 'internal error', {message: 'block range is too wide'}))).toBe(
+				undefined,
+			);
+		});
+
+		it('takes the LOWEST cap when a refusal states more than one', () => {
+			// CONSTRUCTED from two captured phrasings (rpc.merlinchain.io and 1rpc.io/eth,
+			// both 2026-09-08). Reading several and keeping the smallest is what makes the
+			// answer independent of the order the patterns happen to be tried in.
+			const err = rpcError(-32000, 'block range too large, max range: 2000');
+			err.data = 'eth_getLogs is limited to 0 - 50 blocks range';
+			expect(statedBlockCapFromError(err)).toBe(50);
+		});
+	});
+
+	describe('a RESULT cap is never read as a block cap', () => {
+		it('reads nothing from a refusal that counts logs rather than blocks', () => {
+			// arb1.arbitrum.io/rpc and nova.arbitrum.io/rpc, captured 2026-09-08: 10000 is a
+			// RESULT cap. Read as a block span it would be a wrong ceiling, and the block
+			// span that endpoint really allows is not stated anywhere in the message.
+			expect(statedBlockCapFromError(rpcError(-32000, 'logs matched by query exceeds limit of 10000'))).toBeUndefined();
+			// Infura, quoted verbatim in ethers-io/ethers.js#4703: a result cap beside a
+			// suggested block range. The suggested range is read by getNewToBlockFromError;
+			// the 10000 is not a ceiling on anything this fetcher measures in blocks.
+			expect(
+				statedBlockCapFromError(
+					rpcError(-32005, 'query returned more than 10000 results. Try with this block range [0xBDE5F8, 0x102DBCC].'),
+				),
+			).toBeUndefined();
+			// rpc.gnosischain.com (Nethermind), captured 2026-09-08, hint in `data`.
+			expect(
+				statedBlockCapFromError(
+					rpcError(
+						-32602,
+						'invalid params',
+						'Query returned more than 50000 results. Try with this block range [0x1000000, 0x1080000].',
+					),
+				),
+			).toBeUndefined();
+			// rpc.pulsechain.com, captured 2026-09-08: a range complaint with no number in it
+			// at all.
+			expect(
+				statedBlockCapFromError(
+					rpcError(-32000, 'query returned more than allowed number of logs, try with smaller block range'),
+				),
+			).toBeUndefined();
+			// bsc-dataseed.bnbchain.org, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32005, 'limit exceeded'))).toBeUndefined();
+		});
+
+		it('reads nothing from a refusal that is not about ranges at all', () => {
+			// ethereum-rpc.publicnode.com, captured 2026-09-08. Terminal, and no number in it
+			// may become a ceiling.
+			expect(
+				statedBlockCapFromError(
+					rpcError(
+						-32602,
+						'Archive requests require a personal token. Get one at: https://www.allnodes.com/publicnode',
+					),
+				),
+			).toBeUndefined();
+			// mainnet.base.org answering a malformed filter, captured 2026-09-08.
+			expect(statedBlockCapFromError(rpcError(-32602, 'invalid params'))).toBeUndefined();
+			// rpc.ankr.com/eth, captured 2026-09-08.
+			expect(
+				statedBlockCapFromError(
+					rpcError(
+						-32000,
+						'Unauthorized: You must authenticate your request with an API key. Create an account on https://www.ankr.com/rpc/ and generate your personal API key for free.',
+					),
+				),
+			).toBeUndefined();
+		});
+	});
+
+	describe('a number that cannot be a block count is ignored rather than trusted', () => {
+		it('ignores zero and negative caps', () => {
+			// CONSTRUCTED, on the captured immutable/ethers#1816 phrasing. A ceiling of zero
+			// or less bounds the fetcher to nothing at all, so it is read as a misparse.
+			expect(statedBlockCapFromError(rpcError(-32000, 'exceeded maximum block range: 0'))).toBeUndefined();
+			expect(statedBlockCapFromError(rpcError(-32000, 'exceeded maximum block range: -5000'))).toBeUndefined();
+		});
+
+		it('ignores a number too large to be a block-span cap', () => {
+			// CONSTRUCTED, on the captured zkevm phrasing. No provider caps eth_getLogs
+			// anywhere near this; a number this size is something else that a pattern
+			// happened to sit next to.
+			expect(statedBlockCapFromError(rpcError(-32000, 'block range too large, max range: 4294967296'))).toBeUndefined();
+			expect(
+				statedBlockCapFromError(rpcError(-32000, 'block range too large, max range: 1701411834604692317316873')),
+			).toBeUndefined();
+		});
+
+		it('ignores a number that is not whole', () => {
+			// CONSTRUCTED. Blocks are counted, so a fraction of one is a misparse.
+			expect(statedBlockCapFromError(rpcError(-32000, 'exceeded maximum block range: 2.5'))).toBeUndefined();
+		});
+	});
+
+	describe('malformed errors do not throw', () => {
+		it('does not throw on an empty error, a missing message, or nothing at all', () => {
+			expect(statedBlockCapFromError({} as any)).toBeUndefined();
+			expect(statedBlockCapFromError(rpcError(-32000))).toBeUndefined();
+			expect(statedBlockCapFromError(undefined as any)).toBeUndefined();
+			expect(statedBlockCapFromError(null as any)).toBeUndefined();
+			expect(statedBlockCapFromError(new Error('socket hang up'))).toBeUndefined();
+		});
+	});
+});
+
 const passThrough = <T>(p: Promise<T>) => p;
 
 /**
@@ -388,6 +602,36 @@ function refusingProvider(refusal: any, answersUpTo: number) {
 		},
 	};
 	return {provider: provider as any, spans};
+}
+
+/**
+ * The same, for a sequence of DIFFERENT refusals: the nth refused request gets the
+ * nth body, and the last one repeats. Needed because the only-ever-lower rule is a
+ * statement about what a SECOND refusal may do to what a first one established.
+ */
+function refusingProviderInTurn(refusals: any[], answersUpTo: number) {
+	const spans: {fromBlock: number; toBlock: number}[] = [];
+	let refused = 0;
+	const provider = {
+		async request(args: {method: string; params?: any}): Promise<any> {
+			if (args.method !== 'eth_getLogs') throw new Error(`unexpected method ${args.method}`);
+			const fromBlock = parseInt(args.params[0].fromBlock.slice(2), 16);
+			const toBlock = parseInt(args.params[0].toBlock.slice(2), 16);
+			spans.push({fromBlock, toBlock});
+			if (toBlock - fromBlock + 1 > answersUpTo) {
+				throw refusals[Math.min(refused++, refusals.length - 1)];
+			}
+			return [];
+		},
+	};
+	return {provider: provider as any, spans};
+}
+
+/** Reads the discovered ceiling, which is otherwise visible only through arithmetic. */
+class CeilingProbe extends RangeLogFetcher {
+	get discoveredCeiling(): number | undefined {
+		return this.foundNumBlockToHigh;
+	}
 }
 
 /**
@@ -490,5 +734,86 @@ describe('what the fetcher does with a refusal', () => {
 		// node said it could serve, which is 3,615,504 -- and NOT the 5,000,000 that
 		// halving would have asked for.
 		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([10_000_000, 3_615_504]);
+	});
+
+	it('holds a STATED cap as a ceiling over the range the same refusal suggested', async () => {
+		// Alchemy, quoted verbatim in ethers-io/ethers.js#4703, and the reason a stated cap
+		// is worth reading at all: the suggested range honours the 10K LOG cap and ignores
+		// the 2K BLOCK one, so following the suggestion alone asks for 13.6M blocks against
+		// an endpoint that has just said 2,000 is its maximum. `answersUpTo` is that real cap.
+		const {provider, spans} = refusingProvider(rpcError(-32602, ALCHEMY_TWO_CAPS), 2000);
+		const fetcher = new CeilingProbe(provider, null, null, {
+			numBlocksToFetchAtStart: 10_000_000,
+			maxBlocksPerFetch: 10_000_000,
+		});
+
+		const result = await fetcher.getLogs({fromBlock: 0, toBlock: 13_649_336}, passThrough);
+
+		// the suggestion alone would have asked for 80% of 13,649,337 blocks; the ceiling
+		// bounds it to one block under the cap the same message stated.
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([10_000_000, 1999]);
+		expect(fetcher.discoveredCeiling).toBe(2000);
+		expect(result.toBlockUsed).toBe(1998);
+	});
+
+	it('never RAISES the ceiling, whatever number a later refusal states', async () => {
+		// Two captured bodies of ONE shape with different numbers: rpc.merlinchain.io
+		// (2000) then zkevm-rpc.com (10000), both 2026-09-08. The second is what a misparse
+		// looks like from the inside -- a bigger number arriving after a smaller one -- and
+		// it must not widen what the fetcher asks for, because asking wider only earns
+		// another refusal and re-discovers the same limit the slow way.
+		const {provider, spans} = refusingProviderInTurn(
+			[
+				rpcError(-32000, 'block range too large, max range: 2000'),
+				rpcError(-32000, 'block range too large, max range: 10000'),
+			],
+			1500,
+		);
+		const fetcher = new CeilingProbe(provider, null, null, {
+			numBlocksToFetchAtStart: 100_000,
+			maxBlocksPerFetch: 100_000,
+		});
+
+		await fetcher.getLogs({fromBlock: 1, toBlock: 1_000_000}, passThrough);
+		expect(fetcher.discoveredCeiling).toBe(2000);
+
+		// and the NEXT cycle is still bounded by 2000: had the second refusal raised the
+		// ceiling to 10000, the bisection above it would have asked for 5,499 blocks here.
+		await fetcher.getLogs({fromBlock: 1000, toBlock: 1_000_000}, passThrough);
+
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([100_000, 1999, 999, 1499]);
+		expect(fetcher.discoveredCeiling).toBe(2000);
+	});
+
+	it('leaves a refusal that states NO cap halving exactly as before', async () => {
+		// rpc.pulsechain.com, captured 2026-09-08: a range complaint carrying no number,
+		// which is the majority case. No ceiling is discovered and the spans are the
+		// halving sequence, block for block.
+		const {provider, spans} = refusingProvider(
+			rpcError(-32000, 'query returned more than allowed number of logs, try with smaller block range'),
+			300,
+		);
+		const fetcher = new CeilingProbe(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
+
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 499, 249]);
+		expect(result.toBlockUsed).toBe(249);
+		expect(fetcher.discoveredCeiling).toBeUndefined();
+	});
+
+	it('asks for at least one block, even for a provider that states a one-block cap', async () => {
+		// CONSTRUCTED on the captured 1rpc.io/eth phrasing, whose real cap is 50. A cap of
+		// one is the edge of the ceiling's arithmetic (it bounds the next range to zero
+		// blocks, which inverts it), and an inverted range is a request no node can answer
+		// and a bug hunt for whoever meets it.
+		const {provider, spans} = refusingProvider(rpcError(-32602, 'eth_getLogs is limited to 0 - 1 blocks range'), 1);
+		const fetcher = new CeilingProbe(provider, null, null, {numBlocksToFetchAtStart: 1000});
+
+		const result = await fetcher.getLogs({fromBlock: 1, toBlock: 100000}, passThrough);
+
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([1000, 1]);
+		expect(result.toBlockUsed).toBe(1);
+		expect(fetcher.discoveredCeiling).toBe(1);
 	});
 });
