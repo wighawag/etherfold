@@ -165,6 +165,96 @@ export function generateLogRequestForTopicsAndFiltersCombinations(
 	return [...sharedRequests, ...scopedRequests];
 }
 /**
+ * How many of the planner's `eth_getLogs` calls may be in flight at once.
+ *
+ * A STATED number rather than the length of the request list, because that
+ * length is CALLER-CONTROLLED: it is one request per (rule, `match` entry) plus
+ * the leftover groups, so a configuration with twenty filters would otherwise
+ * become a twenty-way burst at whatever endpoint the deployment points at, and a
+ * public provider answers a burst with a rate limit -- which arrives as a
+ * refusal the fetcher then reads as a range hint and halves against.
+ *
+ * Four is deliberately conservative. A browser allows six connections per origin
+ * on HTTP/1.1 and the engine has three other methods to get down the same pipe
+ * (the tip, the chain identity and the genesis probe), so this leaves headroom
+ * rather than filling it, while still collapsing the common filtered
+ * configurations -- two or three requests -- into a single round trip of
+ * latency. It is a CONSTANT and not a `LogFetcherConfig` knob: nothing has
+ * reported a deployment this number is wrong for, and a knob is a user-visible
+ * default nobody can choose better than this one until something measures it.
+ */
+export const MAX_CONCURRENT_LOG_REQUESTS = 4;
+
+/**
+ * Issue the planner's request list CONCURRENTLY but BOUNDED, and hand back one
+ * result array per request IN REQUEST ORDER.
+ *
+ * Order is by request and never by arrival, so the array the union is built from
+ * is the array the sequential loop built, whatever order the node answers in.
+ *
+ * ## A partial answer is never returned
+ *
+ * The sequential loop threw out of `getLogsWithVariousFilters` on the first
+ * rejection, and that is not incidental behaviour to be re-derived from whatever
+ * a gather happens to do: under ADR-0004 a range delivered with logs missing is
+ * read by the receiver as an ABSENCE, an absence is concluded as a REORG, and a
+ * reorg reverts state. So a failure fails the whole fetch.
+ *
+ * Three things follow, and none of them is what a bare `Promise.all` does:
+ *
+ *   - the error that surfaces is the LOWEST-INDEXED failure, which is the one the
+ *     sequential loop would have thrown, and it matters because the caller READS
+ *     it for hints (`RangeLogFetcher.getLogs` parses a range cap, a result cap
+ *     and an archive refusal out of it);
+ *   - no NEW request is started once a failure is known, exactly as the loop
+ *     never reached the requests after the failing one;
+ *   - the requests already in flight are AWAITED before the error is rethrown, so
+ *     nothing is orphaned and no rejection is left with nowhere to go.
+ */
+async function issueRequestsBounded(
+	provider: EIP1193ProviderWithoutEvents,
+	requestList: LogRequest[],
+	options: {fromBlock: number; toBlock: number},
+	unlessCancelled: UnlessCancelledFunction,
+): Promise<IncludedEIP1193Log[][]> {
+	const results: IncludedEIP1193Log[][] = new Array(requestList.length);
+	// A LIST rather than a first-one-wins slot: several requests are in flight when
+	// one fails, so more than one can fail, and which of them is reported is decided
+	// below by INDEX and never by which rejected first.
+	const failures: {index: number; error: any}[] = [];
+	let nextIndex = 0;
+
+	// Workers take the next unclaimed index, so the requests that have been STARTED
+	// are always a prefix of the list -- which is what makes the lowest-indexed
+	// failure the same error the sequential loop would have reported.
+	async function worker(): Promise<void> {
+		while (failures.length === 0 && nextIndex < requestList.length) {
+			const index = nextIndex++;
+			const request = requestList[index];
+			try {
+				results[index] = await unlessCancelled(getLogs(provider, request.contractAddresses, request.topics, options));
+			} catch (err: any) {
+				failures.push({index, error: err});
+				return;
+			}
+		}
+	}
+
+	const workers: Promise<void>[] = [];
+	for (let i = 0; i < Math.min(MAX_CONCURRENT_LOG_REQUESTS, requestList.length); i++) {
+		workers.push(worker());
+	}
+	// A worker swallows its own rejection into `failures`, so this settles rather
+	// than short-circuiting: every request that was issued is done by here.
+	await Promise.all(workers);
+
+	if (failures.length > 0) {
+		throw failures.reduce((earliest, failure) => (failure.index < earliest.index ? failure : earliest)).error;
+	}
+	return results;
+}
+
+/**
  * The logs of one block range, over WHATEVER set of requests the planner asked
  * for: one when nothing is filtered, several when something is.
  *
@@ -173,6 +263,12 @@ export function generateLogRequestForTopicsAndFiltersCombinations(
  * that is what keeps the unfiltered case byte-for-byte the call it always was,
  * and it is also the honest answer, since only MULTIPLE overlapping filters can
  * hand back one log twice or out of order.
+ *
+ * SEVERAL requests are issued CONCURRENTLY, bounded by
+ * {@link MAX_CONCURRENT_LOG_REQUESTS}: they are independent questions about one
+ * block range, so N filters cost one round trip of latency instead of N. It
+ * changes no answer, because the union below is fed the results in REQUEST order
+ * either way.
  */
 export async function getLogsWithVariousFilters(
 	provider: EIP1193ProviderWithoutEvents,
@@ -196,9 +292,8 @@ export async function getLogsWithVariousFilters(
 	}
 
 	const logs: IncludedEIP1193Log[] = [];
-	for (const request of requestList) {
-		const tmpLogs = await unlessCancelled(getLogs(provider, request.contractAddresses, request.topics, options));
-		logs.push(...tmpLogs);
+	for (const perRequestLogs of await issueRequestsBounded(provider, requestList, options, unlessCancelled)) {
+		logs.push(...perRequestLogs);
 	}
 
 	const sortedLogs = logs.sort((a, b) => {
