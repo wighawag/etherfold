@@ -23,9 +23,11 @@ Providers bound the method in two incompatible ways, and the numbers differ by m
 | endpoint | the cap it enforces |
 | --- | --- |
 | `1rpc.io` | 50 BLOCKS per query |
-| `eth.merkle.io` | 1,000 BLOCKS per query |
-| `rpc.mevblocker.io` | 10,000 RESULTS per query |
-| `ethereum-rpc.publicnode.com` | recent blocks only; archive needs a token |
+| `eth.merkle.io` | 1,000 BLOCKS per query — **STALE (2026-09-08): serves no `eth_getLogs` at all now, `-32601 "Method not found"`** |
+| `rpc.mevblocker.io` | 10,000 RESULTS per query — **STALE (2026-09-08): now a 10,000-BLOCK span, `-32602 "range 47440 exceeds limit of 10000"`** |
+| `ethereum-rpc.publicnode.com` | recent blocks only; archive needs a token (re-confirmed 2026-09-08, byte-identical) |
+
+The two stale rows are marked rather than rewritten, because the 2026-06-30 capture is what it is and the table is a dated record. But note WHICH row went: `rpc.mevblocker.io` was this table's only RESULT-cap example, and it has since changed to a BLOCK cap. The point of the section survives it — the two kinds exist and a fixed page size cannot satisfy both — but the example that demonstrated it no longer does, so read the spike for a current RESULT-cap endpoint (Arbitrum's `arb1.arbitrum.io/rpc` counts logs) rather than citing this row for it.
 
 A block-span cap and a result-count cap cannot be satisfied by one page size, because the number of logs per block is a property of the workload rather than of the request. This is the reason etherfold's adaptive sizing exists at all, and it is why a fixed `maxBlocksPerFetch` can never be right for two providers at once.
 
