@@ -64,7 +64,7 @@ Neither gate is set. The spec launched with an open question about how a new con
 
 - **`eth_blockNumber`.** The third round trip in a cycle is a tip read, load-bearing, and not a guard.
 
-- **The genesis-hash check.** Live at load, gated by `skipGenesisCheck`, and untouched here. A separate per-cycle genesis check exists as a commented-out block beside the calls this spec deletes, and reviving it is its own decision with its own per-cycle cost. Its `earliest`-instead-of-block-0 bug, confirmed since, is fixed by `work/tasks/backlog/the-genesis-check-asks-for-block-zero-not-the-earliest-tag.md`.
+- **The genesis-hash check.** Live at load, gated by `skipGenesisCheck`, and untouched here. Its `earliest`-instead-of-block-0 bug, confirmed since, has been FIXED (`work/tasks/done/the-genesis-check-asks-for-block-zero-not-the-earliest-tag.md`), which changes two of this spec's premises: the commented-out per-cycle genesis check that used to sit beside the calls this spec deletes is now DELETED rather than commented out, so there is no dead block here to trip over, and reviving a per-cycle genesis read means calling `checkGenesisHash`, which is now the single place that question is asked. That revival is still its own decision with its own per-cycle cost, and still out of scope here. Note also that the load-path `eth_chainId` refusal is a bare uncaught `Error`, a third site neither that task nor this spec has scoped: story 4's expected-vs-received wording is the natural place to fix it.
 
 ## Further Notes
 

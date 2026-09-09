@@ -6,6 +6,16 @@ source: 'SQD, "eth_getLogs: limits, pagination, and the logs it leaves out", htt
 
 Ground truth about the one method etherfold cannot do without. Two separate things live here: what a node says when it refuses a range (which the fetcher reacts to), and what a node omits when it does NOT refuse (which nothing currently detects).
 
+> **RE-RUN 2026-09-08, and two rows below no longer reproduce.** This finding told its readers to re-run the probes before treating any number as current; that was done while building `a-provider-refusal-is-read-from-its-data-before-its-prose`, and the fresher, wider capture is `docs/spikes/a-provider-refusal-is-read-from-its-data-before-its-prose/refusal-shapes.md`, with `capture-refusals.sh` beside it for re-running. **Prefer the spike where the two disagree.** What changed:
+>
+> - `rpc.mevblocker.io` no longer enforces a RESULT cap. It now enforces a 10,000-BLOCK span and answers `-32602 "range 47440 exceeds limit of 10000"`, so it has changed which KIND of cap it has, which is the one axis section 1 is about.
+> - `eth.merkle.io` no longer serves `eth_getLogs` at all (`-32601 "Method not found"`).
+> - The structured `data: {from, to, limit}` shape is still REAL, but mevblocker is no longer an example of it. Infura is, verbatim in `ethers-io/ethers.js#4703`.
+> - `ethereum-rpc.publicnode.com`'s archive refusal is byte-identical three months on, which is why the fetcher treats it as terminal.
+> - NEW, and not in this finding: Nethermind puts the whole hint in `data` as PROSE while leaving `message` at a bare `"invalid params"` (Gnosis, Fraxtal). A reader that looked only at `message` discarded a complete machine-readable answer. This is why the parser now reads `data` before prose.
+>
+> The SHAPES this finding records are what the code is built on and they have held; it is the per-endpoint NUMBERS that decay, exactly as the `source:` warned. Section 3 (the bloom omission) has NOT been re-run by us and is still a third party's dated capture.
+
 ## 1. There is no portable page size, and the caps are not even the same KIND of cap
 
 Providers bound the method in two incompatible ways, and the numbers differ by more than an order of magnitude. Measured against public Ethereum endpoints, 2026-06-30:

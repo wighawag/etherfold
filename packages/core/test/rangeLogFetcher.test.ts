@@ -1123,11 +1123,100 @@ describe('the learned range is reported, and can be configured back in', () => {
 
 		expect(fetcher.learnedRange.ceiling).toBe(2000);
 		// It LANDS, which is the criterion: a stale configured value costs a retry and
-		// never wedges. The one-block second request is the EXISTING bisection meeting a
-		// safe span the new ceiling has just contradicted, not something the seeding
-		// introduced -- see `work/notes/observations/a-tightened-ceiling-leaves-a-safe-span-above-it.md`.
-		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([40_000, 1]);
-		expect(result.toBlockUsed).toBe(1);
+		// never wedges. The retry asks for just under the newly stated cap, because
+		// lowering the ceiling to 2000 DROPPED the configured 40,000-block safe span it
+		// contradicts -- a width cannot be both known-safe and above a refused one.
+		expect(spans.map((s) => s.toBlock - s.fromBlock + 1)).toEqual([40_000, 1999]);
+		expect(result.toBlockUsed).toBe(1999);
+	});
+
+	it('drops a safe span the newly lowered ceiling contradicts, instead of bisecting against it', async () => {
+		// A provider that TIGHTENS mid-run: it answers a 1000-block span, then states a
+		// 400-block cap. The safe span was evidence about the cap that was in force when
+		// it answered, and that cap is gone, so it is dropped rather than kept.
+		//
+		// Before this was fixed the pair went incoherent (safe 1000 above ceiling 400)
+		// and the error-path bisection read `floor((400 - 1000) / 2)`, a NEGATIVE step,
+		// so `Math.max(1, ...)` fired and the next request asked for a SINGLE block --
+		// costing a round trip per block until it climbed back.
+		const spans: {fromBlock: number; toBlock: number}[] = [];
+		let answered = 0;
+		const provider = {
+			request: async (args: any) => {
+				if (args.method !== 'eth_getLogs') {
+					throw new Error(`unexpected method ${args.method}`);
+				}
+				const fromBlock = parseInt(args.params[0].fromBlock.slice(2), 16);
+				const toBlock = parseInt(args.params[0].toBlock.slice(2), 16);
+				spans.push({fromBlock, toBlock});
+				const span = toBlock - fromBlock + 1;
+				// the first answer establishes a 1000-block safe span; from then on the cap is 400
+				if (answered++ === 0) {
+					return [];
+				}
+				if (span > 400) {
+					throw rpcError(-32000, 'block range too large, max range: 400');
+				}
+				return [];
+			},
+		} as never;
+
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 1000,
+			maxBlocksPerFetch: 100_000,
+		});
+
+		await fetcher.getLogs({fromBlock: 1, toBlock: 1_000_000}, passThrough);
+		expect(fetcher.learnedRange.safeSpan).toBe(1000);
+
+		const result = await fetcher.getLogs({fromBlock: 2000, toBlock: 1_000_000}, passThrough);
+
+		// the contradicted safe span is gone, the ceiling is the stated cap, and the
+		// recovery request is just under it rather than one block. (The 100,000 is the
+		// existing empty-answer rule opening up to `maxBlocksPerFetch`, which is what
+		// earns the refusal that states the new cap.)
+		expect(fetcher.learnedRange.ceiling).toBe(400);
+		expect(spans.slice(1).map((s) => s.toBlock - s.fromBlock + 1)).toEqual([100_000, 399]);
+		expect(result.toBlockUsed).toBe(2398);
+	});
+
+	it('bisects UP from the safe span on the error path, not from zero', async () => {
+		// With a coherent pair (safe 100 below ceiling 1000) the retry asks for the
+		// MIDPOINT, 100 + floor((1000 - 100) / 2) = 550. It used to ask for the bare step
+		// floor((1000 - 100) / 2) = 450, i.e. LESS than a span it had already been served,
+		// which made knowing a safe span worse than not knowing one (the no-safe-span
+		// branch asks for ceiling - 1).
+		const spans: {fromBlock: number; toBlock: number}[] = [];
+		let answered = 0;
+		const provider = {
+			request: async (args: any) => {
+				if (args.method !== 'eth_getLogs') {
+					throw new Error(`unexpected method ${args.method}`);
+				}
+				const fromBlock = parseInt(args.params[0].fromBlock.slice(2), 16);
+				const toBlock = parseInt(args.params[0].toBlock.slice(2), 16);
+				spans.push({fromBlock, toBlock});
+				if (answered++ === 0) {
+					return [];
+				}
+				if (toBlock - fromBlock + 1 > 1000) {
+					throw rpcError(-32000, 'block range too large, max range: 1000');
+				}
+				return [];
+			},
+		} as never;
+
+		const fetcher = new RangeLogFetcher(provider, null, null, {
+			numBlocksToFetchAtStart: 100,
+			maxBlocksPerFetch: 100_000,
+		});
+
+		await fetcher.getLogs({fromBlock: 1, toBlock: 1_000_000}, passThrough);
+		expect(fetcher.learnedRange.safeSpan).toBe(100);
+
+		await fetcher.getLogs({fromBlock: 200, toBlock: 1_000_000}, passThrough);
+
+		expect(spans.slice(1).map((s) => s.toBlock - s.fromBlock + 1)).toEqual([100_000, 550]);
 	});
 
 	it('ignores configured numbers that could not be a count of blocks', () => {

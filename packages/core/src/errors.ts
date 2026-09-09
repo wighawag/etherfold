@@ -291,12 +291,20 @@ export class ArchiveRefusedError extends Error {
  *
  * ## Why this is permanent machinery and not a transitional guard
  *
- * Two causes survive any version bump and neither improves with time: a node
- * being FORKED may predate the spec change (EDR types the field `Option<u64>`
- * precisely so an absent timestamp stays distinguishable from a real one, and
- * passes it through rather than defaulting it), and EDR's on-disk RPC response
- * cache is version-segmented, so entries written before the change keep
- * answering without the field until `rpc_cache` is dropped.
+ * One cause survives any version bump, in two lifetimes, and neither improves
+ * with time. A node being FORKED may predate the spec change: EDR types the
+ * field `Option<u64>` precisely so an absent timestamp stays distinguishable
+ * from a real one, and passes the absence through rather than defaulting it.
+ * And EDR's on-disk RPC response cache REPLAYS such an absence once it has
+ * recorded one, until `rpc_cache` is dropped -- so the fork can be long gone and
+ * the answer still arrive without the field.
+ *
+ * Note what this is NOT, because three of this repo's own documents said it and
+ * it reads backwards: it is not that pre-0.20 cache entries keep answering.
+ * `@nomicfoundation/edr@0.20.0` moved the cache to `rpc_cache/v2` and IGNORES
+ * everything else in `rpc_cache`, so entries written before the change are not
+ * served at all. The hazard is a CURRENT-format entry holding an absence read
+ * from a pre-spec remote.
  *
  * ## Why it does not replace the fold-time refusal
  *
@@ -330,8 +338,8 @@ export class TimestamplessLogError extends Error {
 				`@nomicfoundation/edr >= 0.20.0) put it on the log itself, so this is a fact about the NODE: it ` +
 				`predates the change, or it is a Hardhat version bundling an older EDR (3.16.0 still ships edr 0.19.0 ` +
 				`-- override @nomicfoundation/edr to >=0.20.0 rather than waiting for the bump), or it is forking a ` +
-				`node that predates it, or it is answering from an EDR RPC response cache written before the change ` +
-				`(drop its rpc_cache). Nothing is folded, stored or pushed: the engine refuses here rather than ` +
+				`node that predates it, or it is replaying an EDR RPC response cache entry that recorded the absence ` +
+				`from such a node (drop its rpc_cache). Nothing is folded, stored or pushed: the engine refuses here rather than ` +
 				`guessing a timestamp, because a wrong one breaks the time axis silently.`,
 		);
 	}

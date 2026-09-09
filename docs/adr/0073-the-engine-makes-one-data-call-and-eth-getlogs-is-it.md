@@ -1,12 +1,10 @@
----
-status: accepted, not yet implemented
----
-
 # The engine makes ONE data call, and `eth_getLogs` is it
 
 `alwaysFetchTimestamps` and `alwaysFetchTransactions` are deleted, with the whole `enrichEvents` path under them. After this the engine's entire chain-facing surface is `eth_getLogs` for data, `eth_blockNumber` for the tip and `eth_chainId` for the identity guard, and no configuration can make it call anything else.
 
-Decided now rather than after publication because the deletion is nearly free TODAY and gets more expensive every day (see "the identity property" below). `accepted, not yet implemented`: the tasks are staged, and nothing here ships in the change that records it.
+Decided before publication rather than after because the deletion was nearly free THEN and got more expensive every day (see "the identity property" below).
+
+> **Built.** This ADR carried `status: accepted, not yet implemented` while its tasks were staged; every one of them has since landed, so the status line is gone (this repo marks the exception, not the norm). The identity property it rested on was measured rather than assumed: the recorded digest constants in `packages/core/test/aDeletedStreamFlagDoesNotMoveTheDigest.test.ts` did not move across either flag deletion. One thing is BROADER than described here: the engine's declared surface is FOUR methods, not three, because the genesis probe reads `eth_getBlockByNumber` at block `0x0` once per load. It is identity rather than data, it is declared rather than exempted, and `packages/core/src/providerSurface.ts` holds the engine to the set at runtime, narrowing that one method to the genesis probe by its PARAMS so a per-block read cannot return wearing its name.
 
 ## Why the two flags were not one decision
 
@@ -26,7 +24,9 @@ No released Hardhat bundles it (3.16.0 ships edr 0.19.0), which reads like a dep
 
 ## The refusal is PERMANENT machinery, and it lives in two places
 
-A log with no `blockTimestamp` stays reachable at any version, by two paths that do not improve with time: a node being FORKED may predate the spec change (EDR types the field `Option<u64>` precisely so a missing timestamp stays distinguishable from a real one, and passes it through rather than defaulting it), and EDR's on-disk RPC response cache is version-segmented, so entries written before the change keep answering without the field. So the refusal is not a transitional guard and must not be built as one.
+A log with no `blockTimestamp` stays reachable at any version, by one cause with two lifetimes, neither improving with time: a node being FORKED may predate the spec change (EDR types the field `Option<u64>` precisely so a missing timestamp stays distinguishable from a real one, and passes the absence through rather than defaulting it), and EDR's on-disk RPC response cache REPLAYS such an absence once it has recorded one, until `rpc_cache` is dropped, so the fork can be long gone and the answer still arrive without the field. So the refusal is not a transitional guard and must not be built as one.
+
+> **Correction, 2026-09-08.** This paragraph previously said EDR's cache "is version-segmented, so entries written before the change keep answering without the field". That reads backwards: `@nomicfoundation/edr@0.20.0` moved the cache to `rpc_cache/v2` and IGNORES everything else in `rpc_cache`, so pre-change entries are not served at all. The conclusion is untouched (the forked-node cause stands on its own, and a current-format entry can hold an absence read from a pre-spec remote), which is why this is a correction to the mechanism rather than to the decision. Recorded in `work/notes/observations/edr-cache-segmentation-claim-reads-backwards.md`.
 
 It refuses in TWO places, deliberately, because there are two entry points:
 

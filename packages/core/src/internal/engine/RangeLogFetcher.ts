@@ -787,6 +787,20 @@ export class RangeLogFetcher {
 	 * fetcher asks for one block less than a provider says it allows. That one block
 	 * buys not having to know whether a provider's "up to a 2K block range" is
 	 * inclusive, which no message says.
+	 *
+	 * ## Lowering the ceiling can INVALIDATE the safe span, and does
+	 *
+	 * `safeNumBlock` is a span the provider actually answered, so it is evidence
+	 * about the cap that was in force WHEN IT ANSWERED. A provider that tightens
+	 * mid-run, or that states a cap smaller than a span it has already served,
+	 * leaves the pair incoherent: a width cannot be both known-safe and at or above
+	 * a width that is refused. The new ceiling is the fresher evidence, so the stale
+	 * safe span is DROPPED rather than kept and worked around.
+	 *
+	 * This is the same rule the seeding path applies to a configured range (a
+	 * `safeSpan` at or above the `ceiling` is not believed), stated once here
+	 * instead of at each reader, because this is the only writer of the ceiling and
+	 * therefore the only place the pair can go incoherent.
 	 */
 	protected lowerBlockCeilingTo(cap: number | undefined): void {
 		if (cap === undefined || cap < 1) {
@@ -794,6 +808,9 @@ export class RangeLogFetcher {
 			return;
 		}
 		this.foundNumBlockToHigh = Math.min(this.foundNumBlockToHigh ?? this.config.maxBlocksPerFetch, cap);
+		if (this.safeNumBlock !== undefined && this.safeNumBlock >= this.foundNumBlockToHigh) {
+			this.safeNumBlock = undefined;
+		}
 	}
 
 	/**
@@ -926,10 +943,18 @@ export class RangeLogFetcher {
 				// never below ONE block: a ceiling of 1 (a provider that states a one-block cap,
 				// or a one-block span that was itself refused) otherwise computes a zero-width,
 				// BACKWARDS range, which is a request no node can answer.
+				//
+				// Bisection between what is KNOWN SAFE and what is known refused, which means
+				// the safe span is the BASE and the half-gap is the step -- the same expression
+				// the success path below uses. Without the base this asked for less than a span
+				// it had already been served, so knowing more made it ask for less.
 				if (this.safeNumBlock) {
 					this.numBlocksToFetch = Math.max(
 						1,
-						Math.min(Math.floor((this.foundNumBlockToHigh - this.safeNumBlock) / 2), this.foundNumBlockToHigh - 1),
+						Math.min(
+							this.safeNumBlock + Math.floor((this.foundNumBlockToHigh - this.safeNumBlock) / 2),
+							this.foundNumBlockToHigh - 1,
+						),
 					);
 				} else {
 					this.numBlocksToFetch = Math.max(1, this.foundNumBlockToHigh - 1);

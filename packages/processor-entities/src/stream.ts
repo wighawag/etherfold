@@ -65,8 +65,8 @@ export function blockPointer<ABI extends Abi>(block: BlockOfEvents<ABI>): BlockP
 				`execution-apis#639 (geth >= 1.16.0, reth, besu, erigon, anvil, and EDR >= 0.20.0) put it on the log ` +
 				`itself. Reaching this means the node did not: it predates the change, or it is a Hardhat version ` +
 				`bundling an older EDR (3.16.0 still ships edr 0.19.0 -- override @nomicfoundation/edr to >=0.20.0 ` +
-				`rather than waiting for the bump), or it is forking a node that predates it, or it is answering ` +
-				`from an EDR RPC cache written before the change. Upgrade the node, or populate blockTimestamp ` +
+				`rather than waiting for the bump), or it is forking a node that predates it, or it is replaying an ` +
+				`EDR RPC cache entry that recorded the absence from such a node (drop its rpc_cache). Upgrade the node, or populate blockTimestamp ` +
 				`before feeding this stream in. There is no fallback to fetch the block with: the engine reads ` +
 				`the timestamp off the log and makes no other data call (ADR-0073). This refuses to guess, ` +
 				`because a wrong timestamp breaks the time axis silently.`,
