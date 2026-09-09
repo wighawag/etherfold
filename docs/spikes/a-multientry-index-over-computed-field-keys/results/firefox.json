@@ -1,0 +1,98 @@
+{
+  "project": "firefox",
+  "ranAt": "2026-09-09T19:37:46.049Z",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0",
+  "probes": [
+    {
+      "name": "A. createIndex multiEntry is accepted",
+      "ok": true,
+      "detail": {
+        "version": 1
+      }
+    },
+    {
+      "name": "B. an array subkey is addressable",
+      "ok": true,
+      "detail": [
+        "t3"
+      ]
+    },
+    {
+      "name": "C. a field is a range-scannable bucket",
+      "ok": true,
+      "detail": [
+        "t2",
+        "t4",
+        "t1",
+        "t3"
+      ]
+    },
+    {
+      "name": "D. where + orderBy ride the index",
+      "ok": true,
+      "detail": [
+        "t1",
+        "t3"
+      ]
+    },
+    {
+      "name": "E. buckets are disjoint",
+      "ok": true,
+      "detail": [
+        "t1",
+        "t3",
+        "t2",
+        "t4"
+      ]
+    },
+    {
+      "name": "F. a keyless record is not indexed",
+      "ok": true,
+      "detail": {
+        "indexEntries": 8,
+        "rows": 5
+      }
+    },
+    {
+      "name": "G. binary subkeys sort bytewise",
+      "ok": true,
+      "detail": {
+        "binaryOrder": [
+          "b-nine",
+          "b-ten",
+          "b-big"
+        ],
+        "decimalTextOrderWouldBe": [
+          "10",
+          "9",
+          "9223372036854775815"
+        ]
+      }
+    },
+    {
+      "name": "H. duplicate subkeys collapse",
+      "ok": true,
+      "detail": [
+        "dup",
+        "dup"
+      ]
+    },
+    {
+      "name": "I. an empty key array indexes nothing",
+      "ok": true,
+      "detail": {
+        "before": 13,
+        "after": 13
+      }
+    }
+  ],
+  "passed": 9,
+  "total": 9,
+  "failed": [],
+  "cost": {
+    "withoutIndex": 72,
+    "withIndex": 115,
+    "overheadPercent": 60
+  },
+  "errors": []
+}
