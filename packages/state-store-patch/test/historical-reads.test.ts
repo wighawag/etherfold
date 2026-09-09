@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {BlockNotRetainedError, BlockUnavailableError, type EntityDeclaration} from '@etherfold/state-store';
 import {beforeEach, describe, expect, it} from 'vitest';
+import {codeOnly} from './utils/codeOnly.js';
 import {PatchStateStore} from '../src/index.js';
 
 /**
@@ -82,13 +83,24 @@ describe('every historical read is refused', () => {
 describe('the as-of methods cannot read state, by construction', () => {
 	const source = readFileSync(new URL('../src/store.ts', import.meta.url).pathname, 'utf-8');
 
-	/** The text of one method, from its signature to the closing brace at class indent. */
+	/**
+	 * The CODE of one method, from its signature to the closing brace at class indent.
+	 *
+	 * Comments are stripped (see `codeOnly`), because this slice is matched for the
+	 * ABSENCE of things -- `this.state`, `getCurrent`, `return` -- and a doc comment
+	 * explaining that the method deliberately does not reach for stored state names
+	 * every one of them. Without this, documenting the property fails the test that
+	 * asserts the property, and the cheapest fix is to stop documenting it.
+	 *
+	 * The slice is still taken from the RAW source, so the `\n\t}` terminator keeps
+	 * meaning "closing brace at class indent"; only the matched text is stripped.
+	 */
 	function bodyOf(method: string): string {
 		const start = source.indexOf(`async ${method}<`);
 		expect(start, `${method} is declared in src/store.ts`).toBeGreaterThan(-1);
 		const end = source.indexOf('\n\t}', start);
 		expect(end, `${method} closes`).toBeGreaterThan(start);
-		return source.slice(start, end);
+		return codeOnly(source.slice(start, end));
 	}
 
 	for (const method of ['getAsOf', 'listAsOf']) {

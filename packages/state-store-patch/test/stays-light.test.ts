@@ -1,6 +1,7 @@
 import {readFileSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe, expect, it} from 'vitest';
+import {codeOnly} from './utils/codeOnly.js';
 
 /**
  * The claim in this package's name, asserted rather than reviewed.
@@ -55,8 +56,10 @@ describe('the patch store stays light', () => {
 	it('uses no runtime built-in and no console', () => {
 		for (const file of files) {
 			const source = readFileSync(file, 'utf-8');
-			expect(source, file).not.toMatch(/from '(node|bun|cloudflare):/);
-			expect(source, file).not.toMatch(/\bconsole\./);
+			// comments stripped: prose about a runtime is not a dependency on one (see `codeOnly`)
+			const code = codeOnly(source);
+			expect(code, file).not.toMatch(/from '(node|bun|cloudflare):/);
+			expect(code, file).not.toMatch(/\bconsole\./);
 		}
 	});
 });

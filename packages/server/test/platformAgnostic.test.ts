@@ -1,4 +1,5 @@
 import {describe, it, expect} from 'vitest';
+import {codeOnly} from './utils/codeOnly.js';
 import {readFileSync, readdirSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -39,7 +40,12 @@ describe('the server package names no runtime', () => {
 
 	for (const {pattern, why} of forbidden) {
 		it(`imports no ${why}`, () => {
-			const offenders = files.filter((f) => pattern.test(readFileSync(f, 'utf-8')));
+			// Comments stripped before matching. Five of these six patterns are import
+			// forms and could not appear in prose anyway, but `\bD1Database\b` is a bare
+			// word: a doc comment saying "this must never take a D1Database" would fail
+			// the very gate that exists to keep D1Database out, which makes deleting the
+			// explanation the cheapest way to green. See `codeOnly`.
+			const offenders = files.filter((f) => pattern.test(codeOnly(readFileSync(f, 'utf-8'))));
 			expect(offenders.map((f) => f.slice(pkgRoot.length + 1))).toEqual([]);
 		});
 	}

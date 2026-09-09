@@ -1,6 +1,7 @@
 import {readFileSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe, expect, it} from 'vitest';
+import {codeOnly} from './utils/codeOnly.js';
 
 /**
  * The store targets the `remote-sql` interface, and one hosted SQLite backend is
@@ -51,10 +52,13 @@ describe('the package stays platform agnostic', () => {
 	it('names no specific hosted backend and uses no runtime built-in', () => {
 		for (const file of files) {
 			const source = readFileSync(file, 'utf-8');
-			expect(source, file).not.toMatch(/\bD1\b/);
-			expect(source, file).not.toMatch(/cloudflare/i);
-			expect(source, file).not.toMatch(/from '(node|bun|cloudflare):/);
-			expect(source, file).not.toMatch(/\bconsole\./);
+			// comments stripped: the sentence explaining why this store must not name D1
+			// is not the store naming D1 (see `codeOnly`)
+			const code = codeOnly(source);
+			expect(code, file).not.toMatch(/\bD1\b/);
+			expect(code, file).not.toMatch(/cloudflare/i);
+			expect(code, file).not.toMatch(/from '(node|bun|cloudflare):/);
+			expect(code, file).not.toMatch(/\bconsole\./);
 		}
 	});
 
