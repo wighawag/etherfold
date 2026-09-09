@@ -30,6 +30,18 @@ export default defineConfig({
 		// pass, since it is only reached on failure. See ADR-0032.
 		testTimeout: 60_000,
 		hookTimeout: 60_000,
+		// The pool leaks a workerd instance per test FILE, so with more than one file
+		// `close` never resolves and vitest waits out this timeout before exiting. Every
+		// test passes and the exit code is 0, so the leak costs WALL CLOCK on every gate
+		// run rather than correctness -- ten seconds of it at the default.
+		//
+		// Bounded rather than fixed: the leak is upstream in
+		// `@cloudflare/vitest-pool-workers` (0.22.0 is the latest, so there is no version
+		// to move to), and the levers that used to avoid it, `singleWorker` and
+		// `isolatedStorage`, no longer exist in the plugin form that v0.22 introduced.
+		// One second is enough for a clean close when there is one, and stops paying for
+		// a close that is never coming.
+		teardownTimeout: 1_000,
 		setupFiles: ['./test/vitest/apply-migrations.ts'],
 	},
 });

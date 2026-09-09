@@ -198,6 +198,27 @@ export async function resolveSource<ABI extends Abi, ProcessResultType>(
 		contractsData = processorModule.contractsData;
 	}
 
+	// `contractsData` is the per-chain map's FALLBACK, and it needs a chain id just as
+	// much: the source it resolves to is `{chainId, contracts}`. Only the map's branch
+	// used to ask for one, so a module exporting ONLY `contractsData` -- the shape the
+	// docs describe as supported, and the one `--deployments` calls optional "where the
+	// processor module supplies its own contract data" -- reached the refusal below and
+	// threw `no chainId found` every time, on the CLI and the server alike.
+	//
+	// Asking here rather than at the top keeps the call conditional on NEEDING it: a
+	// module that supplies neither still refuses without touching the chain.
+	if (contractsData && !chainIDAsDecimal) {
+		let chainIDAsHex: `0x${string}`;
+		try {
+			chainIDAsHex = (await provider.request({method: 'eth_chainId'})) as `0x${string}`;
+		} catch (err) {
+			// console.error for the same reason as above: the CLI wires no logger.
+			console.error(`could not fetch chainID`);
+			throw err;
+		}
+		chainIDAsDecimal = '' + parseInt(chainIDAsHex.slice(2), 16);
+	}
+
 	if (processorModule.contractsDataPerChain && !contractsData) {
 		// console.error (not the named-logs logger) to match both original callers' stderr output.
 		console.error(`field "contractsDataPerChain" found but no contracts data found for chainID: ${chainIDAsDecimal}`);

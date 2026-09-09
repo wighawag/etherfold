@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {normalizeEntities, normalizeEntity} from '../src/index.js';
+import {entityKey} from '../src/entities.js';
 import type {EntityDeclaration} from '../src/index.js';
 
 /**
@@ -128,5 +129,34 @@ describe('the rules that did NOT change', () => {
 	it('does not limit an identifier length, because no backend does', () => {
 		const long = `long${'x'.repeat(196)}`;
 		expect(() => normalizeEntity({name: long, id: [`${long}Key`], fields: {[`${long}Field`]: 'text'}})).not.toThrow();
+	});
+});
+
+describe('an id VALUE containing the key separator is refused, not silently merged', () => {
+	// `entityKey` joins the entity name and the id values with U+0000, and the memory
+	// and patch backends key rows on that string. Before this refusal, for `id: ['x',
+	// 'y']` the two DIFFERENT business keys below produced the same string and became
+	// ONE row: the second write overwrote the first and both reads answered with it.
+	// Verified on MemoryStateStore, 2026-08-23. SQLite (separate columns) and
+	// IndexedDB (an array key) kept them apart, so the same processor meant different
+	// things per backend -- the divergence the seam exists to prevent.
+	const declaration = normalizeEntity({name: 'pair', id: ['x', 'y'], fields: {v: 'text'}});
+
+	it('refuses a NUL in an id value, naming the entity and the column', () => {
+		expect(() => entityKey(declaration, {x: 'a\u0000b', y: 'c'})).toThrow(/id column x contains a NUL/);
+		expect(() => entityKey(declaration, {x: 'a', y: 'b\u0000c'})).toThrow(/id column y contains a NUL/);
+	});
+
+	it('is the pair that used to collide, so neither can reach a backend now', () => {
+		// the point is that these two were EQUAL as strings; both are refused, so the
+		// collision is unreachable rather than merely unlikely
+		expect(() => entityKey(declaration, {x: 'a\u0000b', y: 'c'})).toThrow();
+		expect(() => entityKey(declaration, {x: 'a', y: 'b\u0000c'})).toThrow();
+	});
+
+	it('leaves every ordinary id value alone', () => {
+		// an address, a hash and a decimal: what an id actually is
+		expect(entityKey(declaration, {x: '0xabc', y: '42'})).toBe('pair\u00000xabc\u000042');
+		expect(entityKey(declaration, {x: 1, y: 2})).toBe('pair\u00001\u00002');
 	});
 });

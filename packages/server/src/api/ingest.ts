@@ -200,12 +200,49 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 				const resolved = resolveIndexer(options, c as never, 'ingest');
 				if (!resolved.ok) return resolved.response;
 
+				// The BYTE ceiling, stated rather than discovered, and only when this host
+				// knows one (`maxIngestBytes`; absent means unbounded, as it always was). The
+				// declared length is checked FIRST so an oversized body is refused without
+				// being buffered, which is the whole point on a runtime with a hard request
+				// limit; a body arriving without a `Content-Length` still gets the same answer
+				// below, one buffer later, because that is the earliest its size is known.
+				//
+				// The WHOLE batch is refused. Delivering the part that fits is the one thing
+				// ADR-0004 forbids: a short payload is read as an absence, concluded as a reorg
+				// and reverted. The sender lowers `toBlock` and re-sends.
+				const maxBytes = options.maxIngestBytes;
+				if (maxBytes !== undefined) {
+					const declared = Number(c.req.header('content-length'));
+					if (Number.isFinite(declared) && declared > maxBytes) {
+						return tooLarge(c as never, declared, maxBytes);
+					}
+				}
+
+				let body: string;
+				try {
+					body = await c.req.text();
+				} catch (err) {
+					return c.json(
+						{
+							success: false,
+							error: 'invalid-json',
+							message: err instanceof Error ? err.message : String(err),
+						} as const,
+						400,
+					);
+				}
+				if (maxBytes !== undefined) {
+					// the ACTUAL size, for a chunked body that declared none
+					const size = new TextEncoder().encode(body).length;
+					if (size > maxBytes) return tooLarge(c as never, size, maxBytes);
+				}
+
 				let batch: UntypedWireBatch;
 				try {
 					// parsed with the wire codec rather than `c.req.json()`: a decoded log's
 					// `args` carry a BigInt for every uint256 an ABI declares, and plain JSON
 					// has no way to say so
-					batch = parseWireBatch(await c.req.text());
+					batch = parseWireBatch(body);
 				} catch (err) {
 					return c.json(
 						{
@@ -288,6 +325,34 @@ function noReceiverFor(c: Context<{Bindings: Env}>, live: readonly LogIngestion[
 				`is pointed at the wrong named indexer.`,
 		} as const,
 		400,
+	);
+}
+
+/**
+ * A batch too large for this receiver to accept, refused with the ceiling NAMED.
+ *
+ * `413` because it is a fact about the REQUEST rather than about the stream: the
+ * batch may be perfectly well-formed and start exactly where the receiver expects.
+ * It is not a `409`, which is the one resumable refusal and means "re-send from
+ * this block"; here the sender must send a SMALLER RANGE from the same block, so
+ * conflating the two would have it skip the range it just failed to deliver.
+ *
+ * The limit is in the body so a sender learns the ceiling from the refusal rather
+ * than by bisecting against it.
+ */
+function tooLarge(c: Context<{Bindings: Env}>, size: number, limit: number) {
+	return c.json(
+		{
+			success: false,
+			error: 'batch-too-large',
+			message:
+				`this batch is ${size} bytes and this receiver accepts at most ${limit}. Nothing was read or folded. ` +
+				`Lower the range (toBlock) and re-send from the SAME fromBlock: a partial range would be read as an ` +
+				`absence, concluded as a reorg, and would revert state.`,
+			limit,
+			size,
+		} as const,
+		413,
 	);
 }
 

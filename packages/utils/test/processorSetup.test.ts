@@ -163,14 +163,25 @@ describe('resolveSource', () => {
 		expect(source).toEqual({chainId: '1', contracts: SAMPLE_CONTRACTS});
 	});
 
-	// Characterization of the original CLI/server behaviour: chainId is ONLY fetched inside the
-	// `contractsDataPerChain` branch, so a module exporting only `contractsData` never gets a chainId
-	// and therefore throws `no chainId found`. (Quirky, but preserved exactly.)
-	it('throws "no chainId found" when only contractsData is present (no contractsDataPerChain)', async () => {
+	// This USED to throw `no chainId found`, and was characterized as "quirky, but
+	// preserved exactly" when this resolver was extracted. It was not a quirk, it was a
+	// dead path: `contractsData` is documented as the per-chain map's fallback, and
+	// `--deployments` calls itself optional "where the processor module supplies its own
+	// contract data", so the supported shape always threw. It now asks the chain for the
+	// id it needs, which is the same one call the map's branch makes.
+	it('fetches the chainId for a module exporting only contractsData', async () => {
 		const provider = fakeProvider({chainIdHex: '0x1'});
 		const processorModule = {contractsData: SAMPLE_CONTRACTS};
-		await expect(resolveSource(processorModule, provider)).rejects.toThrow(/no chainId found/);
-		// chainId is never fetched in this path
+		const source = await resolveSource(processorModule, provider);
+		expect(source).toEqual({chainId: '1', contracts: SAMPLE_CONTRACTS});
+		expect(provider.request).toHaveBeenCalledWith({method: 'eth_chainId'});
+	});
+
+	it('asks the chain NOTHING when the module supplies no contract data at all', async () => {
+		// the refusal below is reached without a round trip: there is nothing to resolve,
+		// so a chain id would not help
+		const provider = fakeProvider({chainIdHex: '0x1'});
+		await expect(resolveSource({contractsData: undefined}, provider)).rejects.toThrow(/no chainId found/);
 		expect(provider.request).not.toHaveBeenCalled();
 	});
 

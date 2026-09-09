@@ -41,6 +41,34 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 * host holding several passes each name its own.
 	 */
 	getDB: (c: Context<{Bindings: Env}>) => RemoteSQL;
+	/**
+	 * The largest ingest body this deployment will ACCEPT, in bytes. Absent means
+	 * unbounded, which is what it has always been.
+	 *
+	 * A wire batch is bounded by BLOCK RANGE and by EVENT COUNT (`MAX_BLOCKS_PER_FETCH`,
+	 * `MAX_EVENTS_PER_FETCH`), and neither is a bound in bytes: an ABI with large
+	 * `bytes` arguments defeats a count at any setting, because the size of a decoded
+	 * batch is not known until it is built. So a receiver could be handed a body far
+	 * larger than it can hold, read ALL of it into memory before it could check
+	 * anything about it (`c.req.text()`), and fail with whatever its runtime does when
+	 * it runs out -- a ceiling DISCOVERED rather than stated.
+	 *
+	 * Set it where the ceiling is actually known. A Worker knows its own request
+	 * limit; a Node process does not have one, which is why this has no default: a
+	 * number invented here would either be a guess below somebody's working batch, or
+	 * high enough to be no bound at all. Nothing has measured what a decoded batch
+	 * costs per log for a realistic ABI, and this field is deliberately not the place
+	 * to pretend otherwise.
+	 *
+	 * When set, an oversized batch is refused with `413` naming the limit and the size,
+	 * so a sender learns the ceiling instead of hitting it. Refusing the WHOLE batch is
+	 * the only legal answer: ADR-0004 forbids delivering part of a range, since the
+	 * receiver reads a short payload as an absence, concludes a reorg and reverts
+	 * state. The sender's move is to lower `toBlock` and re-send, which is the same
+	 * mechanism the truncation guard already uses.
+	 */
+	maxIngestBytes?: number;
+
 	getEnv: (c: Context<{Bindings: Env}>) => Env;
 	/**
 	 * The NAME-KEYED REGISTRY of the named indexers this deployment hosts.

@@ -130,7 +130,12 @@ type Deployment = {
  * (ADR-0053): the entry carries the handle, so the routes that act on one named
  * indexer read through it and never through the host's `getDB`.
  */
-async function deploy(env: TestEnv = {INGEST_TOKEN: TOKEN}, names: string[] | null = [NAME]): Promise<Deployment> {
+async function deploy(
+	env: TestEnv = {INGEST_TOKEN: TOKEN},
+	names: string[] | null = [NAME],
+	/** Extra `ServerOptions` a host may set; `maxIngestBytes` is the one exercised below. */
+	extra: {maxIngestBytes?: number} = {},
+): Promise<Deployment> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
 	const hosted: Record<string, Hosted> = {};
 	const ingestions: Record<string, ReturnType<typeof singleContextEntry>> = {};
@@ -153,6 +158,7 @@ async function deploy(env: TestEnv = {INGEST_TOKEN: TOKEN}, names: string[] | nu
 		getEnv: () => env,
 		// the shipped helper, so what a host writes is what is under test here
 		...(names === null ? {} : {getIndexer: indexerRegistry(ingestions)}),
+		...extra,
 	});
 	// the fixed tables the counters live in; the entity tables are the store's own
 	// and it creates them on its first load
@@ -568,5 +574,56 @@ describe('the body must be a batch', () => {
 		const res = await post(deployment, batchOf(deployment, 100, 105, 105, [transfer(101, '0xa101', ALICE, id)]));
 		expect(res.status).toBe(200);
 		expect(await ownerOf(deployment, id.toString())).toBe(ALICE);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// THE BYTE CEILING (`maxIngestBytes`)
+// ---------------------------------------------------------------------------
+// A batch is bounded by BLOCK RANGE and by EVENT COUNT, and neither is a bound in
+// bytes: the size of a decoded batch is not known until it is built, so an ABI
+// with large `bytes` arguments defeats a count at any setting. Without a stated
+// ceiling a receiver read the whole body into memory before it could check
+// anything about it, and the limit was whatever its runtime happened to die at.
+//
+// The ceiling is OPTIONAL and has no default, because only a host knows one: a
+// Worker has a request limit, a Node process does not.
+describe('a batch larger than this receiver accepts', () => {
+	it('is refused with 413 naming the limit, and nothing is folded', async () => {
+		const deployment = await deploy({INGEST_TOKEN: TOKEN}, [NAME], {maxIngestBytes: 200});
+
+		const res = await post(deployment, batchOf(deployment, 100, 110, 110, [transfer(101, '0xa101', ALICE, 1n)]));
+
+		expect(res.status).toBe(413);
+		const body = (await res.json()) as {error: string; limit: number; size: number; message: string};
+		expect(body.error).toBe('batch-too-large');
+		// the ceiling is STATED, so a sender learns it instead of bisecting against it
+		expect(body.limit).toBe(200);
+		expect(body.size).toBeGreaterThan(200);
+		// and it says what to do: a SMALLER RANGE from the same block, never a partial one
+		expect(body.message).toMatch(/same fromBlock/i);
+
+		// Nothing was read or folded, shown by the RECOVERY the message prescribes
+		// actually working: the receiver still expects the SAME fromBlock, so re-sending
+		// the range smaller lands. (A moved cursor would answer 409 here instead, and an
+		// applied batch would have created the entity tables.)
+		const smaller = await post(deployment, batchOf(deployment, 100, 100, 110, []));
+		expect(smaller.status).toBe(200);
+	});
+
+	it('is NOT a 409, because a sender must not skip the range it failed to deliver', async () => {
+		// 409 is the one resumable refusal and means "re-send from THIS block". A batch
+		// that is merely too big starts exactly where the receiver expects, so answering
+		// 409 would hand back an expectation the sender has already met and it would
+		// advance past the range it never delivered.
+		const deployment = await deploy({INGEST_TOKEN: TOKEN}, [NAME], {maxIngestBytes: 200});
+		const res = await post(deployment, batchOf(deployment, 100, 110, 110, [transfer(101, '0xa101', ALICE, 1n)]));
+		expect(res.status).not.toBe(409);
+	});
+
+	it('accepts the same batch when the host states no ceiling, which is the default', async () => {
+		const deployment = await deploy();
+		const res = await post(deployment, batchOf(deployment, 100, 110, 110, [transfer(101, '0xa101', ALICE, 1n)]));
+		expect(res.status).toBe(200);
 	});
 });

@@ -201,9 +201,41 @@ export function idValues(entity: NormalizedEntity, id: EntityId): string[] {
 		if (value === undefined || value === null) {
 			throw new Error(`entity ${entity.name} requires an id column ${column}, got ${JSON.stringify(value)}`);
 		}
-		return String(value);
+		const text = String(value);
+		if (text.includes(SEPARATOR)) {
+			// Refused rather than escaped, because the damage is SILENT and permanent.
+			// `entityKey` joins these values with U+0000, and the memory and patch
+			// backends use that string as a map key, so for `id: ['x', 'y']` the keys
+			// {x: 'a\0b', y: 'c'} and {x: 'a', y: 'b\0c'} collapse to ONE row: the second
+			// write overwrites the first and both reads answer with it. The SQL backend
+			// keeps them apart (separate columns) and IndexedDB does too (an array key),
+			// so the same processor silently means different things per backend, which is
+			// the one thing the seam exists to prevent.
+			//
+			// A length-prefixed or escaped join would also close it, and was weighed: it
+			// changes every key string for data that has never had this problem, to keep
+			// admitting a value no chain produces (an id comes from event args, where a
+			// string is an address, a hash or a decimal). Refusing states the rule where
+			// the value arrives, beside the id-is-required refusal above.
+			throw new Error(
+				`entity ${entity.name} id column ${column} contains a NUL character (U+0000), which is the separator ` +
+					`this store keys rows with. Two different ids could not be told apart, so it is refused rather than ` +
+					`stored: ${JSON.stringify(text)}`,
+			);
+		}
+		return text;
 	});
 }
+
+/**
+ * The character `entityKey` joins an entity name and its id values with.
+ *
+ * U+0000 because no legitimate id value contains one: an id comes from decoded
+ * event args, so a string value is an address, a hash or a decimal. `idValues`
+ * REFUSES a value that does contain one, which is what makes the join safe to
+ * treat as unambiguous.
+ */
+const SEPARATOR = '\u0000';
 
 /**
  * A stable string for one entity instance, usable as a Map key.
@@ -213,5 +245,5 @@ export function idValues(entity: NormalizedEntity, id: EntityId): string[] {
  * key, and an extra property on the caller's object cannot fork it into two.
  */
 export function entityKey(entity: NormalizedEntity, id: EntityId): string {
-	return [entity.name, ...idValues(entity, id)].join('\u0000');
+	return [entity.name, ...idValues(entity, id)].join(SEPARATOR);
 }
