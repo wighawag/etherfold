@@ -22,10 +22,25 @@ describe('the worker host serves the same app as the node host', () => {
 
 	it('serves the same status shape the node adapter serves', async () => {
 		const body = (await (await fetchWorker('/status')).json()) as Record<string, unknown>;
-		// identical contract across hosts: the adapters differ in wiring only
-		expect(Object.keys(body).sort()).toEqual(
-			['database', 'healthy', 'lastError', 'reorgs', 'schema'].filter((k) => k in body).sort(),
-		);
+
+		// Asserted in TWO directions, because they fail differently and an earlier version
+		// of this test could only catch one. It compared the body's keys against a list
+		// `.filter((k) => k in body)`, which derives the expectation FROM the body: a field
+		// the host stopped reporting vanished from both sides and the test stayed green.
+		// (An ADDED key did fail it, so the hole was one-directional.)
+		//
+		// The contract cannot simply be an equality either, because `/status` OMITS a field
+		// it has no wiring for rather than sending a null: `reorgs`, `cursor` and `fetcher`
+		// depend on what the host injected, and `lastError` appears only once something has
+		// failed. This worker injects none of them, which is what the case above pins.
+		const CONTRACT = ['cursor', 'database', 'fetcher', 'healthy', 'lastError', 'reorgs', 'schema'];
+		const ALWAYS = ['database', 'healthy', 'schema'];
+
+		// nothing outside the contract: a host may not invent a field
+		expect(Object.keys(body).filter((k) => !CONTRACT.includes(k))).toEqual([]);
+		// and nothing unconditional missing: this is the direction that used to slip through
+		expect(ALWAYS.filter((k) => !(k in body))).toEqual([]);
+
 		expect(body).toHaveProperty('schema.expected');
 	});
 });
