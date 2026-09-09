@@ -24,7 +24,7 @@ source: 'measured by docs/spikes/replay-parse-cost/ (capture-full.mjs, measure.t
 > here unchanged and still load-bearing: consequence 1 (raw-only storage does not ADD replay decode
 > cost, because `reparse` re-derives either way) and consequence 3's size figures.
 
-> This finding is REQUIRED rather than optional: `work/specs/proposed/the-stream-stores-only-what-the-node-said.md` proposes storing the RAW half only so a replay pays decode-on-read, warns that "no task should quote a figure without re-measuring", and — until this spike — had NO measurement of the cost it was proposing to pay on every replay. Nothing else in the repo held one: the committed conformance fixture omits `data`/`topics` (nothing to decode), and the sqlite-in-the-browser spike timed `fetch+parse-fixture` (JSON.parse), not ABI decoding. This is the number its tasking and its acceptance thinking should read.
+> This finding is REQUIRED rather than optional: `work/specs/tasked/the-stream-stores-only-what-the-node-said.md` proposes storing the RAW half only so a replay pays decode-on-read, warns that "no task should quote a figure without re-measuring", and — until this spike — had NO measurement of the cost it was proposing to pay on every replay. Nothing else in the repo held one: the committed conformance fixture omits `data`/`topics` (nothing to decode), and the sqlite-in-the-browser spike timed `fetch+parse-fixture` (JSON.parse), not ABI decoding. This is the number its tasking and its acceptance thinking should read.
 
 **Decode is the DOMINANT term of a processor-change reindex from the stored stream — not a rounding
 error next to the re-processing.** For the launched stratagems game on Base (31,330 events, 1,040

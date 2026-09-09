@@ -12,7 +12,7 @@ taskedAfter: [historical-state-database, a-reconfigure-is-not-an-outage]
 
 > Split out of `historical-state-database` at tasking time. That spec's user stories cover state queries, the ingestion wire and running serverlessly. The scope here (storing the log stream and serving it as a feed) arrived later, via `docs/adr/0006`, and is not covered by any of its stories. Tasking is atomic per spec, so this scope becomes its own spec rather than being smuggled into that one.
 
-> **NARROWED: the REBUILD is no longer here.** Stories 9-11 moved to `work/specs/proposed/the-server-and-cli-hold-generations-too.md`, which supersedes them (see the note where they were). This spec owns the STORAGE and the FEED and nothing about upgrades; that spec is `taskedAfter` this one because it consumes the table this one creates.
+> **NARROWED: the REBUILD is no longer here.** Stories 9-11 moved to `work/specs/tasked/the-server-and-cli-hold-generations-too.md`, which supersedes them (see the note where they were). This spec owns the STORAGE and the FEED and nothing about upgrades; that spec is `taskedAfter` this one because it consumes the table this one creates.
 
 ## Problem Statement
 
@@ -36,7 +36,7 @@ Because the stream is stored locally and keyed independently of the processor ve
 6. As an operator, I want the stream stored append-only with superseded rows flagged, so that no retraction information is ever destroyed and the canonical view stays a cheap derived read.
 7. As an operator, I want optional pair-compaction (dropping a retracted entry together with its retraction, far below finality) as an off-by-default config, so that noise can be reclaimed deliberately and never by accident.
 8. As an operator, I want the log table's `address` and `topic0..topic3` stored as indexed columns, so that a node-compatible `eth_getLogs` API is possible later without migrating the whole table.
-> **Stories 9, 10 and 11 MOVED to `work/specs/proposed/the-server-and-cli-hold-generations-too.md`**, which supersedes them. They described ADR-0008's blue-green rebuild: replay into a new namespace keyed by the processor version hash, flip a pointer, DROP the old. That shape is now a special case of the GENERATION model (`a-reconfigure-is-not-an-outage`), and it is too narrow in two ways that matter here: keyed by the processor hash alone it cannot express a FILTER change, and dropping the old namespace at the flip is what makes a revert impossible. Building it and then replacing it would be paying twice, so the boundary moved rather than the work being duplicated. What this spec still OWES that one is the table underneath it, which is why it is `taskedAfter` this.
+> **Stories 9, 10 and 11 MOVED to `work/specs/tasked/the-server-and-cli-hold-generations-too.md`**, which supersedes them. They described ADR-0008's blue-green rebuild: replay into a new namespace keyed by the processor version hash, flip a pointer, DROP the old. That shape is now a special case of the GENERATION model (`a-reconfigure-is-not-an-outage`), and it is too narrow in two ways that matter here: keyed by the processor hash alone it cannot express a FILTER change, and dropping the old namespace at the flip is what makes a revert impossible. Building it and then replacing it would be paying twice, so the boundary moved rather than the work being duplicated. What this spec still OWES that one is the table underneath it, which is why it is `taskedAfter` this.
 
 ## Implementation Decisions
 
@@ -61,7 +61,7 @@ Because the stream is stored locally and keyed independently of the processor ve
 - The state store, the ingestion wire and the host adapters, all covered by `historical-state-database`.
 - **Rebuilding state on a processor or source change**, and everything the GENERATION model implies
   (holding several generations, the canonical pointer, moving it back, the caps). That is
-  `work/specs/proposed/the-server-and-cli-hold-generations-too.md`, which absorbed stories 9-11 and
+  `work/specs/tasked/the-server-and-cli-hold-generations-too.md`, which absorbed stories 9-11 and
   is `taskedAfter` this spec. This spec owes it the table and the feed and nothing else.
 - The `eth_getLogs` API itself (`work/specs/proposed/node-log-api.md`); this spec only owes it the schema it depends on.
 - Trigger evaluation and delivery, which live entirely outside the indexer-server (`docs/adr/0005`).

@@ -1,6 +1,6 @@
 # Spike: what does a generation cost in browser storage, and is a quota failure atomic?
 
-Evidence for [`work/notes/findings/browser-storage-headroom-for-generations.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/browser-storage-headroom-for-generations.md), which is where the conclusions live. Spec whose open questions this answers: `work/specs/proposed/a-reconfigure-is-not-an-outage.md` (the `maxGenerations` cap, and the atomic segment-plus-cursor commit).
+Evidence for [`work/notes/findings/browser-storage-headroom-for-generations.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/browser-storage-headroom-for-generations.md), which is where the conclusions live. Spec whose open questions this answers: `work/specs/tasked/a-reconfigure-is-not-an-outage.md` (the `maxGenerations` cap, and the atomic segment-plus-cursor commit).
 
 ## The three questions
 

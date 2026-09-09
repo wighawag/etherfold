@@ -196,7 +196,7 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
  * whole reason it is a separate object from `IndexerGeneration`: that class opens
  * `load()` with `eth_chainId`, so the half of a split deployment that hosts the
  * processor cannot use it (recorded in
- * `work/notes/observations/indexer-load-needs-a-chain-so-the-server-half-cannot-call-it.md`).
+ * `indexer-load-needs-a-chain-so-the-server-half-cannot-call-it`).
  *
  * ## Why the cursor is read on every call and never cached
  *

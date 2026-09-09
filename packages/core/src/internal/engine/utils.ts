@@ -727,7 +727,7 @@ export type InvalidationReason = 'stream-config' | 'entry-changed' | 'entry-adde
  * actually needs re-fetching. Collapsing this into a bare boolean, or burying
  * "re-index from the start block" inside the comparison, would make that a
  * rewrite instead of a refinement. See
- * `work/notes/ideas/a-stream-branches-instead-of-being-discarded.md`.
+ * `work/notes/ideas/stream-grafting-what-we-established.md`.
  */
 export type InvalidationVerdict =
 	| {valid: true}

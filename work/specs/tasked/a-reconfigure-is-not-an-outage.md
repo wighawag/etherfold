@@ -125,7 +125,7 @@ The ten tasks, in dependency order:
 a named deliverer and that is deliberate: it is the dependency under stories 1, 3, 13 and 14, whose
 observable behaviour task 9 delivers.
 
-**Seeding is SPLIT OUT** to `work/specs/proposed/a-generation-can-be-seeded-from-a-published-artifact.md`
+**Seeding is SPLIT OUT** to `work/specs/tasked/a-generation-can-be-seeded-from-a-published-artifact.md`
 — it needs a remote captured-stream loader and a decision about the publishing side, neither of which
 exists. All this spec owes it is that creating a generation takes its starting stream as an INPUT, which
 is an acceptance criterion on task 2.

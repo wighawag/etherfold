@@ -115,7 +115,7 @@ spike vocabulary and do not let a spike become the implementation.
   produces one; the publishing pipeline is
   `work/notes/ideas/publishing-snapshots-of-versioned-state.md`.
 - **Snapshot verification**, to the extent it is already owned by
-  `work/tasks/backlog/a-snapshot-a-client-cannot-read-is-refused-not-installed.md`. Story 3 decides
+  `work/tasks/done/a-snapshot-a-client-cannot-read-is-refused-not-installed.md`. Story 3 decides
   what a STREAM seed needs; it does not re-decide the snapshot's.
 
 ## Further Notes

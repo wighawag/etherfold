@@ -23,7 +23,7 @@ const KEY = 'lastSync';
  * BEHIND the state wedges the indexer: the restart replays a block the store
  * already holds and `applyBlock` refuses it, correctly, as the caller bug it
  * normally is, so no amount of restarting clears it
- * (`work/notes/observations/sync-cursor-write-is-not-atomic-with-the-block-it-describes.md`,
+ * (`sync-cursor-write-is-not-atomic-with-the-block-it-describes`,
  * now deleted because it stopped being true). A cursor left AHEAD is worse and
  * quieter: the restart skips a block nothing ever applied, and the state is
  * simply missing it with nothing to say so.

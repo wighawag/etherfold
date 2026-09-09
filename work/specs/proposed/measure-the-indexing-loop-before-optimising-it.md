@@ -55,7 +55,7 @@ The reason this is an EXPLORATION rather than a build spec is the shape of its d
 
 ## Out of Scope
 
-- **Every actual optimisation.** They are `work/specs/proposed/the-fetcher-reads-the-hints-providers-already-send.md` (which is independent of this measurement and need not wait for it) and `work/specs/proposed/the-fold-packs-blocks-into-round-trips.md` (which does wait, via `taskedAfter`).
+- **Every actual optimisation.** They are `work/specs/tasked/the-fetcher-reads-the-hints-providers-already-send.md` (which is independent of this measurement and need not wait for it) and `work/specs/proposed/the-fold-packs-blocks-into-round-trips.md` (which does wait, via `taskedAfter`).
 - **Swapping to a faster log source** (HyperRPC, HyperSync, a bulk archive). Story 5 makes the experiment cheap by making the endpoint an axis, but choosing a source has a correctness surface of its own (ADR-0004's absence inference against a source that may lag the tip or truncate silently) and belongs in its own spec.
 - **A CI regression gate on wall-clock.** ADR-0032 already establishes that the acceptance gate does not assume an idle machine, so the harness reports numbers a human compares. Only correctness assertions gate.
 

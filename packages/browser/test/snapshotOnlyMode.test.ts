@@ -97,7 +97,7 @@ const SNAPSHOT_TIP = 102;
  * depth, so every case here would have been refused the moment the client
  * started passing `finalityDepth`. The guard was therefore never exercised, and
  * the mode this file documents omitted half of ADR-0028's two-sided defence
- * (`work/notes/observations/the-snapshot-only-mode-test-never-exercises-the-inside-reorg-window-guard.md`).
+ * (`the-snapshot-only-mode-test-never-exercises-the-inside-reorg-window-guard`).
  */
 const PUBLISHER_OBSERVED_TIP = SNAPSHOT_TIP + FINALITY;
 

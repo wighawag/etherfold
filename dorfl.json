@@ -1,7 +1,7 @@
 {
 	"dorflCmd": "node_modules/.bin/dorfl",
 	"prepare": "pnpm install",
-	"verify": "pnpm format:check && pnpm check:adr && { [ \"$GITHUB_HEAD_REF\" = \"changeset-release/main\" ] && echo 'skip changeset status on the Version PR (it consumes changesets)' || pnpm changeset status --since=main; } && pnpm build && pnpm typecheck && pnpm test",
+	"verify": "pnpm format:check && pnpm check:adr && pnpm check:refs && { [ \"$GITHUB_HEAD_REF\" = \"changeset-release/main\" ] && echo 'skip changeset status on the Version PR (it consumes changesets)' || pnpm changeset status --since=main; } && pnpm build && pnpm typecheck && pnpm test",
 	"harness": "pi",
 	"autoBuild": false,
 	"autoTask": false,

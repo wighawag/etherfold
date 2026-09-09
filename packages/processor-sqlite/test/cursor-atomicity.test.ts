@@ -25,7 +25,7 @@ import {finality, lastSync, processor, SOURCE, transfer, type TestABI} from './u
  * subsequent start, and no amount of restarting cleared it.
  *
  * That was
- * `work/notes/observations/sync-cursor-write-is-not-atomic-with-the-block-it-describes.md`,
+ * `sync-cursor-write-is-not-atomic-with-the-block-it-describes`,
  * deleted with this change because it stopped being true.
  *
  * ## Why the fix has to be per BLOCK and not per `process` call

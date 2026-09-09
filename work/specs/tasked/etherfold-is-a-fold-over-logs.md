@@ -64,7 +64,7 @@ Launched with three policy questions and `needsAnswers: true`; all three are ans
 
 - **Any replacement for transaction data.** Named as removed, not migrated. The `extra` / prefetch sketch in `indexer.ts` is a different mechanism with different problems (it versions the stream and a version bump means re-indexing from scratch) and is not opened here.
 - **The receipt-based path** that would recover bloom-omitted logs. It is a per-transaction cost, which is the thing this spec exists to remove.
-- **The `eth_chainId` and `eth_blockNumber` calls.** They are identity and tip, not data, and `work/specs/proposed/the-indexing-loop-is-round-trip-bound.md` owns whether they can be reduced.
+- **The `eth_chainId` and `eth_blockNumber` calls.** They are identity and tip, not data, and `work/specs/dropped/the-indexing-loop-is-round-trip-bound.md` owns whether they can be reduced.
 - **Making the fetcher smarter about range caps.** Same neighbouring spec, informed by the same finding.
 
 ## Further Notes

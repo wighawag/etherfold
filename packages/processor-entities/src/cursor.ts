@@ -103,7 +103,7 @@ export function parseStoredCursor<ABI extends Abi>(stored: string | undefined): 
  * the cursor ahead of the state: a crash there and the restart resumes past
  * blocks nothing ever applied, silently. Writing it only with the LAST block puts
  * the cursor behind the state for the whole of the run, and that is the wedge
- * `work/notes/observations/sync-cursor-write-is-not-atomic-with-the-block-it-describes.md`
+ * `sync-cursor-write-is-not-atomic-with-the-block-it-describes`
  * recorded -- the restart replays a block the store already holds, `applyBlock`
  * refuses it as the caller bug it normally is, and no number of restarts clears
  * it.

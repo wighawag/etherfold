@@ -10,7 +10,7 @@ The published packages move from the flat `ethereum-indexer-*` prefix to the **`
 
 ## Why a scope
 
-The flat prefix has run out of room in the one place it matters. `ethereum-indexer-server` is taken by the Koa/PouchDB server that ADR-0010 puts on a retirement path, while the indexer-server that ADR-0003 describes is the thing that actually deserves the name. `work/tasks/backlog/agnostic-server-skeleton.md` escalated that to a human as an open question and listed three options, all of them bad: a temporary name meaning two renames, a permanent second-choice name, or taking the name and breaking existing consumers immediately.
+The flat prefix has run out of room in the one place it matters. `ethereum-indexer-server` is taken by the Koa/PouchDB server that ADR-0010 puts on a retirement path, while the indexer-server that ADR-0003 describes is the thing that actually deserves the name. `work/tasks/done/agnostic-server-skeleton.md` escalated that to a human as an open question and listed three options, all of them bad: a temporary name meaning two renames, a permanent second-choice name, or taking the name and breaking existing consumers immediately.
 
 A scope dissolves it, because `@ethereum-indexer/server` is a fresh namespace: the new server takes the obvious name while `ethereum-indexer-server` keeps working untouched until it is deprecated. That is not a cosmetic gain. It converts a forced choice between "break consumers now" and "rename twice" into no choice at all, and it does the same for every future name the flat prefix has already spent.
 

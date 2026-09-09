@@ -130,7 +130,7 @@ function openingFoldIn(db: RemoteSQL) {
  * database, and that form is asserted over a real shared handle in
  * `packages/cli/test/aChangedContextCreatesASuccessor.test.ts`. It is not
  * reachable through `VersionedStateEventProcessor`, whose options carry no
- * namespace (`work/notes/observations/the-sqlite-processor-convenience-cannot-take-a-table-namespace.md`),
+ * namespace (`the-sqlite-processor-convenience-cannot-take-a-table-namespace`),
  * and it is not what THIS file is the guard for: a successor here exists to be
  * COUNTED by a cap and RECORDED in a registry, and both of those live in the
  * named indexer's own database either way.

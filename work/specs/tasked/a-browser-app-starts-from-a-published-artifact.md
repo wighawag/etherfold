@@ -279,7 +279,7 @@ should not be built yet. Each says which.
   INDEPENDENT of the host serving it, and the named answer for a third-party mirror or an untrusted
   gateway. Not built: no key distribution or rotation exists here (ADR-0066).
 - **The `readOnlyStream` self-clear defect**
-  (`work/notes/observations/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view.md`).
+  (`a-follower-can-self-clear-the-writers-stream-through-the-read-only-view`).
   Reachable only by a snapshot-seeded generation that ALSO keeps a stream, which this spec recommends
   against on independent grounds; fixing it is a design call with three candidate shapes and belongs
   to `readOnlyStream`/ADR-0044, not here.

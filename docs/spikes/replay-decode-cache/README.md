@@ -2,7 +2,7 @@
 
 **Should the stream be able to SKIP decoding on a processor-change replay, by caching the decoded
 `args` under a decode identity? Or should it store the raw log only, as
-`work/specs/proposed/the-stream-stores-only-what-the-node-said.md` proposes, and pay the decode
+`work/specs/tasked/the-stream-stores-only-what-the-node-said.md` proposes, and pay the decode
 every time?**
 
 A decision memo. **Recommendation: neither A nor B as posed. Land the held spec unchanged, and

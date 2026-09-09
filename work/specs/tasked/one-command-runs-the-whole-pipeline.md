@@ -367,8 +367,8 @@ the tasks this spec emits.
 **The rename has to propagate, and these are the artifacts that still carry the old meanings.** Name
 an owner for each before tasking, since three of them are live:
 
-- `work/tasks/backlog/index-to-a-store-from-the-cli.md` — `index` throughout, in the folding sense;
-- `work/tasks/backlog/retire-the-js-object-processor-path.md` — twice, and its ordering argument
+- `work/tasks/done/index-to-a-store-from-the-cli.md` — `index` throughout, in the folding sense;
+- `work/tasks/done/retire-the-js-object-processor-path.md` — twice, and its ordering argument
   depends on which command carries the `keepState` refusal;
 - `CONTEXT.md`, "What must work FIRST" — corrected in the same change as this spec; its first bullet
   described the all-in-one as `serve`, which is now the read-only tier;
@@ -399,7 +399,7 @@ declared to be "one emitted task's to OWN rather than a side effect of another",
 
 **Both host adapters are already built** (`agnostic-server-skeleton`, in `tasks/done/`). What is not
 built is D1's per-request limits reaching the store's batch bounds, which was blocked on the server
-having no store dependency and is now `work/tasks/backlog/d1-limits-reach-the-stores-batch-bounds.md`
+having no store dependency and is now `work/tasks/done/d1-limits-reach-the-stores-batch-bounds.md`
 (the re-minted forward half of the cancelled `server-platform-adapters`). `run` is the first thing
 that wires a store into a server process, so that work becomes reachable here; it is not this spec's
 to deliver, but the seam it was waiting for is the one this spec creates. It is not merely tidy

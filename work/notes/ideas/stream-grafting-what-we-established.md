@@ -10,7 +10,7 @@ slug: stream-grafting-what-we-established
 >
 > **The chosen design is NOT the one recorded below.** Option D (two labels in one stream) was chosen,
 > specced, reviewed four times, and then REPLACED. What is built is
-> `work/specs/proposed/a-reconfigure-is-not-an-outage.md`: N generations, each with its own stream
+> `work/specs/tasked/a-reconfigure-is-not-an-outage.md`: N generations, each with its own stream
 > keyed by its FETCH FILTER, and a canonical pointer. Two reasons it replaced D, both recorded here so
 > the argument is not had again:
 >

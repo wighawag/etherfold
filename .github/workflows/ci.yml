@@ -53,6 +53,12 @@ jobs:
       - name: Check ADR numbering
         run: pnpm check:adr
 
+      # A spec moving proposed -> tasked, or a task moving to done, is the workflow
+      # working; it also breaks every citation of the old path, and nothing else in
+      # this gate reads a path written in prose.
+      - name: Check work/ references resolve
+        run: pnpm check:refs
+
       # `prepare` already built during install; this re-runs it explicitly so a
       # build failure is attributed to the build rather than to installation.
       - name: Build packages and platforms

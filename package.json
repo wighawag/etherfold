@@ -30,6 +30,7 @@
     "format:check": "prettier --check .",
     "------- CHECK (in the acceptance gate: an ADR number is a stable reference, so two ADRs may not claim one) -------": "",
     "check:adr": "node scripts/check-adr-numbers.mjs",
+    "check:refs": "node scripts/check-work-refs.mjs",
     "---------------------- DEV ----------------------": "",
     "dev": "ldenv pnpm --filter './packages/*' --filter './platforms/*' dev",
     "---------------------- TEST ----------------------": "",

@@ -14,7 +14,7 @@ import type {EntityDeclaration} from '../src/index.js';
  * IndexedDB backends. `CREATE TABLE IF NOT EXISTS "Token"` matched the existing
  * `token` and was silently SKIPPED, after which `getCurrent('Token', ...)`
  * answered with `token`'s row
- * (`work/notes/observations/entity-names-differing-only-in-case-collide-on-sqlite.md`).
+ * (`entity-names-differing-only-in-case-collide-on-sqlite`).
  *
  * No DDL makes the two engines agree, so the answer cannot be a backend's: the
  * declaration is refused, everywhere, where it was written. That is why THIS

@@ -79,7 +79,7 @@ A first-class `onDrift: 'report' | 'refuse' | 'rebuild'` config would be tidier 
 
 The catch is the interesting part, and it is the same one that runs through this whole note: **"did an `Approval` occur below the cursor?" is unknowable to the indexer**, because `Approval` was not in the ABI, so its logs were never fetched. The indexer cannot distinguish "there were none" from "we never asked".
 
-Which means this does not stand alone. It is the processor-side half of exactly the question `work/tasks/ready/an-appended-abi-version-does-not-force-a-reindex.md` answers on the source side, and the two compose: the boundary block says "`Approval` could not have occurred before B", the handler map says "`onTransfer` is unchanged", so the state is adopted. Neither half is sufficient alone.
+Which means this does not stand alone. It is the processor-side half of exactly the question `work/tasks/done/abi-versions-are-block-ranged.md` answers on the source side, and the two compose: the boundary block says "`Approval` could not have occurred before B", the handler map says "`onTransfer` is unchanged", so the state is adopted. Neither half is sufficient alone.
 
 Costs: a per-handler map in the cursor (it rides in `ContextIdentifier`, which every persistence path already round-trips whole), and no help at all with the closure hole or with minification, so it still wants the dev/prod split above.
 

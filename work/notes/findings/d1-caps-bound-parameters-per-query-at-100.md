@@ -73,7 +73,7 @@ source. **This note is the only home for those specifics, which is why it must n
 those defaults stand.**
 
 What remains undelivered is the other half: a HOST adapter stating its own backend's limits and
-passing `{bounds}`, which is `work/tasks/backlog/d1-limits-reach-the-stores-batch-bounds.md`. A host
+passing `{bounds}`, which is `work/tasks/done/d1-limits-reach-the-stores-batch-bounds.md`. A host
 is the one place allowed to name its backend, so a Paid-tier deployment raises
 `maxStatementsPerBatch` there rather than everyone paying the Free tier's price forever.
 

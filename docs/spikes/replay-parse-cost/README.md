@@ -3,7 +3,7 @@
 **What does DECODING cost on a replay from the stored stream, next to the read and the
 re-processing a replay also pays? And what does the stored decoded half actually weigh?**
 
-Asked by `work/specs/proposed/the-stream-stores-only-what-the-node-said.md`, which would store
+Asked by `work/specs/tasked/the-stream-stores-only-what-the-node-said.md`, which would store
 the RAW half only, so a replay after a processor change pays decode-on-read (`reparse`) instead of
 trusting stored `args`. Nothing in the repo had measured it: the committed conformance fixture omits
 `data`/`topics` (nothing to decode), and the sqlite-in-the-browser spike timed `fetch+parse-fixture`
