@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # Store the emission stream, derive the canonical view
 
 The indexer-server stores the **emission stream**: the append-only sequence the stream-builder already produces, retractions included, one row per emitted log with its own `seq`. A reorg appends the `removed` rows and flags the superseded originals as dead. Two views are then served over that one table: the full `seq`-ordered stream (retraction-aware, for real-time consumers) and a canonical view (`WHERE alive AND blockNumber <= gate`, ordered by `(blockNumber, logIndex)`, for consumers that never want to hear the word reorg). We chose to store the emission form because it is what the code already computes, so persisting it is zero derivation, while the canonical view is cheaply derived from it and not the reverse.

@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A ROLLING seed is trusted by the HOST its build names, not by a hash the build cannot know
 
 Supersedes ADR-0065 on its trust anchor and on the byte domain of its content hash. Everything else in that ADR stands unchanged: why a stream seed needs more defence than a snapshot, the checks that run before the first write, refusal as data, and the omission residue.

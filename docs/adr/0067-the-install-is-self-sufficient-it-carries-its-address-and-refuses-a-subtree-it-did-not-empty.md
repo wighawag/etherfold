@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # The install is SELF-SUFFICIENT: it carries the address it writes to, and refuses any subtree it did not find empty
 
 Two rules, one principle. An install must not depend on AMBIENT STATE it cannot verify:

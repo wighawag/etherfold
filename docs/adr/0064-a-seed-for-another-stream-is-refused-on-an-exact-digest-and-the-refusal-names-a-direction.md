@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A seed for another stream is REFUSED on an exact digest, and the refusal names a DIRECTION
 
 A published stream seed is admitted only when the stream digest the client computes for ITSELF equals the digest of the stream the publisher captured. Anything else is refused, before a single event is written, and the refusal is returned as DATA carrying which WAY the two disagree so an application can say something true to a user.
