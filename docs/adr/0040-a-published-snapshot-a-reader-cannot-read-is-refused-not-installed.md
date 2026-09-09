@@ -1,4 +1,14 @@
+---
+status: superseded in part by ADR-0037
+---
+
 # A published blob snapshot's format number lives in `@etherfold/core` beside its codec, and a client that cannot read the file refuses that mirror
+
+> **Which half is retired, because only one of them is.** The MECHANISM is gone: ADR-0037 retired the free-form JS-object path, and the blob snapshot envelope this ADR put a format number on went with it. `BLOB_SNAPSHOT_FORMAT` and `isReadableBlobSnapshot` no longer exist in `@etherfold/core`; the only surviving mention of either is a doc-comment in `packages/state-store/src/snapshot.ts`, which explains why the ENTITY envelope's constant keeps its qualified name now that it is the only format number left.
+>
+> The STANCE is untouched, and it is the half that gets cited: **an artifact a client cannot read is REFUSED rather than installed, and the refusal is returned as DATA a host acts on rather than thrown.** ADR-0064 builds its seed-refusal rule on it ("following ADR-0040's refused-not-installed stance") and rejects throwing on the ground that it "contradicts ADR-0040"; ADR-0065 calls it "the stance ADR-0040 settled"; and the shape it names, `bootstrapFromSnapshot`'s `NotBootstrappedReason`, is still the vocabulary those refusals use. The filename says the stance rather than the mechanism, which is why it still reads true.
+>
+> So: read this ADR for the rule, and do not go looking for the symbols.
 
 The free-form path's snapshot file has ONE writer (`@etherfold/cli`'s keeper) and TWO readers (the CLI itself, and `keepStateOnIndexedDB` in `@etherfold/browser`, which downloads it to hydrate a tab). The format number that says which BigInt convention the bytes are in used to live with the writer, where the browser could not import it — the browser package must stay bundleable for a tab (`bundlesForABrowser.test.ts`), and the CLI is a node deployable — so the CLI refused a format-1 file locally while the browser installed the same bytes, and, with ADR-0029 having removed every fallback reviver, every `uint256` in `lastSync.unconfirmedBlocks[].events[].args` arrived as the string `"123n"` instead of a BigInt. The client then indexed on top of silently mistyped state: the exact plausible-wrong-answer failure the tagged codec exists to prevent, arriving through the one door left unwatched.
 

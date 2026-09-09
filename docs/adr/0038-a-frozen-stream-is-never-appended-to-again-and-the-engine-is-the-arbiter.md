@@ -1,6 +1,6 @@
 # A frozen stream is never appended to again, and the ENGINE is the arbiter of that
 
-The cached stream is written BEFORE the processor runs and a batch that was not written is not processed, so the cache cannot fall behind the state — except in the one case where it is allowed to: after a bounded run of failed writes the cache is FROZEN and indexing carries on without it, because an optional cache must never wedge the indexer. We decided that a frozen stream is then **never appended to again in that lineage**, and that the decision is made in `EthereumIndexer` by comparing the stored stream's cursor with the state's, rather than by the keeper's forward-jump guard.
+The cached stream is written BEFORE the processor runs and a batch that was not written is not processed, so the cache cannot fall behind the state — except in the one case where it is allowed to: after a bounded run of failed writes the cache is FROZEN and indexing carries on without it, because an optional cache must never wedge the indexer. We decided that a frozen stream is then **never appended to again in that lineage**, and that the decision is made in `IndexerGeneration` by comparing the stored stream's cursor with the state's, rather than by the keeper's forward-jump guard.
 
 ## Why the keeper cannot decide this
 
