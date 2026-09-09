@@ -61,6 +61,6 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"cli": "node ./dist/cli.js",
-		"test:manual": "ldenv -m localhost node ./dist/cli.js -p ../../../../../wighawag/jolly-roger/indexer/dist/index.js -n @@RPC_URL_:DEPLOYMENT_CONTEXT,RPC_URL -f output.json -d ../../../../wighawag/jolly-roger/contracts/deployments/@@DEPLOYMENT_CONTEXT @@"
+		"test:manual": "ldenv -m localhost node ./dist/cli.js build -p ../../../../../wighawag/jolly-roger/indexer/dist/index.js -n @@RPC_URL_:DEPLOYMENT_CONTEXT,RPC_URL -d ../../../../wighawag/jolly-roger/contracts/deployments/@@DEPLOYMENT_CONTEXT --store sqlite --db file:./test-manual.db @@"
 	}
 }
