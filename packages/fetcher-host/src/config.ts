@@ -125,7 +125,7 @@ export type FetcherHostConfig<ABI extends Abi> = {
 	 *   narrows the range and therefore lowers `toBlock` -- the one legal way to
 	 *   make a payload smaller (ADR-0004 forbids sending part of a range outright).
 	 *   It bounds the batch by EVENT COUNT, which is a proxy for bytes and not a
-	 *   bound on them. See `work/notes/observations/nothing-bounds-the-size-of-an-ingest-batch.md`.
+	 *   bound on them. See `nothing-bounds-the-size-of-an-ingest-batch (discharged; `ServerOptions.maxIngestBytes` is the receiving half)`.
 	 */
 	maxEventsPerFetch: number;
 	/**

@@ -19,7 +19,7 @@
  * `fake-indexeddb`, so the address arithmetic, the segment writes and the cursor
  * record are the shipped ones. The TIMINGS it prints are worthless and are
  * labelled as such: `fake-indexeddb` is a shim whose write cost is known to grow
- * quadratically (`work/notes/observations/fake-indexeddb-write-cost-grows-quadratically.md`),
+ * quadratically (`fake-indexeddb-write-cost-grows-quadratically`),
  * and cost in a real browser is the next task's whole subject. What this spike
  * establishes is CORRECTNESS of the seam, not its price.
  */

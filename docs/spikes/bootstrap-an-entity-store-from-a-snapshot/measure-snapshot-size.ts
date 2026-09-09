@@ -55,23 +55,45 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RESULTS = path.join(HERE, 'results');
 
 /**
- * The `"123n"` convention the storage adapters wrote WHEN THIS RAN, kept as it
- * was so the committed numbers stay reproducible.
+ * The `"123n"` convention the storage adapters wrote when this FIRST ran, kept
+ * so the originally committed numbers stay reproducible.
  *
- * The adapters have since moved to the tagged form (`{__bigint__: "123"}`,
- * `docs/spikes/tagged-bigint-codec-across-storage-adapters/`), which is more
- * verbose, so a re-measurement today would come out LARGER. That matters to
- * anyone quoting these bytes as current rather than as of the measurement;
- * `work/notes/observations/snapshot-size-measured-under-the-retired-bigint-encoding.md`
- * carries the signal.
+ * The adapters have since moved to the tagged form below. Both are measured now,
+ * rather than one replacing the other: the `suffix` figures are what the earlier
+ * `results/` and anything quoting them (ADR-0028) refer to, and the `tagged`
+ * figures are what the repo actually writes today.
  */
 function bnReplacer(_key: string, value: unknown): unknown {
 	return typeof value === 'bigint' ? `${value}n` : value;
 }
 
-function sizes(value: unknown): {bytes: number; gzipped: number} {
-	const text = JSON.stringify(value, bnReplacer);
+/**
+ * The TAGGED convention every storage adapter writes today
+ * (`docs/spikes/tagged-bigint-codec-across-storage-adapters/`).
+ *
+ * It is more verbose per value, so the raw bytes must come out larger. Whether
+ * that survives GZIP was the open question, and it is worth measuring rather
+ * than assuming either way: the tag is a fixed string repeated once per BigInt,
+ * which is the most compressible thing there is.
+ */
+function taggedReplacer(_key: string, value: unknown): unknown {
+	return typeof value === 'bigint' ? {__bigint__: `${value}`} : value;
+}
+
+type Sizes = {bytes: number; gzipped: number};
+
+function sizesWith(value: unknown, replacer: (key: string, value: unknown) => unknown): Sizes {
+	const text = JSON.stringify(value, replacer);
 	return {bytes: Buffer.byteLength(text), gzipped: gzipSync(Buffer.from(text), {level: 9}).length};
+}
+
+/** Both encodings, so a reader can see which number they are quoting. */
+function sizes(value: unknown): Sizes & {suffix: Sizes; tagged: Sizes} {
+	const suffix = sizesWith(value, bnReplacer);
+	const tagged = sizesWith(value, taggedReplacer);
+	// the top-level `bytes`/`gzipped` stay the SUFFIX form so the shape of
+	// `results/snapshot-size.json` and every existing reading of it is unchanged
+	return {...suffix, suffix, tagged};
 }
 
 function kb(bytes: number): string {
@@ -137,6 +159,7 @@ const withHistory = {...snapshot, rows: undefined, versions: allVersions};
 
 const streamGzipped = fs.statSync(ALPHA1.streamPath).size;
 const streamRaw = Buffer.byteLength(JSON.stringify(stream, bnReplacer));
+const streamRawTagged = Buffer.byteLength(JSON.stringify(stream, taggedReplacer));
 
 const current = sizes(snapshot);
 const full = sizes(withHistory);
@@ -154,7 +177,7 @@ const result = {
 	},
 	snapshotOfCurrentRows: current,
 	snapshotOfEveryVersion: full,
-	capturedStream: {gzippedOnDisk: streamGzipped, rawJson: streamRaw},
+	capturedStream: {gzippedOnDisk: streamGzipped, rawJson: streamRaw, rawJsonTagged: streamRawTagged},
 	ratios: {
 		versionsPerLiveRow: +(versionCount / rows.length).toFixed(2),
 		fullHistoryOverCurrentRows: +(full.gzipped / current.gzipped).toFixed(2),

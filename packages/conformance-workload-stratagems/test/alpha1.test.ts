@@ -22,7 +22,7 @@
  * minute for the whole stream) in `work/notes/findings/sqlite-in-the-browser.md`.
  * Half an hour on every pull request would be disabled by the next person to
  * wait for it, so it is opt-in as `STRATAGEMS_WORKLOAD=all`, the observation is
- * recorded in `work/notes/observations/fake-indexeddb-write-cost-grows-quadratically.md`,
+ * recorded in `fake-indexeddb-write-cost-grows-quadratically`,
  * and the honest route to heavy-workload coverage on that backend is the real
  * engine (`packages/state-store-indexeddb/browser/`) rather than a faster shim.
  *

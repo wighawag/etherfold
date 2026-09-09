@@ -1,3 +1,0 @@
-# 2026-02-14: url-form mirror selection downloads every full snapshot, then the winner again
-
-`keepStateOnIndexedDB`'s array-of-`{url}` form fetches each mirror's FULL state file during selection (just to read `lastSync.lastToBlock`), then re-downloads the winner's file in the payload stage — so N url-form mirrors cost N+1 full snapshot downloads per `fetch`. Prefix-form mirrors avoid this via the bare `lastSync` head, which is presumably why the CLI publishes one. Noticed while adding the format refusal (`a-snapshot-a-client-cannot-read-is-refused-not-installed`); the selection-stage parse could keep its envelope as the payload, the way `bootstrapFromSnapshot`'s `Candidate.body` already does on the entity path.

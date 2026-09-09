@@ -37,7 +37,7 @@ import {
  *
  * Cost is asserted as WORK at the INSTRUMENTED OBJECT STORE and never as
  * wall-clock: `fake-indexeddb` is itself quadratic
- * (`work/notes/observations/fake-indexeddb-write-cost-grows-quadratically.md`)
+ * (`fake-indexeddb-write-cost-grows-quadratically`)
  * and ADR-0032 rules a clock out on a loaded machine anyway.
  */
 

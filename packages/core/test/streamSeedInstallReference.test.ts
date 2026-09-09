@@ -25,7 +25,7 @@ import {memorySegmentPort, nodeRefusingProvider} from './utils/streamCacheWorld.
 //
 // It runs on core's in-memory keeper and NOT under `fake-indexeddb`, on purpose:
 // that shim's write cost grows as roughly `mutations^2`
-// (`work/notes/observations/fake-indexeddb-write-cost-grows-quadratically.md`),
+// (`fake-indexeddb-write-cost-grows-quadratically`),
 // so 31,332 events through it is not a slow test but an unfinishable one.
 //
 // SINCE THE ADMISSION CHECKS LANDED it is also the case that keeps them HONEST:

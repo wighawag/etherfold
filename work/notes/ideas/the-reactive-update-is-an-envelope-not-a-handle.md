@@ -33,7 +33,7 @@ keeps answering from whichever generation is now canonical).
 1. **Reactivity stops depending on the store library's equality rule.** Today updates fire only
    because `sveltore`'s `safe_not_equal` treats every object as changed, so a `===`-deduping consumer
    sees nothing, silently
-   (`work/notes/observations/browser-reactive-updates-depend-on-a-store-that-never-dedupes.md`). A
+   (`browser-reactive-updates-depend-on-a-store-that-never-dedupes`). A
    fresh envelope is a genuine change under every equality rule there is.
 2. **A subscriber can snapshot and diff.** `syncing` is mutated in place today, so a captured
    previous value is the same live object and "what changed" is unanswerable. An immutable envelope

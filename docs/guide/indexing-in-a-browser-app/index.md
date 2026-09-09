@@ -213,6 +213,8 @@ Three statuses, not two. `'unknown'` is a real answer and collapsing it is what 
 
 **The pairing with `state` is safe in one direction.** Within one update the hook sets `syncing` before `state`, so the cursor can be one statement ahead of the rows and never behind. An overlay dropped a moment early flickers; one dropped late is counted twice. A subscriber that reads both after an update sees them agree.
 
+**`state` publishes a HANDLE, not the state.** On the entities path the value the store carries is a read handle with deliberately stable identity: the same object every time, so a caller that keeps one is not defeated by an update. An update is therefore a NOTIFICATION TO RE-READ rather than a delivery of new rows, and two things follow. Read your rows through the handle inside the subscriber, rather than treating the published value as data. And do not try to diff or snapshot it: the previous value is the same object as the current one, so "what changed since last time" is not a question this store can answer, and a value captured in a closure changes underneath you. The same is true of `syncing`, which is mutated in place. If you need a before/after, derive and keep what you care about yourself at the moment you are notified.
+
 Two documented limits, both following from the unconfirmed window being *sparse* (event-bearing blocks only): a transaction that emitted no indexed event can never hit, and `'absent'` means "not in the window", so do not ask about a transaction older than it. Pass `minedAtBlock` when you have a receipt to close both.
 
 ## Hot reload: two independent axes

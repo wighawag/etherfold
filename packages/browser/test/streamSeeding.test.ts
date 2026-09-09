@@ -192,7 +192,7 @@ async function streamKeysUnder(name: string): Promise<IDBValidKey[]> {
  *
  * It records the FIELD and not the store object, deliberately: the `syncing`
  * store mutates its state in place and republishes the same reference
- * (`work/notes/observations/browser-reactive-updates-depend-on-a-store-that-never-dedupes.md`),
+ * (`browser-reactive-updates-depend-on-a-store-that-never-dedupes`),
  * so a recorder keeping the object would end up with N references to one value
  * and could assert nothing about a sequence. The field itself is replaced by a
  * fresh object on every publication, which is what makes the sequence readable --

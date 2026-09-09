@@ -31,7 +31,7 @@ It takes a few seconds, asserts every claim it prints, exits non-zero if any cas
 
 ## Reading the numbers honestly
 
-**The timing it records is worthless and is labelled as such in the output.** `fake-indexeddb` is a shim whose write cost is known to grow quadratically (`work/notes/observations/fake-indexeddb-write-cost-grows-quadratically.md`), and node is not a browser. This spike establishes that the seam is CORRECT, never what it costs. Cost is the next task's entire subject, in real browsers.
+**The timing it records is worthless and is labelled as such in the output.** `fake-indexeddb` is a shim whose write cost is known to grow quadratically (`fake-indexeddb-write-cost-grows-quadratically`), and node is not a browser. This spike establishes that the seam is CORRECT, never what it costs. Cost is the next task's entire subject, in real browsers.
 
 Two numbers in the output that ARE meaningful, because they are structural rather than timed: 31,332 events install as **30 segments plus exactly one cursor record**, and the cursor after loading reads `lastToBlock 23400000`, which is the capture's coverage end and above its last event-bearing block (23,303,136). The second one is the whole point: a seeded client resumes from where the capture REACHED, not from where its last log happened to be, and not from the start block.
 

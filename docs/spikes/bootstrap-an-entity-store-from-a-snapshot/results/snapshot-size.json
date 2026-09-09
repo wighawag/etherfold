@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-08-24T14:36:12.939Z",
+  "measuredAt": "2026-09-09T17:07:02.549Z",
   "workload": {
     "fixture": "stratagems alpha1 (the LAUNCHED game)",
     "events": 31332,
@@ -11,21 +11,38 @@
   },
   "snapshotOfCurrentRows": {
     "bytes": 853131,
-    "gzipped": 46659
+    "gzipped": 46660,
+    "suffix": {
+      "bytes": 853131,
+      "gzipped": 46660
+    },
+    "tagged": {
+      "bytes": 853131,
+      "gzipped": 46660
+    }
   },
   "snapshotOfEveryVersion": {
     "bytes": 5519680,
-    "gzipped": 311871
+    "gzipped": 311871,
+    "suffix": {
+      "bytes": 5519680,
+      "gzipped": 311871
+    },
+    "tagged": {
+      "bytes": 5519680,
+      "gzipped": 311871
+    }
   },
   "capturedStream": {
-    "gzippedOnDisk": 634488,
-    "rawJson": 16230783
+    "gzippedOnDisk": 1099520,
+    "rawJson": 27023737,
+    "rawJsonTagged": 27832909
   },
   "ratios": {
     "versionsPerLiveRow": 6.12,
     "fullHistoryOverCurrentRows": 6.68,
-    "currentRowsOverGzippedStream": 0.07,
-    "fullHistoryOverGzippedStream": 0.49
+    "currentRowsOverGzippedStream": 0.04,
+    "fullHistoryOverGzippedStream": 0.28
   },
-  "tookSeconds": 0.9
+  "tookSeconds": 1.6
 }
