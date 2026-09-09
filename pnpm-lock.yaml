@@ -15,8 +15,8 @@ importers:
         specifier: ^2.29.8
         version: 2.31.0(@types/node@25.9.1)
       dorfl:
-        specifier: ^0.13.3
-        version: 0.13.3
+        specifier: ^0.13.4
+        version: 0.13.4
       ipfs-gateway-emulator:
         specifier: 4.2.1-ipfs.2
         version: 4.2.1-ipfs.2
@@ -2764,8 +2764,8 @@ packages:
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
 
-  dorfl@0.13.3:
-    resolution: {integrity: sha512-DRDHUDYW8lfcivxA5Wz8Jsz5Dz8zooFKYaQ225n08HTiRJ0yLXbAJQkwOOJcdTVsefAu3Mb8WtYPpzR+D+9VKg==}
+  dorfl@0.13.4:
+    resolution: {integrity: sha512-Y5tpIoFEVFEbGy+9jVRc36SgQLgE2FIxmGR/TKOcD8uFV4H1uGn5Ux8hhfZf/j/5pzMZzoAha77gC4KkPl0qgw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -6395,7 +6395,7 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
 
-  dorfl@0.13.3:
+  dorfl@0.13.4:
     dependencies:
       commander: 14.0.3
 

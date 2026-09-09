@@ -4,7 +4,7 @@
   "type": "module",
   "devDependencies": {
     "@changesets/cli": "^2.29.8",
-    "dorfl": "^0.13.3",
+    "dorfl": "^0.13.4",
     "ipfs-gateway-emulator": "4.2.1-ipfs.2",
     "ldenv": "^0.5.0",
     "prettier": "^3.8.3",
