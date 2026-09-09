@@ -14,11 +14,11 @@ needsAnswers: true
 
 ## Open questions
 
-1. **Does the seam grow a WRITER LEASE, or an optional token on the existing methods?** A lease (`store.claim()` returns the object that can mutate; the store itself only reads) makes "a reader cannot write" a fact of the type rather than a rule to remember, which is exactly the structural move ADR-0044 already makes for streams ("the writer is handed the keeper, every follower is handed a read-only stream view"). It is also a breaking change to `StateStore`, to all four backends, to the conformance suite and to `@etherfold/processor-entities`. An optional token argument is compatible and opt-in, and leaves the default unguarded, which is the state this spec exists to end. Leaning lease; the cost is real and a human should price it.
-2. **What is the exclusive-write UNIT the token is scoped to?** Not the origin, and probably not the database: two generations of one indexer legitimately write at the same time (a canonical generation and a follower rebuilding), so a database-wide token would refuse a legitimate writer. The candidate answer is "one generation's state", which needs ADR-0053's namespace ("a generation is a table namespace and a named indexer is a database") to be actually realised in the IndexedDB addressing, and today the default `databaseName` plus the documented `createState` example put every generation in one database. Answering this may require fixing that first, in which case this spec gains a `taskedAfter`.
-3. **Do `MemoryStateStore` and `@etherfold/state-store-patch` carry the guard, or declare its absence?** The check is trivial in one heap, and uniformity is what the conformance suite is for; against that, a memory store's second writer is a second object in one process, which is a different hazard from a second tab.
-4. **Should `applyBlock` also refuse a height that is not ABOVE the recorded tip?** A single writer maintains that invariant, but it must be checked against the paths that apply out of order by design if any exist: a replay, a rebuild chunk, a seeded generation installing below its own position.
-5. **Opaque token or monotonic counter?** ADR-0054 rejected a counter because `remote-sql` reports no affected-row count, so a loser reading `expected + 1` could not tell a win from a loss. That reason does not apply on IndexedDB, where the check is a read inside the writing transaction. Uniformity across the two backends argues for the opaque token anyway.
+> The two that governed the shape are CLOSED, and their answers are in Implementation Decisions below: the write surface splits at construction (`openForWriting` / `openForReading`), and the claim is scoped to the store's own storage identity because it lives inside it. Three remain, none of which changes that shape.
+
+1. **Do `MemoryStateStore` and `@etherfold/state-store-patch` carry the guard, or declare its absence?** The check is trivial in one heap, and uniformity is what the conformance suite is for; against that, a memory store's second writer is a second object in one process, which is a different hazard from a second tab. A backend that declares the guard absent creates a second variant of the seam contract, which is the cost to weigh.
+2. **Should `applyBlock` also refuse a height that is not ABOVE the recorded tip?** A single writer maintains that invariant, but it must be checked against the paths that apply out of order by design if any exist: a replay, a rebuild chunk, a seeded generation installing below its own position. Not investigated; this needs reading those paths rather than reasoning about them.
+3. **Opaque token or monotonic counter?** ADR-0054 rejected a counter because `remote-sql` reports no affected-row count, so a loser reading `expected + 1` could not tell a win from a loss. That reason does not apply on IndexedDB, where the check is a read inside the writing transaction. Uniformity across the two backends argues for the opaque token anyway.
 
 <!-- /open-questions -->
 
@@ -67,34 +67,44 @@ A refused writer is not an application error. It is a writer learning it lost, a
 
 ### Autonomy notes
 
-- **`humanOnly: true`.** Open question 1 is a breaking change to `StateStore`, every backend, the conformance suite and `@etherfold/processor-entities`, weighed against a compatible option that leaves the default unsafe. That is a decision about the shape of the project's central seam and a human should take it before anything is tasked.
-- **`needsAnswers: true`.** Five open questions above, of which 2 is the sharpest: the scope of the claim may depend on realising ADR-0053's generation namespace in the IndexedDB addressing first, which would make this spec depend on another. Tasking before that is answered would cut tasks against a scope that is not yet decided.
+- **`humanOnly: true`.** Splitting the store's construction into a writing and a reading factory is a breaking change to `StateStore`, every backend, the conformance suite and `@etherfold/processor-entities`. The decision is taken (below) and the rationale is recorded, but accepting that blast radius on the project's central seam is a human's call, not an auto-tasker's.
+- **`needsAnswers: true`.** Three open questions remain. None blocks the shape, and question 2 is the one that actually blocks tasking: whether any path legitimately applies a block below the recorded tip is a fact about the replay, rebuild and seeding code that nobody has read yet, and cutting an acceptance criterion for a monotonicity check before reading them would pin the wrong behaviour.
 
 ## Implementation Decisions
 
 **The claim is a token, and it is checked in the transaction that writes.** Not before it, not in a wrapper, not by a caller. The rule the seam states is: a mutating call carries the token its writer believes it holds, and a store refuses a token it does not hold, having read the stored token inside the same atomic unit as the write it is about to perform.
 
-The shape, pending open question 1:
+**The write surface splits at CONSTRUCTION, not by an argument.** A store is opened for reading or for writing, and only the writing one has the mutating methods. So "a reader cannot write" is a fact of the type rather than a rule to remember, which is the same structural move ADR-0044 already makes for streams ("the writer is handed the keeper, every follower is handed a read-only stream view"), and the ability to write is obtainable ONLY by claiming, so a token cannot be forged or forgotten.
 
 ```ts
 type WriterToken = string;
 
-// the store reads; the lease writes
-type WriterLease = {
+type ReadableStateStore = {
+  /* getCurrent / getAsOf / listCurrent / listAsOf / readCursor / capabilities */
+};
+
+type WritableStateStore = ReadableStateStore & {
   readonly token: WriterToken;
+  migrate(): Promise<void>;
   applyBlock(block, mutations, cursor?): Promise<void>;
   revertTo(blockNumber): Promise<void>;
   writeCursor(key, value): Promise<void>;
   clearCursor(key): Promise<void>;
   prune(): Promise<void>;
-  release(): Promise<void>;
 };
 
-// claiming SWAPS the stored token for a fresh unique one, so an earlier
-// lease's next mutation is refused. Claiming is not blocking and takes
+// opening for writing SWAPS the stored token for a fresh unique one, so an
+// earlier writer's next mutation is refused. It does not block and it takes
 // nothing: a loser is not waiting, it has simply lost.
-declare function claim(store: StateStore): Promise<WriterLease>;
+declare function openForWriting(...): Promise<WritableStateStore>;
+declare function openForReading(...): Promise<ReadableStateStore>;
 ```
+
+**Why construction rather than a `claim()` on an already-open store.** Three things stop being questions. `migrate` WRITES, so under a separate lease there would be a write outside the guard on day one and the rule would be dented before it shipped; here it simply belongs to the writable store. Bootstrap writes too (`openSnapshotAware`, `bootstrapFromSnapshot`), and is likewise just a writer rather than more surface to re-home. And losing the claim needs no lease-renewal semantics: a demoted writer constructs a fresh store, which forces exactly the re-read that correctness wants anyway, so the mid-fold-dead-lease question never has to be answered.
+
+**Two alternatives, recorded because they will be proposed again.** An OPTIONAL token argument on the existing methods is compatible, tiny and rejected: it leaves every caller unguarded until they read the docs, which is precisely the "read-then-write that merely LOOKS atomic" ADR-0054 refuses, and it passes every single-writer test. A REQUIRED token argument on the five mutating methods is the honest fallback if the blast radius above prices out: it closes the default-unguarded hole for a much smaller change, and its weakness is that a token is just a string, so the type forces PRESENCE but not PROVENANCE, and nothing expresses reader-ness.
+
+**The claim is scoped to the store's own storage identity, because it lives inside that storage.** No new scoping concept is introduced and the guard does not need to know what a generation is. On IndexedDB the identity is the `databaseName`; on SQLite it is the database plus ADR-0053's table namespace, which that backend already validates in its constructor. That gives the four cases the right answers by construction: two tabs on one generation contend and one wins; two tabs running unrelated indexers never contend, because their identities differ; two correctly separated generations never contend; and two generations sharing one database by MISCONFIGURATION contend and are refused loudly, where today they corrupt each other silently. The last case is a feature of this design rather than a limitation of it.
 
 **Per substrate, the same rule realised two ways.** On IndexedDB the token record is read inside the existing `readwrite` transaction and the mutation is abandoned by aborting it, which is what `applyBlock` already does for a duplicate height. On SQLite over `RemoteSQL` it is ADR-0054's mechanism unchanged: guard every statement on the token, swap the token as the last write of the same batch, read it back inside that batch to learn whether it won. Nothing new is invented on the SQL side; the existing pattern is applied to a second set of writes.
 
@@ -123,9 +133,10 @@ External behaviour only, as everywhere behind this seam: what a read returns aft
 - **The query executor seam** (`the-same-query-runs-against-a-worker-and-a-server`).
 - **Amending ADR-0024.** Building election satisfies its criterion 3 ("the app is single-tab by construction, or is willing to build leader election"), which removes one of the four barriers to wasm SQLite. That amendment belongs with the election spec that actually makes it true, not here.
 - **Making concurrency USEFUL.** The guard makes a second writer safe, not productive: it burns RPC calls until its next write is refused. Reducing that waste is what election is for.
+- **The `createState` addressing defect.** `createState` is handed a `GenerationContext` and the documented example ignores it, so an app following the docs puts every generation into the default `etherfold-state` database. That is a real defect and it is captured in the observation this spec came from, but it is NOT a dependency: with the claim scoped as above, the misconfiguration becomes a loud refusal instead of silent corruption. Its own task, and note when writing it that `context.stream` alone is not a sufficient address either, since a follower shares its writer's stream by definition and the processor half of a generation's identity provably cannot be known at `createState` time.
 
 ## Further Notes
 
 The relationship to ADR-0054 is the main thing a reader should leave with: this is not a second concurrency mechanism, it is the same one on a substrate that makes it easier. Recording that explicitly is what stops the next person treating them as separate inventions and giving them separate shapes.
 
-The scoping requirement in user stories 4 and 5 is the constraint most likely to be got wrong. "One writer" is not a statement about an origin, or a tab, or even a database as an app may have configured it. It is a statement about one generation's state, and two writers are only in conflict when they are writing the same one. Two tabs running unrelated indexers must never contend, and two generations of one indexer must be able to write at once, which is precisely why the unit has to be settled (open question 2) before anything is cut into tasks.
+The scoping requirement in user stories 4 and 5 looked like the hardest part of this spec and turned out to dissolve. "One writer" is not a statement about an origin or a tab, and it does not need to be a statement about a generation either: it is a statement about one unit of STORAGE, and putting the token inside that storage makes the scope follow automatically from an identity every backend already has. Two tabs running unrelated indexers never contend because their storage identities differ, and two generations of one indexer can write at once for the same reason, provided the host addressed them apart. What is worth keeping from the earlier framing is only the warning: anyone tempted to scope the claim to an origin, a tab, a connection or a lock name outside the database will break story 4, story 5, or both.
