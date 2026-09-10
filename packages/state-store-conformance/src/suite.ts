@@ -1,6 +1,8 @@
+import {openForWriting, type StateStoreCapabilities} from '@etherfold/state-store';
 import {blockAtomicityCases} from './cases/block-atomicity.js';
 import {boundedListingCases} from './cases/bounded-listing.js';
 import {declaredCapabilityCases} from './cases/declared-capabilities.js';
+import {openingForWritingCases} from './cases/opening-for-writing.js';
 import {portableDeclarationCases} from './cases/portable-declarations.js';
 import {readYourWritesCases} from './cases/read-your-writes.js';
 import {reorgRevertCases} from './cases/reorg-revert.js';
@@ -47,6 +49,25 @@ import type {
  * claim-driven selection again, and the one chapter that needs a second handle
  * the factory cannot give -- see `StateStoreConformanceOptions`), and that a
  * DECLARATION means the same thing here as it does on every other backend.
+ *
+ * ## Every factory-driven chapter is asked TWICE, once per SHAPE
+ *
+ * A consumer no longer holds one thing. It holds a `WritableStateStore` if it
+ * CLAIMED the store (`openForWriting`) and a `ReadableStateStore` if it did not,
+ * and the writable one is a handle over the backend rather than the backend
+ * itself (ADR-0077). A handle that delegated one verb wrongly would be a store
+ * that behaves differently depending on how its holder obtained it, which is
+ * exactly the class of defect this suite exists to catch -- so the questions are
+ * asked of both, and a backend earns its place behind the seam through either
+ * door. When the migration completes and there is one shape again, this loop is
+ * what goes.
+ *
+ * The CONTENTION questions are asked ONCE, and deliberately: `a second writer
+ * writes nothing` and the second-handle half of the retention-enforcement
+ * chapter are driven by `twoWriters` rather than by the factory, so they are
+ * questions about a second HANDLE and not about a shape. Opening a second handle
+ * FOR WRITING is its own question with its own chapter (`a writer claims by
+ * opening`), likewise asked once.
  */
 export async function stateStoreConformanceCases(
 	factory: StateStoreFactory,
@@ -55,6 +76,20 @@ export async function stateStoreConformanceCases(
 	const probe = await factory(CONFORMANCE_ENTITIES);
 	const capabilities = probe.capabilities;
 
+	return [
+		...factoryDrivenCases(factory, capabilities, options),
+		...throughAClaimedWriter(factory, capabilities),
+		...singleWriterCases(factory, capabilities, options),
+		...openingForWritingCases(factory, capabilities, options),
+	];
+}
+
+/** Everything a fresh store from the factory can be asked, whatever shape it is held as. */
+function factoryDrivenCases(
+	factory: StateStoreFactory,
+	capabilities: StateStoreCapabilities,
+	options: StateStoreConformanceOptions,
+): ConformanceCase[] {
 	return [
 		...versionedReadCases(factory, capabilities),
 		...declaredCapabilityCases(factory, capabilities),
@@ -66,9 +101,28 @@ export async function stateStoreConformanceCases(
 		...blockAtomicityCases(factory),
 		...syncCursorCases(factory),
 		...snapshotBootstrapCases(factory, capabilities),
-		...singleWriterCases(factory, capabilities, options),
 		...portableDeclarationCases(factory),
 	];
+}
+
+/**
+ * The same questions, asked of the handle a CLAIM hands back.
+ *
+ * `twoWriters` is deliberately withheld here (see the note on the suite): the
+ * contention questions are about a second handle on one storage, and asking them
+ * again through a second shape would only run them twice.
+ *
+ * One case is slightly WEAKER through this door and it is the first pass's to
+ * hold: `openForWriting` migrates, so a declaration probe that a backend accepts
+ * and then dies on at `migrate()` looks here like a refusal at construction,
+ * which the probe permits. The undecorated pass asks that question exactly.
+ */
+function throughAClaimedWriter(factory: StateStoreFactory, capabilities: StateStoreCapabilities): ConformanceCase[] {
+	const claiming: StateStoreFactory = async (declarations) => openForWriting(await factory(declarations));
+	return factoryDrivenCases(claiming, capabilities, {}).map((one) => ({
+		...one,
+		group: `${one.group} (through a claimed writer)`,
+	}));
 }
 
 /**

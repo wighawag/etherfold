@@ -61,6 +61,14 @@
  */
 
 /**
+ * A writer token: a value only one claim could have produced.
+ *
+ * It is a `string` and not a branded type because nothing anywhere derives
+ * meaning from it: see `writerToken` below for what is and is not asked of one.
+ */
+export type WriterToken = string;
+
+/**
  * A writer token: a value only THIS claim could have produced.
  *
  * It is OPAQUE. Nothing compares two tokens for order, nothing parses one, and
