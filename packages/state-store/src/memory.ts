@@ -100,9 +100,15 @@ export class MemoryStateStore implements StateStore {
 	 * reported as a window: reads outside it are refused by `getAsOf` / `listAsOf`
 	 * at all times, and `prune` drops the versions it no longer covers.
 	 * `revert-only` refuses every historical read while `revertTo` keeps working.
+	 *
+	 * `singleWriter: false`, honestly and permanently. This store's storage is
+	 * three instance fields, so a second writer cannot reach it and a writer token
+	 * here could only ever be compared with itself: green, tested, and meaningless
+	 * (`writer.ts`). Two handles are two stores, and the reference implementation
+	 * says so rather than claiming a guarantee its representation makes vacuous.
 	 */
 	get capabilities(): StateStoreCapabilities {
-		return {retention: this.provided, asOf: this.provided.kind !== 'revert-only'};
+		return {retention: this.provided, asOf: this.provided.kind !== 'revert-only', singleWriter: false};
 	}
 
 	/** Nothing to create: the shape is the declaration, and it is already validated. */

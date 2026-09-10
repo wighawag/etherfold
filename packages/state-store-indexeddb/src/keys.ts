@@ -14,6 +14,7 @@ import {
  * versions  [entity, ...id, lower]  -> {lower, upper, values} the history, for as-of and for revert
  * blocks    number                  -> {number, hash, timestamp}
  * cursors   key                     -> the opaque string the caller wrote
+ * writer    'writer'                -> the token of whoever claimed this database
  * ```
  *
  * **The entity name is part of the KEY rather than the name of a store**, which
@@ -30,8 +31,9 @@ import {
  * distinction is the whole reason for the layout above. A processor declaring
  * one more entity is still not a migration and still cannot be blocked by a
  * second open tab; what moved the version to 2 is this package growing an object
- * store of its own, once, for the sync cursor at the seam. `upgrade` creates
- * whatever is missing, so an existing database gains `cursors` and keeps every
+ * store of its own, twice: once for the sync cursor at the seam, and once for
+ * the writer token that makes a second writer write nothing. `upgrade` creates
+ * whatever is missing, so an existing database gains the store and keeps every
  * row it had.
  *
  * `values` is the COMPLETE row (id columns and every declared field, unlisted
@@ -42,7 +44,7 @@ import {
  * 1,246 for the wasm-SQLite candidate) and a tip listing that never reads a
  * superseded version, and it costs one extra copy of the live set.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const CURRENT = 'current';
 export const VERSIONS = 'versions';
 export const BLOCKS = 'blocks';
@@ -56,6 +58,23 @@ export const BLOCKS = 'blocks';
  * string means.
  */
 export const CURSORS = 'cursors';
+/**
+ * The writer token: WHO holds this database, as one record inside it.
+ *
+ * One store, one key, one opaque string. It is an object store of its own
+ * rather than a key in `cursors`, because that keyspace is the CALLER's -- a
+ * caller chooses its own cursor keys (`cursor.ts` at the seam) and would
+ * eventually choose this one.
+ *
+ * Being INSIDE the database is what scopes the claim: the identity it guards is
+ * the `databaseName` and nothing else, so two unrelated indexers on one origin
+ * never contend and two generations addressed apart both write. See `writer.ts`
+ * at the seam and ADR-0075.
+ */
+export const WRITER = 'writer';
+
+/** The one key in `WRITER`: this database has exactly one holder. */
+export const WRITER_KEY = 'writer';
 
 /** Unique: a hash identifies one block, and a second claim on it is a caller bug. */
 export const HASH_INDEX = 'hash';

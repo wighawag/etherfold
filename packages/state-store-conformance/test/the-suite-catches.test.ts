@@ -124,7 +124,22 @@ class Decorated implements StateStore {
 /** Claims a 60-block window, and cheerfully answers a read from long before it. */
 class LyingWindowStore extends Decorated {
 	override get capabilities(): StateStoreCapabilities {
-		return {retention: {kind: 'window', blocks: 60}, asOf: true};
+		return {retention: {kind: 'window', blocks: 60}, asOf: true, singleWriter: false};
+	}
+}
+
+/**
+ * Claims it enforces a SINGLE WRITER, and lets any handle write over any other.
+ *
+ * The honest in-memory store reports `singleWriter: false`, so it is asked no
+ * contention case at all -- which is what makes this decorator necessary: a
+ * chapter that only ever runs against backends that pass it is decoration. Two
+ * of these over ONE `MemoryStateStore` is genuinely two writers on one storage,
+ * with nothing between them.
+ */
+class LyingSingleWriterStore extends Decorated {
+	override get capabilities(): StateStoreCapabilities {
+		return {...this.inner.capabilities, singleWriter: true};
 	}
 }
 
@@ -191,6 +206,46 @@ describe('the conformance suite', () => {
 		const failures = await failedCases((declarations) => new PrematureCursorStore(new MemoryStateStore(declarations)));
 
 		expect(failures.join('\n')).toMatch(/never ahead of the last applied block/);
+	});
+
+	it('fails a backend that claims a single writer and lets a second one write', async () => {
+		const result = await runStateStoreConformance(
+			(declarations) => new LyingSingleWriterStore(new MemoryStateStore(declarations)),
+			{
+				twoWriters: {
+					sharingStorage: (declarations) => {
+						// ONE store behind two handles: the shape two tabs of one app have
+						const inner = new MemoryStateStore(declarations);
+						return [new LyingSingleWriterStore(inner), new LyingSingleWriterStore(inner)];
+					},
+					addressedApart: (declarations) => [
+						new LyingSingleWriterStore(new MemoryStateStore(declarations)),
+						new LyingSingleWriterStore(new MemoryStateStore(declarations)),
+					],
+				},
+			},
+		);
+		const failures = result.failures.map((failure) => `${failure.group} > ${failure.name}`);
+
+		// every refusal case, and NOT the do-not-over-refuse one: a store that
+		// refuses nothing passes that half by accident, which is why the chapter
+		// asserts both halves.
+		expect(failures.join('\n')).toMatch(/refuses the block of a writer whose claim was taken/);
+		expect(failures.join('\n')).toMatch(/refuses a cursor write/);
+		expect(failures.join('\n')).toMatch(/refuses a revert/);
+		expect(failures.join('\n')).toMatch(/refuses a prune/);
+		expect(failures.join('\n')).not.toMatch(/ADDRESSED APART/);
+	});
+
+	it('fails a backend that claims a single writer and gives the suite no way to test it', async () => {
+		// skipping the chapter would be the comfortable thing to do here, and it is
+		// exactly how a claim becomes fiction: the cases are selected on the CLAIM,
+		// so the missing affordance is the backend author's problem to fix.
+		const failures = await failedCases(
+			(declarations) => new LyingSingleWriterStore(new MemoryStateStore(declarations)),
+		);
+
+		expect(failures.join('\n')).toMatch(/way to open a second handle/);
 	});
 
 	it('reports WHY a case failed, and not merely that it did', async () => {

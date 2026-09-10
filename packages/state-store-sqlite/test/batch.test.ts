@@ -20,9 +20,13 @@ describe('applying a block', () => {
 		await store.applyBlock(block(100), [owns('1', '0xAlice', 1), owns('2', '0xBob', 1)]);
 
 		expect(db.batches.length).toBe(1);
-		// block row + (close + insert) per changed entity
-		expect(db.batches[0].length).toBe(1 + 2 * 2);
-		expect(sqlOf(db.batches[0][0])).toMatch(/INSERT INTO _blocks/i);
+		// the writer's CLAIM + block row + (close + insert) per changed entity + the
+		// read-back that says who holds the store. All in the one batch, which is the
+		// one transaction: the guard is checked where the write happens (ADR-0075).
+		expect(db.batches[0].length).toBe(1 + 1 + 2 * 2 + 1);
+		expect(sqlOf(db.batches[0][0])).toMatch(/INSERT INTO _writer/i);
+		expect(sqlOf(db.batches[0][1])).toMatch(/INSERT INTO _blocks/i);
+		expect(sqlOf(db.batches[0][db.batches[0].length - 1])).toMatch(/SELECT token FROM _writer/i);
 	});
 
 	it('is one batch even with no mutations, so the block is still recorded', async () => {
@@ -46,7 +50,10 @@ describe('applying a block', () => {
 
 		await store.applyBlock(block(101), [{type: 'delete', entity: 'token', id: {id: '1'}}]);
 
-		expect(db.batches[0].length).toBe(2); // block row + the close
+		// block row + the close + the read-back. No claim statement this time: one
+		// landed with the first block, so from here the guard alone stands between
+		// this writer and a rival.
+		expect(db.batches[0].length).toBe(3);
 		expect(sqlOf(db.batches[0][1])).toMatch(/^UPDATE "token" SET _upper/i);
 	});
 
@@ -99,6 +106,35 @@ describe('the batch chunk bound', () => {
 		expect((statement.sql.match(/\?/g) ?? []).length).toBe(statement.args.length);
 	});
 
+	it('leaves room for the writer guard, which IS the parameter that was added', async () => {
+		// The coupling above finally bit: the guard is one more bound parameter on
+		// this exact statement, so `prune` names one FEWER row than the bound allows
+		// and the query still fits the tightest hosted backend's cap. Asserted on the
+		// statement AND on what the store actually emits, because the second is the
+		// one a deployment runs.
+		const D1_MAX_BOUND_PARAMETERS_PER_QUERY = 100;
+		const rowids = Array.from({length: DEFAULT_BATCH_BOUNDS.maxRowsPerStatement - 1}, (_, i) => i + 1);
+		const guarded = dropVersionsStatement(normalizeEntity(TOKEN), rowids, tableNames(), {
+			predicate: `COALESCE((SELECT token FROM _writer WHERE id = 0), '') = ?`,
+			token: 'a-token',
+		});
+		expect(guarded.args.length).toBe(D1_MAX_BOUND_PARAMETERS_PER_QUERY);
+		expect((guarded.sql.match(/\?/g) ?? []).length).toBe(guarded.args.length);
+
+		const db = new RecordingSQL(createTestDB());
+		const store = new VersionedStateStore(db, [TOKEN], {retention: {blocks: 1}, finalityDepth: 1});
+		await store.migrate();
+		for (let n = 100; n < 210; n++) await store.applyBlock(block(n), [owns('1', `0x${n}`, n)]);
+		db.batches.length = 0;
+		await store.prune();
+
+		for (const batch of db.batches) {
+			for (const statement of batch) {
+				expect((sqlOf(statement).match(/\?/g) ?? []).length).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMETERS_PER_QUERY);
+			}
+		}
+	});
+
 	it('never splits an indivisible group across batches', () => {
 		const group = (n: number) => Array.from({length: n}, (_, i) => ({sql: `SELECT ${i}`, args: []}));
 		const batches = planBatches([group(3), group(3), group(3)], {
@@ -123,8 +159,10 @@ describe('the batch chunk bound', () => {
 
 	it('is configurable, and applying many blocks packs them up to the bound', async () => {
 		const db = new RecordingSQL(createTestDB());
-		// 3 statements per block here (block row + close + insert)
-		const store = new VersionedStateStore(db, [TOKEN], {bounds: {maxStatementsPerBatch: 6}});
+		// 3 statements per block here (block row + close + insert), and the guard
+		// keeps 2 of the bound back for itself (the claim and the read-back), so a
+		// bound of 8 packs two blocks per batch.
+		const store = new VersionedStateStore(db, [TOKEN], {bounds: {maxStatementsPerBatch: 8}});
 		await store.migrate();
 		db.batches.length = 0;
 
@@ -137,7 +175,11 @@ describe('the batch chunk bound', () => {
 
 		expect(db.batches.length).toBe(2);
 		for (const batch of db.batches) {
-			expect(sqlOf(batch[0])).toMatch(/INSERT INTO _blocks/i);
+			// the bound is what a backend accepts, so the guard's statements count
+			// against it rather than riding on top of it
+			expect(batch.length).toBeLessThanOrEqual(8);
+			expect(sqlOf(batch[batch.length - 1])).toMatch(/SELECT token FROM _writer/i);
+			expect(batch.some((statement) => /INSERT INTO _blocks/i.test(sqlOf(statement)))).toBe(true);
 		}
 		expect((await store.getAsOf<{owner: string}>('token', {id: '1'}, 101))?.owner).toBe('0xB');
 		expect((await store.getCurrent<{owner: string}>('token', {id: '1'}))?.owner).toBe('0xD');
@@ -153,7 +195,8 @@ describe('the batch chunk bound', () => {
 		await store.applyBlock(block(100), mutations);
 
 		expect(db.batches.length).toBe(1);
-		expect(db.batches[0].length).toBe(21);
+		// block row + 10 * (close + insert), plus the claim and the read-back
+		expect(db.batches[0].length).toBe(23);
 	});
 
 	it('also bounds the DDL issued by migrate', async () => {

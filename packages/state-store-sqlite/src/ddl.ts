@@ -91,6 +91,27 @@ export const CURSOR_KEY = '"key"';
 export const CURSOR_VALUE = '"value"';
 
 /**
+ * The writer-token table: the third fixed one, and the smallest.
+ *
+ * ONE row (`id = 0`, enforced by a CHECK rather than by convention) holding the
+ * opaque token of whoever last claimed this store. Every mutating statement is
+ * guarded on it and reads it back inside the same batch, which is ADR-0054's
+ * mechanism applied one level down (ADR-0075, and `writer.ts` at the seam).
+ *
+ * It is IN THE NAMESPACE, with `_blocks` and `_cursor`, and that placement IS
+ * the scoping decision: a generation's claim covers exactly the tables that
+ * generation owns, so two generations folding into one database contend only if
+ * they were addressed as one (ADR-0053). A single unnamespaced token table
+ * would refuse the concurrent writing the generation model requires.
+ *
+ * A table of its own rather than a column on `_cursor`, unlike ADR-0054's
+ * revision, which rides the pointer row every commit already writes: there is no
+ * row here that every mutation touches (`revertTo` writes no cursor, `prune`
+ * writes none) and the cursor keyspace is the CALLER's.
+ */
+export const WRITER_TABLE = '_writer';
+
+/**
  * Every name ONE store uses, resolved from its namespace: SQL-ready text, and
  * the only place a table or an index name is spelled.
  *
@@ -107,6 +128,8 @@ export type TableNames = {
 	readonly blocks: string;
 	/** The sync-cursor table. */
 	readonly cursor: string;
+	/** The writer-token table. */
+	readonly writer: string;
 	/** One declared entity's table, quoted. */
 	entity(name: string): string;
 	/** One index derived from an entity name, quoted, in the store's `_` namespace. */
@@ -129,6 +152,7 @@ export function tableNames(namespace?: string): TableNames {
 		namespace,
 		blocks: qualified(BLOCKS_TABLE),
 		cursor: qualified(CURSOR_TABLE),
+		writer: qualified(WRITER_TABLE),
 		entity: (name) => quoted(qualified(name)),
 		// the `_` prefix is what keeps a derived index out of the space a
 		// DECLARATION draws from; the namespace goes inside it. See the module note.
@@ -162,6 +186,10 @@ export function fixedSchemaDDL(names: TableNames): string[] {
 		`CREATE TABLE IF NOT EXISTS ${names.cursor} (
 	${CURSOR_KEY} TEXT PRIMARY KEY,
 	${CURSOR_VALUE} TEXT NOT NULL
+)`,
+		`CREATE TABLE IF NOT EXISTS ${names.writer} (
+	id INTEGER PRIMARY KEY CHECK (id = 0),
+	token TEXT NOT NULL
 )`,
 	];
 }
@@ -256,6 +284,10 @@ export function dropSchemaStatements(declarations: Iterable<EntityDeclaration>, 
 	for (const declaration of declarations) {
 		sql.push(`DROP TABLE IF EXISTS ${names.entity(normalizeEntity(declaration).name)}`);
 	}
-	sql.push(`DROP TABLE IF EXISTS ${names.blocks}`, `DROP TABLE IF EXISTS ${names.cursor}`);
+	sql.push(
+		`DROP TABLE IF EXISTS ${names.blocks}`,
+		`DROP TABLE IF EXISTS ${names.cursor}`,
+		`DROP TABLE IF EXISTS ${names.writer}`,
+	);
 	return sql.map((statement) => ({sql: statement, args: []}));
 }

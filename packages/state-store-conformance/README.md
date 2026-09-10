@@ -11,6 +11,19 @@ await describeStateStoreConformance('MyStore', (declarations) => new MyStore(dec
 
 That is the whole integration. The suite creates a fresh store per case, calls `migrate` itself, and registers each case as its own vitest test, so a failure names the behaviour that broke.
 
+One thing a factory cannot express, because it is documented as a fresh database per call: TWO handles on one storage. A backend that claims `singleWriter` supplies them separately, and one that does not omit the option:
+
+```ts
+await describeStateStoreConformance('MyStore', factory, {
+	twoWriters: {
+		// two handles on ONE storage identity: what two tabs of one app have
+		sharingStorage: (declarations) => [new MyStore(declarations, {at: 'x'}), new MyStore(declarations, {at: 'x'})],
+		// and the CLOSEST two separate identities this substrate has
+		addressedApart: (declarations) => [new MyStore(declarations, {at: 'x'}), new MyStore(declarations, {at: 'y'})],
+	},
+});
+```
+
 ## What it asserts
 
 External behaviour only: what a read returns after a write, after a revert, as of a block. Never a table, never a statement, never a version column. A versioned-rows backend and a patch-log backend must both be able to pass the parts they claim, so a case that reaches for an internal is a defect in the case.
@@ -25,13 +38,17 @@ External behaviour only: what a read returns after a write, after a revert, as o
 
 - **Bootstrapping from a snapshot, and the floor it must then report.** A store loaded from state somebody else computed inherits a trap every backend would otherwise meet for the first time in somebody's browser tab: a snapshot carries nothing below its own block, and a freshly migrated store of any backend reports `unbounded`, because that is true of a store that has been indexing since genesis and it has no way to know it is not one. So the cases assert that rows and their cursor install as one unit, that the origin survives a FRESH HANDLE over the same storage (a floor held in a closure is gone on reload), that a revert reaching below the snapshot is refused and changes nothing while a wipe still works, and -- selected on the claim, like every other as-of case -- that a read below the floor is refused and one at or above it is answered. See ADR-0028.
 
+- **A second writer writes nothing, on a backend that CLAIMS it can enforce one.** Selected on `capabilities.singleWriter`, because a backend whose storage is an instance field cannot be beaten by a second writer and a token there would only ever be compared with itself. Both halves are asserted: a writer whose claim was taken is refused on EVERY mutating path with `StoreWriterChangedError` and leaves the store exactly as the holder left it (and can still READ, which is what demoting to a reader needs), while two stores ADDRESSED APART write concurrently and neither is refused. See ADR-0075.
+
 What is NOT here: any access path. That a listing is one indexed range scan rather than a scan-and-sort is a property of a particular backend, and it is pinned in that backend's own tests (`state-store-sqlite/test/listing.test.ts` reads it back out of `EXPLAIN QUERY PLAN`).
 
 ## Why the claim is read first
 
 Testing a backend against a capability it never claimed fails honest backends. Testing it against LESS than it claimed is what lets a claim become fiction. So the suite reads `store.capabilities` once, from a probe store, and asks each backend exactly what it said it could do.
 
-That the capability cases are real is itself a test: `test/the-suite-catches.test.ts` runs the suite against backends with one lie each (claiming a window it does not honour, answering an as-of read from the tip, accepting a revert without undoing it, moving the sync cursor before the block instead of with it) and asserts which cases go red. Without that, the capability tests would be decoration.
+That the capability cases are real is itself a test: `test/the-suite-catches.test.ts` runs the suite against backends with one lie each (claiming a window it does not honour, answering an as-of read from the tip, accepting a revert without undoing it, moving the sync cursor before the block instead of with it, claiming a single writer while letting a second one write) and asserts which cases go red. Without that, the capability tests would be decoration.
+
+The single-writer claim is the one place the suite REFUSES to fall silent: a backend that claims it and hands over no `twoWriters` fails a case saying so, because skipping the only cases that could catch a fiction is how the report stops meaning anything.
 
 ## Running the cases directly
 

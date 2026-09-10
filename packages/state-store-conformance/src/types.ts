@@ -21,6 +21,63 @@ import type {EntityDeclaration, StateStore} from '@etherfold/state-store';
  */
 export type StateStoreFactory = (declarations: readonly EntityDeclaration[]) => StateStore | Promise<StateStore>;
 
+/** Two handles the suite may write through, in the order they are handed over. */
+export type StorePair = readonly [StateStore, StateStore];
+
+/**
+ * How the suite gets TWO handles at once, which is the one thing
+ * `StateStoreFactory` cannot express.
+ *
+ * That factory is documented as a fresh database per call, and it has to stay
+ * that way or every case could be poisoned by the last one. So a backend that
+ * can SHARE storage says so here instead, and the contention cases are written
+ * against these two shapes rather than against a factory that would have to
+ * break its own promise.
+ *
+ * Neither function migrates: the suite calls `migrate` on both handles, exactly
+ * as two tabs of one app would, which is also how it checks that opening a
+ * store does not claim it.
+ */
+export type TwoWriters = {
+	/**
+	 * Two handles on ONE storage identity: the same `databaseName`, the same
+	 * database and table namespace. What two tabs of one app have, and what a
+	 * misconfigured pair of generations has.
+	 */
+	sharingStorage(declarations: readonly EntityDeclaration[]): StorePair | Promise<StorePair>;
+	/**
+	 * Two handles ADDRESSED APART: the CLOSEST two separate storage identities
+	 * this substrate has, which is a second `databaseName` on IndexedDB and a
+	 * second table namespace in ONE database on SQL.
+	 *
+	 * It is not the same question as calling the factory twice, and on the SQL
+	 * backend it is not even the same storage: two generations of one indexer
+	 * share a database and are separated by ADR-0053's namespace, so this is the
+	 * do-not-over-refuse case at the granularity the design actually requires.
+	 */
+	addressedApart(declarations: readonly EntityDeclaration[]): StorePair | Promise<StorePair>;
+};
+
+/**
+ * What a backend can tell the suite BEYOND a factory.
+ *
+ * Everything here is optional, and everything here exists because a property is
+ * not expressible through one handle on a fresh store. A backend that offers
+ * none is asked every case that one handle can answer.
+ */
+export type StateStoreConformanceOptions = {
+	/**
+	 * How to open two writers, for the contention cases.
+	 *
+	 * REQUIRED of a backend whose capability report claims `singleWriter`: the
+	 * cases are selected on the CLAIM, so a backend that claims the guarantee and
+	 * hands the suite no way to contend for it fails a case saying so, rather than
+	 * silently skipping the only cases that could have caught a fiction. A backend
+	 * that honestly reports `singleWriter: false` omits it.
+	 */
+	readonly twoWriters?: TwoWriters;
+};
+
 /**
  * One conformance case: a name, and a function that throws if the backend is wrong.
  *

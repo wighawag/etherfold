@@ -1,4 +1,4 @@
-import {describeStateStoreConformance} from '@etherfold/state-store-conformance';
+import {describeStateStoreConformance, type TwoWriters} from '@etherfold/state-store-conformance';
 import {VersionedStateStore} from '../src/index.js';
 import {createTestDB} from './utils/db.js';
 
@@ -31,21 +31,47 @@ import {createTestDB} from './utils/db.js';
  * a statement that spelled a table name for itself would address the
  * unnamespaced one, which under a namespace exists nowhere, so the case fails
  * loudly instead of passing on a store that was quietly alone.
+ *
+ * Every run also hands over `twoWriters`, because this backend CLAIMS it
+ * enforces a single writer and a claim the suite cannot test is exactly the
+ * fiction the capability report exists to prevent. The two shapes are what this
+ * substrate's storage identity is made of (ADR-0053, ADR-0075): sharing storage
+ * is one database and one table namespace, and being addressed apart is two
+ * NAMESPACES IN ONE DATABASE, which is two generations of one indexer and the
+ * pair that must never contend.
  */
+
+/** Two handles on one libSQL database: sharing its storage, or addressed apart. */
+const twoWriters: TwoWriters = {
+	sharingStorage(declarations) {
+		const db = createTestDB();
+		return [new VersionedStateStore(db, declarations), new VersionedStateStore(db, declarations)];
+	},
+	addressedApart(declarations) {
+		const db = createTestDB();
+		return [
+			new VersionedStateStore(db, declarations, {tableNamespace: 'canonical'}),
+			new VersionedStateStore(db, declarations, {tableNamespace: 'successor'}),
+		];
+	},
+};
 
 await describeStateStoreConformance(
 	'VersionedStateStore, claiming unbounded history',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations),
+	{twoWriters},
 );
 
 await describeStateStoreConformance(
 	'VersionedStateStore, claiming a 60-block window',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: {blocks: 60}, finalityDepth: 60}),
+	{twoWriters},
 );
 
 await describeStateStoreConformance(
 	'VersionedStateStore, set to revert-only',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: 'revert-only'}),
+	{twoWriters},
 );
 
 await describeStateStoreConformance(
@@ -54,5 +80,19 @@ await describeStateStoreConformance(
 		const db = createTestDB();
 		await new VersionedStateStore(db, declarations, {tableNamespace: 'incumbent'}).migrate();
 		return new VersionedStateStore(db, declarations, {tableNamespace: 'successor'});
+	},
+	{
+		// under a namespace too: the token table is inside it, so a namespaced
+		// generation's claim covers its own tables and nothing else.
+		twoWriters: {
+			sharingStorage(declarations) {
+				const db = createTestDB();
+				return [
+					new VersionedStateStore(db, declarations, {tableNamespace: 'successor'}),
+					new VersionedStateStore(db, declarations, {tableNamespace: 'successor'}),
+				];
+			},
+			addressedApart: twoWriters.addressedApart,
+		},
 	},
 );

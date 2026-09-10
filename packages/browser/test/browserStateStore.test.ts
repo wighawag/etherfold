@@ -51,8 +51,8 @@ describe('the browser default', () => {
 			finalityDepth: 64,
 		});
 
-		expect(unbounded.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true});
-		expect(windowed.capabilities).toEqual({retention: {kind: 'window', blocks: 128}, asOf: true});
+		expect(unbounded.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true, singleWriter: true});
+		expect(windowed.capabilities).toEqual({retention: {kind: 'window', blocks: 128}, asOf: true, singleWriter: true});
 	});
 
 	it("takes 'revert-only' as well, and reports asOf: false as its docstring says it will", async () => {
@@ -68,7 +68,7 @@ describe('the browser default', () => {
 			finalityDepth: 64,
 		});
 
-		expect(revertOnly.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false});
+		expect(revertOnly.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false, singleWriter: true});
 	});
 
 	it('refuses a window below the finality depth where it was configured', async () => {

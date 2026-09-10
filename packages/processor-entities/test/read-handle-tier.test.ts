@@ -34,7 +34,7 @@ describe('the backend-neutral read handle', () => {
 		await state.getAsOf('token', {id: '1'}, 100);
 		await state.listCurrent('token', {id: '1'}, 10);
 		await state.listAsOf('token', {id: '1'}, 100, 10);
-		expect(state.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true});
+		expect(state.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true, singleWriter: false});
 
 		// @ts-expect-error a whole-table SQL query is not at the seam: choose SQLite.
 		state.queryCurrent;

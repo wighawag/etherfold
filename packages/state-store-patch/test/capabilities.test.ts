@@ -18,7 +18,14 @@ describe('the capability report', () => {
 	it('claims revert-only history and memory-only durability, before `migrate`', () => {
 		const store = new PatchStateStore(ENTITIES, {retention: 'revert-only', finalityDepth: 64});
 
-		expect(store.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false, durability: 'memory-only'});
+		expect(store.capabilities).toEqual({
+			retention: {kind: 'revert-only'},
+			asOf: false,
+			// honestly false: the storage is an instance field, so no second writer
+			// can reach it and a writer token here would only compare with itself
+			singleWriter: false,
+			durability: 'memory-only',
+		});
 	});
 
 	it('says the same with nothing configured: the claim is about the representation', () => {
@@ -26,6 +33,7 @@ describe('the capability report', () => {
 		expect(new PatchStateStore(ENTITIES).capabilities).toEqual({
 			retention: {kind: 'revert-only'},
 			asOf: false,
+			singleWriter: false,
 			durability: 'memory-only',
 		});
 	});

@@ -9,6 +9,8 @@ import {
 	pruneBudget,
 	resolveRetention,
 	retentionFloor,
+	StoreWriterChangedError,
+	writerToken,
 	type BlockPointer,
 	type EntityDeclaration,
 	type EntityId,
@@ -41,6 +43,8 @@ import {
 	UPPER_INDEX,
 	versionKey,
 	VERSIONS,
+	WRITER,
+	WRITER_KEY,
 	type BlockRecord,
 	type CurrentRecord,
 	type VersionRecord,
@@ -117,6 +121,12 @@ export type IndexedDBStateStoreOptions = RetentionOptions & {
  * IndexedDB event continues in the same microtask checkpoint and the transaction
  * is still active; anything else lets it auto-commit under code that thinks it
  * still owns it. See `idb.ts`.
+ *
+ * Those two rules are also the whole of why this backend can enforce a SINGLE
+ * WRITER exactly rather than best-effort: the writer token is read and checked
+ * in the same serialisable `readwrite` transaction that performs the write, so
+ * there is no window between the check and the write for a second tab to land
+ * in. See `writer.ts` at the seam and ADR-0075.
  */
 export class IndexedDBStateStore implements StateStore {
 	readonly databaseName: string;
@@ -125,6 +135,24 @@ export class IndexedDBStateStore implements StateStore {
 	private readonly finalityDepth: number | undefined;
 	private readonly factory: IDBFactory | undefined;
 	private connection: Promise<IDBDatabase> | undefined;
+	/**
+	 * This writer's claim on the database, minted by its first mutation and never
+	 * re-minted: a writer that lost the store stays refused, because silently
+	 * re-claiming would let two writers take it in turns and corrupt exactly the
+	 * state this guard exists to protect.
+	 */
+	private token: string | undefined;
+	/**
+	 * Whether a transaction CARRYING the claim has committed.
+	 *
+	 * Separate from the token because a transaction can abort for reasons of its
+	 * own -- a duplicate height is the ordinary one -- and it takes the claim down
+	 * with it. Until one commits, this writer has not written, so its next
+	 * mutation claims again; after one does, the check is all that stands between
+	 * it and a rival. The SQL backend keeps the same two fields for the same
+	 * reason, so the two answer identically.
+	 */
+	private claimed = false;
 
 	constructor(declarations: Iterable<EntityDeclaration>, options: IndexedDBStateStoreOptions = {}) {
 		this.entities = normalizeEntities(declarations);
@@ -154,7 +182,7 @@ export class IndexedDBStateStore implements StateStore {
 	 * at startup rather than from a wrong answer later.
 	 */
 	get capabilities(): StateStoreCapabilities {
-		return {retention: this.provided, asOf: this.provided.kind !== 'revert-only'};
+		return {retention: this.provided, asOf: this.provided.kind !== 'revert-only', singleWriter: true};
 	}
 
 	/**
@@ -166,6 +194,38 @@ export class IndexedDBStateStore implements StateStore {
 	 */
 	async migrate(): Promise<void> {
 		await this.database();
+	}
+
+	/**
+	 * Read the writer token and either CLAIM the database or check this writer
+	 * still holds it -- inside the caller's transaction, before it writes.
+	 *
+	 * This is the whole mechanism, and it is short because the substrate does the
+	 * hard part: a `readwrite` transaction serialises across tabs, so this check
+	 * and the writes that follow it are one indivisible unit and a rival's claim
+	 * is either wholly before it (we are refused) or wholly after it (it is
+	 * refused). There is no window, so there is no timing assumption.
+	 *
+	 * The first mutation through a handle claims UNCONDITIONALLY, taking the store
+	 * from whoever held it. That is what makes a crashed writer harmless: there is
+	 * no lease to expire, nothing to clear by hand, and the next writer waits for
+	 * nothing. The loser finds out at its next mutation, which is the point.
+	 */
+	private async claimOrCheck(tx: IDBTransaction, settled: Promise<void>, operation: string): Promise<void> {
+		const writer = tx.objectStore(WRITER);
+		if (!this.claimed) {
+			this.token ??= writerToken();
+			writer.put(this.token, WRITER_KEY);
+			// only a COMMITTED claim is a claim; the rejection is swallowed because
+			// the caller is being told what happened in better words already.
+			settled.then(
+				() => (this.claimed = true),
+				() => undefined,
+			);
+			return;
+		}
+		const held = (await request(writer.get(WRITER_KEY))) as string | undefined;
+		if (held !== this.token) throw abort(tx, settled, new StoreWriterChangedError(operation));
 	}
 
 	/**
@@ -213,11 +273,16 @@ export class IndexedDBStateStore implements StateStore {
 		});
 
 		const db = await this.database();
-		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, CURSORS], 'readwrite');
+		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, CURSORS, WRITER], 'readwrite');
 		const current = tx.objectStore(CURRENT);
 		const versions = tx.objectStore(VERSIONS);
 		const blocks = tx.objectStore(BLOCKS);
 		const settled = committed(tx);
+
+		// FIRST, so a writer that has lost the store is told THAT rather than
+		// whatever the block checks below would have said about a state it no longer
+		// has any business writing to.
+		await this.claimOrCheck(tx, settled, 'applyBlock');
 
 		const recorded = (await request(blocks.get(block.number))) as BlockRecord | undefined;
 		if (recorded) {
@@ -266,11 +331,18 @@ export class IndexedDBStateStore implements StateStore {
 		return (await request(store.get(key))) as string | undefined;
 	}
 
-	/** Move a cursor with no block behind it. See `StateStore.writeCursor`. */
+	/**
+	 * Move a cursor with no block behind it. See `StateStore.writeCursor`.
+	 *
+	 * Guarded like every other mutation, and this is the path the guard exists
+	 * for most: there is no block record here to refuse a stale writer
+	 * incidentally, so this is how a position moves BACKWARDS silently.
+	 */
 	async writeCursor(key: string, value: string): Promise<void> {
 		const db = await this.database();
-		const tx = db.transaction(CURSORS, 'readwrite');
+		const tx = db.transaction([CURSORS, WRITER], 'readwrite');
 		const settled = committed(tx);
+		await this.claimOrCheck(tx, settled, 'writeCursor');
 		tx.objectStore(CURSORS).put(value, key);
 		await settled;
 	}
@@ -278,8 +350,9 @@ export class IndexedDBStateStore implements StateStore {
 	/** Forget it. Deleting a key that is not there is the no-op the contract asks for. */
 	async clearCursor(key: string): Promise<void> {
 		const db = await this.database();
-		const tx = db.transaction(CURSORS, 'readwrite');
+		const tx = db.transaction([CURSORS, WRITER], 'readwrite');
 		const settled = committed(tx);
+		await this.claimOrCheck(tx, settled, 'clearCursor');
 		tx.objectStore(CURSORS).delete(key);
 		await settled;
 	}
@@ -409,11 +482,15 @@ export class IndexedDBStateStore implements StateStore {
 		// not entity state, and the caller moves it when it applies the canonical
 		// branch. See `cursor.ts`.
 		const db = await this.database();
-		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS], 'readwrite');
+		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, WRITER], 'readwrite');
 		const current = tx.objectStore(CURRENT);
 		const versions = tx.objectStore(VERSIONS);
 		const blocks = tx.objectStore(BLOCKS);
 		const settled = committed(tx);
+
+		// the destructive path, so the guard matters most here: this is the one that
+		// can leave a WRONG state rather than an exception.
+		await this.claimOrCheck(tx, settled, 'revertTo');
 
 		await walk(versions.index(LOWER_INDEX).openCursor(above(keepUpTo)), (cursor) => {
 			current.delete(rowOfVersionKey(cursor.primaryKey as IDBValidKey[]));
@@ -439,6 +516,9 @@ export class IndexedDBStateStore implements StateStore {
 	 * Delete the versions the retention floor puts out of reach, oldest close
 	 * first, and report what went.
 	 *
+	 * The tip, the floor derived from it and the deletion are ONE transaction, so
+	 * the floor is never computed against a tip another writer has moved.
+	 *
 	 * The predicate is the seam's (`retentionFloor`) and the access path is this
 	 * backend's: the `upper` index holds exactly the CLOSED versions, ordered by
 	 * the block that closed them, because a live version's `upper` is `null` and
@@ -459,14 +539,29 @@ export class IndexedDBStateStore implements StateStore {
 	 */
 	async prune(options: PruneOptions = {}): Promise<PruneReport> {
 		const budget = pruneBudget(options);
-		const tip = await this.tipBlockNumber();
-		const floor = tip === undefined ? undefined : retentionFloor(this.provided, tip, this.finalityDepth);
-		if (floor === undefined) return {tip, floor: undefined, versionsDeleted: 0, complete: true};
 
 		const db = await this.database();
-		const tx = db.transaction(VERSIONS, 'readwrite');
+		// BLOCKS is in here so the TIP is read inside the transaction that then
+		// deletes against it. It used to be read outside, which made the retention
+		// floor a number computed from a tip another writer could have moved between
+		// the read and the delete -- the read-then-write that merely LOOKS atomic.
+		// Widening the transaction is what closes that, and the writer token is what
+		// makes the closure hold across tabs (ADR-0075).
+		const tx = db.transaction([VERSIONS, BLOCKS, WRITER], 'readwrite');
 		const versions = tx.objectStore(VERSIONS);
 		const settled = committed(tx);
+		// a prune that turns out to delete nothing still claims: pruning is a write
+		// path, and whoever prunes is the writer (see the seam's `prune`).
+		await this.claimOrCheck(tx, settled, 'prune');
+
+		const tipCursor = await request(tx.objectStore(BLOCKS).openCursor(null, 'prev'));
+		const tip = tipCursor ? (tipCursor.key as number) : undefined;
+		const floor = tip === undefined ? undefined : retentionFloor(this.provided, tip, this.finalityDepth);
+		if (floor === undefined) {
+			await settled;
+			return {tip, floor: undefined, versionsDeleted: 0, complete: true};
+		}
+
 		let versionsDeleted = 0;
 		await walk(versions.index(UPPER_INDEX).openCursor(IDBKeyRange.upperBound(floor)), (cursor) => {
 			cursor.delete();
@@ -558,11 +653,12 @@ export class IndexedDBStateStore implements StateStore {
  * The version is this PACKAGE's and never a processor's: the object stores do not
  * depend on the declarations (`keys.ts` says why), so a processor gaining an
  * entity never needs an upgrade transaction that an open tab could block. It
- * moved to 2 once, when the cursor came behind the seam, and every step is
- * `contains`-guarded so an existing database gains the missing store and keeps
- * every row it had.
+ * moved to 2 when the cursor came behind the seam and to 3 when the writer token
+ * arrived, and every step is `contains`-guarded so an existing database gains
+ * the missing store and keeps every row it had.
  */
 function upgrade(db: IDBDatabase): void {
+	if (!db.objectStoreNames.contains(WRITER)) db.createObjectStore(WRITER);
 	if (!db.objectStoreNames.contains(CURSORS)) db.createObjectStore(CURSORS);
 	if (!db.objectStoreNames.contains(CURRENT)) db.createObjectStore(CURRENT);
 	if (!db.objectStoreNames.contains(VERSIONS)) {
@@ -601,9 +697,14 @@ function completeRow(
  * The rejection of the transaction promise is swallowed deliberately: the caller
  * is about to be told what happened in better words than `AbortError`, and an
  * unobserved rejection would surface as an unhandled one.
+ *
+ * A caller may hand over a MESSAGE (the refusals that are caller bugs) or a
+ * built ERROR (`StoreWriterChangedError`, which is a lost race and has to be
+ * distinguishable by type). Aborting is what makes both of them leave the store
+ * byte-identical.
  */
-function abort(tx: IDBTransaction, settled: Promise<void>, message: string): Error {
+function abort(tx: IDBTransaction, settled: Promise<void>, reason: string | Error): Error {
 	settled.catch(() => undefined);
 	tx.abort();
-	return new Error(message);
+	return typeof reason === 'string' ? new Error(reason) : reason;
 }

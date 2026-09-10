@@ -71,7 +71,7 @@ describe('capabilities are data, readable before any read is attempted', () => {
 	it('reports what it keeps and what it can answer', async () => {
 		const store = new MemoryStateStore([TOKEN]);
 		// note: before `migrate`, before any write. That is the point of story 7.
-		expect(store.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true});
+		expect(store.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true, singleWriter: false});
 	});
 });
 

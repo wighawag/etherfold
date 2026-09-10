@@ -6,6 +6,7 @@ export * from './listing.js';
 export * from './blocks.js';
 export * from './capabilities.js';
 export * from './cursor.js';
+export * from './writer.js';
 export * from './retention.js';
 export * from './pruning.js';
 export * from './errors.js';

@@ -38,6 +38,123 @@ export {idValues};
  * exactly the shape a test is least likely to have.
  */
 
+/**
+ * The writer-token guard: a predicate every mutating statement is ANDed with,
+ * and the token it is bound to.
+ *
+ * `RemoteSQL` is `prepare(sql)` plus `batch(statements)`, and a batch is a
+ * PRE-BUILT list, so there is no reading, running JS and writing inside one
+ * transaction here (ADR-0054 says exactly this about the registry). What there
+ * IS, is a batch that is one transaction: so the check travels INSIDE each
+ * statement, and a loser's statements each match zero rows, which is how its
+ * whole batch applies to NOTHING.
+ *
+ * It is OPTIONAL on every builder below, and absent means an unguarded
+ * statement. That is not a way to opt out of the guarantee -- the store always
+ * passes one -- it is what keeps these functions inspectable on their own, which
+ * is why they are pure data in the first place.
+ */
+export type WriterGuard = {
+	/** `COALESCE((SELECT token FROM _writer WHERE id = 0), '') = ?` */
+	readonly predicate: string;
+	/** The value that `?` binds to: this writer's claim. Opaque (`writer.ts`). */
+	readonly token: string;
+};
+
+/**
+ * The guard for one writer's token.
+ *
+ * `COALESCE` and not a bare comparison: with no row at all the subquery is
+ * NULL, and `NULL = ?` is NULL rather than false, which is the same outcome by
+ * accident rather than by statement. A store with no token row has no holder,
+ * and a writer that thinks it holds one has lost.
+ */
+export function writerGuard(token: string, names: TableNames): WriterGuard {
+	return {predicate: `COALESCE((SELECT token FROM ${names.writer} WHERE id = 0), '') = ?`, token};
+}
+
+/**
+ * CLAIM the store: take the token row, whoever held it.
+ *
+ * Unconditional, which is what makes an abandoned store takeable with no lease,
+ * no expiry and no waiting: a writer that was killed mid-block left a row and
+ * nothing else. It is the FIRST statement of the batch that carries a writer's
+ * first mutation, so the claim and that mutation are one transaction.
+ */
+export function claimWriterStatement(token: string, names: TableNames): Statement {
+	return {
+		sql: `INSERT INTO ${names.writer} (id, token) VALUES (0, ?) ON CONFLICT(id) DO UPDATE SET token = excluded.token`,
+		args: [token],
+	};
+}
+
+/**
+ * Read the token back: the LAST statement of a guarded batch, and the only
+ * evidence a writer gets.
+ *
+ * `remote-sql` reports rows and no affected-row count, so "did my guarded
+ * statements apply" is answerable only by asking what the row now holds, inside
+ * the same transaction that would have written. Ours means we won; anything
+ * else means a second writer got there first and our whole batch applied to
+ * nothing (ADR-0054).
+ */
+export function heldWriterStatement(names: TableNames): Statement {
+	return {sql: `SELECT token FROM ${names.writer} WHERE id = 0`, args: []};
+}
+
+/**
+ * RELEASE the claim, if it is still ours: the compare-and-swap `drop` needs.
+ *
+ * `drop` is DDL, and no `DROP TABLE` takes a `WHERE`, so the guard cannot ride
+ * the statements that do the work. It rides this one instead, which is an
+ * ordinary guarded DELETE: paired with `heldWriterStatement` in the same batch
+ * it decides, atomically, whether this writer may proceed to drop -- and it
+ * leaves the store byte-identical when it may not.
+ */
+export function releaseWriterStatement(guard: WriterGuard, names: TableNames): Statement {
+	return {sql: `DELETE FROM ${names.writer} WHERE id = 0 AND ${guard.predicate}`, args: [guard.token]};
+}
+
+/** Whether the writer table exists at all, so `drop` stays a no-op on a store that never migrated. */
+export function writerTableExistsStatement(names: TableNames): Statement {
+	return {sql: `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, args: [names.writer]};
+}
+
+/** `AND <guard>`, or nothing. */
+function andGuard(guard: WriterGuard | undefined): string {
+	return guard ? ` AND ${guard.predicate}` : '';
+}
+
+/** The guard's bound value, or nothing. It always goes LAST in the argument list. */
+function guardArgs(guard: WriterGuard | undefined): unknown[] {
+	return guard ? [guard.token] : [];
+}
+
+/**
+ * One row inserted, guarded or not.
+ *
+ * A guarded insert is `INSERT ... SELECT ?, ? WHERE <guard>` rather than
+ * `INSERT ... VALUES (?, ?)`, because `VALUES` takes no predicate. It inserts
+ * the same row, and it inserts NOTHING when the guard does not hold -- which is
+ * how a lost writer's block row never lands while a duplicate height still
+ * raises the primary-key violation it is supposed to raise.
+ */
+function insertRowStatement(
+	table: string,
+	columns: readonly string[],
+	values: readonly unknown[],
+	guard: WriterGuard | undefined,
+): Statement {
+	const placeholders = columns.map(() => '?').join(', ');
+	if (!guard) {
+		return {sql: `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`, args: [...values]};
+	}
+	return {
+		sql: `INSERT INTO ${table} (${columns.join(', ')}) SELECT ${placeholders} WHERE ${guard.predicate}`,
+		args: [...values, guard.token],
+	};
+}
+
 /** `_lower <= N AND (_upper IS NULL OR N < _upper)` — the whole of time travel. */
 export const AS_OF_PREDICATE = `${LOWER} <= ? AND (${UPPER} IS NULL OR ? < ${UPPER})`;
 
@@ -182,18 +299,31 @@ export function readCursorStatement(key: string, names: TableNames): Statement {
  * same block twice is a caller bug the store makes a primary-key violation on
  * purpose, whereas a cursor exists precisely to be overwritten.
  */
-export function writeCursorStatement(key: string, value: string, names: TableNames): Statement {
+export function writeCursorStatement(key: string, value: string, names: TableNames, guard?: WriterGuard): Statement {
+	if (!guard) {
+		return {
+			sql:
+				`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, ?) ` +
+				`ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = excluded.${CURSOR_VALUE}`,
+			args: [key, value],
+		};
+	}
+	// the upsert over a SELECT, which SQLite accepts precisely because the SELECT
+	// carries a WHERE: without one, `ON` would be ambiguous with a join.
 	return {
 		sql:
-			`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, ?) ` +
+			`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) SELECT ?, ? WHERE ${guard.predicate} ` +
 			`ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = excluded.${CURSOR_VALUE}`,
-		args: [key, value],
+		args: [key, value, guard.token],
 	};
 }
 
 /** Forget one cursor. Deleting a row that is not there is a no-op, which is the contract. */
-export function clearCursorStatement(key: string, names: TableNames): Statement {
-	return {sql: `DELETE FROM ${names.cursor} WHERE ${CURSOR_KEY} = ?`, args: [key]};
+export function clearCursorStatement(key: string, names: TableNames, guard?: WriterGuard): Statement {
+	return {
+		sql: `DELETE FROM ${names.cursor} WHERE ${CURSOR_KEY} = ?${andGuard(guard)}`,
+		args: [key, ...guardArgs(guard)],
+	};
 }
 
 export function applyBlockStatements(
@@ -202,15 +332,18 @@ export function applyBlockStatements(
 	mutations: readonly Mutation[],
 	names: TableNames,
 	cursor?: {key: string; value: string},
+	guard?: WriterGuard,
 ): Statement[] {
 	const entities = asEntityMap(declarations);
 	const statements: Statement[] = [
-		{
-			sql: `INSERT INTO ${names.blocks} (number, hash, timestamp) VALUES (?, ?, ?)`,
-			// the hash is folded to one spelling here, since it is the identity a
-			// consumer pins and later looks up (see `normalizeBlockHash`).
-			args: [block.number, normalizeBlockHash(block.hash), block.timestamp],
-		},
+		// the hash is folded to one spelling here, since it is the identity a
+		// consumer pins and later looks up (see `normalizeBlockHash`).
+		insertRowStatement(
+			names.blocks,
+			['number', 'hash', 'timestamp'],
+			[block.number, normalizeBlockHash(block.hash), block.timestamp],
+			guard,
+		),
 	];
 
 	for (const mutation of mutations) {
@@ -220,25 +353,29 @@ export function applyBlockStatements(
 
 		// (1) close the live version at this height
 		statements.push({
-			sql: `UPDATE ${table} SET ${UPPER} = ? WHERE ${idPredicate(entity)} AND ${UPPER} IS NULL`,
-			args: [block.number, ...values],
+			sql: `UPDATE ${table} SET ${UPPER} = ? WHERE ${idPredicate(entity)} AND ${UPPER} IS NULL${andGuard(guard)}`,
+			args: [block.number, ...values, ...guardArgs(guard)],
 		});
 
 		if (mutation.type === 'upsert') {
 			// (2) open the new one
 			const fields = Object.keys(entity.fields);
 			const columns = [...entity.id.map(quoted), ...fields.map(quoted), LOWER];
-			statements.push({
-				sql: `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
-				args: [...values, ...fields.map((field) => mutation.values?.[field] ?? null), block.number],
-			});
+			statements.push(
+				insertRowStatement(
+					table,
+					columns,
+					[...values, ...fields.map((field) => mutation.values?.[field] ?? null), block.number],
+					guard,
+				),
+			);
 		}
 	}
 
 	// LAST, and in the SAME list, which is the same `batch([...])` and therefore
 	// the same transaction: the cursor and the block it describes move together or
 	// neither moves. See `cursor.ts` at the seam for what the gap used to cost.
-	if (cursor) statements.push(writeCursorStatement(cursor.key, cursor.value, names));
+	if (cursor) statements.push(writeCursorStatement(cursor.key, cursor.value, names, guard));
 
 	return statements;
 }
@@ -295,10 +432,13 @@ export function dropVersionsStatement(
 	entity: NormalizedEntity,
 	rowids: readonly number[],
 	names: TableNames,
+	guard?: WriterGuard,
 ): Statement {
 	return {
-		sql: `DELETE FROM ${names.entity(entity.name)} WHERE ${ROWID} IN (${rowids.map(() => '?').join(', ')})`,
-		args: [...rowids],
+		sql:
+			`DELETE FROM ${names.entity(entity.name)} ` +
+			`WHERE ${ROWID} IN (${rowids.map(() => '?').join(', ')})${andGuard(guard)}`,
+		args: [...rowids, ...guardArgs(guard)],
 	};
 }
 
@@ -329,6 +469,7 @@ export function revertToStatements(
 	declarations: Iterable<EntityDeclaration> | ReadonlyMap<string, NormalizedEntity>,
 	keepUpTo: number,
 	names: TableNames,
+	guard?: WriterGuard,
 ): Statement[] {
 	const entities = asEntityMap(declarations);
 	const statements: Statement[] = [];
@@ -336,14 +477,23 @@ export function revertToStatements(
 	for (const entity of entities.values()) {
 		const table = names.entity(entity.name);
 		// A) drop versions opened above the fork (this clears their open rows)
-		statements.push({sql: `DELETE FROM ${table} WHERE ${LOWER} > ?`, args: [keepUpTo]});
+		statements.push({
+			sql: `DELETE FROM ${table} WHERE ${LOWER} > ?${andGuard(guard)}`,
+			args: [keepUpTo, ...guardArgs(guard)],
+		});
 		// B) re-open versions closed above the fork
-		statements.push({sql: `UPDATE ${table} SET ${UPPER} = NULL WHERE ${UPPER} > ?`, args: [keepUpTo]});
+		statements.push({
+			sql: `UPDATE ${table} SET ${UPPER} = NULL WHERE ${UPPER} > ?${andGuard(guard)}`,
+			args: [keepUpTo, ...guardArgs(guard)],
+		});
 	}
 
 	// the block table is this generation's own too, so a revert here cannot delete
 	// a block another generation on the same chain still needs (ADR-0053)
-	statements.push({sql: `DELETE FROM ${names.blocks} WHERE number > ?`, args: [keepUpTo]});
+	statements.push({
+		sql: `DELETE FROM ${names.blocks} WHERE number > ?${andGuard(guard)}`,
+		args: [keepUpTo, ...guardArgs(guard)],
+	});
 	return statements;
 }
 

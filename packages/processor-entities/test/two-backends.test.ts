@@ -189,8 +189,12 @@ describe.each(backends)('the seam behaves the same on $name', (backend) => {
 	});
 
 	it('reports its capabilities before anything is read', () => {
-		// Nothing was configured, so both keep everything and say so.
-		expect(store.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true});
+		// Nothing was configured, so both keep everything and say so. The RETENTION
+		// half is what a deployment writes and is therefore the same on both;
+		// `singleWriter` is a fact about the STORAGE and honestly differs, which is
+		// why it is asserted per backend rather than expected to match.
+		expect(store.capabilities.retention).toEqual({kind: 'unbounded'});
+		expect(store.capabilities.asOf).toBe(true);
 	});
 });
 
@@ -222,7 +226,8 @@ describe.each(backends)('a retention setting is written the same way on $name', 
 		await store.migrate();
 		await applyEventStream(store, processor, STREAM, undefined);
 
-		expect(store.capabilities).toEqual({retention: {kind: 'window', blocks: 128}, asOf: true});
+		expect(store.capabilities.retention).toEqual({kind: 'window', blocks: 128});
+		expect(store.capabilities.asOf).toBe(true);
 		// inside the window (the tip is block 102, so 100 is well inside it) both
 		// answer, and both keep answering after a prune has run.
 		expect(await store.getAsOf<{value: number}>('counter', {name: 'transfers'}, 100)).toMatchObject({value: 3});
@@ -235,7 +240,8 @@ describe.each(backends)('a retention setting is written the same way on $name', 
 		await store.migrate();
 		await applyEventStream(store, processor, STREAM, undefined);
 
-		expect(store.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false});
+		expect(store.capabilities.retention).toEqual({kind: 'revert-only'});
+		expect(store.capabilities.asOf).toBe(false);
 		// the tip is not a historical read: a processor does not need history to run,
 		// which is what makes `revert-only` a usable deployment rather than a crippled one
 		expect(await store.getCurrent<{value: number}>('counter', {name: 'transfers'})).toMatchObject({value: 5});

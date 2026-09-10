@@ -27,7 +27,7 @@ function windowed(blocks = 60, declarations: EntityDeclaration[] = [TOKEN]) {
 describe('declared capabilities', () => {
 	it('are readable before migrate and before any read', () => {
 		const store = new VersionedStateStore(createTestDB(), [TOKEN]);
-		expect(store.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true});
+		expect(store.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true, singleWriter: true});
 	});
 
 	it('default to `unbounded`, which keeps everything and prunes nothing', async () => {
@@ -76,7 +76,7 @@ describe('a store set to `revert-only`', () => {
 	}
 
 	it('reports that it answers no as-of read', () => {
-		expect(revertOnly().capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false});
+		expect(revertOnly().capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false, singleWriter: true});
 	});
 
 	it("refuses on the read surfaces that are this backend's own, not only at the seam", async () => {

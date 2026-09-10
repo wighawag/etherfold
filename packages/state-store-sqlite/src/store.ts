@@ -1,5 +1,5 @@
 import {logs} from 'named-logs';
-import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
+import type {RemoteSQL, SQLPreparedStatement, SQLResult} from 'remote-sql';
 import {DEFAULT_BATCH_BOUNDS, planBatches, type BatchBounds} from './batching.js';
 import {
 	NoSuchBlockError,
@@ -16,6 +16,8 @@ import {
 	pruneBudget,
 	resolveRetention,
 	retentionFloor,
+	StoreWriterChangedError,
+	writerToken,
 	type EntityIdPrefix,
 	type Listing,
 	type PruneOptions,
@@ -36,8 +38,10 @@ import {
 	blockAtOrBeforeStatement,
 	blockByHashStatement,
 	blockByNumberStatement,
+	claimWriterStatement,
 	clearCursorStatement,
 	dropVersionsStatement,
+	heldWriterStatement,
 	idPredicate,
 	idValues,
 	latestBlockStatement,
@@ -45,8 +49,12 @@ import {
 	listCurrentStatement,
 	prunableVersionsStatement,
 	readCursorStatement,
+	releaseWriterStatement,
 	revertToStatements,
 	writeCursorStatement,
+	writerGuard,
+	writerTableExistsStatement,
+	type WriterGuard,
 } from './statements.js';
 import type {
 	BlockPointer,
@@ -152,6 +160,21 @@ export class VersionedStateStore implements StateStore {
 	private readonly bounds: BatchBounds;
 	private readonly provided: Retention;
 	private readonly finalityDepth: number | undefined;
+	/**
+	 * This writer's claim on the store, minted on the first mutation and never
+	 * re-minted: a writer that lost the store stays refused, because silently
+	 * re-claiming would let two writers take it in turns.
+	 */
+	private token: string | undefined;
+	/**
+	 * Whether a batch CARRYING the claim has landed.
+	 *
+	 * Separate from the token because a batch can fail for reasons of its own (a
+	 * duplicate height is the ordinary one) and roll the claim back with it. Until
+	 * one lands, every guarded batch carries the claim again; after one does, the
+	 * guard alone is what stands between this writer and a rival.
+	 */
+	private claimed = false;
 
 	constructor(
 		private readonly db: RemoteSQL,
@@ -200,7 +223,7 @@ export class VersionedStateStore implements StateStore {
 	 * the report may never do is promise history that is gone.
 	 */
 	get capabilities(): StateStoreCapabilities {
-		return {retention: this.provided, asOf: this.provided.kind !== 'revert-only'};
+		return {retention: this.provided, asOf: this.provided.kind !== 'revert-only', singleWriter: true};
 	}
 
 	/**
@@ -240,6 +263,7 @@ export class VersionedStateStore implements StateStore {
 	 * is independent, and re-running converges.
 	 */
 	async drop(): Promise<void> {
+		await this.releaseBeforeDropping();
 		const statements = dropSchemaStatements(this.entities.values(), this.names);
 		logger.info(`dropping the state of ${this.names.namespace ?? 'the unnamespaced generation'}`);
 		for (const batch of planBatches(
@@ -248,6 +272,42 @@ export class VersionedStateStore implements StateStore {
 		)) {
 			await this.db.batch(this.prepare(batch));
 		}
+	}
+
+	/**
+	 * The guard for `drop`, which cannot be the guard every other path uses.
+	 *
+	 * `DROP TABLE` takes no `WHERE`, so a token predicate cannot ride the
+	 * statements that do the work. What can be guarded is the RELEASE of the claim
+	 * itself: a `DELETE ... WHERE token = ?` paired with the read-back in one
+	 * batch is an ordinary compare-and-swap, and it decides the question `drop`
+	 * actually asks -- may this writer dispose of this generation's state. A
+	 * writer that has lost the store fails that swap, is told so with
+	 * `StoreWriterChangedError`, and drops NOTHING: the store is byte-identical.
+	 *
+	 * What it does not give is what no DDL can: the drops that follow are not in
+	 * the same transaction as the check, so a rival claiming in between is
+	 * dropped out from under. That is inherent to disposing of a generation while
+	 * something writes to it, and it is a smaller window than the whole call it
+	 * replaced, which had none of this.
+	 *
+	 * The claim is forgotten afterwards, so a store `migrate`d back to life claims
+	 * again on its next write rather than guarding on a token whose table went.
+	 */
+	private async releaseBeforeDropping(): Promise<void> {
+		// a store that never migrated has no token table to read, and dropping it is
+		// the documented no-op rather than an error.
+		if ((await this.select(writerTableExistsStatement(this.names))).length === 0) return;
+		const guard = this.guard();
+		const claim = this.claimed ? [] : [claimWriterStatement(guard.token, this.names)];
+		const results = await this.db.batch<{token?: string}>(
+			this.prepare([...claim, releaseWriterStatement(guard, this.names), heldWriterStatement(this.names)]),
+		);
+		// the row is GONE when the release took, which is this batch's evidence that
+		// the claim it deleted was ours.
+		if (results[results.length - 1]?.results[0] !== undefined) throw new StoreWriterChangedError('drop');
+		this.token = undefined;
+		this.claimed = false;
 	}
 
 	// -- write side ----------------------------------------------------------
@@ -278,14 +338,15 @@ export class VersionedStateStore implements StateStore {
 	 * see `cursor.ts` at the seam.
 	 */
 	async applyBlock(block: BlockPointer, mutations: readonly Mutation[] = [], cursor?: CursorWrite): Promise<void> {
-		const statements = applyBlockStatements(this.entities, block, mutations, this.names, cursor);
+		const guard = this.guard();
+		const statements = applyBlockStatements(this.entities, block, mutations, this.names, cursor, guard);
 		if (statements.length > this.bounds.maxStatementsPerBatch) {
 			logger.warn(
 				`block ${block.number} needs ${statements.length} statements, above the configured bound of ` +
 					`${this.bounds.maxStatementsPerBatch}. Sent as one batch regardless: a block is one atomic unit.`,
 			);
 		}
-		await this.db.batch(this.prepare(statements));
+		await this.sendGuarded('applyBlock', guard, statements);
 	}
 
 	/** The opaque string last written under `key`, or `undefined`. See `cursor.ts`. */
@@ -294,14 +355,22 @@ export class VersionedStateStore implements StateStore {
 		return rows[0]?.value;
 	}
 
-	/** Move a cursor with no block behind it. See `StateStore.writeCursor`. */
+	/**
+	 * Move a cursor with no block behind it. See `StateStore.writeCursor`.
+	 *
+	 * Guarded like every other mutation, and this is the path that needs it most:
+	 * no block row incidentally protects it, so it is how a writer holding a stale
+	 * `LastSync` moves the recorded position BACKWARDS.
+	 */
 	async writeCursor(key: string, value: string): Promise<void> {
-		await this.db.batch(this.prepare([writeCursorStatement(key, value, this.names)]));
+		const guard = this.guard();
+		await this.sendGuarded('writeCursor', guard, [writeCursorStatement(key, value, this.names, guard)]);
 	}
 
 	/** Forget it. A `DELETE` matching nothing is the no-op the contract asks for. */
 	async clearCursor(key: string): Promise<void> {
-		await this.db.batch(this.prepare([clearCursorStatement(key, this.names)]));
+		const guard = this.guard();
+		await this.sendGuarded('clearCursor', guard, [clearCursorStatement(key, this.names, guard)]);
 	}
 
 	/**
@@ -312,13 +381,14 @@ export class VersionedStateStore implements StateStore {
 	 * many blocks it carries, and a block is never split across two batches.
 	 */
 	async applyBlocks(updates: readonly BlockUpdate[]): Promise<void> {
+		const guard = this.guard();
 		const groups = updates.map((update) =>
-			applyBlockStatements(this.entities, update.block, update.mutations, this.names),
+			applyBlockStatements(this.entities, update.block, update.mutations, this.names, undefined, guard),
 		);
-		const batches = planBatches(groups, this.bounds);
+		const batches = planBatches(groups, this.guardedBounds());
 		logger.debug(`applying ${updates.length} blocks in ${batches.length} batches`);
 		for (const batch of batches) {
-			await this.db.batch(this.prepare(batch));
+			await this.sendGuarded('applyBlocks', guard, batch);
 		}
 	}
 
@@ -335,10 +405,12 @@ export class VersionedStateStore implements StateStore {
 		// got is not entity state, and the caller moves it when it applies the
 		// canonical branch. See `cursor.ts`.
 		logger.info(`reverting state above block ${keepUpTo}`);
-		const statements = revertToStatements(this.entities, keepUpTo, this.names);
+		const guard = this.guard();
+		const statements = revertToStatements(this.entities, keepUpTo, this.names, guard);
 		// one batch: a partially reverted store would violate the one-live-version
-		// invariant while it lasted.
-		await this.db.batch(this.prepare(statements));
+		// invariant while it lasted. It is also the path that can leave a WRONG state
+		// rather than an exception, which is why every statement in it is guarded.
+		await this.sendGuarded('revertTo', guard, statements);
 	}
 
 	/**
@@ -382,29 +454,37 @@ export class VersionedStateStore implements StateStore {
 	 */
 	async prune(options: PruneOptions = {}): Promise<PruneReport> {
 		const budget = pruneBudget(options);
-		const tip = await this.tipBlockNumber();
+		const guard = this.guard();
+		// The tip rides the CLAIM batch, so the number the floor is computed from and
+		// the token that authorises the deletion are read in one transaction, and a
+		// writer that has lost the store is refused before it reads anything. That
+		// costs no round trip: this is the tip read `prune` always made.
+		const [tipResult] = await this.sendGuarded<RecordedBlock>('prune', guard, [latestBlockStatement(this.names)]);
+		const tip = tipResult?.results[0]?.number;
 		const floor = tip === undefined ? undefined : retentionFloor(this.provided, tip, this.finalityDepth);
 		if (floor === undefined) return {tip, floor: undefined, versionsDeleted: 0, complete: true};
 
 		let versionsDeleted = 0;
 		for (const entity of this.entities.values()) {
 			while (versionsDeleted < budget) {
-				const limit = Math.min(this.bounds.maxRowsPerStatement, budget - versionsDeleted);
+				// one fewer row than the bound allows, because the guard is the one other
+				// bound parameter this statement carries -- see `maxRowsPerStatement`,
+				// whose default sits EXACTLY on the tightest hosted backend's cap.
+				const limit = Math.min(Math.max(1, this.bounds.maxRowsPerStatement - 1), budget - versionsDeleted);
 				// keyed off ROWID rather than a literal: the column name is `ddl.ts`'s to
 				// choose, and renaming it must not silently produce a list of undefineds.
 				const found = await this.select<Record<typeof ROWID, number>>(
 					prunableVersionsStatement(entity, floor, limit, this.names),
 				);
 				if (found.length === 0) break;
-				await this.db.batch(
-					this.prepare([
-						dropVersionsStatement(
-							entity,
-							found.map((row) => row[ROWID]),
-							this.names,
-						),
-					]),
-				);
+				await this.sendGuarded('prune', guard, [
+					dropVersionsStatement(
+						entity,
+						found.map((row) => row[ROWID]),
+						this.names,
+						guard,
+					),
+				]);
 				versionsDeleted += found.length;
 			}
 		}
@@ -632,6 +712,64 @@ export class VersionedStateStore implements StateStore {
 			.bind(...(options.args ?? []), ...tailArgs)
 			.all<T>();
 		return result.results;
+	}
+
+	// -- the writer token ----------------------------------------------------
+
+	/**
+	 * This writer's guard, minting its claim token on first use.
+	 *
+	 * Minting is not claiming: the token becomes real only when a batch carrying
+	 * `claimWriterStatement` commits. Until then it is a value nobody has seen.
+	 */
+	private guard(): WriterGuard {
+		this.token ??= writerToken();
+		return writerGuard(this.token, this.names);
+	}
+
+	/**
+	 * Send one guarded batch: the CLAIM (until one has landed), the caller's
+	 * already-guarded statements, and the READ-BACK that says who holds the store.
+	 *
+	 * This is ADR-0054's shape, and the ordering is the same and load-bearing for
+	 * the same reasons. The claim comes FIRST, because a writer's first mutation
+	 * must take the store and write in one transaction. The read-back comes LAST,
+	 * because `remote-sql` reports rows and no affected-row count, so what the
+	 * token row says at the end of the batch is the only evidence there is: ours
+	 * means every guarded statement applied, anything else means a second writer
+	 * got there first and this whole batch applied to NOTHING.
+	 *
+	 * There is deliberately NO retry. ADR-0054 re-runs a losing decision because
+	 * the registry's caller wants the write to happen against whatever state holds;
+	 * here a loser must not write at all, so it is told and it stops.
+	 *
+	 * Returns the caller's own results, aligned with the statements it passed.
+	 */
+	private async sendGuarded<T = Record<string, unknown>>(
+		operation: string,
+		guard: WriterGuard,
+		statements: readonly Statement[],
+	): Promise<SQLResult<T>[]> {
+		const claim = this.claimed ? [] : [claimWriterStatement(guard.token, this.names)];
+		const results = await this.db.batch<T & {token?: string}>(
+			this.prepare([...claim, ...statements, heldWriterStatement(this.names)]),
+		);
+		const held = results[results.length - 1]?.results[0]?.token;
+		if (held !== guard.token) throw new StoreWriterChangedError(operation);
+		this.claimed = true;
+		return results.slice(claim.length, results.length - 1);
+	}
+
+	/**
+	 * The batch bounds with room kept for the two statements every guarded batch
+	 * adds: the claim and the read-back.
+	 *
+	 * Only the paths that PACK several atomic units need it (`applyBlocks`): a
+	 * single block is one indivisible group and is sent oversized on purpose if it
+	 * has to be.
+	 */
+	private guardedBounds(): BatchBounds {
+		return {...this.bounds, maxStatementsPerBatch: Math.max(1, this.bounds.maxStatementsPerBatch - 2)};
 	}
 
 	private async select<T>(statement: Statement): Promise<T[]> {

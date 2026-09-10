@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import {describeStateStoreConformance} from '@etherfold/state-store-conformance';
+import {describeStateStoreConformance, type TwoWriters} from '@etherfold/state-store-conformance';
 import {IndexedDBStateStore} from '../src/index.js';
 import {freshDatabaseName} from './utils/database.js';
 
@@ -25,11 +25,35 @@ import {freshDatabaseName} from './utils/database.js';
  * chosen on (and the multi-tab behaviour it was chosen for) are exactly what a
  * shim cannot show. This run is what keeps the acceptance gate honest between
  * browser runs.
+ *
+ * Every run hands over `twoWriters`, because this backend CLAIMS it enforces a
+ * single writer, and on this substrate the storage identity is exactly the
+ * `databaseName` (ADR-0075): two handles on one name are two tabs of one app,
+ * and two names are two unrelated indexers -- or two generations of one indexer
+ * addressed apart, which must keep writing at the same time.
  */
+
+/** Two stores on one database name, or on two: the whole of the scoping question here. */
+const twoWriters: TwoWriters = {
+	sharingStorage(declarations) {
+		const databaseName = freshDatabaseName();
+		return [
+			new IndexedDBStateStore(declarations, {databaseName}),
+			new IndexedDBStateStore(declarations, {databaseName}),
+		];
+	},
+	addressedApart(declarations) {
+		return [
+			new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName()}),
+			new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName()}),
+		];
+	},
+};
 
 await describeStateStoreConformance(
 	'IndexedDBStateStore, keeping everything',
 	(declarations) => new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName()}),
+	{twoWriters},
 );
 
 await describeStateStoreConformance(
@@ -40,6 +64,7 @@ await describeStateStoreConformance(
 			retention: {blocks: 128},
 			finalityDepth: 64,
 		}),
+	{twoWriters},
 );
 
 await describeStateStoreConformance(
@@ -50,4 +75,5 @@ await describeStateStoreConformance(
 			retention: 'revert-only',
 			finalityDepth: 64,
 		}),
+	{twoWriters},
 );

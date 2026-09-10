@@ -22,12 +22,12 @@ async function loaded(options: ConstructorParameters<typeof VersionedStateEventP
 describe('what a consumer can discover at startup', () => {
 	it('reads the retention off the view, before any read', async () => {
 		const p = await loaded();
-		expect(p.state.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true});
+		expect(p.state.capabilities).toEqual({retention: {kind: 'unbounded'}, asOf: true, singleWriter: true});
 	});
 
 	it('reports `revert-only` when the deployment asked for it', async () => {
 		const p = await loaded({retention: 'revert-only'});
-		expect(p.state.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false});
+		expect(p.state.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false, singleWriter: true});
 	});
 });
 

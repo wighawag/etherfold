@@ -169,6 +169,7 @@ describe('dropping one generation state', () => {
 				'_genB_token_lower',
 				'_genB_token_open',
 				'_genB_token_upper',
+				'_genB_writer',
 				'genB_account',
 				'genB_token',
 			].sort(),
@@ -209,6 +210,7 @@ describe('with NO namespace configured', () => {
 			'_token_lower',
 			'_token_open',
 			'_token_upper',
+			'_writer',
 			'token',
 		]);
 	});

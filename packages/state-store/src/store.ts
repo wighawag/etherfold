@@ -41,6 +41,21 @@ import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.j
  * store can close it -- and the cost is a handful of lines per backend over one
  * key and one opaque string, which is what keeps ADR-0016 intact: the store
  * still does not know what a `LastSync` is. See `cursor.ts`.
+ *
+ * ## Every MUTATING verb is guarded, on a backend that claims it
+ *
+ * `applyBlock`, `revertTo`, `writeCursor`, `clearCursor` and `prune` are the
+ * mutating surface here, and a store reporting `singleWriter` carries a WRITER
+ * TOKEN on every one of them, checked inside the same atomic unit as the write
+ * it guards (`writer.ts`, ADR-0075). A backend with mutating verbs of its own
+ * (`applyBlocks` and `drop` on `@etherfold/state-store-sqlite`) owes them the
+ * same guard: the promise is about the STORAGE, so a path that skips it is a
+ * hole in it.
+ *
+ * `migrate` is deliberately EXCLUDED and must not claim. It runs on every open,
+ * including from `createBrowserStateStore`, so claiming there would make merely
+ * OPENING a second handle -- which is what several tabs of one app do -- take
+ * the store away from the writer that has it.
  */
 export interface StateStore {
 	/** What this store keeps and what it can answer. Readable before `migrate`. */
@@ -52,6 +67,9 @@ export interface StateStore {
 	/**
 	 * Bring the storage to the declared shape. Idempotent, so it is safe on every
 	 * boot.
+	 *
+	 * It is NOT a mutating path in the writer-token sense and must never claim:
+	 * opening a store is not writing to it, and every tab of one app opens.
 	 */
 	migrate(): Promise<void>;
 

@@ -174,9 +174,15 @@ export class PatchStateStore implements StateStore {
 	 * other claim would be fiction. `asOf: false` is what makes
 	 * `assertRetained` refuse every as-of read at the seam's own boundary rather
 	 * than at one written here.
+	 *
+	 * `singleWriter: false` for the same reason it is `memory-only`: the state and
+	 * the patch log are instance fields, so no second writer can reach them, and a
+	 * writer token here could only ever be compared with itself -- a guarantee
+	 * that is green, tested and vacuous (`writer.ts`). Two handles on this store
+	 * are two stores.
 	 */
 	get capabilities(): PatchStateStoreCapabilities {
-		return {retention: REVERT_ONLY, asOf: false, durability: 'memory-only'};
+		return {retention: REVERT_ONLY, asOf: false, singleWriter: false, durability: 'memory-only'};
 	}
 
 	/** Nothing to create: the shape is the declaration, validated at construction. */

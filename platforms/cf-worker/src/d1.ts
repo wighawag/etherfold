@@ -58,8 +58,16 @@ export const D1_LIMITS: Record<D1Plan, D1Limits> = {
  */
 export const DEFAULT_D1_PLAN: D1Plan = 'free';
 
-/** The queries one prune ROUND costs: one SELECT of row ids, one DELETE naming them. */
-const QUERIES_PER_PRUNE_ROUND = 2;
+/**
+ * The queries one prune ROUND costs: one SELECT of row ids, one DELETE naming
+ * them, and the writer read-back that says the DELETE was ours to make.
+ *
+ * It was two until every mutating path carried a writer token (ADR-0075): the
+ * DELETE is now guarded on the token and the batch reads it back, because
+ * `remote-sql` reports no affected-row count and that read is the only evidence
+ * there is.
+ */
+const QUERIES_PER_PRUNE_ROUND = 3;
 
 /**
  * The plan this deployment says it is on, from the `D1_PLAN` var in
@@ -115,8 +123,11 @@ export function d1BatchBounds(plan: D1Plan): BatchBounds {
  * cap is per Worker invocation, and a prune is a LOOP of small requests, so the
  * thing that keeps it inside the cap is its budget (ADR-0022 makes `prune` an
  * explicit host-scheduled call for exactly this kind of reason). A prune costs
- * two queries per round plus a tip read, and one round drops at most
- * `maxRowsPerStatement` versions.
+ * `QUERIES_PER_PRUNE_ROUND` queries per round plus a tip read, and one round
+ * drops just under `maxRowsPerStatement` versions -- the writer guard is one of
+ * that statement's bound parameters, so the row ids are one fewer, which makes
+ * the rounds a budget costs round UP by a percent. The reserved half below
+ * absorbs that as it absorbs the tip read and the completeness probe.
  *
  * Half the plan's queries are RESERVED by default, for the rest of whatever the
  * invocation is doing (an ingest reads a cursor and writes blocks before it ever
