@@ -1,27 +1,10 @@
 ---
 title: 'The indexer runs in a worker and the tab talks to it'
 slug: the-indexer-runs-in-a-worker-and-the-tab-talks-to-it
-humanOnly: true
-needsAnswers: true
 taskedAfter: [a-second-writer-writes-nothing]
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK — stripped by the apply rung on full resolution.
--->
-
-## Open questions
-
-1. **Who authors the worker script?** The processor is CODE and cannot cross a `postMessage` boundary, so the worker must IMPORT it, which means the worker entry point is app-authored and this package ships the body it calls rather than the script itself. The alternative is a processor MODULE loaded by URL, which `instantiateProcessor` already contemplates for hosts, and which would let this package ship a ready-made worker at the cost of the app's bundler no longer seeing its own processor.
-2. **Dedicated worker or SharedWorker, and who decides?** They differ in exactly the way the election spec cares about: a SharedWorker is one instance per origin and script, so it removes election entirely, while a dedicated worker is per tab and needs one. Both are wanted, which suggests the boundary should be transport-shaped (a `MessagePort`) and the choice a deployment's, but a SharedWorker's lifecycle and its inability to be debugged in some tooling are real costs to accept knowingly.
-3. **Does the control surface mirror the current hook, or narrow?** `createIndexerState` exposes a reactive `syncing` / `state` / `status` triple, `checkTxInclusion`, and generation control. Mirroring it across a port preserves every app, and it also exports a surface designed for same-thread use, where a getter is free and a round trip is not.
-4. **What happens when the worker dies?** A crashed or evicted worker leaves a tab holding a port to nothing. Restart-and-resume should be transparent (the state is in the store and the cursor is beside it), but "transparent" has to be defined: whether in-flight queries reject or retry, and whether the app is told at all.
-5. **Is the main-thread path kept?** Running the indexer on the main thread is what ships today and is the simplest thing for a small app. Keeping both means two hosting shapes to support; dropping it means the smallest app pays for a worker.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -72,8 +55,7 @@ Three surfaces cross that port, and they are deliberately three rather than one 
 
 ### Autonomy notes
 
-- **`humanOnly: true`.** This decides the shape of the public browser API: whether `createIndexerState` stays, what an app writes, and whether the main-thread path survives. That is the surface every browser app is written against.
-- **`needsAnswers: true`.** Question 1 decides what an app authors and therefore what this package can ship at all; question 5 decides whether there are one or two supported hosting shapes, which changes every task's scope.
+- **No flags.** Every question is answered below, and the work is ADDITIVE: a new worker entry, a new port, a new shell around an unchanged body. Nothing existing breaks and nothing has to be migrated, so cutting it into tasks needs no judgement a tasker does not have.
 - **`taskedAfter: [a-second-writer-writes-nothing]`.** The two ends of this port are exactly the two ends of that spec's writer/reader split: the worker holds the store opened for writing, a tab holds a reader. Building the boundary first would mean inventing a second way to say the same thing.
 
 ## Implementation Decisions
@@ -86,7 +68,19 @@ Three surfaces cross that port, and they are deliberately three rather than one 
 
 **Writer and reader are expressed across the boundary.** The worker holds the store opened for writing; a tab holds a reader. That is the writer-guard spec's split reaching its natural home, and it is why this spec is worth doing in the order it is: the two ends of the port are exactly the two ends of that distinction.
 
-**A restart is expected, not exceptional.** Browsers evict workers. The state is in the store and the cursor is written in the same transaction as the block it describes (ADR-0027), so resuming is reading the cursor and continuing. What needs deciding is only the tab's experience of it (question 4), and the default should be that the app is told rather than left guessing, because a silent restart looks exactly like a stall.
+**A restart is expected, not exceptional.** Browsers evict workers. The state is in the store and the cursor is written in the same transaction as the block it describes (ADR-0027), so resuming is reading the cursor and continuing.
+
+### The five answers
+
+**The APP authors the worker entry; this package ships the body it calls.** A processor is code and closures, so it cannot be cloned across `postMessage` and the worker must IMPORT it. Loading it as a module by URL instead would take the processor out of the app's bundler, losing type-checking across the boundary and duplicating dependencies like viem. The app writes about five lines, and `new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})` is first-class in every current bundler. A consequence worth having falls out of it: a SharedWorker is identified by its SCRIPT URL plus name, so two different apps on one origin get different workers with nothing to configure, which is the same scoping the writer guard arrives at from the storage side.
+
+**Both hosting shapes, chosen at construction, with a dedicated worker as the DEFAULT.** They differ only in how a port is obtained, so this is configuration rather than a fork. Dedicated is the default because it works everywhere, it debugs properly (a SharedWorker needs `chrome://inspect` and has no devtools panel), and the non-leader workers are not idle: each serves its own tab's reads, so reads PARALLELISE instead of funnelling through one worker. SharedWorker is opt-in and wins a narrower prize: one store connection, and no election needed at all.
+
+**The control surface NARROWS, and this is already forced by another spec.** `a-reader-learns-when-the-state-moved` decided that sync progress rides the notification signal, so status is PUSHED rather than mirrored. Reproducing today's reactive triple across a port would mean either polling or duplicating state in every tab, which is what a surface designed for same-thread use (where a getter is free and a round trip is not) turns into when it crosses a boundary. An app builds its own reactive wrapper from the signal, and a small helper for the common case can ship beside it.
+
+**A dead worker: tell the app, reject in-flight calls with a typed error, auto-restart and resume.** Silence looks exactly like a stall, which is where "is it broken?" reports come from, and a hung promise is the worst of the available outcomes. Resume is nearly free because the cursor is written in the same transaction as the block it describes. Reject rather than silently retry: every GraphQL client already retries, and a silent retry hides an event the app may want to know about.
+
+**The main-thread path is KEPT.** This looked like a product decision and is not one: `localExecutor` is needed for tests regardless, so the same-thread path EXISTS whether or not it is a supported product. Making it supported therefore costs documentation rather than code, because the body is identical in both shells. What changes is that the guide stops leading with it.
 
 ## Testing Decisions
 

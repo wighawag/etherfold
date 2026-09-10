@@ -1,25 +1,10 @@
 ---
 title: 'One tab indexes and the others read'
 slug: one-tab-indexes-and-the-others-read
-needsAnswers: true
 taskedAfter: [a-second-writer-writes-nothing]
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK — stripped by the apply rung on full resolution.
--->
-
-## Open questions
-
-1. **Is a SharedWorker the primary mechanism, or the Web Locks election?** A SharedWorker is a singleton by construction, so there is no election at all and no lease to reason about, but it PRESUMES a worker-hosted indexer, and nothing in this repository puts one there yet (see Out of Scope). Web Locks works with the indexer wherever it already is. Picking SharedWorker first makes this spec depend on work that does not exist; picking Web Locks first means building an election that a later SharedWorker would make redundant.
-2. **How does a reader learn that the leader advanced?** OWNED BY `a-reader-learns-when-the-state-moved`, which exists because this question belonged to neither of the two specs that needed it. Recorded here because the leader is the PRODUCER in that model, and `BroadcastChannel` between tabs is one of the transports it has to work over. Do not answer it here.
-3. **What does a demoted leader do with work in flight?** The writer guard makes its next mutation fail safely, so this is about tidiness rather than correctness: whether it abandons the batch silently, reports it, or keeps its fetched logs warm in case it wins the lease back.
-4. **Does a reader tab report sync progress, and from where?** An app renders "syncing, 400 blocks behind" from `IndexerState`. A reader computes nothing itself and must read the leader's cursor, which is behind the storage seam as an opaque string. Either the leader publishes progress alongside its block notification, or a reader deserialises a cursor the seam says is opaque, and only the first of those is allowed.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -37,11 +22,13 @@ That last clause is what `a-second-writer-writes-nothing` buys and it is why thi
 
 The structural half is that a non-leader is not a leader that declines to write. It is **handed a reader**: `openForReading` from the writer-guard spec, which is the same move ADR-0044 already makes for streams, where a follower is handed a `readOnlyStream` rather than asked to behave.
 
-The mechanism is a ladder, because runtimes differ and the best answer needs work that does not exist yet:
+**The mechanism is Web Locks, and there is no ladder.** This spec launched with three rungs and they collapse into one, which is the better answer:
 
-1. **A SharedWorker**, where available: one instance per origin and script, so there is no election, no lease, no heartbeat and no dual-leader window. Tabs attach by `MessagePort`, which is exactly the query spec's `workerExecutor(port)`. Safari removed SharedWorker for years and restored it in 16.4, so it is now broadly viable rather than Chrome-only.
-2. **Web Locks** (`navigator.locks.request`), when the indexer is in a dedicated worker per tab or on the main thread: acquisition is ATOMIC so there is no read-check-write race and no dual-leader window to reconcile afterwards, and the lock is released automatically when the tab dies or crashes, so there is no heartbeat, no stale threshold and no timeout to tune. Safari 15.4+.
-3. **A `localStorage` lock plus `BroadcastChannel` with heartbeats**, the portable floor. Written and tested next door in `jolly-roger` (`web/src/lib/core/tab-leader/`), and its own comments are honest about the cost of that substrate: the read-check-write "is not atomic (TOCTOU race)... all could briefly become leaders", resolved afterwards by channel messages, plus a heartbeat, a stale threshold and an election debounce. Four moving parts because `localStorage` cannot do better.
+**Web Locks (`navigator.locks.request`) is THE mechanism.** Acquisition is ATOMIC, so there is no read-check-write race and no dual-leader window to reconcile afterwards, and the lock is released automatically when the tab dies or crashes, so there is no heartbeat, no stale threshold and no timeout to tune. Safari 15.4+.
+
+**A SharedWorker is not a second mechanism. It is a deployment where the lock never contends.** With one instance per origin and script there is exactly one contender, so the same code takes the same lock uncontended and costs nothing. That is worth stating as strongly as possible, because "SharedWorker OR Web Locks" would have meant two code paths with two failure modes for one job, and choosing between them per deployment. There is one path.
+
+**The `localStorage` plus `BroadcastChannel` fallback is CUT unless a real target needs it.** It exists for pre-15.4 Safari, and this project already requires modern IndexedDB behaviour. `jolly-roger`'s implementation (`web/src/lib/core/tab-leader/`) is good and is there if such a target is ever named; building it now is speculative work with four moving parts, and its own comments say why that substrate needs them (the read-check-write "is not atomic (TOCTOU race)... all could briefly become leaders", so it also needs channel reconciliation, a heartbeat, a stale threshold and an election debounce).
 
 Whichever rung is used, the lock's identity is **the store's storage identity**, not the origin and not the app. Two tabs running unrelated indexers must never contend, and two correctly separated generations of one indexer must be able to write at once, which is the same scoping rule the writer guard already settles by putting its token inside the storage it guards.
 
@@ -68,8 +55,7 @@ Whichever rung is used, the lock's identity is **the store's storage identity**,
 
 ### Autonomy notes
 
-- **No `humanOnly`.** Nothing here changes a public seam or a default. It adds a mechanism whose failure mode is cost, and the shape is constrained by the writer-guard spec that precedes it.
-- **`needsAnswers: true`.** Question 1 decides whether this spec depends on a worker-hosted indexer that does not exist yet, which changes what the tasks are rather than how they are built. Question 2 must be answered jointly with the query spec's transport question or the two will disagree.
+- **No flags.** Nothing here changes a public seam or a default; it adds a mechanism whose failure mode is cost. Of the four questions it launched with, two were answered by `a-reader-learns-when-the-state-moved` (how a reader learns, and where a reader's progress comes from), and the other two are answered below.
 
 ## Implementation Decisions
 
@@ -80,6 +66,8 @@ Whichever rung is used, the lock's identity is **the store's storage identity**,
 **A leader publishes; it is not polled.** Readers learn of a new block from the leader rather than by watching the store, because a store that has to be watched means either polling or a change feed nothing has asked for. What that publication carries is settled with the query spec's transport question (open question 2), and it must include enough for a reader to render sync progress without deserialising the cursor, which the seam says is opaque (ADR-0027).
 
 **Losing is a demotion, not an error.** A tab that loses the lease, or whose write is refused by the guard, drops its in-memory `LastSync` (now a lie), stops fetching, and continues as a reader. That is the same demotion the writer-guard spec already specifies for a refused write, and there should be one code path for both.
+
+**A demoted leader ABANDONS its in-flight batch, reports it, and keeps nothing.** Holding the fetched logs warm optimises winning the lease back, which should be rare, and it means holding memory in a tab that has just concluded it is not the one doing the work. Reporting it makes the abandonment visible rather than a silent gap in what that tab thought it was doing.
 
 **A foreground tab may take the lease from a backgrounded one.** This is the case that a lock alone does not solve, because a throttled tab holds its lock perfectly well while doing almost nothing. Whatever mechanism is chosen needs a way for a visible tab to ask, and the fallback if it is not built is simply the status quo: the backgrounded leader keeps indexing slowly, which is a cost problem and not a correctness one.
 

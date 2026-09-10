@@ -63,7 +63,7 @@ A refused writer is not an application error. It is a writer learning it lost, a
 
 ### Autonomy notes
 
-- **`humanOnly: true`.** Splitting the store's construction into a writing and a reading factory is a breaking change to `StateStore`, every backend, the conformance suite and `@etherfold/processor-entities`. The decision is taken (below) and the rationale is recorded, but accepting that blast radius on the project's central seam is a human's call, not an auto-tasker's.
+- **`humanOnly: true`, and for a TASKING reason rather than an approval one.** The flag's only effect is that an agent may not auto-task this spec, so "a human should approve a big change" is not what it is for. What it is for here: splitting construction into a writing and a reading factory is the one genuinely BREAKING change in this set, touching `StateStore`, four backends, the conformance suite and `@etherfold/processor-entities`, and HOW that is cut is a judgement. One task leaves the repository unbuildable in the middle; eight tasks in the wrong order leave it unbuildable between two of them. Choosing the sequence so that `main` builds and passes at every step is the decision, and with no CI the only thing enforcing that is how the tasks were cut in the first place.
 - **No `needsAnswers`.** All three are answered in Implementation Decisions below. Two were preferences with a clear argument; the third was a question about existing code, and it was settled by reading `applyEventStream` rather than by choosing.
 
 ## Implementation Decisions

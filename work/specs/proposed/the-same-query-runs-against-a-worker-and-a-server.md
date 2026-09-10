@@ -1,8 +1,6 @@
 ---
 title: 'The same query runs against a worker and a server'
 slug: the-same-query-runs-against-a-worker-and-a-server
-humanOnly: true
-needsAnswers: true
 taskedAfter:
   [
     a-second-writer-writes-nothing,
@@ -13,25 +11,6 @@ taskedAfter:
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK — stripped by the apply rung on full resolution.
--->
-
-## Open questions
-
-> **Three of six are CLOSED**, and their answers are in Implementation Decisions below.
->
-> - **multiEntry, by measurement.** `docs/spikes/a-multientry-index-over-computed-field-keys/` answers 9 of 9 probes on Chromium, Firefox and WebKit, three runs each, with no engine needing a workaround: rung 2 is viable. What that spike did NOT settle is the write cost, which is now an obligation ON rung 2 rather than a question for this spec.
-> - **GraphQL does not replace the generated read surface**, because that was never really the question: `createReadSurface` costs no bundle, so deleting it saves nothing.
-> - **`block:` combined with `where` IS served in the browser**, inside retention, as current-plus-delta over two indexes that already exist.
-> - **The transport does NOT admit `AsyncIterable`.** `a-reader-learns-when-the-state-moved` owns that decision and answered it: liveness is a SIGNAL on its own channel, not a GraphQL subscription, so `QueryExecutor` stays `Promise`-returning on day one. If subscriptions are ever wanted they arrive as a separate `subscribe` on the same port rather than by widening the executor, which is the cleaner shape regardless: two functions rather than one polymorphic one.
-
-1. **What bounds rung 1, and in what unit?** Rows scanned, rows returned, or elapsed time. Rows scanned is the honest one (it is what actually grows), elapsed time is what a user feels, and the two disagree exactly when it matters. One bound now governs BOTH the tip scan and the as-of delta (below), so this is one knob and not two.
-2. **Where does the accessor seam live?** `@etherfold/state-store` (neutral, beside `createReadSurface`, and then the seam has a member no backend can implement without a planner) or its own package that both backends and the schema depend on.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -85,8 +64,7 @@ There is also a gap on the server that is easy to miss because a research table 
 
 ### Autonomy notes
 
-- **`humanOnly: true`.** What a browser app PAYS is a product decision, and it survives the closing of the replace-or-keep question rather than being settled by it: keeping `createReadSurface` means an app can opt out of the `graphql` runtime, and which surface the guide leads with sets what most apps will actually ship. That is a call about the project's public face, not about the code.
-- **`needsAnswers: true`.** Three questions remain of six. None is a genuine unknown any more: the one that was (engine behaviour, which cannot be reasoned about) has been measured. What is left is the transport's return type, the unit a bound is expressed in, and which package the accessor seam lives in, all of which change what the tasks SAY rather than whether they can be cut.
+- **No flags.** All six questions are answered, one of them by measurement. The work is ADDITIVE throughout: a new package for the accessor tier, a schema built from declarations that already exist, executors, and two rungs behind the accessor seam. Nothing existing breaks and nothing is migrated, so the cut needs no judgement a tasker does not have. Which surface the guide LEADS with remains a documentation decision, and it is one that can be taken when the guide is written rather than one that gates tasking.
 - **`taskedAfter`, four of them, each for a different reason.** `a-second-writer-writes-nothing` produces `openForReading`, which is what a non-indexing tab and a query executor hold. `a-declaration-a-schema-can-be-built-from` is the sharpest: the accessor seam is this spec's central decision, and defining "find the rows matching this predicate, ordered, bounded" against a declaration that cannot name a RELATION would bake that limitation into the one place both backends and every resolver share, so the seam would be re-cut later. `the-indexer-runs-in-a-worker-and-the-tab-talks-to-it` provides the port `workerExecutor` sits on. `a-reader-learns-when-the-state-moved` decides open question 1.
 
 ## Implementation Decisions
@@ -111,11 +89,17 @@ A client relates a notification to a query through the block number, which appea
 
 **The accessor seam** is what the resolvers call and what each backend implements: an entity, a predicate over declared fields, an ordering over a declared field, a bound, and either the tip or a block. SQL generates SQL for it. IndexedDB serves it by scanning a key range and filtering in memory (**rung 1**), and later from a real index (**rung 2**). Relations are batched at this seam rather than resolved per row, so an N+1 is not expressible.
 
+**It lives in its OWN PACKAGE, and the important part is what it must not be: a member of `StateStore`.** Adding a predicate-taking read to that seam would breach ADR-0021, which narrowed it precisely because a handler runs once per event on a substrate with no query planner. Putting the accessor tier inside `@etherfold/state-store`, next to the seam it is deliberately not part of, invites exactly that confusion. Its own package makes the boundary visible, gives it its own conformance suite, and turns the two-tier split that already exists as a convention (`createReadSurface` against `createQuerySurface`) into a structure.
+
+**A relation read is bounded PER PARENT, never per batch.** This is where `a-declaration-a-schema-can-be-built-from` constrains this seam and the detail is easy to get wrong: a relation compiles to a bounded id-prefix listing, so "the children of these N parents" is one `IN` query on SQL and N cheap key-range scans on IndexedDB. Bound the whole BATCH and one prolific parent starves every other parent in the page, which looks correct in a test with three rows and is badly wrong in production. The limit belongs to each parent's collection.
+
 **Rung 2 is a real IndexedDB index, not hand-rolled index rows**, and the move is the one `keys.ts` already makes for the entity name: put the FIELD NAME inside the KEY rather than in the key path. One `multiEntry` index on `current`, over a computed array of `[field, value]` subkeys, so a `where` is `IDBKeyRange.bound(["price", lo], ["price", []])` (the `[...prefix, []]` idiom `startingWith` already documents) and an `orderBy` rides the index order instead of sorting in memory. It costs ONE package-level `versionchange`, which `keys.ts` already sanctions as the kind that is allowed ("The schema version is this PACKAGE's, not a processor's"), and a processor declaring another filterable field still needs no migration.
 
 **Rung 2 is MEASURED viable and carries one obligation.** `docs/spikes/a-multientry-index-over-computed-field-keys/` answers 9 of 9 probes on all three engines. Three of them are load-bearing beyond "it works": a record whose key path yields no key is in NO index entry, so an index over `current` is a PARTIAL index over exactly the live set with nothing to maintain (the same mechanism `UPPER_INDEX` already uses); binary subkeys sort bytewise, so a big-endian fixed-width big number orders correctly where the decimal text the store holds today sorts `"10"` before `"9"`; and duplicate subkeys collapse, so a filter cannot double-count a row. The obligation is the WRITE cost: the probe measured tens of percent for three indexed fields per row, with run-to-run variance wider than the gaps between engines, so it establishes that the cost is material and settles nothing more. ADR-0024's own consequences already record that the shipped `lower` and `upper` indexes were added AFTER the 45.6 ms/block figure and never re-measured, so rung 2 needs a real write-path measurement on the real workload before it ships.
 
 **Rung 1 ships regardless.** It is the fallback for any field nobody indexed, and it is the reference the index path is checked against. Bounded and refusing past the bound: a scan that silently gets slower is the failure mode ADR-0015 and ADR-0019 refuse everywhere else.
+
+**The bound is ROWS EXAMINED, as a declared number, and deliberately not elapsed time.** Time is a property of the DEVICE, so a bound in milliseconds would have a slow phone refusing queries a laptop answers, and it would make the same conformance case flaky depending on what else the machine is doing. Rows examined is deterministic, so a query refuses identically everywhere, which is the property that makes the refusal TESTABLE rather than merely present. It is also the quantity that actually grows, and the one a developer can reason about from their own data model. One number governs both the tip scan and the as-of delta, and the default should be generous against the measured live set of 4,072 rows.
 
 **`block:` combined with `where` is served as CURRENT PLUS A DELTA, not as a version scan.** The rows that differ between a pinned block B and the tip are exactly the rows with a version opened above B or closed above B, and BOTH of those are already indexed range scans in this backend: `LOWER_INDEX` and `UPPER_INDEX` over `above(B)`, which are revert legs A and B, and `asOfRange` already reads one row's version as of a block. So the query runs against `current` through rung 1 or rung 2, the small delta is reconciled against it (rows that matched at B but not now are added, rows that match now but did not at B are removed), the delta is merged into the ordered stream, and the limit is cut afterwards. Cost is the index result plus the CHURN SINCE B, never the depth of history, and no two-dimensional index is needed anywhere. The same declared bound as rung 1 governs it: churn past the bound is refused rather than scanned.
 
