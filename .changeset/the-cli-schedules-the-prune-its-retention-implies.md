@@ -1,6 +1,5 @@
 ---
 '@etherfold/state-store': minor
-'@etherfold/platform-cf-worker': patch
 'etherfold': minor
 ---
 
