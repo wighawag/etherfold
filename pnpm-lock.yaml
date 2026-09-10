@@ -191,6 +191,9 @@ importers:
       '@etherfold/server':
         specifier: workspace:*
         version: link:../server
+      '@etherfold/state-store':
+        specifier: workspace:*
+        version: link:../state-store
       '@etherfold/state-store-sqlite':
         specifier: workspace:*
         version: link:../state-store-sqlite
@@ -219,9 +222,6 @@ importers:
         specifier: ^0.0.7
         version: 0.0.7
     devDependencies:
-      '@etherfold/state-store':
-        specifier: workspace:*
-        version: link:../state-store
       '@libsql/client':
         specifier: ^0.17.3
         version: 0.17.4

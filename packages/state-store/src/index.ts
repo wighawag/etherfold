@@ -7,6 +7,7 @@ export * from './blocks.js';
 export * from './capabilities.js';
 export * from './cursor.js';
 export * from './retention.js';
+export * from './pruning.js';
 export * from './errors.js';
 export * from './store.js';
 export * from './snapshot.js';

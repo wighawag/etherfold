@@ -101,13 +101,15 @@ Named for what it PRODUCES: a database. What it does: load the processor module,
 | `-p, --processor <path>` | the processor module. It must export `createProcessor` (a factory, or the processor object itself) |
 | `--store <sqlite>` | REQUIRED and never defaulted. It names where the state goes, and it is the axis a second backend would arrive on |
 | `--db <url>` | libSQL url: `file:./etherfold.db`, `:memory:`, or `libsql://<host>`. Required with `--store sqlite`, so no run writes a database nobody named |
-| `--retention <blocks\|revert-only\|unbounded>` | how far back superseded versions are kept, in BLOCK numbers and no other unit (ADR-0019). Default `unbounded` |
+| `--retention <blocks\|revert-only\|unbounded>` | how far back superseded versions are kept, in BLOCK numbers and no other unit (ADR-0019). Default `unbounded`. What falls outside it is refused on read AND dropped from storage, because this command schedules the prune its retention implies |
 | `-d, --deployments <folder>` | contract deployments in hardhat-deploy / rocketh format, or `INDEXING_SOURCE` as JSON. Optional when the module supplies `contractsDataPerChain` |
 | `-n, --node-url <url>` | the JSON-RPC endpoint (or `ETH_NODE_URI`) |
 | `--rps <n>` | cap the requests per second made to the node (or `REQUESTS_PER_SECOND`) |
 | `--indexer <name>` | the NAMED INDEXER the artifact's stored stream is keyed on (or `INDEXER_NAME`). Optional here, and the only input besides `--port` that defaults: `default` (ADR-0052). It routes nothing -- this command answers no requests |
 
-A flag combination that names no store is REFUSED rather than ignored: an accepted-and-ignored flag is a deployment believing a retention window is enforced, or a database is being written, when neither is true. Nothing prunes automatically, because pruning costs time proportional to what it drops and is a call a host schedules (ADR-0022).
+A flag combination that names no store is REFUSED rather than ignored: an accepted-and-ignored flag is a deployment believing a retention window is enforced, or a database is being written, when neither is true.
+
+**A retention floor is enforced on BOTH halves.** A window bounds what a read may ask about from the moment it is configured, and this command drops what falls below it: bounded passes until the state is at its floor, once it has reached the tip and before it exits, because the database it exits with is an artifact and "prunes eventually" is not a property an artifact has. `run` does the same on its cycle, one bounded pass at a time, in the gap it already waits between fetches. It is never a side effect of a write (ADR-0022), because a prune costs time proportional to what it drops and a block should not pay for work it did not cause. `revert-only` has a floor too -- the finality depth this deployment protects against -- so it is pruned as well; `unbounded` has none, and a prune there is a no-op that changes nothing about the default.
 
 The processor module hands back the AUTHORING object (declarations plus handlers) and never picks a store; that is what makes the SAME module file the one a browser tab runs. A module still returning the retired `{kind, processor}` tag is refused by name (ADR-0037).
 
@@ -157,7 +159,7 @@ etherfold index \
 | --- | --- |
 | `-p, --processor <path>` | the processor module. It must export `createProcessor` |
 | `--store <sqlite>` / `--db <url>` | REQUIRED, exactly as on `build`: this command owns the database |
-| `--retention <blocks\|revert-only\|unbounded>` | as on `build`. Nothing prunes automatically (ADR-0022) |
+| `--retention <blocks\|revert-only\|unbounded>` | as on `build`, with one difference: this command schedules NO prune. It is fed over the wire and has no cycle of its own to prune between, and a prune inside the ingest path is exactly what ADR-0022 refuses -- so a bounded retention here bounds what a read may ask about without yet reclaiming the versions below it |
 | `-d, --deployments <folder>` | what to index, or `INDEXING_SOURCE` as JSON. REQUIRED here in one form or the other -- see below |
 | `--indexer <name>` | REQUIRED, and never defaulted on this half of the wire (unlike `run` / `build`, which route nothing). The NAMED INDEXER this process HOSTS (or `INDEXER_NAME`): the name a sender addresses it by, and the name the stream it stores is keyed on. It registers exactly this one and refuses every other with a `404`, rather than serving a misdirected push from the only indexer it holds |
 | `--ingest-token <token>` | REQUIRED. The wire's shared secret, the same name on both sides (or `INGEST_TOKEN`, which is preferable: a secret on a command line is visible to every process on the host) |

@@ -160,8 +160,9 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 	retention: {
 		flag: '--retention <blocks|revert-only|unbounded>',
 		describe:
-			'how far back superseded versions are kept, in BLOCK numbers. Nothing prunes automatically: ' +
-			'pruning is a call a host schedules (ADR-0022)',
+			'how far back superseded versions are kept, in BLOCK numbers. What falls outside it is both ' +
+			'refused on read and DROPPED from storage: this command schedules the prune its retention ' +
+			'implies, between cycles and never inside a write (ADR-0022)',
 	},
 	port: {flag: '--port <port>', variable: 'PORT', describe: 'port to listen on'},
 	host: {flag: '--host <hostname>', describe: 'hostname to bind'},
