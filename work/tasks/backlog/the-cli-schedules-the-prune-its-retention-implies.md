@@ -4,6 +4,7 @@ slug: the-cli-schedules-the-prune-its-retention-implies
 spec: a-configured-window-is-actually-pruned
 blockedBy: []
 covers: [1, 4, 5, 6, 7, 12]
+needsAnswers: true
 ---
 
 ## What to build
