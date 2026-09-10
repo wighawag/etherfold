@@ -46,27 +46,8 @@ Unbounded deployments, which is the default and probably most of them, are untou
 13. As a maintainer, I want the conformance suite to ask every backend the same question, so that a new backend inherits the obligation.
 14. As a reviewer, I want the sqlite finding's superseded claim corrected where a reader will meet it, so that "no backend prunes" does not keep being quoted after it stopped being true.
 
-## Implementation Decisions
 
-**Do NOT start by deleting the option.** Disallowing bounded retention server-side (add it back when it is needed) was considered and rejected on 2026-09-09. The appeal is real: nothing to schedule, and the half-state disappears. But the cost of "add it later" has already been paid, so it would mean deleting or refusing working, budgeted, documented code and orphaning `d1PruneBudget`, in exchange for nothing, while leaving the actual defect exactly where it was.
-
-**What IS adopted from that direction: the defaults.** `unbounded` stays the default, on the server and in the browser, and no host is obliged to prune. Pruning is what a deployment opts INTO by configuring a window.
-
-**Do NOT bound the browser default at the finality depth.** It is the number that looks right and measures wrong. Retention is in BLOCK NUMBERS and event-bearing blocks on the real stream are median **429 apart** (max 1,226,194), so a 64-block window contains zero or one event-bearing block. Bounding there does not keep a little history, it removes as-of reads while continuing to advertise them, which is the wrong answer ADR-0019 exists to prevent. If reorg safety is all that is wanted, `revert-only` is the honest claim, it is already supported, and it sets `capabilities.asOf` false so a caller learns at startup. If some history is wanted, the window is sized against that 429 median.
-
-**Where the obligation lives** is the one shape question. Candidates: at the seam (every backend inherits it, and the seam gains a member about scheduling, which is arguably the host's business and not the store's); or per backend at construction, beside the existing `finalityDepth` check, which is where the precedent sits and where a refusal already names the config it came from. Leaning per backend at construction, on precedent.
-
-**The prune call shape already exists and is not being invented here**: `prune(options)` returns a `PruneReport`, and `pruneBudget` / `d1PruneBudget` size one call. What is added is a host that calls it on a schedule it owns, and that treats "did not finish" as "call again" rather than as an error.
-
-## Testing Decisions
-
-External behaviour only, as everywhere behind this seam.
-
-- **A bounded store actually drops versions**: write past the window, prune, and assert both that the versions are gone (a count, not a statement) and that the LIVE version of an old entity survives however old it is, which is the property a naive "drop what is older than the floor" destroys.
-- **The refusal at construction**: a bounded window without the scheduling is refused where it is configured, naming both the window and the remedy, and an `unbounded` configuration is unaffected.
-- **In the conformance suite**, parameterised by the factory, so every backend answers it.
-- **The budgeted call**: a prune that cannot finish within its budget reports so, and a caller looping on that report reaches completion.
-- Note that the browser evidence for reclamation belongs in the browser run (`packages/state-store-indexeddb/browser/`) rather than under `fake-indexeddb`. The shim is what keeps this backend honest between browser runs and it is fine for the conformance suite's small cases, but its write path is not the engine's: the launched-game replay degrades roughly as `mutations^2` on it (50 blocks in 0.3 s, 250 in 25 s, 500 in 271 s) against 45.6 ms/block on real Chromium. A prune measured on the shim would be measuring the shim.
+> **Tasked.** The technical detail this spec launched with (Implementation Decisions, Testing Decisions, and the Task order) now lives in the tasks it produced, which is where it can go stale against code rather than beside it. Durable rationale is relocated to an ADR by the task that lands it. What remains here is the durable framing: Problem, Solution, User Stories, Out of Scope.
 
 ## Out of Scope
 
