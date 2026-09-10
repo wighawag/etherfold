@@ -4,6 +4,7 @@ import {declaredCapabilityCases} from './cases/declared-capabilities.js';
 import {portableDeclarationCases} from './cases/portable-declarations.js';
 import {readYourWritesCases} from './cases/read-your-writes.js';
 import {reorgRevertCases} from './cases/reorg-revert.js';
+import {retentionEnforcementCases} from './cases/retention-enforcement.js';
 import {retentionPruningCases} from './cases/retention-pruning.js';
 import {singleWriterCases} from './cases/single-writer.js';
 import {snapshotBootstrapCases} from './cases/snapshot-bootstrap.js';
@@ -36,7 +37,10 @@ import type {
  * as one unit (with the sync cursor that describes it, which is the half a
  * caller cannot make atomic from outside), what a prune must never delete (the
  * same claim-driven selection: what a store may drop is what it stopped
- * promising to answer), what a store bootstrapped from a snapshot may claim
+ * promising to answer), whether the retention a store reports is actually being
+ * ENFORCED against its storage (cross-checked against the pass's own report,
+ * because only the store knows whether it has a floor at all), what a store
+ * bootstrapped from a snapshot may claim
  * about history it never received (claim-driven again, and the one trap a new
  * backend would otherwise rediscover in a browser tab), that a SECOND WRITER
  * writes nothing on a backend that claims it can enforce one (the same
@@ -55,6 +59,7 @@ export async function stateStoreConformanceCases(
 		...versionedReadCases(factory, capabilities),
 		...declaredCapabilityCases(factory, capabilities),
 		...retentionPruningCases(factory, capabilities),
+		...retentionEnforcementCases(factory, capabilities, options),
 		...reorgRevertCases(factory, capabilities),
 		...readYourWritesCases(factory, capabilities),
 		...boundedListingCases(factory, capabilities),

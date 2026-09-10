@@ -10,6 +10,7 @@ import type {
 	NormalizedEntity,
 	PruneOptions,
 	PruneReport,
+	RetentionEnforcement,
 	StateStore,
 	StateStoreCapabilities,
 } from '@etherfold/state-store';
@@ -305,6 +306,10 @@ class Watched implements StateStore {
 			this.prunesDuringAnApply++;
 		}
 		return this.inner.prune(options);
+	}
+
+	readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return this.inner.readRetentionEnforcement();
 	}
 
 	getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined> {

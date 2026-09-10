@@ -8,6 +8,7 @@ export * from './capabilities.js';
 export * from './cursor.js';
 export * from './writer.js';
 export * from './retention.js';
+export * from './enforcement.js';
 export * from './pruning.js';
 export * from './errors.js';
 export * from './store.js';

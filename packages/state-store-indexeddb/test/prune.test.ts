@@ -117,3 +117,34 @@ describe('pruning walks the closed versions and cannot reach a live one', () => 
 		expect(cursors(log).filter((request) => request.on === 'upper')).toEqual([]);
 	});
 });
+
+describe('the record a prune leaves behind survives the page it ran on', () => {
+	it('is read back by a store opened on the same database, rather than starting at never', async () => {
+		const databaseName = freshDatabaseName();
+		const options = {databaseName, retention: {blocks: 64}, finalityDepth: 64} as const;
+
+		const first = new IndexedDBStateStore([TOKEN], options);
+		await first.migrate();
+		await first.applyBlock(block(100), [owns('busy', '0xowner-100')]);
+		await first.applyBlock(block(101), [owns('busy', '0xowner-101')]);
+		await first.applyBlock(block(1_000), []);
+		const pass = await first.prune();
+		expect(pass.versionsDeleted).toBeGreaterThan(0);
+
+		// a new tab, or the same tab after a reload: nothing in memory survived, so
+		// a store that held its enforcement state in a closure would come back
+		// reporting `never-pruned` over versions it had already dropped.
+		const reloaded = new IndexedDBStateStore([TOKEN], options);
+		await reloaded.migrate();
+
+		expect(await reloaded.readRetentionEnforcement()).toEqual({kind: 'pruned', floor: 936, prunedTo: 936});
+	});
+
+	it('leaves an unbounded store reporting `no-floor` after a pass, with no record written', async () => {
+		const store = await withHistory('unbounded');
+
+		await store.prune();
+
+		expect(await store.readRetentionEnforcement()).toEqual({kind: 'no-floor'});
+	});
+});

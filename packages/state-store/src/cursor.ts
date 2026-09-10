@@ -40,6 +40,17 @@
  * `load` RETURNS a cursor, and a cursor keyed by context would answer "nothing
  * stored" after a processor upgrade and silently index on top of the previous
  * processor's rows. See `SYNC_CURSOR_KEY` in `@etherfold/processor-entities`.
+ *
+ * ## The port is a SHARED namespace, and the seam itself uses two keys of it
+ *
+ * The sync cursor is this port's first user, not its definition. Because the
+ * slot is durable, unversioned, never reverted and never pruned, it is also
+ * where the seam keeps the two small facts a store must not forget across a
+ * reload: `SNAPSHOT_ORIGIN_KEY` (`snapshot.ts` -- the block a bootstrapped
+ * store's rows came from, so it cannot claim history it never received) and
+ * `RETENTION_ENFORCEMENT_KEY` (`enforcement.ts` -- the floor the last prune
+ * pass ran at, so a store pruned before the process died does not come back
+ * saying never). A caller choosing its own key should avoid those two.
  */
 
 /**

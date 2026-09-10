@@ -135,7 +135,12 @@ describe('the transaction a prune runs in', () => {
 		// behavioural assertion can see the difference, so the transaction itself is
 		// what is pinned -- the same reason `listing-access-path.test.ts` records
 		// requests rather than results.
-		expect(opened.transactions[0]).toEqual({stores: ['versions', 'blocks', 'writer'], mode: 'readwrite'});
+		//
+		// `cursors` is in the same transaction for a narrower reason: the record this
+		// pass leaves under `RETENTION_ENFORCEMENT_KEY` is the claim that a pass RAN,
+		// and a claim committed apart from the deletion it describes is a claim a
+		// crash can separate from its own evidence.
+		expect(opened.transactions[0]).toEqual({stores: ['versions', 'blocks', 'cursors', 'writer'], mode: 'readwrite'});
 		expect(opened.transactions.filter((tx) => tx.mode === 'readonly' && tx.stores.includes('blocks'))).toEqual([]);
 	});
 });

@@ -17,6 +17,12 @@
  * covers (`StateStore.prune`, which the host schedules). A store that could do
  * neither would have to report `unbounded`, which is what both shipped stores
  * did until pruning existed.
+ *
+ * What this report deliberately does NOT say is whether the second half is
+ * actually HAPPENING -- whether any host ever schedules that call. That answer
+ * is durable, so it lives in storage and cannot be produced by a synchronous
+ * getter readable before the database is open: it is its own asynchronous read
+ * (`StateStore.readRetentionEnforcement`, `enforcement.ts`, ADR-0076).
  */
 
 /**

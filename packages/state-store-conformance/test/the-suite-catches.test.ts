@@ -9,6 +9,7 @@ import {
 	type NormalizedEntity,
 	type PruneOptions,
 	type PruneReport,
+	type RetentionEnforcement,
 	type StateStore,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
@@ -39,6 +40,13 @@ import {runStateStoreConformance, type StateStoreFactory} from '../src/index.js'
  *   block is refused. It is the shape every backend would drift into by writing
  *   the two halves in the convenient order, and its cost is silent: the next run
  *   resumes past a block nothing ever applied.
+ * - `SilentPrunerStore` prunes for real and reports that it never has. It is the
+ *   half a new backend forgets, because the read and the record are written in
+ *   different places, and forgetting it makes a perfectly healthy deployment
+ *   report the one state that is supposed to mean somebody should look.
+ * - `EagerEnforcementStore` is the same mistake the other way round: a store
+ *   with no floor claiming a pass at one. Nothing is deleted on such a store by
+ *   contract, so the claim is about a pass that could not have happened.
  * - `AccommodatingStore` takes a block at any height by REWINDING to make room
  *   for it. It is what a store does when it treats a stale writer's offer as
  *   something to fit in rather than something to refuse, and it is the shape a
@@ -98,6 +106,10 @@ class Decorated implements StateStore {
 
 	prune(options?: PruneOptions): Promise<PruneReport> {
 		return this.inner.prune(options);
+	}
+
+	readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return this.inner.readRetentionEnforcement();
 	}
 
 	getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined> {
@@ -172,6 +184,28 @@ class StickyCounterStore extends Decorated {
 }
 
 /**
+ * Prunes for real and says it never has.
+ *
+ * The shape a backend that implemented the READ and forgot the RECORD arrives
+ * at, which is easy to reach because the two live in different methods. Its cost
+ * is the opposite of loud: a host pruning correctly on every cycle reports the
+ * one state that is meant to send somebody looking, so the report stops meaning
+ * anything long before anyone notices.
+ */
+class SilentPrunerStore extends Decorated {
+	override async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return {kind: 'never-pruned', floor: undefined};
+	}
+}
+
+/** Claims a pass at a floor it does not have: an `unbounded` store reporting `pruned`. */
+class EagerEnforcementStore extends Decorated {
+	override async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return {kind: 'pruned', floor: 0, prunedTo: 0};
+	}
+}
+
+/**
  * Moves the cursor FIRST and applies the block after: honest while everything
  * works, and ahead of its own state the moment a block is refused.
  */
@@ -222,6 +256,26 @@ describe('the conformance suite', () => {
 		const failures = await failedCases((declarations) => new StickyCounterStore(new MemoryStateStore(declarations)));
 
 		expect(failures.join('\n')).toMatch(/DOWN/);
+	});
+
+	it('fails a backend that prunes and reports that it never has', async () => {
+		const failures = await failedCases(
+			(declarations) =>
+				new SilentPrunerStore(new MemoryStateStore(declarations, {retention: {blocks: 64}, finalityDepth: 64})),
+		);
+
+		// the cross-check is what catches it: the pass itself reported a floor, so a
+		// store saying it has never been pruned is contradicting its own prune.
+		expect(failures.join('\n')).toMatch(/agrees with the pass it just ran/);
+	});
+
+	it('fails a backend with no floor that claims a pass at one', async () => {
+		const failures = await failedCases((declarations) => new EagerEnforcementStore(new MemoryStateStore(declarations)));
+
+		// `unbounded` deletes nothing by contract, so `pruned` there is a claim about
+		// a pass that could not have happened.
+		expect(failures.join('\n')).toMatch(/never reports a prune that has not happened/);
+		expect(failures.join('\n')).toMatch(/keeping everything is not something to enforce/);
 	});
 
 	it('fails a backend that rewinds to make room for a block the tip has passed', async () => {

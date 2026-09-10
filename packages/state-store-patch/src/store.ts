@@ -14,7 +14,10 @@ import {
 	normalizeEntities,
 	prefixValues,
 	pruneBudget,
+	pruneRecord,
+	retentionEnforcementOf,
 	retentionFloor,
+	RETENTION_ENFORCEMENT_KEY,
 	type BlockPointer,
 	type EntityDeclaration,
 	type EntityId,
@@ -26,6 +29,7 @@ import {
 	type PruneReport,
 	type CursorWrite,
 	type Retention,
+	type RetentionEnforcement,
 	type StateStore,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
@@ -412,7 +416,35 @@ export class PatchStateStore implements StateStore {
 		const doomed = budget === Number.POSITIVE_INFINITY ? unreachable : unreachable.slice(0, budget);
 		for (const number of doomed) this.reversals.delete(number);
 
+		// AFTER the deletion, so the record can never claim a pass that did not
+		// happen. It rides the cursor map like every other cursor, which on this
+		// backend means it goes with the process exactly as the state does.
+		const record = pruneRecord(floor);
+		if (record !== undefined) this.cursors.set(RETENTION_ENFORCEMENT_KEY, record);
+
 		return {tip, floor, versionsDeleted: doomed.length, complete: doomed.length === unreachable.length};
+	}
+
+	/**
+	 * Whether the retention this store reports is enforced against its storage.
+	 *
+	 * This backend is `revert-only` by construction, so the answer turns entirely
+	 * on whether a finality depth was declared: without one it has stated no floor
+	 * and reports `no-floor`, and with one it has a floor and must be pruned like
+	 * any other store. That is the case a host testing for a WINDOW gets wrong,
+	 * and it is this backend's ordinary configuration.
+	 *
+	 * Nothing here survives the process (`durability: 'memory-only'`), so the
+	 * durability the report promises elsewhere is vacuous here rather than false:
+	 * a store that did not survive cannot come back claiming anything.
+	 */
+	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return retentionEnforcementOf(
+			REVERT_ONLY,
+			this.finalityDepth,
+			this.tip,
+			this.cursors.get(RETENTION_ENFORCEMENT_KEY),
+		);
 	}
 
 	/**
