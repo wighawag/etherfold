@@ -3,6 +3,7 @@ import {
 	type BlockPointer,
 	type EntityDeclaration,
 	type StateStore,
+	type StateStoreBackend,
 } from '@etherfold/state-store';
 import {beforeEach, describe, expect, it} from 'vitest';
 import {PatchStateStore, RevertBeyondPatchHistoryError} from '../src/index.js';
@@ -50,7 +51,7 @@ function sparseBlock(index: number): BlockPointer {
  * function of what the store currently reports, so a revert that leaves the old
  * value standing keeps points a reorged-out block awarded.
  */
-async function award(store: StateStore, at: BlockPointer, address: string, points: number): Promise<void> {
+async function award(store: StateStoreBackend, at: BlockPointer, address: string, points: number): Promise<void> {
 	const {state, mutations} = createMutationContext(store);
 	const player = await state.get<{computedPoints: number | null}>('player', {address});
 	state.set('player', {address}, {computedPoints: (player?.computedPoints ?? 0) + points});

@@ -24,7 +24,12 @@
  * about on every backend.
  */
 import type {LastSync} from '@etherfold/core';
-import {EntityEventProcessor, SYNC_CURSOR_KEY, deserializeLastSync} from '@etherfold/processor-entities';
+import {
+	EntityEventProcessor,
+	SYNC_CURSOR_KEY,
+	deserializeLastSync,
+	openForWriting,
+} from '@etherfold/processor-entities';
 import {describe, expect, it} from 'vitest';
 import {
 	BASE_ABANDONED,
@@ -55,7 +60,7 @@ describe.each(BACKENDS)('the workload through EntityEventProcessor, on $name', (
 	it('lands on the same state as driving the store directly, and on the golden one', async () => {
 		const direct = await runWorkload(backend.make, BASE_ABANDONED);
 
-		const store = await backend.make(stratagemsProcessor.entities);
+		const store = await openForWriting(await backend.make(stratagemsProcessor.entities));
 		const p = new EntityEventProcessor(store, stratagemsProcessor);
 		await p.load(SOURCE, STREAM_CONFIG);
 
@@ -72,7 +77,7 @@ describe.each(BACKENDS)('the workload through EntityEventProcessor, on $name', (
 	});
 
 	it('leaves a cursor a restart can resume from, at the block it actually reached', async () => {
-		const store = await backend.make(stratagemsProcessor.entities);
+		const store = await openForWriting(await backend.make(stratagemsProcessor.entities));
 		const p = new EntityEventProcessor(store, stratagemsProcessor);
 		await p.load(SOURCE, STREAM_CONFIG);
 

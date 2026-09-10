@@ -8,7 +8,7 @@ import {
 	SnapshotFormatError,
 	SnapshotProcessorMismatchError,
 	type StateSnapshot,
-	type StateStore,
+	type StateStoreBackend,
 } from '../src/index.js';
 import {ACCOUNT, TOKEN, block, owns} from './utils/fixtures.js';
 
@@ -39,7 +39,7 @@ function snapshotAt(number: number, options: Partial<StateSnapshot> = {}): State
 	};
 }
 
-async function bootstrapped(inner?: StateStore, at = TAKEN_AT) {
+async function bootstrapped(inner?: StateStoreBackend, at = TAKEN_AT) {
 	const store = await openSnapshotAware(inner ?? new MemoryStateStore([TOKEN, ACCOUNT]));
 	await store.migrate();
 	await store.bootstrap(snapshotAt(at), {processor: 'proc-v1'});

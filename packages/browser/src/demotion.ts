@@ -1,7 +1,7 @@
 import {
 	openForReading,
-	type ReadableStateStore,
 	type StateStore,
+	type WritableStateStore,
 	StoreWriterChangedError,
 } from '@etherfold/state-store';
 import {logs} from 'named-logs';
@@ -86,7 +86,7 @@ export type Demotion = {
 	 * would be a mutation that looked like it worked. So this is not a new object
 	 * to swap in; it is the same storage, held as the thing a reader holds.
 	 */
-	readonly reading: readonly ReadableStateStore[];
+	readonly reading: readonly StateStore[];
 };
 
 /**
@@ -116,7 +116,7 @@ export type DemotableWriter = {
 	 */
 	forgetCursor(): void;
 	/** The state stores this writer was folding into, which become reads. */
-	stores(): Iterable<StateStore>;
+	stores(): Iterable<WritableStateStore>;
 };
 
 /**

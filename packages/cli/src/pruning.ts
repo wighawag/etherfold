@@ -1,5 +1,5 @@
 import type {Abi, ReceivingIndexer} from '@etherfold/core';
-import type {StateStore} from '@etherfold/processor-entities';
+import type {WritableStateStore} from '@etherfold/processor-entities';
 import {pruneMore, type PruneOptions, type PruneReport, type ScheduledPruneReport} from '@etherfold/state-store';
 
 // ---------------------------------------------------------------------------------------------------
@@ -83,9 +83,9 @@ export const DEFAULT_PRUNE_BUDGET = 10_000;
  * that built it is written.
  */
 export function statesHeldBy<ABI extends Abi, ProcessResultType>(
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>,
-): StateStore[] {
-	return container.held().map((fold) => fold.state as StateStore);
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
+): WritableStateStore[] {
+	return container.held().map((fold) => fold.state as WritableStateStore);
 }
 
 /**
@@ -97,7 +97,7 @@ export function statesHeldBy<ABI extends Abi, ProcessResultType>(
  * nothing waits on it.
  */
 export function pruneHeldMore<ABI extends Abi, ProcessResultType>(
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>,
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 	options: PruneOptions = {},
 ): Promise<ScheduledPruneReport> {
 	return pruneMore(statesHeldBy(container), options);
@@ -120,7 +120,7 @@ export function pruneHeldMore<ABI extends Abi, ProcessResultType>(
  * this function does not compute is how a one-shot fails to terminate.
  */
 export async function pruneHeldUntilComplete<ABI extends Abi, ProcessResultType>(
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>,
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 	options: PruneOptions = {},
 ): Promise<ScheduledPruneReport> {
 	const passes: PruneReport[] = [];

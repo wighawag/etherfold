@@ -8,9 +8,9 @@ import type {
 	StreamRead,
 } from '@etherfold/core';
 import {EntityEventProcessor, type EntityProcessor, type EntityStateView} from '@etherfold/processor-entities';
-import type {StateStore} from '@etherfold/state-store';
+import {openForWriting, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {VERSIONS} from '@etherfold/state-store-indexeddb';
-import {createIndexerState} from '../src/index.js';
+import {createBrowserStateStore, type BrowserStateStoreConfig, createIndexerState} from '../src/index.js';
 
 /**
  * The subject both runners drive: one entity processor, one captured stream, one
@@ -503,12 +503,23 @@ export async function readState(view: EntityStateView): Promise<{
 }
 
 /**
+ * A browser store for a case that INDEXES: built, then CLAIMED.
+ *
+ * Every case in this harness folds, and folding is writing, so what a case needs
+ * is the handle a claim hands back (ADR-0077). `openForWriting` migrates on the
+ * way, which is the whole of the open.
+ */
+export async function writableStore(config: BrowserStateStoreConfig = {}): Promise<WritableStateStore> {
+	return openForWriting(await createBrowserStateStore(processor.entities, config));
+}
+
+/**
  * The hook, wired to a store, exactly as an application wires it.
  *
  * Two lines an application author writes: the store is the deployment's choice
  * and the processor above is untouched.
  */
-export function indexerFor(store: StateStore) {
+export function indexerFor(store: WritableStateStore) {
 	return indexerForProcessor(store, processor);
 }
 
@@ -528,7 +539,7 @@ export function indexerFor(store: StateStore) {
  * `createState` hands that one back -- the factory is what distinguishes THIS
  * generation's state, and this fixture has exactly one.
  */
-export function indexerForProcessor(store: StateStore, definition: EntityProcessor<TestABI>) {
+export function indexerForProcessor(store: WritableStateStore, definition: EntityProcessor<TestABI>) {
 	return createIndexerState<TestABI, EntityStateView>({
 		createState: () => store,
 		createProcessor: (state) => entityProcessorOver(state, definition),
@@ -543,7 +554,7 @@ export function indexerForProcessor(store: StateStore, definition: EntityProcess
  * store is the same object (the tab's IndexedDB connection did not go anywhere),
  * and only the definition is new.
  */
-export function entityProcessorOver(store: StateStore, definition: EntityProcessor<TestABI>) {
+export function entityProcessorOver(store: WritableStateStore, definition: EntityProcessor<TestABI>) {
 	return new EntityEventProcessor<TestABI>(store, definition);
 }
 
@@ -589,7 +600,7 @@ function demotedOrCursor(indexer: IndexerState, lastSync: LastSync<TestABI> | un
  * is what makes the reload case a reload rather than a fresh chain.
  */
 export async function runWorkload(
-	store: StateStore,
+	store: WritableStateStore,
 	chain: ReturnType<typeof fakeChain> = fakeChain(),
 ): Promise<{
 	state: Awaited<ReturnType<typeof readState>>;

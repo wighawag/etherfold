@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
 import type {EntityStateView} from '@etherfold/processor-entities';
 import type {ExistingStream} from '@etherfold/core';
-import {MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {createIndexerState, keepStreamOnIndexedDB, type SyncingState} from '../src/index.js';
 import {
 	BRANCH_A_TIP,
@@ -40,9 +40,8 @@ const freshName = () => `progress-${counter++}-${Math.random().toString(36).slic
 /** The edited fold: the same events counted by two, so a READ says which generation answered. */
 const EDITED = processorVariant({version: '2.0.0', countBy: 2});
 
-async function memoryStore(entities = processor.entities): Promise<StateStore> {
-	const store = new MemoryStateStore(entities);
-	await store.migrate();
+async function memoryStore(entities = processor.entities): Promise<WritableStateStore> {
+	const store = await openForWriting(new MemoryStateStore(entities));
 	return store;
 }
 

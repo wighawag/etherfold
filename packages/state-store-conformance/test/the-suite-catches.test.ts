@@ -10,7 +10,7 @@ import {
 	type PruneOptions,
 	type PruneReport,
 	type RetentionEnforcement,
-	type StateStore,
+	type StateStoreBackend,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
@@ -73,7 +73,7 @@ async function failedCases(factory: StateStoreFactory): Promise<string[]> {
 }
 
 /** An honest store with one lie bolted on; every verb but the lie is delegated. */
-class Decorated implements StateStore {
+class Decorated implements StateStoreBackend {
 	constructor(protected readonly inner: MemoryStateStore) {}
 
 	get capabilities(): StateStoreCapabilities {

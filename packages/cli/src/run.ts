@@ -2,7 +2,7 @@ import type {Abi, EventProcessor, ReceivingIndexer, StreamBuilder} from '@etherf
 import type {FetcherHost, RunSummary} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
-import type {StateStore} from '@etherfold/processor-entities';
+import type {WritableStateStore} from '@etherfold/processor-entities';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {foldingStatusReport} from './folding.js';
@@ -76,7 +76,7 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	port: number;
 	/** The ONE handle the store folds into and the server answers over. */
 	db: RemoteSQL;
-	store: StateStore;
+	store: WritableStateStore;
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/** The receiving half. Present so a caller can assert WHICH engine folds, rather than trust it. */
 	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
@@ -90,7 +90,7 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 * own once that successor has caught up. It is the same object `index` holds and
 	 * the same one `/status` is reported from.
 	 */
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/** The sending half, plus the policy for reading what a cycle did. */
 	host: FetcherHost<ABI>;
 	/**

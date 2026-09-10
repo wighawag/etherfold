@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {MemoryStateStore, pruneMore} from '../src/index.js';
+import {MemoryStateStore, openForWriting, pruneMore, type StateStore, type WritableStateStore} from '../src/index.js';
 import {ACCOUNT, TOKEN, block, owns} from './utils/fixtures.js';
 
 /**
@@ -21,11 +21,13 @@ import {ACCOUNT, TOKEN, block, owns} from './utils/fixtures.js';
  * in what it answers and unbounded in what it holds).
  */
 
-/** A store whose window is `blocks`, over the two entities the fixtures declare. */
-async function windowed(blocks: number): Promise<MemoryStateStore> {
-	const store = new MemoryStateStore([TOKEN, ACCOUNT], {retention: {blocks}, finalityDepth: 64});
-	await store.migrate();
-	return store;
+/**
+ * A store whose window is `blocks`, over the two entities the fixtures declare,
+ * CLAIMED -- because `prune` is a mutation and a host that schedules one is the
+ * writer (`openForWriting` migrates on the way).
+ */
+async function windowed(blocks: number): Promise<WritableStateStore> {
+	return openForWriting(new MemoryStateStore([TOKEN, ACCOUNT], {retention: {blocks}, finalityDepth: 64}));
 }
 
 /**
@@ -36,7 +38,7 @@ async function windowed(blocks: number): Promise<MemoryStateStore> {
  * `writes` versions of which `writes - 1` are unreachable at the floor and one is
  * LIVE -- the row a prune must never take, however old it is.
  */
-async function loaded(store: MemoryStateStore, id: string, writes: number): Promise<MemoryStateStore> {
+async function loaded(store: WritableStateStore, id: string, writes: number): Promise<WritableStateStore> {
 	for (let index = 0; index < writes; index++) {
 		await store.applyBlock(block(1_000 + index), [owns(id, `0x${index}`, index)]);
 	}
@@ -45,7 +47,7 @@ async function loaded(store: MemoryStateStore, id: string, writes: number): Prom
 }
 
 /** What a store still holds, as the versions a read can reach: the honest measure of a prune. */
-async function survives(store: MemoryStateStore, id: string): Promise<Record<string, unknown> | undefined> {
+async function survives(store: StateStore, id: string): Promise<Record<string, unknown> | undefined> {
 	return store.getCurrent('token', {id});
 }
 
@@ -150,8 +152,7 @@ describe('one bounded pass over the states a host holds', () => {
 	 * answer.
 	 */
 	it('deletes nothing where a store states no floor', async () => {
-		const unbounded = new MemoryStateStore([TOKEN, ACCOUNT]);
-		await unbounded.migrate();
+		const unbounded = await openForWriting(new MemoryStateStore([TOKEN, ACCOUNT]));
 		await loaded(unbounded, '1', 6);
 
 		expect(await pruneMore([unbounded], {maxVersions: 100})).toMatchObject({versionsDeleted: 0, complete: true});

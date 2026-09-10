@@ -9,6 +9,7 @@ import {
 import {
 	BlockNotRetainedError,
 	MemoryStateStore,
+	openForWriting,
 	type Mutation,
 	type StateSnapshot,
 	type StateStore,
@@ -83,7 +84,7 @@ async function publish(store: StateStore, lastSync: Parameters<typeof createSnap
 		lastSync,
 		// the version hash the LOCAL processor will compute, which is what makes
 		// this snapshot adoptable at all.
-		processor: versionHash(),
+		processor: await versionHash(),
 	});
 }
 
@@ -92,8 +93,14 @@ async function publish(store: StateStore, lastSync: Parameters<typeof createSnap
  * than written out here, so a change to how it is built cannot leave this file
  * asserting against a constant nobody produces.
  */
-function versionHash(): string {
-	return new EntityEventProcessor<TestABI>(new MemoryStateStore(processor.entities), processor).getVersionHash();
+async function versionHash(): Promise<string> {
+	// CLAIMED because building a processor is declaring an intent to fold, and the
+	// ability to mutate is obtained by claiming (ADR-0077). The hash is a function
+	// of the declarations, so the store is only here to be the runtime's own.
+	return new EntityEventProcessor<TestABI>(
+		await openForWriting(new MemoryStateStore(processor.entities)),
+		processor,
+	).getVersionHash();
 }
 
 /** A mirror that serves one snapshot, and records what was asked for. */
@@ -114,7 +121,9 @@ async function browserStore(databaseName = freshName()): Promise<SnapshotAwareSt
 describe('a new tab that starts from a published snapshot', () => {
 	it('resumes from the snapshot instead of asking for the start block', async () => {
 		// tab A does the work, and publishes what it computed
-		const publisher = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const publisher = await openForWriting(
+			await createBrowserStateStore(processor.entities, {databaseName: freshName()}),
+		);
 		const first = await runWorkload(publisher);
 		expect(first.state).toEqual(EXPECTED_A);
 		expect(first.ranges[0].from).toBe(START_BLOCK);
@@ -127,12 +136,12 @@ describe('a new tab that starts from a published snapshot', () => {
 			// a real publisher takes a snapshot at least the finality depth behind
 			// the tip, and `finalityDepth` here is how a client insists on it; this
 			// fixture's tip IS the snapshot block, so the option is left off.
-			processor: versionHash(),
+			processor: await versionHash(),
 			fetch: remote.fetch,
 		});
 		expect(outcome).toMatchObject({status: 'bootstrapped', at: BRANCH_A_TIP});
 
-		const second = await runWorkload(store, fakeChain());
+		const second = await runWorkload(await openForWriting(store), fakeChain());
 
 		expect(second.state).toEqual(EXPECTED_A);
 		// the point: this tab never asked for the start block. It asked from inside
@@ -142,13 +151,15 @@ describe('a new tab that starts from a published snapshot', () => {
 	});
 
 	it('refuses the history it never received, rather than answering from the rows it was given', async () => {
-		const publisher = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const publisher = await openForWriting(
+			await createBrowserStateStore(processor.entities, {databaseName: freshName()}),
+		);
 		const first = await runWorkload(publisher);
 		const snapshot = await publish(publisher, first.lastSync);
 
 		const store = await browserStore();
 		const remote = mirror(snapshot);
-		await bootstrapFromSnapshot(store, remote.url, {processor: versionHash(), fetch: remote.fetch});
+		await bootstrapFromSnapshot(store, remote.url, {processor: await versionHash(), fetch: remote.fetch});
 
 		// the tab that computed the state can answer about the block token 1 moved in
 		expect(await publisher.getAsOf('token', {id: '1'}, START_BLOCK)).toMatchObject({owner: expect.any(String)});
@@ -159,7 +170,7 @@ describe('a new tab that starts from a published snapshot', () => {
 
 	it('keeps its own state when a mirror is behind it, and downloads nothing more', async () => {
 		const databaseName = freshName();
-		const publisher = await createBrowserStateStore(processor.entities, {databaseName});
+		const publisher = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName}));
 		const first = await runWorkload(publisher);
 		// only its HEAD is ever read (it loses the comparison), so the rows it
 		// carries never matter; what is under test is the choice, not the payload.
@@ -168,7 +179,10 @@ describe('a new tab that starts from a published snapshot', () => {
 		// the same tab, reopened: it has a cursor at the tip already
 		const store = await browserStore(databaseName);
 		const remote = mirror(stale);
-		const outcome = await bootstrapFromSnapshot(store, remote.url, {processor: versionHash(), fetch: remote.fetch});
+		const outcome = await bootstrapFromSnapshot(store, remote.url, {
+			processor: await versionHash(),
+			fetch: remote.fetch,
+		});
 
 		expect(outcome).toEqual({status: 'kept-local', at: first.lastSync.lastToBlock});
 		// the head was read to compare; nothing was installed over the local state

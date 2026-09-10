@@ -3,7 +3,9 @@ import {
 	MemoryStateStore,
 	createReadSurface,
 	declareEntities,
+	openForWriting,
 	type StateStore,
+	type WritableStateStore,
 } from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
@@ -32,12 +34,16 @@ const entities = declareEntities([
 const processor: EntityProcessor<TestABI> = {...fixtureProcessor, entities};
 
 const backends = [
-	{name: 'memory', make: (): StateStore => new MemoryStateStore(entities)},
+	{name: 'memory', make: (): Promise<WritableStateStore> => openForWriting(new MemoryStateStore(entities))},
 	{
 		name: 'sqlite',
-		make: (): StateStore => new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), entities),
+		make: (): Promise<WritableStateStore> =>
+			openForWriting(new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), entities)),
 	},
-	{name: 'patch', make: (): StateStore => new PatchStateStore(entities, {retention: 'revert-only'})},
+	{
+		name: 'patch',
+		make: (): Promise<WritableStateStore> => openForWriting(new PatchStateStore(entities, {retention: 'revert-only'})),
+	},
 ];
 
 const STREAM = [
@@ -64,16 +70,14 @@ async function report(store: StateStore): Promise<Record<string, unknown>> {
 
 describe.each(backends)('the generated read surface runs unchanged on $name', (backend) => {
 	it('answers the same questions with the same values', async () => {
-		const store = backend.make();
-		await store.migrate();
+		const store = await backend.make();
 		await applyEventStream(store, processor, STREAM, undefined);
 
 		expect(await report(store)).toEqual({owner: '0xbob', transferCount: 2, transfers: 3});
 	});
 
 	it('answers `undefined` for an entity that is absent, and nothing else', async () => {
-		const store = backend.make();
-		await store.migrate();
+		const store = await backend.make();
 		await applyEventStream(store, processor, STREAM, undefined);
 		const surface = createReadSurface(store, entities);
 
@@ -84,8 +88,7 @@ describe.each(backends)('the generated read surface runs unchanged on $name', (b
 describe('a historical read is answered or refused, never served from the tip', () => {
 	it('answers as of an earlier block where the backend retains it', async () => {
 		for (const backend of backends.filter((candidate) => candidate.name !== 'patch')) {
-			const store = backend.make();
-			await store.migrate();
+			const store = await backend.make();
 			await applyEventStream(store, processor, STREAM, undefined);
 			const surface = createReadSurface(store, entities);
 
@@ -99,8 +102,7 @@ describe('a historical read is answered or refused, never served from the tip', 
 		// reorg revert and answers no historical read at all. The generated surface
 		// propagates that refusal; swallowing it into `undefined` would read as
 		// "the counter did not exist then", which is a number a caller acts on.
-		const store = new PatchStateStore(entities, {retention: 'revert-only'});
-		await store.migrate();
+		const store = await openForWriting(new PatchStateStore(entities, {retention: 'revert-only'}));
 		await applyEventStream(store, processor, STREAM, undefined);
 		const surface = createReadSurface(store, entities);
 

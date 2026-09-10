@@ -9,7 +9,8 @@ import {
 	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
-	type StateStore,
+	openForWriting,
+	type WritableStateStore,
 } from '@etherfold/processor-entities';
 import {
 	applySchema,
@@ -97,20 +98,24 @@ function oneDatabase(): RemoteSQL {
 /** ONE FOLD, as the host builds it: its own state namespace, then the processor over it. */
 function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
 	return {
+		// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
+		// claiming (ADR-0077), exactly as the CLI's own `buildFolding` does it.
 		createState: (context: {stream: string}) =>
-			new VersionedStateStore(db, declared.entities, {
-				tableNamespace: generationDigestOf({
-					stream: context.stream,
-					processor: entityProcessorVersionHash(declared),
+			openForWriting(
+				new VersionedStateStore(db, declared.entities, {
+					tableNamespace: generationDigestOf({
+						stream: context.stream,
+						processor: entityProcessorVersionHash(declared),
+					}),
+					finalityDepth: FINALITY,
 				}),
-				finalityDepth: FINALITY,
-			}),
-		createProcessor: (state: StateStore) =>
+			),
+		createProcessor: (state: WritableStateStore) =>
 			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
 	};
 }
 
-async function openIndexer(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, unknown, StateStore>> {
+async function openIndexer(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	return openReceivingIndexer({
 		port: generationRegistryPortOnSQL(db, INDEXER),
 		source: SOURCE,
@@ -118,7 +123,7 @@ async function openIndexer(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, 
 		appendEmissions: emissionAppenderFor(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
 		generation: specFor(db, V1),
-	}) as Promise<ReceivingIndexer<typeof abi, unknown, StateStore>>;
+	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
 
 /** One decoded `Transfer` carrying the REAL topics a stored row keeps, so a replay can decode it again. */
@@ -148,7 +153,7 @@ function transferEvent(
 }
 
 async function push(
-	indexer: ReceivingIndexer<typeof abi, unknown, StateStore>,
+	indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>,
 	over: {toBlock: number; latestBlock: number; logs?: LogEvent<typeof abi>[]},
 ): Promise<void> {
 	const batch: WireBatch<typeof abi> = {
@@ -162,7 +167,9 @@ async function push(
 }
 
 /** A database an incumbent has folded into, over a history long enough to need several chunks. */
-async function anIndexerThatHasFolded(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, unknown, StateStore>> {
+async function anIndexerThatHasFolded(
+	db: RemoteSQL,
+): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	await applySchema(db);
 	const incumbent = await openIndexer(db);
 	await push(incumbent, {
@@ -189,7 +196,7 @@ async function anIndexerThatHasFolded(db: RemoteSQL): Promise<ReceivingIndexer<t
  * The mapping from what the container HOLDS to what the reporter reads is the
  * four lines a host writes; nothing about it is test-only.
  */
-async function hostOver(db: RemoteSQL, indexer: ReceivingIndexer<typeof abi, unknown, StateStore>) {
+async function hostOver(db: RemoteSQL, indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>) {
 	const app = createServer<{DEV?: string}>({
 		getDB: () => db,
 		getEnv: () => ({}),
@@ -198,7 +205,7 @@ async function hostOver(db: RemoteSQL, indexer: ReceivingIndexer<typeof abi, unk
 			return readStatusReport({
 				folds: indexer.held().map((fold) => ({
 					generation: fold.record,
-					store: fold.state as StateStore,
+					store: fold.state as WritableStateStore,
 					follows: fold.follows,
 				})),
 				...(canonical ? {canonical} : {}),

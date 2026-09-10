@@ -4,6 +4,7 @@ import {
 	type EntityDeclaration,
 	type Mutation,
 	type StateStore,
+	type StateStoreBackend,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import type {ConformanceCase, StateStoreFactory} from './types.js';
@@ -244,7 +245,7 @@ export function playersOf(rows: readonly Record<string, unknown>[]): unknown[] {
 }
 
 /** A store from the factory, migrated, exactly as a caller would get one. */
-export async function opened(factory: StateStoreFactory): Promise<StateStore> {
+export async function opened(factory: StateStoreFactory): Promise<StateStoreBackend> {
 	const store = await factory(CONFORMANCE_ENTITIES);
 	await store.migrate();
 	return store;
@@ -258,7 +259,12 @@ export async function opened(factory: StateStoreFactory): Promise<StateStore> {
  * of the value the store currently reports, so a store whose revert leaves the
  * old value standing keeps the points a reorged-out block gave it.
  */
-export async function award(store: StateStore, at: BlockPointer, address: string, points: number): Promise<void> {
+export async function award(
+	store: StateStoreBackend,
+	at: BlockPointer,
+	address: string,
+	points: number,
+): Promise<void> {
 	const {state, mutations} = createMutationContext(store);
 	const player = await state.get<{computedPoints: number | null}>('player', {address});
 	state.set('player', {address}, {computedPoints: (player?.computedPoints ?? 0) + points});

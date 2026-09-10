@@ -1,4 +1,4 @@
-import type {EntityDeclaration, RetentionSetting, StateStore} from '@etherfold/state-store';
+import type {EntityDeclaration, RetentionSetting, StateStoreBackend} from '@etherfold/state-store';
 import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
 
 /**
@@ -10,14 +10,18 @@ import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
  * over a `MutationContext`, and it names no backend at all.
  *
  * ```ts
- * // the default: versioned rows in IndexedDB (ADR-0024)
- * const createState = () => createBrowserStateStore(processor.entities);
+ * // the default: versioned rows in IndexedDB (ADR-0024). The CLAIM is what turns
+ * // a store into one a generation may fold into (ADR-0077), and it is taken here
+ * // because this factory is the one place that knows this tab means to INDEX.
+ * const createState = async () => openForWriting(await createBrowserStateStore(processor.entities));
  *
  * // the same app on the light store instead: nothing else changes
- * const createState = () =>
- *   createBrowserStateStore(processor.entities, {
- *     backend: (entities) => new PatchStateStore(entities, {retention: 'revert-only', finalityDepth: 64}),
- *   });
+ * const createState = async () =>
+ *   openForWriting(
+ *     await createBrowserStateStore(processor.entities, {
+ *       backend: (entities) => new PatchStateStore(entities, {retention: 'revert-only', finalityDepth: 64}),
+ *     }),
+ *   );
  *
  * // ...and either one indexes through the hook, with the processor untouched.
  * // It is the FACTORY the hook takes, not the store: each GENERATION folds into
@@ -27,6 +31,12 @@ import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
  *   createProcessor: (store) => fromEntityProcessor(processor)(store),
  * });
  * ```
+ *
+ * **This function does NOT claim, and that is deliberate.** A tab that only
+ * RENDERS opens the same store (it is the same origin and the same database), so
+ * claiming here would have every reading tab take the store from the tab that is
+ * indexing. Building a store and becoming its writer are two acts, and
+ * `openForWriting` is the second one.
  *
  * ## Does a RELOAD keep it? Ask the store, at startup
  *
@@ -92,12 +102,14 @@ import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
  * WHOLE state object of a `JSObjectEventProcessor` on every save. It was the
  * fastest writer at today's sizes (2.0 ms/block on Chromium) precisely because
  * it kept no history, could not answer an as-of read and could not revert. It is
- * deleted with the free-form processor path (ADR-0037). This builds a
- * `StateStore`: the state IS versioned rows, so a write costs what CHANGED, a
+ * deleted with the free-form processor path (ADR-0037). This builds a store
+ * behind the seam: the state IS versioned rows, so a write costs what CHANGED, a
  * reload reads only what it asks for, a reorg is a revert, and history is
  * readable to the declared retention.
  */
-export type BrowserStateStoreFactory = (declarations: readonly EntityDeclaration[]) => StateStore | Promise<StateStore>;
+export type BrowserStateStoreFactory = (
+	declarations: readonly EntityDeclaration[],
+) => StateStoreBackend | Promise<StateStoreBackend>;
 
 /**
  * What a browser deployment says about where its state lives.
@@ -206,7 +218,7 @@ export type BrowserStateStoreConfig =
 export async function createBrowserStateStore(
 	declarations: readonly EntityDeclaration[],
 	config: BrowserStateStoreConfig = {},
-): Promise<StateStore> {
+): Promise<StateStoreBackend> {
 	const store =
 		typeof config.backend === 'function'
 			? await config.backend(declarations)

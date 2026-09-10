@@ -6,8 +6,8 @@ import {
 	openForWriting,
 	StoreWriterChangedError,
 	WRITER_CLAIM_KEY,
-	type ReadableStateStore,
 	type StateStore,
+	type StateStoreBackend,
 	type WritableStateStore,
 } from '../src/index.js';
 import {ACCOUNT, block, owns, TOKEN} from './utils/fixtures.js';
@@ -19,7 +19,14 @@ import {ACCOUNT, block, owns, TOKEN} from './utils/fixtures.js';
  * carries a `token`, so a `WritableStateStore` cannot be produced by holding a
  * store and hoping. That is what makes the claim impossible to FORGET, in the
  * same way ADR-0044 makes the stream's one-writer rule structural by handing a
- * follower a read-only stream view rather than asking it to behave.
+ * follower a read-only stream view rather than asking it to behave. (Same move,
+ * OPPOSITE arbiter: a stream's writer is the OLDEST surviving generation, derived
+ * and never raced; a store's writer is the LAST claimant.)
+ *
+ * The seam has three names and the door is between the first two: `StateStore` is
+ * the reads a CONSUMER holds, `StateStoreBackend` is what an IMPLEMENTOR provides
+ * and what a claim is taken over, and `WritableStateStore` is what the claim hands
+ * back (ADR-0079).
  *
  * **`pnpm typecheck` is what runs half of this file.** The `@ts-expect-error`
  * lines below FAIL the typecheck if the call they guard starts compiling, which
@@ -185,7 +192,7 @@ describe('the shape a reader holds', () => {
 		// Deliberately never CALLED: the assertions here are the `@ts-expect-error`
 		// comments, which `pnpm typecheck` evaluates. Vitest strips types, so
 		// running the body would only mutate a store nobody reads.
-		function refusals(readable: ReadableStateStore, writable: WritableStateStore, seam: StateStore) {
+		function refusals(readable: StateStore, writable: WritableStateStore, backend: StateStoreBackend) {
 			// @ts-expect-error a reader cannot apply a block: the ability to mutate is obtained by claiming
 			readable.applyBlock(block(100), []);
 			// @ts-expect-error nor move a cursor, which is how a position goes BACKWARDS silently
@@ -197,8 +204,15 @@ describe('the shape a reader holds', () => {
 			// @ts-expect-error nor delete against a floor computed from a tip another writer moved
 			readable.prune();
 
-			// @ts-expect-error and a store that merely EXISTS is not a claim: the token cannot be forgotten
-			const forged: WritableStateStore = seam;
+			// @ts-expect-error and a BACKEND is not a claim either: the store can do all five, and this
+			// holder has not claimed, so the token cannot be forgotten
+			const forged: WritableStateStore = backend;
+
+			// @ts-expect-error nor can a reader widen its own handle back by re-opening it: the
+			// narrowing is ONE-WAY, and becoming a writer again is a NEW store (ADR-0078)
+			void openForWriting(readable);
+			// ...which is exactly what a BACKEND is for: the site that built the store claims
+			void openForWriting(backend);
 
 			// the reads, on the other hand, are exactly the store's
 			void readable.getCurrent('token', {id: '1'});

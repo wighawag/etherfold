@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import {openForWriting} from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
 import type {EntityProcessor, EntityStateView} from '@etherfold/processor-entities';
 import {createBrowserStateStore, createIndexerState, keepStreamOnIndexedDB} from '../src/index.js';
@@ -47,7 +48,7 @@ const freshName = () => `reconfigure-${counter++}-${Math.random().toString(36).s
 
 /** Index branch A to the tip, on a fresh IndexedDB database, with `definition`. */
 async function indexedWith(definition = processor, chain = fakeChain()) {
-	const store = await createBrowserStateStore(definition.entities, {databaseName: freshName()});
+	const store = await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: freshName()}));
 	const indexer = indexerForProcessor(store, definition);
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 	await indexToTip(indexer);
@@ -297,7 +298,7 @@ describe('axis two: a new implementation behind the same address', () => {
  */
 async function indexerOnBranchA(chain = fakeChain(), countBy = 1) {
 	const definition = processorVariant({countBy});
-	const store = await createBrowserStateStore(definition.entities, {databaseName: freshName()});
+	const store = await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: freshName()}));
 	const indexer = indexerForProcessor(store, definition);
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 	await indexToTip(indexer);
@@ -432,7 +433,7 @@ describe('the state a subscriber is holding, after a discard', () => {
 	it('keeps the state the rebuild produced when a cached stream was replayed', async () => {
 		const tag = `stream-${counter++}`;
 		const chain = fakeChain();
-		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
 		const indexer = createIndexerState<TestABI, EntityStateView>(
 			{
 				createState: () => store,

@@ -25,7 +25,9 @@ export type {
 	SnapshotHead,
 	StateSnapshot,
 	StateStore,
+	StateStoreBackend,
 	StateStoreCapabilities,
+	WritableStateStore,
 	Retention,
 	RetentionSetting,
 } from '@etherfold/state-store';
@@ -37,14 +39,22 @@ export type {
  * They are DEFINED in `@etherfold/state-store` because a history floor is a
  * fact about a store rather than about a processor, and every backend inherits
  * it (the conformance suite asserts it of all of them).
+ *
+ * `openForWriting` / `openForReading` ride along for the same reason and are on
+ * the same boot path: a store a generation FOLDS into has to be claimed (ADR-0077),
+ * and an app that opens one beside `openAndBootstrap` should not need a second
+ * import to say which of the two it is doing.
  */
 export {
 	ENTITY_SNAPSHOT_FORMAT,
+	openForReading,
+	openForWriting,
 	openSnapshotAware,
 	RevertBeyondSnapshotError,
 	SnapshotFormatError,
 	SnapshotProcessorMismatchError,
 	SNAPSHOT_ORIGIN_KEY,
+	WRITER_CLAIM_KEY,
 } from '@etherfold/state-store';
 
 /**

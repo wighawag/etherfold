@@ -1,5 +1,5 @@
 import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
-import {fromEntityProcessor} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 import {createConnection} from '@etherplay/connect';
 import {abi, tokenProcessor} from '../src/processor.js';
 
@@ -104,10 +104,16 @@ async function start() {
 	// `databaseName` are one store by IndexedDB's own definition, and they would
 	// collide on the sync cursor as well as on the rows, because that cursor lives
 	// under a fixed key.
-	const createState = (context: GenerationContext) =>
-		createBrowserStateStore(tokenProcessor.entities, {
-			databaseName: `reference-${CHAIN.id}-${CONTRACT}-${context.stream}`,
-		});
+	// CLAIMED, because this tab INDEXES: building a store and becoming its writer
+	// are two acts, and `openForWriting` is the second one (ADR-0077). A tab that
+	// only rendered would open the same store and never call it, and the type is
+	// what stops it writing. `openForWriting` migrates, so this is the whole open.
+	const createState = async (context: GenerationContext) =>
+		openForWriting(
+			await createBrowserStateStore(tokenProcessor.entities, {
+				databaseName: `reference-${CHAIN.id}-${CONTRACT}-${context.stream}`,
+			}),
+		);
 
 	// The store the CANONICAL generation was built over, kept because the
 	// live-reload below rebuilds a processor over the SAME store: a hot reload

@@ -1,7 +1,7 @@
 import type {Abi, LogEvent} from '@etherfold/core';
 import type {EntityProcessor} from '@etherfold/processor-entities';
 import {applyEventStream} from '@etherfold/processor-entities';
-import type {StateStore} from '@etherfold/state-store';
+import {openForWriting, type StateStore, type StateStoreBackend} from '@etherfold/state-store';
 
 /**
  * One processor, written once against the seam, run on the server and in a tab.
@@ -136,7 +136,7 @@ export async function liveRows(store: StateStore): Promise<Record<string, unknow
  * Identical on both sides of the wire, so any difference between what the tab
  * computed and what node computed is the STORE and not the driving code.
  */
-export async function runWorkload(store: StateStore): Promise<{
+export async function runWorkload(store: StateStoreBackend): Promise<{
 	afterIndexing: Record<string, unknown>[];
 	afterRetraction: Record<string, unknown>[];
 	afterReplacement: Record<string, unknown>[];
@@ -147,16 +147,20 @@ export async function runWorkload(store: StateStore): Promise<{
 }> {
 	const {indexing, retraction, replacement} = streams();
 	const counter = async () => (await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value;
+	// this harness FOLDS, so it claims the store it was handed: the ability to mutate
+	// is obtained by claiming (ADR-0077), and `openForWriting` migrates on the way.
+	// The reads below go on using the store itself, which is the same storage.
+	const writer = await openForWriting(store);
 
-	await applyEventStream(store, processor, indexing, undefined);
+	await applyEventStream(writer, processor, indexing, undefined);
 	const afterIndexing = await liveRows(store);
 	const counterBefore = await counter();
 
-	await applyEventStream(store, processor, retraction, undefined);
+	await applyEventStream(writer, processor, retraction, undefined);
 	const afterRetraction = await liveRows(store);
 	const counterAfterRetraction = await counter();
 
-	await applyEventStream(store, processor, replacement, undefined);
+	await applyEventStream(writer, processor, replacement, undefined);
 	const afterReplacement = await liveRows(store);
 	const counterAfterReplacement = await counter();
 

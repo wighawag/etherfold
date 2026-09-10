@@ -21,7 +21,7 @@
  */
 import 'fake-indexeddb/auto';
 import {createClient} from '@libsql/client';
-import {MemoryStateStore, type EntityDeclaration, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, type EntityDeclaration, type StateStoreBackend} from '@etherfold/state-store';
 import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
@@ -29,7 +29,7 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 
 export type Backend = {
 	readonly name: string;
-	make(declarations: readonly EntityDeclaration[]): StateStore | Promise<StateStore>;
+	make(declarations: readonly EntityDeclaration[]): StateStoreBackend | Promise<StateStoreBackend>;
 };
 
 let databaseCounter = 0;

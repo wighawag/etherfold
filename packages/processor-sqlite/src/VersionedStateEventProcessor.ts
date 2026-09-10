@@ -4,9 +4,15 @@ import {
 	type PruneReport,
 	type VersionedStateStoreOptions,
 } from '@etherfold/state-store-sqlite';
-import {EntityEventProcessor, type EntityProcessor} from '@etherfold/processor-entities';
+import {
+	EntityEventProcessor,
+	entityProcessorVersionHash,
+	openForWriting,
+	type EntityProcessor,
+} from '@etherfold/processor-entities';
 import {
 	assertProcessorVersion,
+	processorCodeFingerprint,
 	type Abi,
 	type EventProcessor,
 	type IndexingSource,
@@ -95,11 +101,27 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 > {
 	private readonly store: VersionedStateStore;
 	private readonly view: VersionedStateView;
-	private readonly inner: EntityEventProcessor<ABI, ProcessorConfig>;
+	private config: ProcessorConfig | undefined;
+	/** The depth the store was configured with, kept for the fold this claims for. */
+	private readonly finalityDepth: number | undefined;
+	/**
+	 * The neutral processor over the CLAIMED store, built on FIRST USE.
+	 *
+	 * Not in the constructor, because claiming is a WRITE and `openForWriting` is
+	 * therefore asynchronous (ADR-0077), while this convenience class is `new`ed
+	 * synchronously by every caller it has. Deferring it costs nothing that matters:
+	 * the store is one this class BUILT and nothing else holds, so there is no rival
+	 * to lose it to in between, and the first operation that could mutate is the
+	 * first that needs the claim. It is memoised, so the claim is taken once.
+	 *
+	 * The claim is still EXPLICIT -- what was removed with the seam's mutating half
+	 * is a mutation nobody claimed for, not a claim at a particular line.
+	 */
+	private folding: Promise<EntityEventProcessor<ABI, ProcessorConfig>> | undefined;
 
 	constructor(
 		db: RemoteSQL,
-		processor: EntityProcessor<ABI, ProcessorConfig>,
+		private readonly processor: EntityProcessor<ABI, ProcessorConfig>,
 		options: VersionedStateProcessorOptions = {},
 	) {
 		// Checked here as well as inside, and NOT because one of them is redundant:
@@ -113,7 +135,28 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 		// on the first read it would have answered wrongly.
 		this.store = new VersionedStateStore(db, processor.entities, options);
 		this.view = new VersionedStateView(this.store);
-		this.inner = new EntityEventProcessor(this.store, processor, {finalityDepth: options.finalityDepth});
+		this.finalityDepth = options.finalityDepth;
+	}
+
+	/**
+	 * CLAIM the store this class built, and the fold over it. Memoised.
+	 *
+	 * The config is re-applied on every call rather than once at build time, so a
+	 * `configure` that arrived before the claim and one that arrived after mean the
+	 * same thing to the fold. `configure` itself stays synchronous, because
+	 * `getVersionHash` is a function of the config and a host reads it before
+	 * anything is folded.
+	 */
+	private async folded(): Promise<EntityEventProcessor<ABI, ProcessorConfig>> {
+		this.folding ??= openForWriting(this.store).then(
+			(claimed) =>
+				new EntityEventProcessor<ABI, ProcessorConfig>(claimed, this.processor, {
+					...(this.finalityDepth === undefined ? {} : {finalityDepth: this.finalityDepth}),
+				}),
+		);
+		const fold = await this.folding;
+		if (this.config !== undefined) fold.configure(this.config);
+		return fold;
 	}
 
 	/** The read handle, also what `load` and `process` hand back: the SQL tier. */
@@ -122,22 +165,31 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 	}
 
 	/** See `EntityEventProcessor.prune`: a write, scheduled by the host, never by `process`. */
-	prune(options?: PruneOptions): Promise<PruneReport> {
-		return this.inner.prune(options);
+	async prune(options?: PruneOptions): Promise<PruneReport> {
+		return (await this.folded()).prune(options);
 	}
 
-	/** See `EntityEventProcessor.getVersionHash`: the version plus the declarations and config. */
+	/**
+	 * See `EntityEventProcessor.getVersionHash`: the version plus the declarations and
+	 * config.
+	 *
+	 * Through the SHARED function rather than through the fold, because a host reads
+	 * this before anything is folded (it names the state's table namespace,
+	 * ADR-0053) and `EntityEventProcessor.getVersionHash` is that same function. Two
+	 * spellings of one formula is how a namespace comes to be keyed on a hash the
+	 * fold does not have; one function called twice is not.
+	 */
 	getVersionHash(): string {
-		return this.inner.getVersionHash();
+		return entityProcessorVersionHash(this.processor, this.config);
 	}
 
-	/** Advisory; see `EventProcessor.getCodeFingerprint`. */
+	/** Advisory; see `EventProcessor.getCodeFingerprint`. Taken from the author's object. */
 	getCodeFingerprint(): string | undefined {
-		return this.inner.getCodeFingerprint();
+		return processorCodeFingerprint(this.processor);
 	}
 
 	configure(config: ProcessorConfig): void {
-		this.inner.configure(config);
+		this.config = config;
 	}
 
 	/**
@@ -151,7 +203,7 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 		source: IndexingSource<ABI>,
 		streamConfig: UsedStreamConfig,
 	): Promise<{state: VersionedStateView; lastSync: LastSync<ABI>} | undefined> {
-		const loaded = await this.inner.load(source, streamConfig);
+		const loaded = await (await this.folded()).load(source, streamConfig);
 		return loaded && {state: this.view, lastSync: loaded.lastSync};
 	}
 
@@ -161,18 +213,18 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 	 * separate `_sync` write used to leave open.
 	 */
 	async process(eventStream: LogEvent<ABI>[], lastSync: LastSync<ABI>): Promise<VersionedStateView> {
-		await this.inner.process(eventStream, lastSync);
+		await (await this.folded()).process(eventStream, lastSync);
 		return this.view;
 	}
 
 	/** Wipe the state, the history and the cursor. See `EntityEventProcessor.reset`. */
-	reset(): Promise<void> {
-		return this.inner.reset();
+	async reset(): Promise<void> {
+		return (await this.folded()).reset();
 	}
 
 	/** Same as `reset`, for a store whose state is never anywhere else. */
-	clear(): Promise<void> {
-		return this.inner.clear();
+	async clear(): Promise<void> {
+		return (await this.folded()).clear();
 	}
 }
 

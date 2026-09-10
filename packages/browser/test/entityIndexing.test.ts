@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
-import {MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {createBrowserStateStore} from '../src/index.js';
@@ -51,7 +51,7 @@ const RESUME_FLOOR = BRANCH_A_TIP - FINALITY;
 
 describe('indexing through the hook with an entity processor', () => {
 	it('lands on the expected state, on the IndexedDB default', async () => {
-		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
 
 		const {state, lastSync} = await runWorkload(store);
 
@@ -68,21 +68,25 @@ describe('indexing through the hook with an entity processor', () => {
 	 * hand-written expectation.
 	 */
 	it('lands on the same state whichever backend the deployment picked', async () => {
-		const backends: {name: string; open(): Promise<StateStore>}[] = [
+		const backends: {name: string; open(): Promise<WritableStateStore>}[] = [
 			{
 				name: 'indexeddb (the default)',
-				open: () => createBrowserStateStore(processor.entities, {databaseName: freshName()}),
+				open: async () =>
+					openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()})),
 			},
 			{
 				name: 'the light patch store',
-				open: () =>
-					createBrowserStateStore(processor.entities, {
-						backend: (declarations) => new PatchStateStore(declarations, {finalityDepth: FINALITY}),
-					}),
+				open: async () =>
+					openForWriting(
+						await createBrowserStateStore(processor.entities, {
+							backend: (declarations) => new PatchStateStore(declarations, {finalityDepth: FINALITY}),
+						}),
+					),
 			},
 			{
 				name: 'memory',
-				open: () => createBrowserStateStore(processor.entities, {backend: (d) => new MemoryStateStore(d)}),
+				open: async () =>
+					openForWriting(await createBrowserStateStore(processor.entities, {backend: (d) => new MemoryStateStore(d)})),
 			},
 		];
 
@@ -100,13 +104,18 @@ describe('indexing through the hook with an entity processor', () => {
 	 * assertion on both a versioned-rows backend and the patch log.
 	 */
 	it.each([
-		['indexeddb', () => createBrowserStateStore(processor.entities, {databaseName: freshName()})],
+		[
+			'indexeddb',
+			async () => openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()})),
+		],
 		[
 			'patch',
-			() =>
-				createBrowserStateStore(processor.entities, {
-					backend: (d) => new PatchStateStore(d, {finalityDepth: FINALITY}),
-				}),
+			async () =>
+				openForWriting(
+					await createBrowserStateStore(processor.entities, {
+						backend: (d) => new PatchStateStore(d, {finalityDepth: FINALITY}),
+					}),
+				),
 		],
 	])('reverts a reorg and the counter decreases (%s)', async (_name, open) => {
 		const chain = fakeChain();
@@ -141,14 +150,20 @@ describe('closing the tab and opening it again', () => {
 		const databaseName = freshName();
 		const chain = fakeChain();
 
-		const first = await runWorkload(await createBrowserStateStore(processor.entities, {databaseName}), chain);
+		const first = await runWorkload(
+			await openForWriting(await createBrowserStateStore(processor.entities, {databaseName})),
+			chain,
+		);
 		expect(first.state).toEqual(EXPECTED_A);
 		expect(first.ranges[0].from).toBe(START_BLOCK);
 
 		// the tab is gone: a NEW store over the same database, a NEW processor, a
 		// NEW hook. Nothing but IndexedDB carries anything across.
 		const reopenedChain = fakeChain();
-		const second = await runWorkload(await createBrowserStateStore(processor.entities, {databaseName}), reopenedChain);
+		const second = await runWorkload(
+			await openForWriting(await createBrowserStateStore(processor.entities, {databaseName})),
+			reopenedChain,
+		);
 
 		expect(second.state).toEqual(EXPECTED_A);
 		// the point: the second tab never asked for the start block again. It asked
@@ -168,10 +183,12 @@ describe('closing the tab and opening it again', () => {
 	 * is why the answer is no.
 	 */
 	it('starts over on the memory-only patch store, and says so before it does', async () => {
-		const openLightStore = () =>
-			createBrowserStateStore(processor.entities, {
-				backend: (d) => new PatchStateStore(d, {finalityDepth: FINALITY}),
-			});
+		const openLightStore = async () =>
+			openForWriting(
+				await createBrowserStateStore(processor.entities, {
+					backend: (d) => new PatchStateStore(d, {finalityDepth: FINALITY}),
+				}),
+			);
 
 		const first = await runWorkload(await openLightStore(), fakeChain());
 		expect(first.state).toEqual(EXPECTED_A);
@@ -186,7 +203,10 @@ describe('closing the tab and opening it again', () => {
 });
 
 describe('what a browser deployment gets when it names its storage', () => {
-	it('createBrowserStateStore builds a StateStore, and not a whole-blob keeper', async () => {
+	it('createBrowserStateStore builds a store behind the seam, and not a whole-blob keeper', async () => {
+		// deliberately NOT claimed: what this asserts is what the FACTORY hands back,
+		// which is the backend itself. A claim wraps it (ADR-0077), so wrapping here
+		// would have the `instanceof` below answer about the handle instead.
 		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
 
 		expect(store).toBeInstanceOf(IndexedDBStateStore);

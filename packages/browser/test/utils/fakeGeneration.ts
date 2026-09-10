@@ -1,5 +1,5 @@
 import type {Abi} from '@etherfold/core';
-import {MemoryStateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting} from '@etherfold/state-store';
 import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../../src/IndexerState.js';
 
 /**
@@ -11,10 +11,10 @@ import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../../src/In
  * These suites are about the hook's own wiring (dispose, error routing,
  * reconfigure serialization, tx reconciliation) and their processors are fakes
  * that persist nothing, so there is nothing for `createState` to open: it hands
- * back an EMPTY memory store, which is a real `StateStore` that the fold never
+ * back an EMPTY memory store, CLAIMED, which is a real store that the fold never
  * touches.
  *
- * Deliberately not a cast to `StateStore` over `undefined`: a generation HAS a
+ * Deliberately not a cast over `undefined`: a generation HAS a
  * state even when the fold under test ignores it, and a fixture that lied about
  * that would be the one place a real requirement could go unnoticed.
  */
@@ -22,7 +22,7 @@ export function generationOf<ABI extends Abi, ProcessResultType>(
 	processor: EntityEventProcessorLike<ABI, ProcessResultType, undefined>,
 ): BrowserGenerationSpec<ABI, ProcessResultType, undefined> {
 	return {
-		createState: () => new MemoryStateStore([]),
+		createState: () => openForWriting(new MemoryStateStore([])),
 		createProcessor: () => processor,
 	};
 }

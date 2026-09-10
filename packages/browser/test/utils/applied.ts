@@ -1,6 +1,6 @@
 import {expect} from 'vitest';
 import {EntityEventProcessor, type EntityProcessor, type EntityStateView} from '@etherfold/processor-entities';
-import type {StateStore} from '@etherfold/state-store';
+import {openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {createBrowserStateStore, createIndexerState} from '../../src/index.js';
 import type {TestABI} from '../../browser/workload.js';
 
@@ -65,8 +65,10 @@ export const keysOf = (rows: {key: string}[]) => rows.map((row) => row.key);
  * The name is the IDENTITY of the state: reopening the same one is what a RELOAD
  * is here, and a fresh one is what DISCARDING the state is.
  */
-export function browserStore(name: string, definition: EntityProcessor<TestABI>): Promise<StateStore> {
-	return createBrowserStateStore(definition.entities, {databaseName: name});
+export async function browserStore(name: string, definition: EntityProcessor<TestABI>): Promise<WritableStateStore> {
+	// CLAIMED, because these cases INDEX: the ability to mutate is obtained by
+	// claiming (ADR-0077), and `openForWriting` migrates on the way.
+	return openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name}));
 }
 
 /**
@@ -80,7 +82,7 @@ export function browserStore(name: string, definition: EntityProcessor<TestABI>)
  */
 export function indexerOver(
 	definition: EntityProcessor<TestABI>,
-	store: StateStore,
+	store: WritableStateStore,
 	keepers: {
 		keepStream?: unknown;
 		/**

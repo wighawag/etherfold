@@ -1,4 +1,10 @@
-import {BlockNotRetainedError, MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {
+	BlockNotRetainedError,
+	MemoryStateStore,
+	openForWriting,
+	type StateStore,
+	type WritableStateStore,
+} from '@etherfold/state-store';
 import {PatchStateStore, RevertBeyondPatchHistoryError} from '@etherfold/state-store-patch';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {createClient} from '@libsql/client';
@@ -25,13 +31,17 @@ import {processor, transfer} from './utils/fixtures.js';
  */
 
 const backends = [
-	{name: 'memory', make: (): StateStore => new MemoryStateStore(processor.entities)},
+	{name: 'memory', make: (): Promise<WritableStateStore> => openForWriting(new MemoryStateStore(processor.entities))},
 	{
 		name: 'sqlite',
-		make: (): StateStore =>
-			new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), processor.entities),
+		make: (): Promise<WritableStateStore> =>
+			openForWriting(new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), processor.entities)),
 	},
-	{name: 'patch', make: (): StateStore => new PatchStateStore(processor.entities, {retention: 'revert-only'})},
+	{
+		name: 'patch',
+		make: (): Promise<WritableStateStore> =>
+			openForWriting(new PatchStateStore(processor.entities, {retention: 'revert-only'})),
+	},
 ];
 
 /** The declared fields only: versions, ranges and patches are storage, not state. */
@@ -63,8 +73,7 @@ describe('one processor, on versioned rows and on a patch log', () => {
 	beforeEach(async () => {
 		states = {};
 		for (const backend of backends) {
-			const store = backend.make();
-			await store.migrate();
+			const store = await backend.make();
 			await applyEventStream(store, processor, STREAM, undefined);
 			states[backend.name] = await stateOf(store, IDS);
 		}
@@ -87,11 +96,12 @@ describe('one processor, on versioned rows and on a patch log', () => {
 });
 
 describe('the patch store under the processor', () => {
-	let store: PatchStateStore;
+	let store: WritableStateStore;
 
 	beforeEach(async () => {
-		store = new PatchStateStore(processor.entities, {retention: 'revert-only', finalityDepth: 64});
-		await store.migrate();
+		store = await openForWriting(
+			new PatchStateStore(processor.entities, {retention: 'revert-only', finalityDepth: 64}),
+		);
 	});
 
 	it('makes a counter DECREASE when the block that raised it is retracted', async () => {
@@ -135,8 +145,7 @@ describe('the patch store under the processor', () => {
 	it('refuses the historical read the other two answer, instead of serving the tip', async () => {
 		await applyEventStream(store, processor, STREAM, undefined);
 
-		const answered = new MemoryStateStore(processor.entities);
-		await answered.migrate();
+		const answered = await openForWriting(new MemoryStateStore(processor.entities));
 		await applyEventStream(answered, processor, STREAM, undefined);
 		expect(await answered.getAsOf<{value: number}>('counter', {name: 'transfers'}, 100)).toMatchObject({value: 3});
 

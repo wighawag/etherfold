@@ -11,7 +11,7 @@ import {
 	type EntityStateView,
 	type MutationContext,
 } from '@etherfold/processor-entities';
-import type {StateStore} from '@etherfold/state-store';
+import {openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {createBrowserStateStore, createIndexerState, keepStreamOnIndexedDB, streamAddress} from '../src/index.js';
 import {
 	EXPECTED_A,
@@ -49,7 +49,7 @@ const freshName = () => `invalidation-${counter++}-${Math.random().toString(36).
 
 /** Index branch A to the tip on a fresh IndexedDB database, against `source`. */
 async function indexed(source = SOURCE, chain = fakeChain()) {
-	const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+	const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
 	const indexer = indexerForProcessor(store, processor);
 	await indexer.init({provider: chain.provider, source: source as never, config: {stream: {finality: FINALITY}}});
 	await indexToTip(indexer);
@@ -150,7 +150,9 @@ async function namesIn(view: EntityStateView): Promise<NamesState> {
 
 /** A store and a stream keeper under one name, indexed to the tip against branch A. */
 async function indexedWithKeptStream(tag = freshName(), chain = fakeChain()) {
-	const store = await createBrowserStateStore(namesProcessor('1.0.0').entities, {databaseName: tag});
+	const store = await openForWriting(
+		await createBrowserStateStore(namesProcessor('1.0.0').entities, {databaseName: tag}),
+	);
 	const indexer = createIndexerState<TestABI, EntityStateView>(
 		{
 			createState: () => store,
@@ -212,7 +214,7 @@ describe('a context persisted by the SHIPPED code, read by this one', () => {
 	 * re-index every existing deployment once -- charging exactly the cost
 	 * per-event hashing exists to remove, at exactly the moment nobody is looking.
 	 */
-	async function agePersistedContextsToTheShippedShape(tag: string, store: StateStore) {
+	async function agePersistedContextsToTheShippedShape(tag: string, store: WritableStateStore) {
 		const wholeSource = [{startBlock: 0, hash: simple_hash(SOURCE)}];
 
 		// The STATE side keeps its cursor behind the storage seam, as an opaque string
@@ -249,7 +251,9 @@ describe('a context persisted by the SHIPPED code, read by this one', () => {
 
 		// a new tab, the same stores, the upgraded library
 		const rangesBefore = chain.ranges.length;
-		const reopened = await createBrowserStateStore(namesProcessor('1.0.0').entities, {databaseName: tag});
+		const reopened = await openForWriting(
+			await createBrowserStateStore(namesProcessor('1.0.0').entities, {databaseName: tag}),
+		);
 		const reloaded = createIndexerState<TestABI, EntityStateView>(
 			{
 				createState: () => reopened,

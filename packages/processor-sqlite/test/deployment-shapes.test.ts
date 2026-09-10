@@ -21,7 +21,13 @@ import {
 	type UsedStreamConfig,
 } from '@etherfold/core';
 import {applyEventStream, type EntityProcessor} from '@etherfold/processor-entities';
-import {MemoryStateStore, type EntityId, type StateStore} from '@etherfold/state-store';
+import {
+	MemoryStateStore,
+	openForWriting,
+	type EntityId,
+	type StateStoreBackend,
+	type WritableStateStore,
+} from '@etherfold/state-store';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {beforeAll, describe, expect, it} from 'vitest';
 import {VersionedStateEventProcessor} from '../src/index.js';
@@ -438,26 +444,30 @@ async function snapshotOf(read: Reader): Promise<Snapshot> {
  * deployment, not to this one. What it is here for is that the storage backend
  * is the only thing that differs between two runs of the SAME processor object.
  */
-function entityProcessorOver(store: StateStore, authored: EntityProcessor<TestABI>): EventProcessor<TestABI, void> {
-	let migrated = false;
+function entityProcessorOver(
+	store: StateStoreBackend,
+	authored: EntityProcessor<TestABI>,
+): EventProcessor<TestABI, void> {
+	// CLAIMED once, on first use: folding is writing, and the ability to mutate is
+	// obtained by claiming (ADR-0077). `openForWriting` migrates, which is what the
+	// `migrated` flag here used to be.
+	let writer: Promise<WritableStateStore> | undefined;
+	const claimed = () => (writer ??= openForWriting(store));
 	return {
 		getVersionHash: () => `${authored.version}-${simple_hash({entities: authored.entities})}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
-			if (!migrated) {
-				await store.migrate();
-				migrated = true;
-			}
+			await claimed();
 			return undefined;
 		},
 		process: async (eventStream) => {
-			await applyEventStream(store, authored, eventStream, undefined);
+			await applyEventStream(await claimed(), authored, eventStream, undefined);
 		},
 		reset: async () => {
-			await store.revertTo(-1);
+			await (await claimed()).revertTo(-1);
 		},
 		clear: async () => {
-			await store.revertTo(-1);
+			await (await claimed()).revertTo(-1);
 		},
 	};
 }

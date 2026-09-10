@@ -9,7 +9,7 @@ import {
 import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
-import type {EntityProcessor, StateStore} from '@etherfold/processor-entities';
+import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
@@ -109,7 +109,7 @@ export type RunningReceiver<ABI extends Abi = Abi, ProcessResultType = unknown> 
 	port: number;
 	/** The ONE handle the store folds into and the server answers over. */
 	db: RemoteSQL;
-	store: StateStore;
+	store: WritableStateStore;
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/** What it indexes, which is also half of the wire identity a sender must assert. */
 	source: IndexingSource<ABI>;
@@ -125,7 +125,7 @@ export type RunningReceiver<ABI extends Abi = Abi, ProcessResultType = unknown> 
 	 * resolves to: the durable registry, the canonical pointer and the folds over
 	 * them. The same container `run` holds.
 	 */
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/**
 	 * Resolves when it has been asked to stop, which is the only way a receiver
 	 * ends: a signal, or `stop()`. Reaching a tip is not one of the ways, because

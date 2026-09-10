@@ -30,7 +30,7 @@ import {
 	type CursorWrite,
 	type Retention,
 	type RetentionEnforcement,
-	type StateStore,
+	type StateStoreBackend,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {RevertBeyondPatchHistoryError} from './errors.js';
@@ -143,7 +143,7 @@ export type PatchStateStoreOptions = {
  * the single failure mode this design exists to prevent, and worse than an error
  * because it is plausible.
  */
-export class PatchStateStore implements StateStore {
+export class PatchStateStore implements StateStoreBackend {
 	private readonly entities: ReadonlyMap<string, NormalizedEntity>;
 	private readonly finalityDepth: number | undefined;
 	private readonly blocks = new Map<number, BlockPointer>();
@@ -270,7 +270,7 @@ export class PatchStateStore implements StateStore {
 		return this.cursors.get(key);
 	}
 
-	/** Move a cursor with no block behind it. See `StateStore.writeCursor`. */
+	/** Move a cursor with no block behind it. See `StateStoreBackend.writeCursor`. */
 	async writeCursor(key: string, value: string): Promise<void> {
 		this.cursors.set(key, value);
 	}
@@ -451,7 +451,7 @@ export class PatchStateStore implements StateStore {
 	 * The blocks whose reverse patches are still held, ascending: how deep a
 	 * revert can still go.
 	 *
-	 * Not part of `StateStore`, because on a versioned backend the same question
+	 * Not part of the seam, because on a versioned backend the same question
 	 * is answered by the retention window. It is here because on THIS backend the
 	 * honest depth is a fact about the stream rather than about the setting -- on
 	 * a sparse one a declared depth of 64 leaves a single block -- and a host that
@@ -464,7 +464,7 @@ export class PatchStateStore implements StateStore {
 	/**
 	 * The block recorded at a height, or `undefined`.
 	 *
-	 * Not part of `StateStore`: addressing state by hash or by time is the read
+	 * Not part of the seam: addressing state by hash or by time is the read
 	 * layer above the seam. This is here so a test, or a host deciding what to
 	 * re-index, can see what was recorded.
 	 */

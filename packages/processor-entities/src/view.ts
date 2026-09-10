@@ -36,10 +36,11 @@ import type {EntityId, EntityIdPrefix, Listing, StateStore, StateStoreCapabiliti
  *
  * ## It is READ-ONLY on purpose
  *
- * Handing back the `StateStore` itself would put `applyBlock` and `revertTo` in
- * the hands of a UI callback, where a stray call corrupts the chain of versions
- * with no way to tell afterwards. The writer is the processor, and it is the
- * only writer.
+ * Handing back the store itself would put `applyBlock` and `revertTo` in the
+ * hands of a UI callback, where a stray call corrupts the chain of versions with
+ * no way to tell afterwards. The writer is the processor, and it is the only
+ * writer -- which is now a fact of the TYPE as well: this holds the seam as a
+ * `StateStore`, and the mutating verbs are not on it (ADR-0077).
  */
 export class EntityStateView {
 	constructor(private readonly store: StateStore) {}

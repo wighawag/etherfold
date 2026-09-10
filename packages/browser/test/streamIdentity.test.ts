@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import {openForWriting} from '@etherfold/state-store';
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import {get, keys as allKeys, set} from 'idb-keyval';
@@ -238,7 +239,7 @@ describe('the identity the keeper addresses by is the INDEXER\u2019s', () => {
 	it('is the RESOLVED stream config the indexer is running, not a default the keeper kept', async () => {
 		const tag = freshName();
 		const chain = fakeChain();
-		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
 		const streamConfig = {finality: FINALITY};
 		const indexer = createIndexerState<TestABI, EntityStateView>(
 			{
@@ -270,7 +271,7 @@ describe('the identity the keeper addresses by is the INDEXER\u2019s', () => {
 	it('follows a RECONFIGURE onto the new stream, leaving the old one where it is', async () => {
 		const tag = freshName();
 		const chain = fakeChain();
-		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
 		const indexer = createIndexerState<TestABI, EntityStateView>(
 			{
 				createState: () => store,

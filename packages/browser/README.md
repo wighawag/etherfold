@@ -19,11 +19,13 @@ Two lines beyond the processor. The first names WHERE the state lives, which is 
 
 ```ts
 import {createBrowserStateStore, createIndexerState} from '@etherfold/browser';
-import {fromEntityProcessor} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 
 const indexer = createIndexerState({
-	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024)
-	createState: () => createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'}),
+	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024).
+	// `openForWriting` is what makes this tab the WRITER of that store: building a store
+	// and claiming it are two acts, and only a claimed store can be folded into (ADR-0077).
+	createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'})),
 	createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
 });
 
@@ -49,7 +51,7 @@ await indexer.startAutoIndexing(); // or call indexMoreAndCatchupIfNeeded() on e
 
 ## Choosing where the state lives
 
-`createBrowserStateStore` is the ONE place a backend is named, and swapping it changes nothing about the processor:
+`createBrowserStateStore` is the ONE place a backend is named, and swapping it changes nothing about the processor. It does NOT claim: a tab that only renders opens the same database, so building the store and becoming its writer are separate (wrap it in `openForWriting` where you index, as in the usage above).
 
 ```ts
 // the default: versioned rows in IndexedDB, resumed from the cursor after a reload

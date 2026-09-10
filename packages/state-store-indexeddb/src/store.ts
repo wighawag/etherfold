@@ -28,7 +28,7 @@ import {
 	type RetentionEnforcement,
 	type RetentionOptions,
 	type RetentionSetting,
-	type StateStore,
+	type StateStoreBackend,
 	type StateStoreCapabilities,
 	type CursorWrite,
 } from '@etherfold/state-store';
@@ -133,7 +133,7 @@ export type IndexedDBStateStoreOptions = RetentionOptions & {
  * there is no window between the check and the write for a second tab to land
  * in. See `writer.ts` at the seam and ADR-0075.
  */
-export class IndexedDBStateStore implements StateStore {
+export class IndexedDBStateStore implements StateStoreBackend {
 	readonly databaseName: string;
 	private readonly entities: ReadonlyMap<string, NormalizedEntity>;
 	private readonly provided: Retention;
@@ -356,7 +356,7 @@ export class IndexedDBStateStore implements StateStore {
 	}
 
 	/**
-	 * Move a cursor with no block behind it. See `StateStore.writeCursor`.
+	 * Move a cursor with no block behind it. See `StateStoreBackend.writeCursor`.
 	 *
 	 * Guarded like every other mutation, and this is the path the guard exists
 	 * for most: there is no block record here to refuse a stale writer
@@ -633,7 +633,7 @@ export class IndexedDBStateStore implements StateStore {
 	/**
 	 * The block recorded at a height, or `undefined`.
 	 *
-	 * Not part of `StateStore`: addressing state by hash or by time (and refusing
+	 * Not part of the seam: addressing state by hash or by time (and refusing
 	 * an address that resolves to nothing) is the read layer above the seam. This
 	 * is here so a caller, or a test, can see what was recorded.
 	 */

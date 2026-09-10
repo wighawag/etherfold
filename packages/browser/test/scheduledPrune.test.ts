@@ -11,9 +11,11 @@ import type {
 	PruneOptions,
 	PruneReport,
 	RetentionEnforcement,
-	StateStore,
+	StateStoreBackend,
 	StateStoreCapabilities,
+	WritableStateStore,
 } from '@etherfold/state-store';
+import {openForWriting} from '@etherfold/state-store';
 import type {EntityStateView} from '@etherfold/processor-entities';
 import {createBrowserStateStore, createIndexerState} from '../src/index.js';
 import {
@@ -76,7 +78,7 @@ const UNPRUNED = 10;
 const RETAINED = 6;
 
 /** One run of the late-branch workload against a store the test configured. */
-async function indexLateBranch(store: StateStore) {
+async function indexLateBranch(store: WritableStateStore) {
 	return runWorkload(store, fakeChain(BRANCH_A_LATER, BRANCH_A_LATER_TIP));
 }
 
@@ -86,10 +88,10 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 		const windowedName = freshName();
 
 		const unbounded = await indexLateBranch(
-			await createBrowserStateStore(processor.entities, {databaseName: unboundedName}),
+			await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: unboundedName})),
 		);
 		const windowed = await indexLateBranch(
-			await createBrowserStateStore(processor.entities, {databaseName: windowedName, ...WINDOW}),
+			await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: windowedName, ...WINDOW})),
 		);
 
 		expect(await versionCount(unboundedName)).toBe(UNPRUNED);
@@ -114,11 +116,13 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 		const databaseName = freshName();
 
 		const {state} = await indexLateBranch(
-			await createBrowserStateStore(processor.entities, {
-				databaseName,
-				retention: 'revert-only',
-				finalityDepth: 64,
-			}),
+			await openForWriting(
+				await createBrowserStateStore(processor.entities, {
+					databaseName,
+					retention: 'revert-only',
+					finalityDepth: 64,
+				}),
+			),
 		);
 
 		expect(await versionCount(databaseName)).toBe(RETAINED);
@@ -139,7 +143,9 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 	])('deletes nothing where there is no floor (%s)', async (_name, config) => {
 		const databaseName = freshName();
 
-		const {state} = await indexLateBranch(await createBrowserStateStore(processor.entities, {databaseName, ...config}));
+		const {state} = await indexLateBranch(
+			await openForWriting(await createBrowserStateStore(processor.entities, {databaseName, ...config})),
+		);
 
 		expect(await versionCount(databaseName)).toBe(UNPRUNED);
 		expect(state).toEqual(EXPECTED_A_LATER);
@@ -155,7 +161,7 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 	 */
 	it('keeps the live version of a row last written far below the floor', async () => {
 		const databaseName = freshName();
-		const store = await createBrowserStateStore(processor.entities, {databaseName, ...WINDOW});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName, ...WINDOW}));
 
 		const {state} = await indexLateBranch(store);
 
@@ -178,7 +184,7 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 	 */
 	it('spends a bounded budget per cycle and comes back for the rest', async () => {
 		const databaseName = freshName();
-		const store = await createBrowserStateStore(processor.entities, {databaseName, ...WINDOW});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName, ...WINDOW}));
 		const chain = fakeChain(BRANCH_A_LATER, BRANCH_A_LATER_TIP);
 		const indexer = createIndexerState<TestABI, EntityStateView>(
 			{createState: () => store, createProcessor: (state) => entityProcessorOver(state, processor)},
@@ -220,7 +226,9 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 	 * per cycle for ever.
 	 */
 	it('refuses a budget no pass could spend, at the line that configured it', async () => {
-		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName(), ...WINDOW});
+		const store = await openForWriting(
+			await createBrowserStateStore(processor.entities, {databaseName: freshName(), ...WINDOW}),
+		);
 
 		expect(() =>
 			createIndexerState<TestABI, EntityStateView>(
@@ -239,10 +247,12 @@ describe('the indexing loop schedules the prune its retention implies', () => {
 	 * `prune` call is ever in flight while an `applyBlock` is.
 	 */
 	it('never reaches a prune from the path that applies a block', async () => {
-		const inner = await createBrowserStateStore(processor.entities, {databaseName: freshName(), ...WINDOW});
+		const inner = await openForWriting(
+			await createBrowserStateStore(processor.entities, {databaseName: freshName(), ...WINDOW}),
+		);
 		const watched = new Watched(inner);
 
-		await indexLateBranch(watched);
+		await indexLateBranch(await openForWriting(watched));
 
 		// it did prune -- otherwise the claim below is vacuous
 		expect(watched.pruneCalls).toBeGreaterThan(0);
@@ -258,13 +268,13 @@ describe('the indexing loop schedules the prune its retention implies', () => {
  * IndexedDB store, so what it observes is the calls the hook actually makes on
  * the path it actually takes.
  */
-class Watched implements StateStore {
+class Watched implements StateStoreBackend {
 	pruneCalls = 0;
 	blocksApplied = 0;
 	prunesDuringAnApply = 0;
 	private applying = 0;
 
-	constructor(private readonly inner: StateStore) {}
+	constructor(private readonly inner: StateStoreBackend) {}
 
 	get capabilities(): StateStoreCapabilities {
 		return this.inner.capabilities;

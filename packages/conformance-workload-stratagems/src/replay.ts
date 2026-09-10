@@ -26,7 +26,7 @@ import {
 	runBlockHandlers,
 	type EntityProcessor,
 	type EntityId,
-	type StateStore,
+	type WritableStateStore,
 } from '@etherfold/processor-entities';
 
 /** Every business key the run wrote or deleted, per entity, deduplicated. */
@@ -69,7 +69,7 @@ function remember(touched: TouchedIds, entity: string, id: EntityId): void {
  * reason to return.
  */
 export async function replayIntoStore<ABI extends Abi>(
-	store: StateStore,
+	store: WritableStateStore,
 	processor: EntityProcessor<ABI>,
 	eventStream: readonly LogEvent<ABI>[],
 ): Promise<ReplayReport> {

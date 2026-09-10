@@ -2,6 +2,8 @@ import {
 	GenerationCapReachedError,
 	generationDigestOf,
 	openReceivingIndexer,
+	resolveStreamConfig,
+	streamDigestOf,
 	type LogEvent,
 	type ReceivingIndexer,
 	type WireBatch,
@@ -10,7 +12,9 @@ import {
 	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
+	openForWriting,
 	type StateStore,
+	type WritableStateStore,
 } from '@etherfold/processor-entities';
 import {
 	applySchema,
@@ -76,7 +80,7 @@ async function openIndexer(
 	db: RemoteSQL,
 	declared: EntityProcessor<typeof abi>,
 	options: {caps?: {maxGenerations: number; maxStreams: number}} = {},
-): Promise<ReceivingIndexer<typeof abi, unknown, StateStore>> {
+): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
 		await new VersionedStateStore(db, declared.entities, {tableNamespace: generationDigestOf(id)}).drop();
 	};
@@ -87,20 +91,24 @@ async function openIndexer(
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
 		generation: {
+			// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
+			// claiming (ADR-0077), exactly as the CLI's own `buildFolding` does it.
 			createState: (context) =>
-				new VersionedStateStore(db, declared.entities, {
-					tableNamespace: generationDigestOf({
-						stream: context.stream,
-						processor: entityProcessorVersionHash(declared),
+				openForWriting(
+					new VersionedStateStore(db, declared.entities, {
+						tableNamespace: generationDigestOf({
+							stream: context.stream,
+							processor: entityProcessorVersionHash(declared),
+						}),
+						finalityDepth: FINALITY,
 					}),
-					finalityDepth: FINALITY,
-				}),
-			createProcessor: (state: StateStore) =>
+				),
+			createProcessor: (state: WritableStateStore) =>
 				new EntityEventProcessor<typeof abi>(state, declared, {
 					finalityDepth: FINALITY,
 				}) as unknown as EntityEventProcessor<typeof abi>,
 		},
-	}) as Promise<ReceivingIndexer<typeof abi, unknown, StateStore>>;
+	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
 
 let logCounter = 0;
@@ -132,7 +140,7 @@ function transferEvent(
 }
 
 function batch(
-	indexer: ReceivingIndexer<typeof abi, unknown, StateStore>,
+	indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>,
 	over: {fromBlock: number; toBlock: number; latestBlock: number; logs?: LogEvent<typeof abi>[]},
 ): WireBatch<typeof abi> {
 	return {
@@ -298,7 +306,7 @@ describe('an upgraded fold against a database another fold wrote', () => {
 });
 
 describe('at the cap', () => {
-	it('REFUSES the successor, names what to delete, and leaves nothing partial behind', async () => {
+	it('REFUSES the successor, names what to delete, and registers nothing', async () => {
 		const db = oneDatabase();
 		const incumbent = await anIndexerThatHasFolded(db);
 		const tablesBefore = await tablesIn(db);
@@ -307,15 +315,35 @@ describe('at the cap', () => {
 		await expect(refused).rejects.toBeInstanceOf(GenerationCapReachedError);
 		await expect(refused).rejects.toThrow(/Delete one of these first/);
 
-		// no orphan record...
+		// no orphan record: what makes a generation EXIST is the registry row, and the
+		// refusal is before it
 		const rows = await db
 			.prepare(`SELECT processor FROM ${GENERATION_TABLE} WHERE indexer = ?1`)
 			.bind(INDEXER)
 			.all<{processor: string}>();
 		expect(rows.results.map((row) => row.processor)).toEqual([incumbent.generation.processor]);
-		// ...and no orphan tables: the refused generation's state store was built but
-		// creates nothing until the first write, so a refusal costs no DDL
-		expect(await tablesIn(db)).toEqual(tablesBefore);
+		// The refused generation's namespace DOES exist, and that is the price of the
+		// claim being explicit: `createState` claims (ADR-0077) and claiming migrates,
+		// while the cap is enforced one step later, when the record is written -- because
+		// the record needs the processor's version hash, which needs the processor, which
+		// needs the state (ADR-0043). So a refusal costs the DDL of a namespace it can
+		// never fill, plus the claim row inside it. It is reused verbatim if the operator
+		// raises the bound (the namespace is a digest of the identity, not a fresh name),
+		// nothing reads it while no record names it, and dropping a generation still drops
+		// exactly its own tables. What must hold is that it carries no STATE:
+		const added = (await tablesIn(db)).filter((table) => !tablesBefore.includes(table));
+		const namespace = generationDigestOf({
+			stream: streamDigestOf(SOURCE, resolveStreamConfig({finality: FINALITY})),
+			processor: entityProcessorVersionHash(V2),
+		});
+		expect(added.length).toBeGreaterThan(0);
+		expect(added.every((table) => table.includes(namespace))).toBe(true);
+		for (const table of added) {
+			const rows = await db.prepare(`SELECT COUNT(*) AS records FROM "${table}"`).all<{records: number}>();
+			// the one row anywhere in it is the CLAIM the open took, in the writer table the
+			// guard keeps its token in (ADR-0075); every other table is untouched.
+			expect(Number(rows.results[0]?.records), table).toBe(table.endsWith('_writer') ? 1 : 0);
+		}
 		// and the incumbent still answers
 		expect(await stateOf(incumbent.state)).toEqual({transfers: 1, owner: ALICE});
 	});

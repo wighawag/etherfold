@@ -1,5 +1,5 @@
 import type {Abi, LogEvent} from '@etherfold/core';
-import {MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {createClient} from '@libsql/client';
@@ -152,13 +152,17 @@ function placed(
 }
 
 const backends = [
-	{name: 'memory', make: (): StateStore => new MemoryStateStore(processor.entities)},
+	{name: 'memory', make: (): Promise<WritableStateStore> => openForWriting(new MemoryStateStore(processor.entities))},
 	{
 		name: 'sqlite',
-		make: (): StateStore =>
-			new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), processor.entities),
+		make: (): Promise<WritableStateStore> =>
+			openForWriting(new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), processor.entities)),
 	},
-	{name: 'patch', make: (): StateStore => new PatchStateStore(processor.entities, {retention: 'revert-only'})},
+	{
+		name: 'patch',
+		make: (): Promise<WritableStateStore> =>
+			openForWriting(new PatchStateStore(processor.entities, {retention: 'revert-only'})),
+	},
 ];
 
 /** Epochs deliberately repeat and go BACKWARDS: arrival order is not `epoch` order. */
@@ -170,11 +174,11 @@ const STREAM = EPOCHS.map((epoch, index) =>
 );
 
 describe.each(backends)('an ordered bounded child collection, on $name', (backend) => {
-	let store: StateStore;
+	let store: WritableStateStore;
 
 	beforeEach(async () => {
-		store = backend.make();
-		await store.migrate();
+		// `openForWriting` migrates on the way, so claiming is the whole of the open.
+		store = await backend.make();
 	});
 
 	/** The window as a caller sees it: the derived collection, in arrival order. */

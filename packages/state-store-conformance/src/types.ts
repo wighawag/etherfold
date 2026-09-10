@@ -1,4 +1,4 @@
-import type {EntityDeclaration, StateStore} from '@etherfold/state-store';
+import type {EntityDeclaration, StateStoreBackend} from '@etherfold/state-store';
 
 /**
  * How the suite gets a store to interrogate: hand it declarations, get a store.
@@ -19,10 +19,12 @@ import type {EntityDeclaration, StateStore} from '@etherfold/state-store';
  * reads the report once, from a probe store, and selects the cases the backend
  * has CLAIMED it can pass.
  */
-export type StateStoreFactory = (declarations: readonly EntityDeclaration[]) => StateStore | Promise<StateStore>;
+export type StateStoreFactory = (
+	declarations: readonly EntityDeclaration[],
+) => StateStoreBackend | Promise<StateStoreBackend>;
 
 /** Two handles the suite may write through, in the order they are handed over. */
-export type StorePair = readonly [StateStore, StateStore];
+export type StorePair = readonly [StateStoreBackend, StateStoreBackend];
 
 /**
  * How the suite gets TWO handles at once, which is the one thing

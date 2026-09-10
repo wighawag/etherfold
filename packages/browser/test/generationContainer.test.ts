@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
 import {openIndexer, type GenerationContext, type GenerationSpec} from '@etherfold/core';
-import {MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import type {EntityEventProcessor, EntityProcessor, EntityStateView} from '@etherfold/processor-entities';
 import {createIndexerState, openGenerationRegistryOnIndexedDB} from '../src/index.js';
 import {
@@ -61,8 +61,7 @@ describe('createIndexerState takes the factories a generation is built from', ()
 			createState: async (context) => {
 				built.states++;
 				built.context = context;
-				const store = new MemoryStateStore(processor.entities);
-				await store.migrate();
+				const store = await openForWriting(new MemoryStateStore(processor.entities));
 				return store;
 			},
 			createProcessor: (store, context) => {
@@ -89,8 +88,7 @@ describe('createIndexerState takes the factories a generation is built from', ()
 		const indexer = createIndexerState<TestABI, EntityStateView>({
 			registry: await browserRegistry(),
 			createState: async () => {
-				const store = new MemoryStateStore(processor.entities);
-				await store.migrate();
+				const store = await openForWriting(new MemoryStateStore(processor.entities));
 				return store;
 			},
 			createProcessor: (store) => entityProcessorOver(store, processor),
@@ -115,9 +113,9 @@ describe('createIndexerState takes the factories a generation is built from', ()
  * reason the entity path hands back a handle rather than a state object.
  */
 function generationOver(
-	store: StateStore,
+	store: WritableStateStore,
 	definition: EntityProcessor<TestABI>,
-): GenerationSpec<TestABI, EntityStateView, StateStore> {
+): GenerationSpec<TestABI, EntityStateView, WritableStateStore> {
 	let fold: EntityEventProcessor<TestABI> | undefined;
 	return {
 		createState: () => store,
@@ -142,8 +140,7 @@ describe('the entities-path handle is INDIRECT', () => {
 		const definitionV2 = processorVariant({version: '2.0.0', countBy: 2});
 
 		// generation B's state, folded on its own: same events, different fold
-		const storeB: StateStore = new MemoryStateStore(definitionV2.entities);
-		await storeB.migrate();
+		const storeB = await openForWriting(new MemoryStateStore(definitionV2.entities));
 		const seeding = createIndexerState<TestABI, EntityStateView>({
 			createState: () => storeB,
 			createProcessor: (state) => entityProcessorOver(state, definitionV2),
@@ -153,8 +150,7 @@ describe('the entities-path handle is INDIRECT', () => {
 		expect((await readState(seeding.state.$state)).transfers).toBe(EXPECTED_A.transfers * 2);
 		seeding.dispose();
 
-		const storeA: StateStore = new MemoryStateStore(processor.entities);
-		await storeA.migrate();
+		const storeA = await openForWriting(new MemoryStateStore(processor.entities));
 
 		const chain = fakeChain();
 		const container = await openIndexer<TestABI, EntityStateView>({

@@ -1,5 +1,6 @@
 import {
 	BlockNotRetainedError,
+	openForWriting,
 	openSnapshotAware,
 	RevertBeyondSnapshotError,
 	type Mutation,
@@ -89,7 +90,9 @@ describe('an indexer that starts from a snapshot', () => {
 		const store = await freshStore();
 		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
 
-		const runtime = new EntityEventProcessor(store, processor);
+		// the CLAIM is what the ability to fold rests on (ADR-0077); `bootstrap` stays
+		// reachable on the snapshot-aware handle, which the claimed one wraps.
+		const runtime = new EntityEventProcessor(await openForWriting(store), processor);
 		const loaded = await runtime.load(SOURCE, STREAM_CONFIG);
 
 		// this is the whole capability: the core asks the processor where it is,
@@ -102,7 +105,9 @@ describe('an indexer that starts from a snapshot', () => {
 		const store = await freshStore();
 		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
 
-		const runtime = new EntityEventProcessor(store, processor);
+		// the CLAIM is what the ability to fold rests on (ADR-0077); `bootstrap` stays
+		// reachable on the snapshot-aware handle, which the claimed one wraps.
+		const runtime = new EntityEventProcessor(await openForWriting(store), processor);
 		await runtime.load(SOURCE, STREAM_CONFIG);
 		await runtime.process([transfer(SNAPSHOT_BLOCK + 1, '0xN', {from: '0xalice', to: '0xbob', id: 1n})], {
 			...lastSync({lastToBlock: SNAPSHOT_BLOCK + 1, latestBlock: SNAPSHOT_BLOCK + 1}),
@@ -127,7 +132,9 @@ describe('a reorg that reaches below the snapshot, through the runtime that woul
 	it('is refused loudly by the revert rather than half-performed', async () => {
 		const store = await freshStore();
 		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
-		const runtime = new EntityEventProcessor(store, processor);
+		// the CLAIM is what the ability to fold rests on (ADR-0077); `bootstrap` stays
+		// reachable on the snapshot-aware handle, which the claimed one wraps.
+		const runtime = new EntityEventProcessor(await openForWriting(store), processor);
 		await runtime.load(SOURCE, STREAM_CONFIG);
 
 		// a retraction AT the snapshot block forks below it: the canonical chain
