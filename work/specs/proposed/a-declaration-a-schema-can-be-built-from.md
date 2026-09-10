@@ -1,7 +1,6 @@
 ---
 title: 'A declaration a schema can be built from'
 slug: a-declaration-a-schema-can-be-built-from
-humanOnly: true
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
@@ -60,7 +59,7 @@ Two additions, each described so that it says what the system ALREADY does rathe
 
 ### Autonomy notes
 
-- **`humanOnly: true`, and NOT because the change is large.** The flag's only effect is that an agent may not auto-task this spec, so it is about whether the CUT needs judgement, not about approving a decision (the decisions are all taken below). The judgement here is ATOMICITY. A semantic type owns three things at once, a canonical encoding, an equality and an ordering, and it must own them on EVERY backend or the same declaration means different things in a browser and on a server, which is a silent cross-backend correctness bug rather than a failure. A cut that lands the read side before the encoding, or one backend before another, ships exactly that. Sequencing the tasks so no intermediate state is half-implemented is the decision, and with no CI nothing catches it afterwards. The type change ITSELF is additive: a bare `'text'` keeps its meaning, `parent` is optional, and every existing declaration compiles untouched.
+- **No flags.** This carried `humanOnly` while the ATOMICITY of the cut was an open judgement: a semantic type owns an encoding, an equality and an ordering, and must own all three on EVERY backend, or one declaration means different things in a browser and on a server, which fails silently rather than loudly. That judgement is now written down as **Task order** below, as a rule a tasker follows rather than a risk a person watches for. The type change itself was always additive: a bare `'text'` keeps its meaning, `parent` is optional, and every existing declaration compiles untouched.
 - **No `needsAnswers`.** Every question this spec launched with was a TYPE or a SCOPE question, which is exactly the kind that must be settled before tasking, so all five are answered in Implementation Decisions below. What is deliberately left to the build is implementation preference, which a spec should not freeze.
 
 ## Implementation Decisions
@@ -104,6 +103,25 @@ Three reasons it is not a fifth `FieldType`. Storage and meaning are **different
 **Existing declarations must keep working.** Everything here is additive and opt-in: a declaration with no relations and no semantic types means exactly what it means today, on every backend.
 
 **One schema source, still.** The point of adding to the declaration rather than beside it is that `createReadSurface`, the accessor seam the query spec defines, the storage layout and any future schema all continue to read one object. A relation described in a GraphQL layer instead would be a second description of the data, which is the thing this project has consistently refused.
+
+## Task order
+
+Three independent bodies of work, ordered so that the two safe ones land first and the one with an atomicity requirement carries that requirement in its acceptance rather than in someone's attention.
+
+**1. Relations, entirely, first.** They are independent of everything else here and they have no cross-backend encoding problem at all, because a relation compiles to the bounded id-prefix listing that every backend already implements by construction (ADR-0021). Three tasks, in order: the declaration type plus the declaration-time validation (the child's leading id columns ARE the parent's whole id, by name and in order, refused everywhere identically); the conformance cases; then the generated read surface deriving the parent-side collection. Relations are also what `the-same-query-runs-against-a-worker-and-a-server` waits on, so putting them first shortens that dependency rather than lengthening it.
+
+**2. Enums.** Small, independent, and no encoding question beyond storing text and checking a declared set at write time. It can equally land before relations; it is second only because it is worth less.
+
+**3. Semantic types, and this is the part with a rule attached.**
+
+- **3a. The registry**, defining what a semantic type IS: encode, decode, equality, ordering, with `u256` as the first and only member. No backend work.
+- **3b. Every backend implements it, in ONE task, not one task per backend.** This is the atomicity requirement made concrete and it is the whole reason this section exists. The task is not done when SQLite passes; it is done when the shared conformance cases for the semantic type pass on SQLite, IndexedDB, memory and patch. Splitting it per backend is what produces the silent half-migrated state, so it must not be split, however tempting the size makes it.
+- **3c. The read surface decodes it**, which ADR-0025 says follows "for free" because its types are derived from the declaration. That claim is asserted by type-level tests, since it is exactly what would rot.
+- **3d. The browser index path orders it**, using the bytewise ordering of binary keys measured in `docs/spikes/a-multientry-index-over-computed-field-keys/`. Only meaningful once rung 2 of the query spec exists, so this may trail.
+
+**The conformance cases lead their implementation in every one of these.** The suite is what makes "every backend agrees" checkable rather than hoped for, and with no CI it is also the only thing that will notice a backend quietly diverging later.
+
+Amending ADR-0025 lands with 3b: its decision is unchanged and correct, what changes is that the declaration now describes more, and its delegation pointer names a task that completed without doing this half.
 
 ## Testing Decisions
 

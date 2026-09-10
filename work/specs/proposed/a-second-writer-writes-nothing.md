@@ -1,7 +1,6 @@
 ---
 title: 'A second writer writes nothing'
 slug: a-second-writer-writes-nothing
-humanOnly: true
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
@@ -63,7 +62,7 @@ A refused writer is not an application error. It is a writer learning it lost, a
 
 ### Autonomy notes
 
-- **`humanOnly: true`, and for a TASKING reason rather than an approval one.** The flag's only effect is that an agent may not auto-task this spec, so "a human should approve a big change" is not what it is for. What it is for here: splitting construction into a writing and a reading factory is the one genuinely BREAKING change in this set, touching `StateStore`, four backends, the conformance suite and `@etherfold/processor-entities`, and HOW that is cut is a judgement. One task leaves the repository unbuildable in the middle; eight tasks in the wrong order leave it unbuildable between two of them. Choosing the sequence so that `main` builds and passes at every step is the decision, and with no CI the only thing enforcing that is how the tasks were cut in the first place.
+- **No flags.** This carried `humanOnly` while the sequencing of a breaking change was an open judgement. That judgement is now written down as **Task order** below, which converts it from something a person had to decide into something a tasker follows, so the flag has nothing left to buy. The property it exists to protect is stated there as an acceptance condition rather than left to care: `main` builds and `pnpm test` passes after every step, which matters more than usual because there is no CI to catch a bad sequence afterwards.
 - **No `needsAnswers`.** All three are answered in Implementation Decisions below. Two were preferences with a clear argument; the third was a question about existing code, and it was settled by reading `applyEventStream` rather than by choosing.
 
 ## Implementation Decisions
@@ -117,6 +116,22 @@ declare function openForReading(...): Promise<ReadableStateStore>;
 **The guard is an OPAQUE token, not a counter.** ADR-0054's own reason for rejecting a counter does not apply here: it could not distinguish a win from a loss because `remote-sql` reports no affected-row count, and on IndexedDB the check is a read inside the writing transaction, so a counter would work. It is still an opaque token, for uniformity: one mechanism satisfied two ways lets the conformance suite ask both backends the same question, where two mechanisms would make the SQL and browser cases read differently for no gain.
 
 **Every backend carries the guard, including `MemoryStateStore` and `@etherfold/state-store-patch`.** The check is trivial in one heap, and the alternative is worse than its cost: a backend that declares the guard absent creates a second variant of the seam contract, so the conformance suite would have to ask a different question per backend, which is precisely what that suite exists to avoid. A second writer in one process is a different hazard from a second tab, but it is not an absent one.
+
+## Task order
+
+Expand, migrate, contract. The property every step owes is that `main` builds and `pnpm test` passes when it lands, and the sequence is chosen so that is true without anyone checking.
+
+**The order delivers the CORRECTNESS fix first and the structural improvement second**, which is the load-bearing property of this sequence rather than an accident of it. Step 1 alone closes the corruption hole. Everything after it makes reader-ness structural, and if it were all deprioritised tomorrow the repository would still be safe.
+
+1. **The token, per backend, behind the surface that exists today.** Add the writer-token record and the in-transaction check to every mutating path on every backend, with an IMPLICIT claim on first write so that a single writer behaves exactly as it does now and no caller changes. The guarded cursor write inside `applyBlock` lands here too, because it is the same transaction. Two writers each claiming implicitly is already the full guarantee: the second claim invalidates the first, and the first's next write is refused. Conformance gains the case that a second claim invalidates the first, and that a refused call leaves the store byte-identical.
+2. **The monotonic-tip refusal**, as its OWN task rather than folded into 1. It is the one behaviour TIGHTENING here, and separating it means it can be reverted alone if some path is found that legitimately applies below the tip (the reading of `applyEventStream` says none does).
+3. **The multi-tab contention case**, in the browser run: two tabs contending for the same heights, exactly one winning, the loser refused by name, the audit finding no torn state. This is where the claim in step 1 stops being an assertion. It needs three browser binaries, so it is not in the acceptance gate, on the same reasoning as the existing browser run.
+4. **`openForWriting` / `openForReading`, added ADDITIVELY.** The base type keeps its mutating methods for now, so nothing breaks and no caller has to move yet. Conformance is parameterised over both shapes.
+5. **`StoreWriterChangedError` and the demotion path**, once an explicit claim exists to lose. One code path shared with the lease loss the election spec later needs.
+6. **Migrate the callers, one package per task, in any order**: `processor-entities`, `processor-sqlite`, `browser`, `server`, `cli`, `cf-worker`, `conformance-workload-stratagems`. Each is independently green because step 4 left both shapes working, which is the whole reason step 4 exists.
+7. **Contract.** Remove the mutating methods from the readable store and remove the implicit claim from step 1. This is the only step that can break a caller, and by construction there are none left. After it, a reader cannot write and the guard has no unguarded door.
+
+The ADR recording the rationale, and its relationship to ADR-0054, should land with step 1 rather than at the end, since that is where the decision becomes visible in the code.
 
 ## Testing Decisions
 
