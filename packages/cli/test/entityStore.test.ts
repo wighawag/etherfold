@@ -149,7 +149,7 @@ describe('--store sqlite', () => {
 		});
 	});
 
-	it('takes a retention window and REPORTS it, and prunes nothing inside the index loop', async () => {
+	it('takes a retention window, REPORTS it, and deletes only from the host, after the fold', async () => {
 		const chain = fakeChain().serve(A_100, A_TIP);
 		const prepared = await prepareIndexing(
 			'build',
@@ -166,10 +166,21 @@ describe('--store sqlite', () => {
 
 		// ADR-0022: pruning is a call the HOST schedules, never a side effect of a
 		// write, because it costs time proportional to what it drops -- a prune inside
-		// `process` stalls whichever block crosses the threshold.
+		// `process` stalls whichever block crosses the threshold. The one-shot DOES
+		// schedule one (the database it exits with is an artifact, so "prunes
+		// eventually" is not a property it can have), and this is the ORDER that says
+		// which of the two happened: every delete is after the last block applied.
+		// What a prune drops, and that it never runs while an apply is in flight, is
+		// `scheduledPrune.test.ts`.
+		const applyBlock = vi.spyOn(store, 'applyBlock');
 		const prune = vi.spyOn(store, 'prune');
 		await prepared.index();
-		expect(prune).not.toHaveBeenCalled();
+
+		expect(prune).toHaveBeenCalled();
+		expect(applyBlock).toHaveBeenCalled();
+		expect(Math.min(...prune.mock.invocationCallOrder)).toBeGreaterThan(
+			Math.max(...applyBlock.mock.invocationCallOrder),
+		);
 	});
 
 	it('refuses a retention window below the finality a reorg can reach', async () => {

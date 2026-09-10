@@ -289,9 +289,14 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 	 * The finality depth is the stream's own, resolved by the caller from
 	 * `streamConfigFor`: a retention window is validated against the depth a reorg
 	 * can actually reach, and a number written here instead would be a second
-	 * opinion about it. Nothing here prunes: pruning is a call a host schedules
-	 * (ADR-0022), and one inside the index loop would stall whichever block crossed
-	 * the threshold.
+	 * opinion about it. It is also the FLOOR a `revert-only` store prunes at
+	 * (`retentionFloor`), which is why stating it matters to a deployment that set no
+	 * window at all.
+	 *
+	 * Nothing here prunes, and nothing on the fold's path does: pruning is a call a
+	 * host SCHEDULES (ADR-0022), and one inside the index loop would stall whichever
+	 * block crossed the threshold. This command set schedules it between cycles and,
+	 * on the one-shot, before it exits -- see `pruning.ts`.
 	 */
 	const stateFor = (id: GenerationId): SQLiteStateStore =>
 		new VersionedStateStore(db, declared.entities, {

@@ -41,11 +41,13 @@ export {
 } from './folding.js';
 export {canonicalGenerationIn, canonicalStateNamespaceIn, heldGenerationsIn, type ReadTierOptions} from './readTier.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
+export {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete, statesHeldBy} from './pruning.js';
 export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch.js';
 export {index, indexMain, type IndexDependencies, type RunningReceiver} from './indexCommand.js';
 export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
 import {newlyStalledFollowers} from './followers.js';
+import {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete} from './pruning.js';
 
 const logger = logs('etherfold');
 
@@ -355,6 +357,19 @@ async function openSource<ABI extends Abi, ProcessResultType>(
  * not a compromise: the generation that answers reads is the one still being
  * caught up, and a rebuild competing with it for the same handle would slow the
  * thing every reader is waiting on.
+ *
+ * ## The third thing that gap is for: the PRUNE this deployment's retention implies
+ *
+ * The same clock, the same argument, a different verb (`pruning.ts`). A
+ * retention floor is enforced on two halves -- refused on read, DROPPED from
+ * storage -- and the second half is a call the HOST schedules and never a side
+ * effect of a write (ADR-0022). So one BOUNDED pass rides in the gap between
+ * cycles, unconditionally, since a store with no floor is a no-op there and its
+ * floor is not a question this loop can ask.
+ *
+ * Here `build` differs rather than abstaining: it has an EXIT, so its passes run
+ * until the state is at its floor once it has reached the tip, because the
+ * database it exits with is a publishable artifact.
  */
 async function driveCycles<ABI extends Abi, ProcessResultType>(
 	command: ChainFollowingCommand,
@@ -373,17 +388,23 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 
 	const wait = deps.sleep ?? sleep;
 	/**
-	 * One bounded chunk for every follower held, then the sleep the loop asked for.
+	 * WHAT THE HOST DOES IN THE GAP IT WAITS: one bounded rebuild chunk for every
+	 * follower held, one bounded prune pass over the states held, then the sleep the
+	 * loop asked for.
 	 *
-	 * A rebuild that fails is LOGGED and the loop carries on: the successor is behind
-	 * by one chunk and the canonical generation goes on answering, which is the whole
-	 * shape of a rebuild running beside a live fold. It costs one in-memory check on
-	 * a process holding no follower, which is every process until something adds one.
+	 * Both are the same bargain and both FAIL SOFT. A rebuild that fails is LOGGED
+	 * and the loop carries on: the successor is behind by one chunk and the canonical
+	 * generation goes on answering, which is the whole shape of a rebuild running
+	 * beside a live fold. A prune that fails leaves a store larger than it asked to
+	 * be, which is not a wrong answer. The rebuild costs one in-memory check on a
+	 * process holding no follower, which is every process until something adds one;
+	 * the prune costs one tip read on a store with no floor, which is every
+	 * deployment that configured no retention.
 	 */
 	/** Which followers have already been reported as stalled, so it is said once and not per cycle. */
 	const reportedStalled = new Set<string>();
 
-	const advanceFollowers: Sleep = async (ms, signal) => {
+	const betweenCycles: Sleep = async (ms, signal) => {
 		if (!stopAtTip && container.followers().length > 0) {
 			try {
 				for (const stalled of newlyStalledFollowers(await container.rebuildMore(), reportedStalled)) {
@@ -403,13 +424,34 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 				logger.error(`a rebuild chunk failed; the canonical generation is unaffected and the next cycle retries`, err);
 			}
 		}
+		// THE OTHER HALF OF RETENTION, on the same clock and for the same reason: a
+		// window bounds what a READ may ask about from the moment it is configured,
+		// and this is what bounds the BYTES (ADR-0022 -- a call the HOST schedules,
+		// never a side effect of a write). Unconditional: it is a no-op wherever there
+		// is no floor, and a store's floor is not a question this loop can ask (see
+		// `pruning.ts`). One BOUNDED pass, here in the gap the loop already waits, so
+		// a backlog drains over cycles instead of stalling the cycle that met it.
+		try {
+			const pruned = await pruneHeldMore(container, {maxVersions: DEFAULT_PRUNE_BUDGET});
+			if (!pruned.complete) {
+				logger.info(
+					`pruned ${pruned.versionsDeleted} versions and the budget of ${DEFAULT_PRUNE_BUDGET} stopped the pass ` +
+						`before the state reached its retention floor. The next cycle continues.`,
+				);
+			}
+		} catch (err) {
+			// The same shape as the rebuild above: indexing is what this process is for,
+			// and a delete that could not run leaves a store LARGER than it asked to be
+			// rather than an answer that is wrong. The next cycle retries.
+			logger.error(`a scheduled prune failed; the fold is unaffected and the next cycle retries`, err);
+		}
 		await wait(ms, signal);
 	};
 
 	try {
 		const summary = await runFetcherLoop(host, {
 			signal: controller.signal,
-			sleep: advanceFollowers,
+			sleep: betweenCycles,
 			onReport: (report) => {
 				if (report.kind === 'progress') {
 					console.log(`${report.outcome.toBlock} / ${report.outcome.latestBlock}`);
@@ -426,6 +468,23 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 			// suspected truncation. It is re-thrown so `main` resolves a non-zero exit
 			// code and a CI job can depend on it rather than on parsing output.
 			throw summary.error;
+		}
+
+		// THE ONE-SHOT'S PRUNE, and the one place a pass is not enough: `build` exits,
+		// so "the next cycle continues" has no next cycle, and the database it exits
+		// with is a publishable ARTIFACT. The passes stay bounded and this loops them
+		// until the state is at its floor. A `build` STOPPED from outside skips it: a
+		// caller asking a process to stop is not asking it to finish a delete first,
+		// and the tip it stopped at is not the tip its retention was written for.
+		if (stopAtTip && !deps.signal?.aborted) {
+			try {
+				await pruneHeldUntilComplete(container, {maxVersions: DEFAULT_PRUNE_BUDGET});
+			} catch (err) {
+				// It folded everything it was asked to fold, which is what the exit code is
+				// about: the artifact holds more history than its retention covers, and
+				// re-running the command prunes it.
+				logger.error(`the scheduled prune of this build failed; the state it folded is unaffected`, err);
+			}
 		}
 		return summary;
 	} finally {

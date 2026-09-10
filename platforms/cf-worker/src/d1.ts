@@ -171,9 +171,19 @@ export type D1StoreOptions = Omit<VersionedStateStoreOptions, 'bounds'> & {
  * });
  * ```
  *
- * and schedules its pruning separately with
- * `store.prune({maxVersions: d1PruneBudget(plan)})`, because a prune is never a
- * side effect of a write (ADR-0022).
+ * and schedules its pruning separately -- in a `scheduled` handler, never on the
+ * ingest path, because a prune is never a side effect of a write (ADR-0022):
+ *
+ * ```ts
+ * // one invocation's worth of deleting, and `complete` says whether the next
+ * // invocation still has work. `pruneMore` (@etherfold/state-store) is the same
+ * // pass the CLI's cycle drives, so a host holding SEVERAL generations spends one
+ * // budget across them rather than the allowance once per generation.
+ * const report = await pruneMore(states, {maxVersions: d1PruneBudget(plan)});
+ * ```
+ *
+ * A single-store host can call `store.prune({maxVersions: d1PruneBudget(plan)})`
+ * directly: that is what the shared pass does per state.
  */
 export function createD1Store(
 	db: RemoteSQL,

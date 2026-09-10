@@ -31,6 +31,7 @@
 		"@etherfold/platform-nodejs-fetcher": "workspace:*",
 		"@etherfold/processor-entities": "workspace:*",
 		"@etherfold/server": "workspace:*",
+		"@etherfold/state-store": "workspace:*",
 		"@etherfold/state-store-sqlite": "workspace:*",
 		"@etherfold/utils": "workspace:*",
 		"commander": "^15.0.0",
@@ -42,7 +43,6 @@
 		"remote-sql": "^0.0.7"
 	},
 	"devDependencies": {
-		"@etherfold/state-store": "workspace:*",
 		"@libsql/client": "^0.17.3",
 		"@types/fs-extra": "^11.0.4",
 		"@types/node": "^25.9.1",
