@@ -74,11 +74,11 @@ export class VersionedSqlBlockStore implements BlockStore {
 	/**
 	 * Drop versions that closed below a retention floor.
 	 *
-	 * SPIKE CODE, and its absence upstream is itself a result: the spec says
-	 * "pruning drops versions whose upper bound is older than the window", and
-	 * `@etherfold/state-store-sqlite` has no pruning at all today, so every
-	 * backend it ships is effectively `unbounded`. This is what that statement
-	 * would cost, measured, not what the package does.
+	 * SPIKE CODE: the spec says "pruning drops versions whose upper bound is older
+	 * than the window", and this is what that statement cost when it was measured,
+	 * not what the package does.
+	 *
+	 * AMENDED 2026-09-10 (`the-prune-claims-in-the-docs-match-the-code`): as written on 2026-08-22 this docstring added that its absence upstream is itself a result, because `@etherfold/state-store-sqlite` "has no pruning at all today, so every backend it ships is effectively `unbounded`". True then, FALSE now. Both shipped backends implement `prune` (`packages/state-store-sqlite/src/store.ts`, `packages/state-store-indexeddb/src/store.ts`): budgeted, keyed off the retention floor, never reaching a live version or a block record, reporting whether the pass finished. What is narrower than "retention is enforced everywhere" is now the HOST and not the backend: the browser loop and the CLI's `run`/`build` schedule a pass, `etherfold index` and any bespoke host do not. The one thing this spike prune does that the shipped one does not is `VACUUM`, which is why the footprint saving measured here is a FILE-SIZE saving. Nothing here changes: this is the exhibit those numbers were taken with. See the amendment in `work/notes/findings/sqlite-in-the-browser.md`.
 	 */
 	async prune(floor: number): Promise<void> {
 		const statements = [...this.store.declarations.keys()].map((entity) =>
