@@ -9,6 +9,7 @@ import type {
 } from '@etherfold/core';
 import {EntityEventProcessor, type EntityProcessor, type EntityStateView} from '@etherfold/processor-entities';
 import type {StateStore} from '@etherfold/state-store';
+import {VERSIONS} from '@etherfold/state-store-indexeddb';
 import {createIndexerState} from '../src/index.js';
 
 /**
@@ -359,6 +360,25 @@ export const BRANCH_A_EXTENDED: readonly RawLog[] = [
 export const BRANCH_A_EXTENDED_TIP = 107;
 
 /**
+ * Branch A, and then a long QUIET stretch with one event at the end of it.
+ *
+ * The gap is the whole point, and it is what a retention window is actually
+ * measured against: event-bearing blocks on the real stream are median 429
+ * blocks apart (ADR-0019), so a window that sounds generous holds one or two of
+ * them. Here the tip a floor is measured back from is block 200 while everything
+ * else this fixture holds was written at 100 to 104 -- which puts a 64-block
+ * window's floor ABOVE every version that was ever CLOSED and below several that
+ * are still LIVE. A prune that reads its floor as "delete what is old" destroys
+ * the state; one that reads it as "delete what no legal read can reach" reclaims
+ * four versions and answers exactly as an unbounded store does.
+ */
+export const BRANCH_A_LATER: readonly RawLog[] = [
+	...BRANCH_A,
+	transferLog(200, '0xa200', {from: DAN, to: ALICE, id: 3n}),
+];
+export const BRANCH_A_LATER_TIP = 201;
+
+/**
  * The same chain after a reorg at 104: same 100 and 102, a DIFFERENT 104.
  *
  * The replacement carries FEWER events than what it replaces, which is the case
@@ -384,6 +404,12 @@ export const EXPECTED_A = {
 export const EXPECTED_B = {
 	owners: {'1': BOB, '2': BOB, '3': undefined, '4': CAROL},
 	transfers: 4,
+};
+
+/** The state `BRANCH_A_LATER` produces: branch A, plus the one late transfer. */
+export const EXPECTED_A_LATER = {
+	owners: {'1': BOB, '2': ERIN, '3': ALICE, '4': undefined},
+	transfers: 6,
 };
 
 /** One `eth_getLogs` call, as the fake chain saw it. */
@@ -427,6 +453,38 @@ export function fakeChain(branch: readonly RawLog[] = BRANCH_A, latestBlock: num
 			},
 		} as any,
 	};
+}
+
+/**
+ * HOW MANY VERSIONS the database is physically holding, counted from a second
+ * connection.
+ *
+ * The honest measure of a prune, and the one the assertions are written against:
+ * a version count is a fact about what is STORED, where "the retention says N"
+ * is a statement the store issues and `navigator.storage.estimate()` is
+ * quantised, lags, and once reported MORE space used after a prune that dropped
+ * nothing (`work/notes/findings/sqlite-in-the-browser.md`).
+ *
+ * It reaches past the seam on purpose. `StateStore` has no verb for this and
+ * should not grow one -- a host has no business counting rows -- so the count is
+ * read the way an operator would read it, from the object store the backend
+ * documents, through the same engine the run used.
+ */
+export async function versionCount(databaseName: string): Promise<number> {
+	const database = await new Promise<IDBDatabase>((resolve, reject) => {
+		const open = indexedDB.open(databaseName);
+		open.onsuccess = () => resolve(open.result);
+		open.onerror = () => reject(open.error);
+	});
+	try {
+		return await new Promise<number>((resolve, reject) => {
+			const counted = database.transaction(VERSIONS, 'readonly').objectStore(VERSIONS).count();
+			counted.onsuccess = () => resolve(counted.result);
+			counted.onerror = () => reject(counted.error);
+		});
+	} finally {
+		database.close();
+	}
 }
 
 /** The state as the assertions quote it, read back through the seam-tier handle. */

@@ -17,6 +17,11 @@
  * - `backends`: the SAME processor object on the IndexedDB default and on the
  *   light patch store, compared to each other rather than to a hand-written
  *   answer.
+ * - `prune`: the same workload against a store with a retention FLOOR and
+ *   against one without, counting what each physically holds afterwards. It runs
+ *   here because reclamation is the one claim a shim cannot make: `prune` is a
+ *   range scan over a real `upper` index, in a real transaction, and
+ *   `fake-indexeddb`'s write path is not the engine's.
  * - `hot-processor` / `hot-contract`: the two reload axes, which are the ones
  *   that only exist because of a DEVELOPMENT loop -- an edited reducer swapped
  *   into a running tab, and a contract redeployed behind a proxy at an address
@@ -34,6 +39,8 @@ import {MemoryStateStore} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {createBrowserStateStore} from '../src/index.js';
 import {
+	BRANCH_A_LATER,
+	BRANCH_A_LATER_TIP,
 	BRANCH_B,
 	BRANCH_B_TIP,
 	entityProcessorOver,
@@ -49,6 +56,7 @@ import {
 	SOURCE,
 	SOURCE_V2,
 	START_BLOCK,
+	versionCount,
 } from './workload.js';
 
 type Params = Record<string, unknown>;
@@ -114,6 +122,62 @@ async function backendsCase(params: Params, timings: Timing[]): Promise<Record<s
 		memory: inMemory.state,
 		// what the light store tells an app author about a reload, BEFORE one happens
 		patchDurability: (onPatches.indexer.state.$state.capabilities as {durability?: string}).durability ?? 'unstated',
+	};
+}
+
+/**
+ * The SAME workload on three stores that differ only in what they said they
+ * KEEP.
+ *
+ * The claim is a count, because a count is what a prune changes: a store with a
+ * floor holds fewer versions afterwards, a store without one holds every version
+ * it ever wrote, and all three answer identically -- which is what makes the
+ * reclamation free rather than lossy.
+ *
+ * `revert-only` with a depth is here beside the window on purpose. It HAS a
+ * floor (the depth a revert reaches is its whole retention), and an
+ * implementation that triggered on "a window is set" would leave it refusing
+ * every historical read while retaining every version for ever.
+ */
+async function pruneCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const names = {
+		unbounded: databaseName(params, 'prune-unbounded'),
+		windowed: databaseName(params, 'prune-window'),
+		revertOnly: databaseName(params, 'prune-revert-only'),
+	};
+	const lateBranch = () => fakeChain(BRANCH_A_LATER, BRANCH_A_LATER_TIP);
+
+	const unbounded = await timed('unbounded', timings, async () =>
+		runWorkload(await createBrowserStateStore(processor.entities, {databaseName: names.unbounded}), lateBranch()),
+	);
+	const windowed = await timed('window', timings, async () =>
+		runWorkload(
+			await createBrowserStateStore(processor.entities, {
+				databaseName: names.windowed,
+				retention: {blocks: 64},
+				finalityDepth: 64,
+			}),
+			lateBranch(),
+		),
+	);
+	const revertOnly = await timed('revert-only', timings, async () =>
+		runWorkload(
+			await createBrowserStateStore(processor.entities, {
+				databaseName: names.revertOnly,
+				retention: 'revert-only',
+				finalityDepth: 64,
+			}),
+			lateBranch(),
+		),
+	);
+
+	return {
+		unboundedVersions: await versionCount(names.unbounded),
+		windowedVersions: await versionCount(names.windowed),
+		revertOnlyVersions: await versionCount(names.revertOnly),
+		unboundedState: unbounded.state,
+		windowedState: windowed.state,
+		revertOnlyState: revertOnly.state,
 	};
 }
 
@@ -264,6 +328,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'backends':
 						results = await backendsCase(ctx.params, timings);
+						break;
+					case 'prune':
+						results = await pruneCase(ctx.params, timings);
 						break;
 					case 'hot-processor':
 						results = await hotProcessorCase(ctx.params, timings);
