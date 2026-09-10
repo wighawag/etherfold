@@ -5,42 +5,47 @@ spec: a-second-writer-writes-nothing
 blockedBy:
   [
     a-refused-writer-demotes-itself-to-a-reader,
-    the-processor-layer-opens-its-store-for-writing,
-    the-browser-package-opens-its-store-for-writing,
-    the-server-and-cli-open-their-stores-for-writing,
-    the-cf-worker-platform-opens-its-store-for-writing,
-    the-conformance-workload-opens-its-store-for-writing,
+    two-tabs-contending-for-one-height-leave-one-winner,
+    the-processor-layer-holds-a-writable-store,
+    the-browser-package-holds-a-writable-store,
+    the-cli-holds-a-writable-store,
+    the-workload-and-cf-worker-hold-writable-stores,
   ]
-covers: [8, 11, 20]
+covers: []
 ---
 
 ## What to build
 
 The CONTRACT step, and the only one in this sequence that can break a caller. By the time it runs there are none left, which is what its `blockedBy` fan-in encodes.
 
-Remove the mutating methods from the readable store type, and remove the implicit claim that the first task added so a single writer would notice nothing. After this, a reader cannot write because the type says so, and the guard has no unguarded door left: every mutation goes through a store that was opened for writing and therefore holds a token it claimed.
+Remove the mutating members from the readable seam type, and remove the implicit claim the first task added so a single writer would notice nothing. After this, a reader cannot write because the type says so, and every mutation goes through a store opened for writing and therefore holding a token it claimed.
+
+Remember what this does NOT touch: concrete backend classes keep their full surface, so the hundreds of mutating call sites in `packages/state-store-sqlite/test`, `packages/state-store-indexeddb/test` and `packages/state-store-patch/test` construct concretely, hold the CLASS type, and are unaffected. If you find yourself editing those suites, the split was done at the wrong level and that is a STOP.
 
 ## Acceptance criteria
 
-- The readable store type carries reads, the capability report and the cursor read, and no mutating method.
-- The implicit claim is gone: a mutation without a claimed token is not possible to express, rather than being tolerated.
-- Nothing in the repository calls a mutating method on a store it did not open for writing, verified by the fact that it compiles.
-- The conformance suite is no longer parameterised over two shapes: there is one.
-- Every existing suite is green, including the browser contention case.
-- The full gate passes: format, ADR check, refs check, changeset status, build, typecheck, test.
-- A changeset accompanies the change (`pnpm changeset`). This touches PUBLISHED packages and `pnpm changeset status --since=main` is part of the acceptance gate, so a missing changeset is a red gate for a reason unrelated to the work.
+- [ ] The readable seam type carries reads, `migrate`, the capability report and the cursor read, and no mutating member.
+- [ ] The implicit claim is gone: a mutation without a claimed token cannot be expressed, rather than being tolerated.
+- [ ] Nothing holds a readable-typed store and mutates it, verified by the fact that it compiles.
+- [ ] The backend test suites are UNTOUCHED by this task.
+- [ ] The conformance suite is no longer parameterised over two shapes: there is one.
+- [ ] Every existing suite is green, and the browser contention case still passes (it was written against the implicit claim, so check it explicitly and update it if the claim's removal changed how it opens its stores).
+- [ ] The full gate passes: format, ADR check, refs check, changeset status, build, typecheck, test.
+- [ ] A changeset accompanies the change (`pnpm changeset`). This touches PUBLISHED packages and `pnpm changeset status --since=main` is in the acceptance gate.
 
 ## Blocked by
 
-Every migration batch, plus the demotion task. This fan-in IS the safety property: the removal cannot start until nothing depends on what it removes.
+`a-refused-writer-demotes-itself-to-a-reader`, `two-tabs-contending-for-one-height-leave-one-winner`, `the-processor-layer-holds-a-writable-store`, `the-browser-package-holds-a-writable-store`, `the-cli-holds-a-writable-store`, `the-workload-and-cf-worker-hold-writable-stores`. This fan-in IS the safety property: the removal cannot start until nothing depends on what it removes.
 
 ## Prompt
 
-Read `work/specs/tasked/a-second-writer-writes-nothing.md` and its Task order; this is step 7 of 7.
+Read `work/specs/tasked/a-second-writer-writes-nothing.md`.
 
-Before removing anything, VERIFY the premise: grep the whole repository, including tests, examples and platforms, for calls to the mutating methods on a store that was not opened for writing. The migration tasks should have left none, and if you find one, that is not something to fix inline here: it means a migration batch missed a call site, and the honest move is to STOP and report which one, so the batch is completed rather than patched over from this task.
+Before removing anything, VERIFY the premise: grep `packages/*/src`, `platforms/*/src` and `examples/*/src` for calls to the mutating methods on a value typed as the readable seam. The migration batches should have left none. If you find one, that is not something to fix inline: it means a batch missed a call site, so STOP and report which one, so the batch is completed rather than patched over from here.
 
-Note that this task's diff should be mostly DELETIONS. If it is growing new logic, something is wrong: the design landed in the earlier steps and this one only takes away the scaffolding that made them non-breaking.
+Two places will show up in a naive grep and are OUT OF SCOPE: the backend TEST suites (they construct concretely and hold the class type, not the seam type) and `docs/spikes/`, which is frozen evidence and is excluded from the workspace test filter. Do not edit either.
+
+This task's diff should be mostly DELETIONS. If it is growing new logic, something is wrong: the design landed in the earlier steps and this one removes the scaffolding that made them non-breaking.
 
 Domain vocabulary: this completes the STRUCTURAL form of the one-writer rule that ADR-0044 already applies to streams, where "the writer is handed the keeper, every follower is handed a read-only stream view". After this task the same sentence is true of state.
 
