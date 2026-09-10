@@ -15,7 +15,7 @@ taskedAfter: [a-second-writer-writes-nothing]
 ## Open questions
 
 1. **Is a SharedWorker the primary mechanism, or the Web Locks election?** A SharedWorker is a singleton by construction, so there is no election at all and no lease to reason about, but it PRESUMES a worker-hosted indexer, and nothing in this repository puts one there yet (see Out of Scope). Web Locks works with the indexer wherever it already is. Picking SharedWorker first makes this spec depend on work that does not exist; picking Web Locks first means building an election that a later SharedWorker would make redundant.
-2. **How does a reader learn that the leader advanced?** A non-leader tab holds correct data and no way to know when it changed. `BroadcastChannel` from the leader on each applied block is the obvious answer and it is the same question the query spec parks as its own open question 1 (whether the transport admits `AsyncIterable`). These two should be answered together or they will be answered differently.
+2. **How does a reader learn that the leader advanced?** OWNED BY `a-reader-learns-when-the-state-moved`, which exists because this question belonged to neither of the two specs that needed it. Recorded here because the leader is the PRODUCER in that model, and `BroadcastChannel` between tabs is one of the transports it has to work over. Do not answer it here.
 3. **What does a demoted leader do with work in flight?** The writer guard makes its next mutation fail safely, so this is about tidiness rather than correctness: whether it abandons the batch silently, reports it, or keeps its fetched logs warm in case it wins the lease back.
 4. **Does a reader tab report sync progress, and from where?** An app renders "syncing, 400 blocks behind" from `IndexerState`. A reader computes nothing itself and must read the leader's cursor, which is behind the storage seam as an opaque string. Either the leader publishes progress alongside its block notification, or a reader deserialises a cursor the seam says is opaque, and only the first of those is allowed.
 
@@ -93,8 +93,9 @@ Whichever rung is used, the lock's identity is **the store's storage identity**,
 ## Out of Scope
 
 - **The writer guard** (`a-second-writer-writes-nothing`), which this depends on and which carries correctness.
-- **Putting the indexer in a worker at all.** Nothing in this repository does this yet: `createIndexerState` is a main-thread reactive hook. Rung 1 presumes that work exists, which is what open question 1 is really about, and it is a larger piece than this spec (who owns the worker script, how the processor module gets in, how the app configures and controls it).
-- **The query transport** (`the-same-query-runs-against-a-worker-and-a-server`), except for the shared answer to how a reader is notified.
+- **Putting the indexer in a worker at all**, which is `the-indexer-runs-in-a-worker-and-the-tab-talks-to-it`. Nothing in this repository does it yet: `createIndexerState` is a main-thread reactive hook. Rung 1 presumes that spec has landed, which is what open question 1 is really about. Deliberately NOT a `taskedAfter`, because the Web Locks rung needs no worker, and making it one would decide question 1 by the back door.
+- **The query transport** (`the-same-query-runs-against-a-worker-and-a-server`).
+- **How a reader is notified**, which is `a-reader-learns-when-the-state-moved`. Open question 2 here is that spec's to answer; it is recorded on both sides because a leader publishing block notifications is the same mechanism seen from the producer's end.
 - **Cross-DEVICE coordination.** This is about tabs of one browser profile sharing one origin's storage, and nothing here is a distributed-systems mechanism.
 - **Amending ADR-0024.** It should be amended when this lands, not before, since its criterion 3 becomes satisfied by the existence of this work rather than by the decision to do it.
 

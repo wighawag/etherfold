@@ -3,7 +3,13 @@ title: 'The same query runs against a worker and a server'
 slug: the-same-query-runs-against-a-worker-and-a-server
 humanOnly: true
 needsAnswers: true
-taskedAfter: [a-second-writer-writes-nothing]
+taskedAfter:
+  [
+    a-second-writer-writes-nothing,
+    a-declaration-a-schema-can-be-built-from,
+    the-indexer-runs-in-a-worker-and-the-tab-talks-to-it,
+    a-reader-learns-when-the-state-moved,
+  ]
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
@@ -21,7 +27,7 @@ taskedAfter: [a-second-writer-writes-nothing]
 > - **GraphQL does not replace the generated read surface**, because that was never really the question: `createReadSurface` costs no bundle, so deleting it saves nothing.
 > - **`block:` combined with `where` IS served in the browser**, inside retention, as current-plus-delta over two indexes that already exist.
 
-1. **Does the transport type admit `AsyncIterable` from day one?** The server's live path is SSE (or a hibernating Durable Object, both built and verified in the research), and the browser's is a local event on block-apply. Subscriptions are out of scope for v1 either way, but the return type either accommodates them now or the seam is refactored later.
+1. **Does the transport type admit `AsyncIterable` from day one?** Decided by `a-reader-learns-when-the-state-moved`, which owns the notification model and whose own question 1 is whether it is a GraphQL subscription or a signal beside the query surface. Recorded here because this spec CONSUMES that answer (the return type either accommodates a stream now or the seam is refactored later) and must not answer it independently.
 2. **What bounds rung 1, and in what unit?** Rows scanned, rows returned, or elapsed time. Rows scanned is the honest one (it is what actually grows), elapsed time is what a user feels, and the two disagree exactly when it matters. One bound now governs BOTH the tip scan and the as-of delta (below), so this is one knob and not two.
 3. **Where does the accessor seam live?** `@etherfold/state-store` (neutral, beside `createReadSurface`, and then the seam has a member no backend can implement without a planner) or its own package that both backends and the schema depend on.
 
@@ -81,7 +87,7 @@ There is also a gap on the server that is easy to miss because a research table 
 
 - **`humanOnly: true`.** What a browser app PAYS is a product decision, and it survives the closing of the replace-or-keep question rather than being settled by it: keeping `createReadSurface` means an app can opt out of the `graphql` runtime, and which surface the guide leads with sets what most apps will actually ship. That is a call about the project's public face, not about the code.
 - **`needsAnswers: true`.** Three questions remain of six. None is a genuine unknown any more: the one that was (engine behaviour, which cannot be reasoned about) has been measured. What is left is the transport's return type, the unit a bound is expressed in, and which package the accessor seam lives in, all of which change what the tasks SAY rather than whether they can be cut.
-- **`taskedAfter: [a-second-writer-writes-nothing]`.** That spec produces `openForReading`, which is precisely what a non-indexing tab and a query executor hold. Tasking this first would either duplicate that split or build the reader against a store that cannot express reader-ness.
+- **`taskedAfter`, four of them, each for a different reason.** `a-second-writer-writes-nothing` produces `openForReading`, which is what a non-indexing tab and a query executor hold. `a-declaration-a-schema-can-be-built-from` is the sharpest: the accessor seam is this spec's central decision, and defining "find the rows matching this predicate, ordered, bounded" against a declaration that cannot name a RELATION would bake that limitation into the one place both backends and every resolver share, so the seam would be re-cut later. `the-indexer-runs-in-a-worker-and-the-tab-talks-to-it` provides the port `workerExecutor` sits on. `a-reader-learns-when-the-state-moved` decides open question 1.
 
 ## Implementation Decisions
 
@@ -136,7 +142,9 @@ type QueryExecutor = (request: QueryRequest) => Promise<QueryResult>;
 
 ## Out of Scope
 
-- **Subscriptions and live push.** The server-side transports are researched and built (SSE on a plain Worker, WebSocket hibernation on a Durable Object); the browser side is a local event. Only the return type question is in scope here, as open question 2.
+- **Subscriptions and live push**, which are `a-reader-learns-when-the-state-moved`. The server-side transports are researched and built (SSE on a plain Worker, WebSocket hibernation on a Durable Object); the browser side is a local event. Only consuming that spec's answer is in scope here, as open question 1.
+- **Making the declaration expressive enough for a graph** (`a-declaration-a-schema-can-be-built-from`). Without it every generated type is flat, which removes the two rows GraphQL wins on in the research's own matrix. A dependency, not a detail.
+- **Hosting the indexer in a worker** (`the-indexer-runs-in-a-worker-and-the-tab-talks-to-it`). This spec assumes a worker holds the store and the schema; nothing does that yet.
 - **The writer guard** (`a-second-writer-writes-nothing`), which this depends on.
 - **Leader election** (`one-tab-indexes-and-the-others-read`), which decides which tab writes. This spec only needs a reader.
 - **The bigint codec.** `orderBy` on a `uint256` is wrong on BOTH backends until it lands, because a u256 stored as decimal text sorts lexicographically (`"10" < "9"`), and ADR-0025 parks decoding deliberately. IndexedDB accepts binary keys sorted bytewise, so a big-endian fixed-width buffer converges with the server's sortable-BLOB approach; that is a note for whoever takes the codec, not work here.
