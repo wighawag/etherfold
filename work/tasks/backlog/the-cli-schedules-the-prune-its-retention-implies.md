@@ -4,8 +4,30 @@ slug: the-cli-schedules-the-prune-its-retention-implies
 spec: a-configured-window-is-actually-pruned
 blockedBy: []
 covers: [1, 4, 5, 6, 7, 12]
-needsAnswers: true
 ---
+
+## Continuing from a bounced run — read this first
+
+A previous run built this task and its work is preserved on the branch this claim continues from. It was bounced by the acceptance gate for ONE reason, and that reason was NOT the implementation:
+
+`pnpm changeset status --since=main` refused the changeset, so the gate stopped there. **`pnpm build`, `pnpm typecheck` and `pnpm test` never ran against that work at all.**
+
+The refusal:
+
+```
+Found mixed changeset the-cli-schedules-the-prune-its-retention-implies
+Found ignored packages: @etherfold/platform-cf-worker
+Found not ignored packages: @etherfold/state-store etherfold
+Mixed changesets that contain both ignored and not ignored packages are not allowed
+```
+
+`@etherfold/platform-cf-worker` is `private: true`, and `.changeset/config.json` sets `privatePackages: false`, so changesets treats it as IGNORED and refuses any single changeset spanning both sides of that line.
+
+**The fix is one line: DELETE `'@etherfold/platform-cf-worker': patch` from the changeset's frontmatter.** Do not split the changeset in two. A private package is never published, so it needs no changeset entry at all, and the change to `platforms/cf-worker/src/d1.ts` is a JSDoc block with no executable change. Keep the changeset PROSE exactly as it is.
+
+Then expect the rest of the gate to run for the first time. Fix whatever real failures build, typecheck and test surface behind it, and re-check the acceptance criteria below against what is actually on the branch rather than assuming the previous run met them.
+
+Background: `work/notes/observations/a-changeset-mixing-private-and-published-packages-fails-late.md`.
 
 ## What to build
 
