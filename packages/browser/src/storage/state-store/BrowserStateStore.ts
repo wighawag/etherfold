@@ -138,9 +138,47 @@ export type BrowserStateStoreConfig =
 			 * as long as reorg revert needs them, and the depth is how long that is);
 			 * `unbounded`, and `revert-only` with no depth, state none and nothing is
 			 * ever dropped.
+			 *
+			 * ## Reorg safety and NO history: write `revert-only`, not a small window
+			 *
+			 * `revert-only` is how this configuration says "survive a reorg, keep no
+			 * history", and it is the setting to reach for when that is what the app
+			 * wants. It is a `retention` value like any other, so it is available on
+			 * this default IndexedDB backend and not only on the light store that is
+			 * `revert-only` by construction (ADR-0023).
+			 *
+			 * It also SAYS so, before any read: a `revert-only` store reports
+			 * `capabilities.asOf === false`, so an app that turns out to need history
+			 * learns it at startup from the store's own report rather than from a
+			 * refused read halfway through a session. (`asOf` is reported separately
+			 * from `retention` because the two fail differently: a window answers
+			 * inside itself and refuses outside it, while a store that reconstructs no
+			 * history refuses everywhere.)
+			 *
+			 * **A small window is not a substitute for it**, and the reason is measured
+			 * rather than stylistic. Retention is counted in BLOCK NUMBERS and never in
+			 * updates (ADR-0019), and on the real measured stream (the launched
+			 * stratagems game on Base, `work/notes/findings/sqlite-in-the-browser.md`)
+			 * event-bearing blocks are median **429 blocks apart**, max 1,226,194. So
+			 * `{blocks: 64}` typically holds exactly ONE of them, the tip's, and often
+			 * none: what it buys is a store that refuses almost every historical read
+			 * while looking configured for history. `revert-only` asks for the same
+			 * thing honestly, and reports it.
+			 *
+			 * **What `revert-only` still guarantees is the reorg half.** Revert keeps
+			 * working, because its floor is the finality depth: the superseded versions
+			 * a revert reopens are exactly the ones it keeps (`retentionFloor`). That
+			 * is why `finalityDepth` belongs beside it -- it is the depth the revert is
+			 * protected to, and the floor the scheduled prune deletes against.
 			 */
 			retention?: RetentionSetting;
-			/** The reorg depth this deployment protects against, in block numbers. */
+			/**
+			 * The reorg depth this deployment protects against, in block numbers.
+			 *
+			 * Required beside a `{blocks: N}` window, and load-bearing beside
+			 * `revert-only`, where it is the whole of what that store keeps and
+			 * therefore its prune floor.
+			 */
 			finalityDepth?: number;
 	  }
 	| {
