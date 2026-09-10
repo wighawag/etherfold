@@ -31,7 +31,7 @@ Construction, not a `claim()` on an already-open store, and the reason is that t
 
 ## Prompt
 
-Read `work/specs/proposed/a-second-writer-writes-nothing.md`, its Implementation Decisions (which carry the type sketch and the reasons construction beat a lease) and its Task order (this is step 4 of 7, the expand step whose whole purpose is that nothing has to move yet).
+Read `work/specs/tasked/a-second-writer-writes-nothing.md`, its Implementation Decisions (which carry the type sketch and the reasons construction beat a lease) and its Task order (this is step 4 of 7, the expand step whose whole purpose is that nothing has to move yet).
 
 Domain vocabulary and the precedent to follow: ADR-0044 makes the one-writer rule STRUCTURAL for streams, "the writer is handed the keeper, every follower is handed a read-only stream view". This is that move for state. Note the one existing case that swallows writes instead, `readOnlyStream`, did so for a documented reason that does NOT apply here: there read and write shared one seam and the engine's save was unconditional, so declining to write was not expressible. Here it is expressible, so it is expressed.
 

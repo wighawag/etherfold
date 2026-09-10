@@ -35,7 +35,7 @@ None, can start immediately.
 
 ## Prompt
 
-Read `work/specs/proposed/a-second-writer-writes-nothing.md` in full, especially its "What is unguarded today" section and its Task order, then `docs/adr/0054-a-registry-commit-over-remote-sql-is-a-guarded-batch-with-a-revision-token.md`.
+Read `work/specs/tasked/a-second-writer-writes-nothing.md` in full, especially its "What is unguarded today" section and its Task order, then `docs/adr/0054-a-registry-commit-over-remote-sql-is-a-guarded-batch-with-a-revision-token.md`.
 
 ADR-0054 is the whole design, one level down, and its opening line hands you the primitive: "IndexedDB gives that for free (`readwrite` transactions serialise across tabs)". That ADR needed a revision token because `RemoteSQL` cannot read, run JS and write inside one transaction; the state store on IndexedDB CAN, so there the check and the write sit in one serialisable transaction and the fencing is EXACT rather than best-effort. On SQLite over `remote-sql` it is ADR-0054's mechanism unchanged: guard every statement on the token, swap it as the last write of the same batch, read it back inside that batch to learn whether you won.
 

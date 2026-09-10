@@ -30,7 +30,7 @@ The error must be DISTINCT from the existing duplicate-height refusal, because t
 
 ## Prompt
 
-Read `work/specs/proposed/a-second-writer-writes-nothing.md`, particularly "Losing is not throwing at the app", and `work/specs/proposed/one-tab-indexes-and-the-others-read.md`, which needs this same demotion when a tab loses a lease. Build one path both can use.
+Read `work/specs/tasked/a-second-writer-writes-nothing.md`, particularly "Losing is not throwing at the app", and `work/specs/proposed/one-tab-indexes-and-the-others-read.md`, which needs this same demotion when a tab loses a lease. Build one path both can use.
 
 Domain vocabulary: a **generation** is one indexed lineage, a stream plus a fold over it. A **follower** is a generation that folds a stream another generation is indexing into: it fetches NOTHING and writes no segment. That is the shape a demoted writer becomes, so read how a follower already behaves before inventing a new state.
 

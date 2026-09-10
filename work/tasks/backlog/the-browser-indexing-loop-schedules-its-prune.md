@@ -34,7 +34,7 @@ None, can start immediately.
 
 ## Prompt
 
-Read `work/specs/proposed/a-configured-window-is-actually-pruned.md` for the full framing, then `packages/state-store/src/retention.ts` for `PruneOptions`, `PruneReport` and `resolveRetention`, and `packages/state-store-indexeddb/src/store.ts` for the backend's own `prune` (a range scan over the `upper` index, deliberately, so it does not full-scan).
+Read `work/specs/tasked/a-configured-window-is-actually-pruned.md` for the full framing, then `packages/state-store/src/retention.ts` for `PruneOptions`, `PruneReport` and `resolveRetention`, and `packages/state-store-indexeddb/src/store.ts` for the backend's own `prune` (a range scan over the `upper` index, deliberately, so it does not full-scan).
 
 Domain vocabulary you need: **retention** is measured in BLOCK NUMBERS and never in a count of updates or a duration (ADR-0019); its floor is the finality depth. **`prune`** is an explicit call the HOST schedules and never a side effect of a write (ADR-0022). A **version** is one complete row with a half-open block-validity range, and a LIVE version has `upper: null`, which is not a valid IndexedDB key and is therefore unreachable from the `upper` index at all: that is exactly what keeps a prune from destroying current state.
 

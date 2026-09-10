@@ -31,7 +31,7 @@ None, can start immediately.
 
 ## Prompt
 
-Read `work/specs/proposed/a-configured-window-is-actually-pruned.md`, then `packages/state-store/src/retention.ts` (`PruneOptions.maxVersions`, `PruneReport.complete`, `retentionFloor`) and `packages/state-store-sqlite/src/store.ts`, whose `prune` already exists, takes a budget and logs. Its own docstring states the defect this task closes: a deployment that never prunes "gets a store bounded in what it answers and unbounded in what it holds".
+Read `work/specs/tasked/a-configured-window-is-actually-pruned.md`, then `packages/state-store/src/retention.ts` (`PruneOptions.maxVersions`, `PruneReport.complete`, `retentionFloor`) and `packages/state-store-sqlite/src/store.ts`, whose `prune` already exists, takes a budget and logs. Its own docstring states the defect this task closes: a deployment that never prunes "gets a store bounded in what it answers and unbounded in what it holds".
 
 Domain vocabulary: **retention** is in BLOCK NUMBERS (ADR-0019), its floor is the finality depth, and `prune` is a call the HOST schedules, never a side effect of a write (ADR-0022). The shape to follow is the one `rebuildMore` already has: bounded work per call, reporting whether it finished, with the host looping.
 

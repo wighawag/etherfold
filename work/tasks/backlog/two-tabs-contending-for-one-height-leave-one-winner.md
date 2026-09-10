@@ -30,7 +30,7 @@ This is where the writer token stops being an assertion and becomes an observati
 
 ## Prompt
 
-Read `packages/state-store-indexeddb/browser/multi-tab.spec.ts` first: it is the harness you are extending and its own comment explains precisely what it does not cover. Then `packages/state-store-indexeddb/playwright.config.ts` for why the browser run sits outside the gate, and `work/specs/proposed/a-second-writer-writes-nothing.md`.
+Read `packages/state-store-indexeddb/browser/multi-tab.spec.ts` first: it is the harness you are extending and its own comment explains precisely what it does not cover. Then `packages/state-store-indexeddb/playwright.config.ts` for why the browser run sits outside the gate, and `work/specs/tasked/a-second-writer-writes-nothing.md`.
 
 Domain vocabulary: IndexedDB `readwrite` transactions SERIALISE across tabs, which is the primitive the whole guard rests on (recorded in ADR-0054's opening line). The **storage identity** the token is scoped to is the `databaseName` here, so tabs contending must share one.
 

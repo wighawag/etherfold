@@ -30,7 +30,7 @@ It is a separate task from the guard deliberately, so that it can be reverted al
 
 ## Prompt
 
-Read `work/specs/proposed/a-second-writer-writes-nothing.md`, then `packages/processor-entities/src/apply.ts` in full: `applyEventStream` is the one production caller and its docstring is the evidence that this tightening is safe. Then read `applyBlock` in `packages/state-store-indexeddb/src/store.ts` and `packages/state-store-sqlite/src/store.ts`.
+Read `work/specs/tasked/a-second-writer-writes-nothing.md`, then `packages/processor-entities/src/apply.ts` in full: `applyEventStream` is the one production caller and its docstring is the evidence that this tightening is safe. Then read `applyBlock` in `packages/state-store-indexeddb/src/store.ts` and `packages/state-store-sqlite/src/store.ts`.
 
 Before you build, CONFIRM the premise yourself rather than trusting this task: check the replay path, the rebuild-chunk path and `bootstrapFromSnapshot` for any call that applies a block at or below an existing tip. The reading says none does, and if you find one, that is a STOP: report it rather than weakening the check to accommodate it.
 

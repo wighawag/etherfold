@@ -29,7 +29,7 @@ These hosts also own the emission-stream tables in the same database, so read ho
 
 ## Prompt
 
-Read `work/specs/proposed/a-second-writer-writes-nothing.md`, especially its Task order: this is one batch of step 6, and the property that makes it safe is that step 4 left the OLD surface working, so you are moving a caller rather than migrating a seam.
+Read `work/specs/tasked/a-second-writer-writes-nothing.md`, especially its Task order: this is one batch of step 6, and the property that makes it safe is that step 4 left the OLD surface working, so you are moving a caller rather than migrating a seam.
 
 Do not remove anything from the base store type in this task. The removal is the final contract task and it is blocked by every migration including this one. If you find yourself deleting a method from `StateStore`, you are in the wrong task.
 

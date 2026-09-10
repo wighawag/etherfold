@@ -27,7 +27,7 @@ Give that helper its caller, so the cf-worker platform schedules a prune sized t
 
 ## Prompt
 
-Read `work/specs/proposed/a-configured-window-is-actually-pruned.md`, then `platforms/cf-worker/src/d1.ts` (the `d1PruneBudget` function and the docstring above `createD1Store` that describes exactly this call), and `packages/state-store/src/retention.ts` for `PruneOptions.maxVersions` and `PruneReport.complete`.
+Read `work/specs/tasked/a-configured-window-is-actually-pruned.md`, then `platforms/cf-worker/src/d1.ts` (the `d1PruneBudget` function and the docstring above `createD1Store` that describes exactly this call), and `packages/state-store/src/retention.ts` for `PruneOptions.maxVersions` and `PruneReport.complete`.
 
 Domain vocabulary: a prune is a call the HOST schedules and never a side effect of a write (ADR-0022). On D1 the binding constraint is the number of QUERIES one invocation may issue, which is what `d1PruneBudget` computes from the plan, not the size of the database.
 

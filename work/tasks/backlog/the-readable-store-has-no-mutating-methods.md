@@ -36,7 +36,7 @@ Every migration batch, plus the demotion task. This fan-in IS the safety propert
 
 ## Prompt
 
-Read `work/specs/proposed/a-second-writer-writes-nothing.md` and its Task order; this is step 7 of 7.
+Read `work/specs/tasked/a-second-writer-writes-nothing.md` and its Task order; this is step 7 of 7.
 
 Before removing anything, VERIFY the premise: grep the whole repository, including tests, examples and platforms, for calls to the mutating methods on a store that was not opened for writing. The migration tasks should have left none, and if you find one, that is not something to fix inline here: it means a migration batch missed a call site, and the honest move is to STOP and report which one, so the batch is completed rather than patched over from this task.
 
