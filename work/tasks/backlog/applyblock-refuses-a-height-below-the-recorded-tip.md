@@ -4,6 +4,7 @@ slug: applyblock-refuses-a-height-below-the-recorded-tip
 spec: a-second-writer-writes-nothing
 blockedBy: [every-mutating-path-carries-a-writer-token]
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
