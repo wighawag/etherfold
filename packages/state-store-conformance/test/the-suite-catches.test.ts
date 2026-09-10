@@ -39,6 +39,11 @@ import {runStateStoreConformance, type StateStoreFactory} from '../src/index.js'
  *   block is refused. It is the shape every backend would drift into by writing
  *   the two halves in the convenient order, and its cost is silent: the next run
  *   resumes past a block nothing ever applied.
+ * - `AccommodatingStore` takes a block at any height by REWINDING to make room
+ *   for it. It is what a store does when it treats a stale writer's offer as
+ *   something to fit in rather than something to refuse, and it is the shape a
+ *   backend reaches for the moment the tip rule is inconvenient: every read
+ *   afterwards is served from a state assembled out of two positions.
  *
  * Each lie is written as a DECORATOR over the honest store rather than as a
  * subclass overriding one method, because the honest store's refusal is not a
@@ -177,6 +182,23 @@ class PrematureCursorStore extends Decorated {
 	}
 }
 
+/**
+ * Accepts any height by reverting to just below it first: a store that
+ * ACCOMMODATES a writer the tip has passed instead of refusing it.
+ *
+ * The honest store refuses, and it refuses inside the same atomic unit as the
+ * write, so the lie has to be a decorator here as everywhere else in this file.
+ * An ascending sequence is untouched by it (the revert is a no-op above the
+ * tip), which is exactly why it is a plausible thing to write and why the case
+ * that catches it has to exist.
+ */
+class AccommodatingStore extends Decorated {
+	override async applyBlock(block: BlockPointer, mutations?: readonly Mutation[], cursor?: CursorWrite): Promise<void> {
+		await this.inner.revertTo(block.number - 1);
+		await this.inner.applyBlock(block, mutations, cursor);
+	}
+}
+
 describe('the conformance suite', () => {
 	it('passes an honest backend, so a failure below means something', async () => {
 		expect(await failedCases(honest)).toEqual([]);
@@ -200,6 +222,16 @@ describe('the conformance suite', () => {
 		const failures = await failedCases((declarations) => new StickyCounterStore(new MemoryStateStore(declarations)));
 
 		expect(failures.join('\n')).toMatch(/DOWN/);
+	});
+
+	it('fails a backend that rewinds to make room for a block the tip has passed', async () => {
+		const failures = await failedCases((declarations) => new AccommodatingStore(new MemoryStateStore(declarations)));
+
+		expect(failures.join('\n')).toMatch(/not above the recorded tip/);
+		// and NOT the two halves the same rule has to leave alone: an empty store
+		// takes any height, and a revert makes a height applicable again.
+		expect(failures.join('\n')).not.toMatch(/EMPTY store admits any height/);
+		expect(failures.join('\n')).not.toMatch(/admits a height again once a revert/);
 	});
 
 	it('fails a backend whose cursor can end up ahead of the block it describes', async () => {

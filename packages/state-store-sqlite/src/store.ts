@@ -10,6 +10,7 @@ import {
 } from './blocks.js';
 import {
 	assertRetained,
+	blockNotAboveTip,
 	boundedListing,
 	mustGet,
 	normalizeEntities,
@@ -336,6 +337,19 @@ export class VersionedStateStore implements StateStore {
 	 * to be a second `batch` issued by the processor afterwards, and a crash inside
 	 * that window left state ahead of the cursor, which is a wedge and not a retry:
 	 * see `cursor.ts` at the seam.
+	 *
+	 * ## A height that is not ABOVE the recorded tip is refused, and how
+	 *
+	 * The caller reverts to the fork before it applies the branch replacing it, so
+	 * every apply lands above what the store holds; an offer at or below the tip is
+	 * a writer working from a position this store has passed. On a substrate that
+	 * could read, decide and write in one transaction that is one `if`. Here it is
+	 * a CONDITIONAL WRITE plus a READ-BACK, exactly as the writer token is: every
+	 * statement carries `aboveTipGuard`, so a refused block applies to nothing at
+	 * all, and the tip read that opens the batch is the evidence -- taken inside the
+	 * same transaction, before the insert, so the number it reports is the tip the
+	 * write was judged against and the message can name both heights. An EMPTY store
+	 * reports no tip and admits any height.
 	 */
 	async applyBlock(block: BlockPointer, mutations: readonly Mutation[] = [], cursor?: CursorWrite): Promise<void> {
 		const guard = this.guard();
@@ -346,7 +360,14 @@ export class VersionedStateStore implements StateStore {
 					`${this.bounds.maxStatementsPerBatch}. Sent as one batch regardless: a block is one atomic unit.`,
 			);
 		}
-		await this.sendGuarded('applyBlock', guard, statements);
+		// FIRST, so it reports the tip as the guarded statements found it. It costs a
+		// statement and no round trip, because it rides the batch that was going out.
+		const results = await this.sendGuarded<RecordedBlock>('applyBlock', guard, [
+			latestBlockStatement(this.names),
+			...statements,
+		]);
+		const tip = results[0]?.results[0]?.number;
+		if (tip !== undefined && block.number <= tip) throw new Error(blockNotAboveTip(block.number, tip));
 	}
 
 	/** The opaque string last written under `key`, or `undefined`. See `cursor.ts`. */
@@ -379,14 +400,50 @@ export class VersionedStateStore implements StateStore {
 	 * Backfill is bound by round-trips, not by SQLite work, so packing blocks is
 	 * the difference that matters there. A batch remains one transaction however
 	 * many blocks it carries, and a block is never split across two batches.
+	 *
+	 * Every block here carries the same tip guard `applyBlock` does, and the updates
+	 * must therefore ASCEND -- refused HERE, before any I/O, because it is a fact
+	 * about the call rather than about the store, and it is the same rule the engine
+	 * applies to a fetched payload (`assertAscendingByBlock`, `@etherfold/core`).
+	 *
+	 * Given that, ONE tip read decides the whole sequence, and it rides a batch
+	 * carrying the LOWEST block alone. If the tip this sequence started against is
+	 * below that height, every later block is above both it and its own
+	 * predecessors, so nothing after can be refused; and if it is not, the sequence
+	 * is refused having applied NOTHING, because the batches carrying the rest have
+	 * not been sent. That costs one round trip per CALL, not per block, and it is
+	 * what makes a refusal here mean what a refusal on `applyBlock` means.
 	 */
 	async applyBlocks(updates: readonly BlockUpdate[]): Promise<void> {
+		if (updates.length === 0) return;
+		for (let index = 1; index < updates.length; index++) {
+			const [previous, current] = [updates[index - 1].block.number, updates[index].block.number];
+			if (current <= previous) {
+				throw new Error(
+					`the blocks handed to \`applyBlocks\` must ASCEND: block ${current} follows block ${previous}. A store's ` +
+						`blocks only ever move forward, so packing them into one batch can only mean what applying them one at a ` +
+						`time means if the sequence is in the order they happened.`,
+				);
+			}
+		}
+
 		const guard = this.guard();
 		const groups = updates.map((update) =>
 			applyBlockStatements(this.entities, update.block, update.mutations, this.names, undefined, guard),
 		);
-		const batches = planBatches(groups, this.guardedBounds());
-		logger.debug(`applying ${updates.length} blocks in ${batches.length} batches`);
+		const batches = planBatches(groups.slice(1), this.guardedBounds());
+		logger.debug(`applying ${updates.length} blocks in ${batches.length + 1} batches`);
+
+		// the OPENING batch: the tip read and the lowest block, so the number the
+		// sequence is judged against is read in the transaction that judged it.
+		const opening = await this.sendGuarded<RecordedBlock>('applyBlocks', guard, [
+			latestBlockStatement(this.names),
+			...groups[0],
+		]);
+		const tip = opening[0]?.results[0]?.number;
+		const lowest = updates[0].block.number;
+		if (tip !== undefined && lowest <= tip) throw new Error(blockNotAboveTip(lowest, tip));
+
 		for (const batch of batches) {
 			await this.sendGuarded('applyBlocks', guard, batch);
 		}
@@ -766,7 +823,7 @@ export class VersionedStateStore implements StateStore {
 	 *
 	 * Only the paths that PACK several atomic units need it (`applyBlocks`): a
 	 * single block is one indivisible group and is sent oversized on purpose if it
-	 * has to be.
+	 * has to be, and so is the opening batch that carries the tip read with it.
 	 */
 	private guardedBounds(): BatchBounds {
 		return {...this.bounds, maxStatementsPerBatch: Math.max(1, this.bounds.maxStatementsPerBatch - 2)};

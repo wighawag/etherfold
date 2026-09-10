@@ -82,12 +82,16 @@ describe("D1's documented limits reach the store's batch bounds", () => {
 
 		await store.applyBlocks(updates(blocks, {from: 1_000_000, id: 'paid'}));
 
-		// one round trip carrying every block, which is 20x what the Free-tier
-		// default would allow in one batch -- plus the two statements the writer
-		// guard adds to any batch: the claim and the read-back (ADR-0075)
-		expect(db.batches.length).toBe(1);
-		expect(db.batches[0].length).toBe(blocks * STATEMENTS_PER_UPDATE + 2);
-		expect(db.batches[0].length).toBeGreaterThan(d1BatchBounds('free').maxStatementsPerBatch);
+		// TWO round trips for any number of blocks: the lowest block opens the
+		// sequence on its own, carrying the tip read that decides whether the whole
+		// sequence may land, and the claim and the read-back the writer guard adds to
+		// any batch (ADR-0075).
+		expect(db.batches.length).toBe(2);
+		expect(db.batches[0].length).toBe(1 + 1 + STATEMENTS_PER_UPDATE + 1);
+		// and then every remaining block in ONE round trip, which is 20x what the
+		// Free-tier default would allow in one batch, plus that batch's read-back
+		expect(db.batches[1].length).toBe((blocks - 1) * STATEMENTS_PER_UPDATE + 1);
+		expect(db.batches[1].length).toBeGreaterThan(d1BatchBounds('free').maxStatementsPerBatch);
 		expect((await store.getCurrent<{transferCount: number}>('token', {id: 'paid'}))?.transferCount).toBe(
 			1_000_000 + blocks - 1,
 		);

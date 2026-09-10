@@ -6,6 +6,7 @@ import {
 	dropVersionsStatement,
 	planBatches,
 	tableNames,
+	writerGuard,
 } from '../src/index.js';
 import {FailingTailSQL, RecordingSQL, createTestDB, rows, sqlOf} from './utils/db.js';
 import {TOKEN, block, owns} from './utils/fixtures.js';
@@ -20,12 +21,15 @@ describe('applying a block', () => {
 		await store.applyBlock(block(100), [owns('1', '0xAlice', 1), owns('2', '0xBob', 1)]);
 
 		expect(db.batches.length).toBe(1);
-		// the writer's CLAIM + block row + (close + insert) per changed entity + the
-		// read-back that says who holds the store. All in the one batch, which is the
-		// one transaction: the guard is checked where the write happens (ADR-0075).
-		expect(db.batches[0].length).toBe(1 + 1 + 2 * 2 + 1);
+		// the writer's CLAIM + the TIP read + block row + (close + insert) per changed
+		// entity + the read-back that says who holds the store. All in the one batch,
+		// which is the one transaction: both guards are checked where the write happens
+		// (ADR-0075), and the tip is READ there too, so the number a refusal names is
+		// the one the write was judged against.
+		expect(db.batches[0].length).toBe(1 + 1 + 1 + 2 * 2 + 1);
 		expect(sqlOf(db.batches[0][0])).toMatch(/INSERT INTO _writer/i);
-		expect(sqlOf(db.batches[0][1])).toMatch(/INSERT INTO _blocks/i);
+		expect(sqlOf(db.batches[0][1])).toMatch(/SELECT number, hash, timestamp FROM _blocks ORDER BY number DESC/i);
+		expect(sqlOf(db.batches[0][2])).toMatch(/INSERT INTO _blocks/i);
 		expect(sqlOf(db.batches[0][db.batches[0].length - 1])).toMatch(/SELECT token FROM _writer/i);
 	});
 
@@ -50,11 +54,11 @@ describe('applying a block', () => {
 
 		await store.applyBlock(block(101), [{type: 'delete', entity: 'token', id: {id: '1'}}]);
 
-		// block row + the close + the read-back. No claim statement this time: one
-		// landed with the first block, so from here the guard alone stands between
-		// this writer and a rival.
-		expect(db.batches[0].length).toBe(3);
-		expect(sqlOf(db.batches[0][1])).toMatch(/^UPDATE "token" SET _upper/i);
+		// the tip read + block row + the close + the read-back. No claim statement this
+		// time: one landed with the first block, so from here the guard alone stands
+		// between this writer and a rival.
+		expect(db.batches[0].length).toBe(4);
+		expect(sqlOf(db.batches[0][2])).toMatch(/^UPDATE "token" SET _upper/i);
 	});
 
 	it('leaves nothing applied when a statement inside the batch fails', async () => {
@@ -114,10 +118,12 @@ describe('the batch chunk bound', () => {
 		// one a deployment runs.
 		const D1_MAX_BOUND_PARAMETERS_PER_QUERY = 100;
 		const rowids = Array.from({length: DEFAULT_BATCH_BOUNDS.maxRowsPerStatement - 1}, (_, i) => i + 1);
-		const guarded = dropVersionsStatement(normalizeEntity(TOKEN), rowids, tableNames(), {
-			predicate: `COALESCE((SELECT token FROM _writer WHERE id = 0), '') = ?`,
-			token: 'a-token',
-		});
+		const guarded = dropVersionsStatement(
+			normalizeEntity(TOKEN),
+			rowids,
+			tableNames(),
+			writerGuard('a-token', tableNames()),
+		);
 		expect(guarded.args.length).toBe(D1_MAX_BOUND_PARAMETERS_PER_QUERY);
 		expect((guarded.sql.match(/\?/g) ?? []).length).toBe(guarded.args.length);
 
@@ -163,6 +169,10 @@ describe('the batch chunk bound', () => {
 		// keeps 2 of the bound back for itself (the claim and the read-back), so a
 		// bound of 8 packs two blocks per batch.
 		const store = new VersionedStateStore(db, [TOKEN], {bounds: {maxStatementsPerBatch: 8}});
+		// which makes THREE batches for four blocks, because the lowest block opens
+		// the sequence on its own: it carries the tip read that decides whether the
+		// whole sequence may land at all, and a refusal there must leave the rest
+		// unsent (see `above-the-tip.test.ts`). One extra round trip per CALL.
 		await store.migrate();
 		db.batches.length = 0;
 
@@ -173,7 +183,7 @@ describe('the batch chunk bound', () => {
 			{block: block(103), mutations: [owns('1', '0xD', 4)]},
 		]);
 
-		expect(db.batches.length).toBe(2);
+		expect(db.batches.length).toBe(3);
 		for (const batch of db.batches) {
 			// the bound is what a backend accepts, so the guard's statements count
 			// against it rather than riding on top of it
@@ -181,6 +191,11 @@ describe('the batch chunk bound', () => {
 			expect(sqlOf(batch[batch.length - 1])).toMatch(/SELECT token FROM _writer/i);
 			expect(batch.some((statement) => /INSERT INTO _blocks/i.test(sqlOf(statement)))).toBe(true);
 		}
+		// and the three blocks after the opening one still pack two to a batch, which
+		// is what the bound is for
+		expect(db.batches.map((batch) => batch.filter((s) => /INSERT INTO _blocks/i.test(sqlOf(s))).length)).toEqual([
+			1, 2, 1,
+		]);
 		expect((await store.getAsOf<{owner: string}>('token', {id: '1'}, 101))?.owner).toBe('0xB');
 		expect((await store.getCurrent<{owner: string}>('token', {id: '1'}))?.owner).toBe('0xD');
 	});
@@ -195,8 +210,8 @@ describe('the batch chunk bound', () => {
 		await store.applyBlock(block(100), mutations);
 
 		expect(db.batches.length).toBe(1);
-		// block row + 10 * (close + insert), plus the claim and the read-back
-		expect(db.batches[0].length).toBe(23);
+		// block row + 10 * (close + insert), plus the claim, the tip read and the read-back
+		expect(db.batches[0].length).toBe(24);
 	});
 
 	it('also bounds the DDL issued by migrate', async () => {

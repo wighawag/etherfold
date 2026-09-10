@@ -1,6 +1,7 @@
 import {
 	assertListingLimit,
 	assertRetained,
+	blockNotAboveTip,
 	boundedListing,
 	idValues,
 	mustGet,
@@ -253,6 +254,16 @@ export class IndexedDBStateStore implements StateStore {
 	 * later read would have to pick between. A reorged height is REVERTED and then
 	 * re-applied.
 	 *
+	 * So is a height that is not ABOVE the recorded tip, which is the same rule one
+	 * step wider: the caller reverts to the fork before it applies the branch that
+	 * replaces it, so every apply lands above what the store holds, and an offer at
+	 * or below the tip is a writer working from a position this store has passed --
+	 * a backgrounded tab resuming on a stale cursor is the ordinary way to get one.
+	 * The tip is read from the BLOCKS store inside this same transaction, which is
+	 * what makes it a genuine compare-and-swap: another tab's revert cannot lower it
+	 * between the read and the write, because a `readwrite` transaction serialises
+	 * across connections. An EMPTY store has no tip and admits any height.
+	 *
 	 * Two mutations of ONE business key in one block resolve to the last of them,
 	 * because a version is keyed by `(id, lower)` and a block opens at most one
 	 * version per key here. The SQL backend keeps both (its version identity is a
@@ -296,6 +307,15 @@ export class IndexedDBStateStore implements StateStore {
 		const claimed = await request(blocks.index(HASH_INDEX).getKey(hash));
 		if (claimed !== undefined) {
 			throw abort(tx, settled, `block hash ${hash} is already recorded, at height ${String(claimed)}.`);
+		}
+		// AFTER the two above, so the ordinary caller bug -- re-applying a block --
+		// keeps the message that names it, and this one answers the case those cannot:
+		// a height the tip has passed and nothing ever recorded. One cursor, backwards
+		// over the primary key, so it costs a single key read and no scan.
+		const tipCursor = await request(blocks.openCursor(null, 'prev'));
+		const tip = tipCursor ? (tipCursor.key as number) : undefined;
+		if (tip !== undefined && block.number <= tip) {
+			throw abort(tx, settled, blockNotAboveTip(block.number, tip));
 		}
 
 		for (const {mutation, entity, key, id} of planned) {

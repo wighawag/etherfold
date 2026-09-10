@@ -81,6 +81,19 @@ export interface StateStore {
 	 * is. A block that carries a log of ours which changes nothing is still a
 	 * block a consumer can legitimately pin.
 	 *
+	 * **The height must be ABOVE the recorded tip**, which is wider than refusing a
+	 * duplicate and is the invariant a single writer maintains anyway: a caller
+	 * reverts to the fork BEFORE it applies the branch that replaces it (see
+	 * `applyEventStream` in `@etherfold/processor-entities`), so every apply lands
+	 * above what the store holds. An offer at or below the tip is therefore a writer
+	 * working from a position the store has passed -- a backgrounded tab resuming on
+	 * a stale cursor, a second instance -- and taking it would open a version
+	 * underneath the live one rather than after it. The tip is read inside the same
+	 * atomic unit as the write, so a revert lowering it and an apply above it cannot
+	 * interleave with another writer. An EMPTY store has no tip and admits whatever
+	 * height its caller starts at, which is what a fresh index, a rebuild resuming
+	 * mid-chain and a bootstrap installing a snapshot all need.
+	 *
 	 * `cursor` joins that unit. It is how a processor's "I have got this far"
 	 * stops being a separate round trip: the block and the cursor that describes
 	 * it move together or neither moves, so a crash can never leave state ahead of

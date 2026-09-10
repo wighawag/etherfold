@@ -3,6 +3,7 @@ import {
 	assertRetained,
 	assertFinalityDepth,
 	BlockNotRetainedError,
+	blockNotAboveTip,
 	boundedListing,
 	compareIds,
 	entityKey,
@@ -202,6 +203,11 @@ export class PatchStateStore implements StateStore {
 	 * when the host prunes, and they need no snapshot of the state as of an
 	 * earlier block -- which is exactly what a light path does not have.
 	 *
+	 * A height must be ABOVE the recorded tip, and not merely unused: a caller
+	 * reverts to the fork before it applies the branch replacing it, so an offer at
+	 * or below the tip is a writer working from a position this store has passed.
+	 * An empty store has no tip and admits whatever height it is started at.
+	 *
 	 * The `cursor` is written LAST, after the point where anything can still
 	 * refuse: there is no transaction to join here, so "all or nothing" is
 	 * ordering, and the ordering has to be the safe one. Note what this store's
@@ -219,6 +225,12 @@ export class PatchStateStore implements StateStore {
 		}
 		if (this.hashes.has(hash)) {
 			throw new Error(`block hash ${hash} is already recorded, at height ${this.hashes.get(hash)}.`);
+		}
+		// AFTER the two above, so the ordinary caller bug -- re-applying a block --
+		// keeps the message that names it, and this one answers the case that message
+		// cannot: a height the tip has passed and nothing ever recorded.
+		if (this.tip !== undefined && block.number <= this.tip) {
+			throw new Error(blockNotAboveTip(block.number, this.tip));
 		}
 
 		const planned = mutations.map((mutation) => {
