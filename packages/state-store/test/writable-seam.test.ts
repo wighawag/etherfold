@@ -1,8 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import {
+	BlockUnavailableError,
 	MemoryStateStore,
 	openForReading,
 	openForWriting,
+	StoreWriterChangedError,
 	WRITER_CLAIM_KEY,
 	type ReadableStateStore,
 	type StateStore,
@@ -157,6 +159,24 @@ describe('opening a store for reading', () => {
 		const readable = openForReading(store);
 
 		expect(readable).toBe(store);
+	});
+});
+
+describe('what a writer that LOST is told', () => {
+	it('is not a read this store cannot answer', () => {
+		// The `BlockUnavailableError` family is a fact about the STORE that a caller
+		// answers by re-pinning or widening retention (ADR-0015, ADR-0019). This is the
+		// WRITE path, and the mutation did not happen: the remedy is to stop writing and
+		// become a reader, which no retention setting reaches. `RevertBeyondSnapshotError`
+		// is kept out of that family on exactly this ground, and so is this.
+		const refusal = new StoreWriterChangedError('applyBlock');
+
+		expect(refusal).toBeInstanceOf(Error);
+		expect(refusal).not.toBeInstanceOf(BlockUnavailableError);
+		expect(refusal.name).toBe('StoreWriterChangedError');
+		// the name is what a consumer across a package boundary recognises it by, where
+		// a bundled app can hold two copies of this module and `instanceof` would miss.
+		expect(refusal.operation).toBe('applyBlock');
 	});
 });
 

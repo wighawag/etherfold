@@ -198,6 +198,24 @@ indexer.syncing.subscribe(($syncing) => {
 
 It is asserted end to end by [`packages/browser/test/streamSeeding.test.ts`](https://github.com/wighawag/etherfold/blob/main/packages/browser/test/streamSeeding.test.ts), against the real IndexedDB substrate.
 
+## When another tab takes the store: your tab becomes a reader
+
+A user with your app open in two tabs is not an exotic deployment, and neither is a backgrounded tab that wakes up an hour later holding a cursor that stopped being true. Every mutation is checked against a claim inside the transaction that writes it ([ADR-0075](../../adr/0075-every-mutating-path-carries-a-writer-token-checked-in-the-transaction-that-writes.md)), so the loser writes NOTHING — and what it does about that is **demote itself to a reader**: it stops fetching, drops the in-memory cursor that is now a lie, and goes on answering reads from the store the other tab is writing.
+
+```ts
+indexer.syncing.subscribe(($syncing) => {
+	if ($syncing.demotion) showQuietly('another tab is indexing; this one is up to date and reading');
+});
+```
+
+**It is not an error and there is nothing to retry.** The data on screen stays correct — it is the store's, and the store is being written by whoever holds it now — which is why it is its own field rather than `syncing.error`, exactly as a refused seed is. Nothing loops: the auto-index loop stops and is not re-armed, and `startAutoIndexing()` on a demoted tab answers `false` rather than fetching a chain in order to be refused by every write it makes.
+
+**An advance answers nothing once demoted.** `indexMore()`, `indexMoreAndCatchupIfNeeded()` and `indexToLatest()` resolve to `undefined`, which means demoted and means nothing else; `syncing.demotion` says why. A caller that ignores the return value is unaffected.
+
+**Getting the write duty back is a fresh start, deliberately.** A store that lost is never re-claimed ([ADR-0077](../../adr/0077-the-storage-seam-splits-at-the-interface-and-the-claim-is-taken-by-constructing-a-writer.md)), so indexing again is `dispose()` and a fresh `init()` over a store built fresh — which re-reads everything, which is what makes the recovered writer correct.
+
+**And you can ask for it.** `indexer.demoteToReader('lease-lost')` is the same code path, for an app that elects one indexing tab itself and wants the others to read. Note that it is not the opposite of `promote()`: that moves the canonical pointer between generations, this drops the write duty over the storage they all fold into ([ADR-0078](../../adr/0078-a-demotion-lives-where-the-store-does-and-an-advance-that-answers-nothing-is-how-a-driver-learns.md)).
+
 ## Telling whether the state already accounts for your transaction
 
 Before an app lays an **optimistic update** over indexed state, it has to know whether the indexed state already contains the transaction's effects — because applied on top of a state that already has it, a non-idempotent update (a counter, a balance, an append) is counted twice.

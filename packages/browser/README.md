@@ -83,6 +83,12 @@ Both return a `ReconfigureOutcome`: `{stateDiscarded}` for the caller that only 
 - **`indexer.checkTxInclusion(...)`** answers whether the state you are about to render already accounts for a transaction. An app laying an OPTIMISTIC update over indexed state needs it: applied on top of state that already contains it, a non-idempotent update is counted twice. Its own receipt cannot answer that, because a reorg can re-include the same transaction in a different block.
 - **`keepStreamOnIndexedDB(name)`**, passed as `createIndexerState(..., {keepStream})`, caches the raw fetched logs so a state rebuild replays from IndexedDB instead of re-fetching every log. It is an append-only run of segments: a save costs its batch and not the history, and an inconsistent stream is cleared and re-fetched rather than repaired.
 
+## A second tab takes the store: this one becomes a reader
+
+Every mutation is checked against a claim inside the transaction that writes it ([ADR-0075](https://github.com/wighawag/etherfold/blob/main/docs/adr/0075-every-mutating-path-carries-a-writer-token-checked-in-the-transaction-that-writes.md)), so a tab that loses the race writes NOTHING. What it does about that is **demote itself to a reader**: it stops fetching, drops the in-memory cursor that is now a lie, and goes on answering reads from the store the other tab is writing, so the data on screen stays correct ([ADR-0078](https://github.com/wighawag/etherfold/blob/main/docs/adr/0078-a-demotion-lives-where-the-store-does-and-an-advance-that-answers-nothing-is-how-a-driver-learns.md)).
+
+It is a state change and not an error: `syncing.demotion` carries `{reason, reading}` (beside `streamSeed`, deliberately not inside `error`), the auto-index loop stops and is not re-armed, and an advance answers `undefined` — which means demoted and means nothing else. `indexer.demoteToReader('lease-lost')` is the same path for an app that elects one indexing tab itself; it is not the inverse of `promote`, which moves the canonical pointer between generations. Getting the write duty back is `dispose()` plus a fresh `init` over a store built fresh, because a store that lost is never re-claimed.
+
 ## Tests
 
 `pnpm --filter @etherfold/browser test` (vitest, on `fake-indexeddb`) and `pnpm --filter @etherfold/browser test:browser` (playwright, in a real engine).
