@@ -29,7 +29,7 @@ import {
 	resolveStreamConfig,
 	sameGeneration,
 } from '@etherfold/core';
-import type {StateStore} from '@etherfold/state-store';
+import {pruneBudget, type StateStore} from '@etherfold/state-store';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
@@ -46,6 +46,32 @@ export type ExtendedLastSync<ABI extends Abi> = LastSync<ABI> & {
 };
 
 export type ErrorCode = string;
+
+/**
+ * How many versions ONE scheduled prune may delete, where the application names
+ * no budget of its own.
+ *
+ * A prune costs time proportional to what it DROPS, which is the whole reason
+ * ADR-0022 makes it a call the host schedules rather than something `applyBlock`
+ * does on its way past -- so a host that schedules one still has to decide how
+ * much of the backlog a single cycle pays for. This is that decision for a
+ * BROWSER TAB, and the axis it is chosen on is responsiveness rather than any
+ * cap a platform imposes (a Worker has one, and `d1PruneBudget` computes it; a
+ * tab does not).
+ *
+ * The number: the IndexedDB prototype's FULL-SCAN prune took 6.3 s at 62,553
+ * versions (`work/notes/findings/sqlite-in-the-browser.md`), so ~0.3 ms per
+ * version is a safe over-estimate for the shipped store, which walks an index
+ * instead. A thousand versions is therefore a fraction of a second of database
+ * work against an auto-index loop that rests at four seconds, and it drains the
+ * whole measured workload's unbounded footprint (29,393 versions) in about
+ * thirty cycles rather than in one long stall. A steady-state cycle deletes a
+ * handful and never reaches it.
+ *
+ * It bounds ONE PASS and never the total: an incomplete pass leaves the rest for
+ * the next cycle, which is what keeps a large backlog off any single one.
+ */
+export const DEFAULT_PRUNE_BUDGET = 1000;
 
 /**
  * A GENERATION THAT IS NOT ANSWERING READS, and how far its fold has got.
@@ -487,6 +513,23 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * the safe one.
 		 */
 		promotion?: PromotionConfig;
+		/**
+		 * How many versions ONE of this loop's scheduled prunes may delete. Defaults
+		 * to `DEFAULT_PRUNE_BUDGET`.
+		 *
+		 * The budget is per PASS, and the loop comes back on its next cycle for
+		 * whatever a pass could not finish, so this is a smoothness knob rather than a
+		 * limit on what is reclaimed. Lower it for a tab doing animation work beside
+		 * its indexing; raise it for one that has just been given a window after
+		 * running unbounded and wants the backlog gone sooner.
+		 *
+		 * What it is NOT is a way to turn pruning off. A store prunes because its
+		 * retention states a FLOOR, and a deployment that wants nothing dropped says
+		 * so where retention is configured (`unbounded`, which is the default) rather
+		 * than by starving the schedule -- a store bounded in what it answers and
+		 * unbounded in what it holds is strictly worse than either honest position.
+		 */
+		pruneBudget?: number;
 		// Optional factory used to construct the underlying IndexerGeneration. Receives the same
 		// arguments (already request-tracked/logged provider, configured processor, source, config)
 		// that would otherwise be passed to `new IndexerGeneration(...)`. Useful for injecting a
@@ -519,6 +562,19 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		nonCanonicalGenerations: [],
 	});
 
+	/**
+	 * The budget every scheduled prune spends, validated HERE rather than on the
+	 * first cycle that would have used it.
+	 *
+	 * It is the seam's own check (`pruneBudget`, `@etherfold/state-store`), so a
+	 * nonsense budget is refused in the same words wherever it is written -- and it
+	 * lands where the app configured it instead of becoming a logged failure once
+	 * per cycle for ever. Zero in particular is refused rather than read as "do
+	 * nothing": a caller that computed a budget wrongly would otherwise watch a
+	 * prune run on schedule while the store grew.
+	 */
+	const scheduledPruneBudget = pruneBudget({maxVersions: options?.pruneBudget ?? DEFAULT_PRUNE_BUDGET});
+
 	const {set: setStatus, readable: readableStatus} = createStore<StatusState>({state: 'Idle'});
 	/**
 	 * There is nothing to publish until `init` has built the generation.
@@ -549,6 +605,35 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * window nothing maintains.
 	 */
 	let promotions = 0;
+
+	/**
+	 * WHERE EACH GENERATION'S STATE LIVES, so the cycle can prune what this
+	 * indexer holds.
+	 *
+	 * Keyed by the generation the store belongs to, because that is the thing that
+	 * comes and goes: a generation dropped on promotion takes its state with it,
+	 * and a hook holding every store it ever built would go on pruning a database
+	 * that was deleted underneath it. The key is the generation's own identity
+	 * (`{stream, processor}`), computed from exactly what the container registers.
+	 *
+	 * It is recorded rather than asked for, because there is nothing to ask: the
+	 * container hands out a `HeldGeneration` carrying the record, the engine and
+	 * the fold, and deliberately not the store -- a generation's state is the
+	 * caller's own object, built by the caller's own factory. This hook CALLED that
+	 * factory, so it is the one place that knows.
+	 *
+	 * Which is also the limit of what it can know: a store handed in ALREADY BUILT,
+	 * which is what `updateProcessor` takes, was not built through a factory here.
+	 * That is the same store in the ordinary case (a hot reload rebuilds the
+	 * processor over the tab's existing database), and a swap onto a genuinely
+	 * different store is prunable again after the next `init`.
+	 */
+	const statesByGeneration = new Map<string, StateStore>();
+
+	/** A generation's identity as a map key: the two halves the registry records. */
+	function generationKey(id: {stream: string; processor: string}): string {
+		return `${id.stream}/${id.processor}`;
+	}
 
 	// Serializes reconfiguration (updateIndexer/updateProcessor) so that overlapping calls
 	// (e.g. a slow deploy's source change racing a processor change, in either order) run one fully
@@ -586,6 +671,21 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				const built = await createProcessor(state as StateStore, context);
 				if (built.configure && processorConfig) {
 					built.configure(processorConfig);
+				}
+				// Recorded HERE and not in `createState`, because this is the first moment
+				// both halves exist: a generation is `{stream, processor version hash}` and
+				// the fold's half is only known once the processor is built, which is why
+				// the factories run in this order at all.
+				//
+				// The FIRST one wins, because that is what the container does with the
+				// generation itself: naming a generation it already holds RESOLVES to the one
+				// it is folding rather than adding a second engine over it, and the state that
+				// is being folded into is the one built alongside THAT processor. Overwriting
+				// would point this at a store nothing writes to and quietly stop pruning the
+				// one that is growing.
+				const key = generationKey({stream: context.stream, processor: built.getVersionHash()});
+				if (!statesByGeneration.has(key)) {
+					statesByGeneration.set(key, state as StateStore);
 				}
 				return built;
 			},
@@ -919,7 +1019,84 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// it stands NOW, so a pointer that moved during the cycle is already accounted
 		// for rather than something to skip.
 		reportGenerationProgress();
+		// LAST, and outside every apply: the blocks are already stored and the cursor
+		// is already published, so what the delete delays is this cycle's return and
+		// never a block's own transaction (ADR-0022).
+		await pruneScheduled();
 		return lastSync;
+	}
+
+	/**
+	 * RECLAIM WHAT THE RETENTION NO LONGER COVERS: one bounded pass per cycle, over
+	 * the state of every generation this indexer holds.
+	 *
+	 * The half of retention that a browser deployment was missing. A window bounds
+	 * what a READ may ask about from the moment it is configured; this is what
+	 * bounds the BYTES, and ADR-0022 makes it an explicit call a HOST schedules --
+	 * so without a caller a tab got the refusals of a bounded store and the
+	 * footprint of an unbounded one, on a device under a quota, for as long as it
+	 * stayed open.
+	 *
+	 * ## Why it is called UNCONDITIONALLY
+	 *
+	 * It is a no-op wherever there is no floor, which ADR-0022 states precisely so
+	 * that a host may schedule one without asking what it is holding. And the
+	 * question could not be answered here anyway: the trigger is a FLOOR and not a
+	 * window -- `retentionFloor` returns one for `revert-only` too, wherever a
+	 * finality depth was stated -- while the capability report carries no depth. A
+	 * host that branched on `retention.kind === 'window'` would leave a
+	 * `revert-only` deployment, which is the setting a browser app wanting reorg
+	 * safety and no history is told to prefer, refusing every historical read while
+	 * retaining every version for ever.
+	 *
+	 * ## Why it is not the store's own business
+	 *
+	 * Because it costs time proportional to what it drops, and WHICH cycle pays is
+	 * a scheduling decision a store cannot make for a tab, a backfilling CLI and a
+	 * long-running server at once. Here it is the cycle, after the advance: a
+	 * bounded pass, and whatever it could not finish is the next cycle's. A tab
+	 * that ran unbounded for a month before a window was configured therefore
+	 * reclaims its backlog over cycles instead of stalling on one delete, and the
+	 * report says which of the two just happened (`complete`).
+	 *
+	 * A failed prune does not fail the cycle. Indexing is what the tab is for, and
+	 * a delete that could not run is a store that stayed larger than it asked to be
+	 * -- worth saying out loud, and not worth stopping for.
+	 */
+	async function pruneScheduled(): Promise<void> {
+		if (!indexer) {
+			return;
+		}
+		// A SET, because two generations may legitimately fold into one store (a
+		// caller's `createState` that hands back the object it captured, which is what
+		// a hot reload wants), and pruning it twice in one cycle would spend the
+		// budget twice for nothing.
+		const states = new Set<StateStore>();
+		for (const held of indexer.generations) {
+			const state = statesByGeneration.get(generationKey(held.record));
+			if (state) {
+				states.add(state);
+			}
+		}
+		for (const state of states) {
+			try {
+				const report = await state.prune({maxVersions: scheduledPruneBudget});
+				if (!report.complete) {
+					// The one thing the report decides here is whether this is worth saying:
+					// a pass that spent its whole budget and left more below the floor is a
+					// store still converging, which looks identical from outside to a store
+					// that is not being pruned at all. It is not an error and nothing waits on
+					// it: the next cycle continues from where this one stopped.
+					namedLogger.info(
+						`pruned ${report.versionsDeleted} versions at or below block ${report.floor}, and the budget of ` +
+							`${scheduledPruneBudget} stopped the pass before the store reached its floor. The next cycle ` +
+							`continues.`,
+					);
+				}
+			} catch (err) {
+				namedLogger.error(`failed to prune the state of a generation this indexer holds`, err);
+			}
+		}
 	}
 
 	async function indexMore(): Promise<LastSync<ABI>> {
@@ -1063,6 +1240,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 		// 3. drop the indexer reference and reset browser-layer state so a later init() starts clean.
 		indexer = undefined;
+		// The stores go with it: a later `init` calls the factories again, and holding
+		// the previous container's states here would keep pruning them (and keep them
+		// reachable) long after nothing is indexing into them.
+		statesByGeneration.clear();
 		setSyncing({
 			waitingForProvider: true,
 			loading: false,

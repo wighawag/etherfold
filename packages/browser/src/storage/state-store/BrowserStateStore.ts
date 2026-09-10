@@ -128,6 +128,16 @@ export type BrowserStateStoreConfig =
 			 * revert itself needs. Note the trap recorded in ADR-0019: N BLOCKS is not
 			 * N updates of history -- on the real measured stream, event-bearing blocks
 			 * are median 429 blocks apart.
+			 *
+			 * **What is set here is also what is RECLAIMED**, and a caller has nothing
+			 * further to schedule: `createIndexerState`'s cycle prunes the state of
+			 * every generation it holds, so a store that states a FLOOR physically
+			 * drops the versions below it instead of only refusing to answer about
+			 * them. A floor is what `{blocks: N}` states and what `revert-only` states
+			 * ALONGSIDE a `finalityDepth` (that kind keeps superseded versions exactly
+			 * as long as reorg revert needs them, and the depth is how long that is);
+			 * `unbounded`, and `revert-only` with no depth, state none and nothing is
+			 * ever dropped.
 			 */
 			retention?: RetentionSetting;
 			/** The reorg depth this deployment protects against, in block numbers. */

@@ -1,6 +1,6 @@
 import {expect, test, type Page} from '@playwright/test';
 import {mountHarness} from 'playwright-browser-harness';
-import {EXPECTED_A, EXPECTED_B, START_BLOCK} from './workload.js';
+import {EXPECTED_A, EXPECTED_A_LATER, EXPECTED_B, START_BLOCK} from './workload.js';
 
 /**
  * A browser tab indexing with an entity processor, on the engines it has to work
@@ -70,6 +70,46 @@ test('runs the same processor on whichever backend the application chose', async
 		expect(run.results.memory).toEqual(run.results.indexeddb);
 		// and the light one says up front what a reload will cost (ADR-0023)
 		expect(run.results.patchDurability).toBe('memory-only');
+	} finally {
+		await harness.dispose();
+	}
+});
+
+/**
+ * The reclamation half of retention, in the engine that has to do it.
+ *
+ * This is the one claim in this package that a shim cannot make. `prune` on this
+ * backend is a range scan over the `upper` index in a real transaction, and what
+ * keeps it from destroying current state is that a LIVE version has `upper:
+ * null`, which is not a valid IndexedDB key and is therefore absent from that
+ * index entirely -- a property of the ENGINE's key handling, not of the store's
+ * arithmetic. The counts below are what the database is physically holding after
+ * the tab indexed, so "a configured window is actually pruned" is a measurement
+ * rather than a statement the store issues about itself.
+ */
+test('reclaims the versions a retention floor no longer covers, and only those', async ({page}) => {
+	const harness = await harnessFor(page);
+	try {
+		const run = await harness.run({phase: 'once', params: {case: 'prune', tag: tag('prune')}});
+
+		expect(run.errors).toEqual([]);
+
+		// the store that said it keeps everything holds everything: the baseline the
+		// other two are a reclamation FROM
+		expect(run.results.unboundedVersions).toBe(10);
+		// a 64-block window at a tip of 200 floors at 136, and the four versions closed
+		// at blocks 102 and 104 are below it
+		expect(run.results.windowedVersions).toBe(6);
+		// and `revert-only` with a depth prunes for the same reason and to the same
+		// floor: the depth a revert reaches IS its retention
+		expect(run.results.revertOnlyVersions).toBe(6);
+
+		// what was dropped was unreachable, so all three answer identically -- including
+		// the rows last written at 102 and 104, which are 30-odd blocks BELOW the floor
+		// and are still the current state
+		expect(run.results.unboundedState).toEqual(EXPECTED_A_LATER);
+		expect(run.results.windowedState).toEqual(EXPECTED_A_LATER);
+		expect(run.results.revertOnlyState).toEqual(EXPECTED_A_LATER);
 	} finally {
 		await harness.dispose();
 	}
