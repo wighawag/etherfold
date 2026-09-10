@@ -46,9 +46,10 @@ describe('two tabs writing one database', () => {
 		const [a, b] = twoTabs();
 		await Promise.all([a.migrate(), b.migrate()]);
 
-		// both write in the same tick, at different heights, and neither has
-		// claimed yet: a first write CLAIMS, so both of these land whichever order
-		// IndexedDB serialises them in.
+		// both write in the same tick, at ascending heights, and neither has claimed
+		// yet: a first write CLAIMS unconditionally, so both of these land. They
+		// ascend because a store's blocks are ONE sequence whoever offers them, which
+		// is the other half of what a second writer runs into.
 		const first = await Promise.allSettled([
 			a.applyBlock(block(100), [owns('1', '0xa')]),
 			b.applyBlock(block(101), [owns('1', '0xb')]),
@@ -82,6 +83,39 @@ describe('two tabs writing one database', () => {
 			await expect(stale.writeCursor('lastSync', 'at 100')).rejects.toBeInstanceOf(StoreWriterChangedError);
 		}
 		expect(await holder.readCursor('lastSync')).toBe('at 101');
+	});
+});
+
+describe('the transaction the tip is read in', () => {
+	it('reads it INSIDE the transaction that then writes the block against it', async () => {
+		const [store] = await migrated(twoTabs());
+		await store.applyBlock(block(100), [owns('1', '0x100')]);
+
+		const opened = recordTransactions();
+		await store.applyBlock(block(101), [owns('1', '0x101')]);
+		opened.stop();
+
+		// A height is judged against the tip, and a tip read OUTSIDE this transaction
+		// is a read-then-write that merely LOOKS atomic: another tab's revert lowers
+		// the tip between the read and the write, or raises it, and the block lands
+		// against a number that was never true. No behavioural assertion can see the
+		// difference here, so the transaction itself is what is pinned -- the same
+		// reason the prune case below pins one.
+		expect(opened.transactions).toEqual([
+			{stores: ['current', 'versions', 'blocks', 'cursors', 'writer'], mode: 'readwrite'},
+		]);
+	});
+
+	it('refuses a height the tip has passed, naming both', async () => {
+		const [store] = await migrated(twoTabs());
+		await store.applyBlock(block(100), [owns('1', '0x100')]);
+		await store.applyBlock(block(102), [owns('1', '0x102')]);
+
+		await expect(store.applyBlock(block(101), [owns('1', '0x101')])).rejects.toThrow(
+			/block 101 is not above the recorded tip 102/,
+		);
+		// aborted, so the transaction left the store byte-identical
+		expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0x102'});
 	});
 });
 

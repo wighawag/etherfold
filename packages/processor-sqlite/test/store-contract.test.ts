@@ -27,10 +27,11 @@ describe('one block is one batch', () => {
 		const applyBatches = db.batches.filter((batch) => batch.some((s) => sqlOf(s).includes('INSERT INTO _blocks')));
 		expect(applyBatches).toHaveLength(2);
 		for (const batch of applyBatches) {
-			// the block row leads the WORK of the batch; ahead of it may sit the
-			// writer's claim, and behind everything the read-back that says the claim
-			// still holds (ADR-0075). Both are part of the same one transaction.
-			expect(sqlOf(batch[0])).toMatch(/INSERT INTO (_blocks|_writer)/);
+			// the block row leads the WORK of the batch; ahead of it sit the writer's
+			// claim (on the first batch only) and the tip read the height is judged
+			// against, and behind everything the read-back that says the claim still
+			// holds (ADR-0075). All of them are part of the same one transaction.
+			expect(sqlOf(batch[0])).toMatch(/INSERT INTO (_blocks|_writer)|SELECT number, hash, timestamp FROM _blocks/);
 			expect(batch.length).toBeGreaterThan(1);
 		}
 	});

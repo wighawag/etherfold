@@ -1,4 +1,4 @@
-import {normalizeBlockHash} from './blocks.js';
+import {blockNotAboveTip, normalizeBlockHash} from './blocks.js';
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import {entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
@@ -122,6 +122,12 @@ export class MemoryStateStore implements StateStore {
 	 * store exactly as it found it. That mirrors the SQL store, where one block
 	 * is one batch and therefore one transaction.
 	 *
+	 * A height must be ABOVE the recorded tip, which is wider than refusing a
+	 * duplicate and is the invariant a single writer actually maintains: the caller
+	 * reverts to the fork BEFORE it applies the branch that replaces it, so every
+	 * apply lands above what the store holds. An empty store has no tip and admits
+	 * whatever height its caller starts at.
+	 *
 	 * The `cursor` is part of that unit and is written LAST, after the point where
 	 * anything can still refuse: there is no transaction to join here, so "all or
 	 * nothing" is ordering instead, and the ordering has to be the safe one. A
@@ -138,6 +144,12 @@ export class MemoryStateStore implements StateStore {
 		}
 		if (this.hashes.has(hash)) {
 			throw new Error(`block hash ${hash} is already recorded, at height ${this.hashes.get(hash)}.`);
+		}
+		// AFTER the two above, so the ordinary caller bug -- re-applying a block --
+		// keeps the message that names it, and this one answers the case that message
+		// cannot: a height the tip has passed and nothing ever recorded.
+		if (this.tip !== undefined && block.number <= this.tip) {
+			throw new Error(blockNotAboveTip(block.number, this.tip));
 		}
 
 		const planned = mutations.map((mutation) => {

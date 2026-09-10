@@ -47,6 +47,31 @@ export function assertBlockNumber(at: unknown): asserts at is number {
 }
 
 /**
+ * The refusal a store gives a block that is not ABOVE its recorded tip, in the
+ * one place that spells it.
+ *
+ * It is a message rather than an error class because it is the same kind of news
+ * as the duplicate-height refusal beside it and means the same thing: the CALLER
+ * is wrong, and the remedy is to revert first or to stop writing. `StoreWriterChangedError`
+ * is the one on this path that had to be a type, because it means the opposite
+ * (a race this caller could not have avoided, whose correct response is to demote
+ * itself to a reader), and telling the two apart is what a caller does with it.
+ *
+ * It lives here, with the rest of what `BlockPointer` MEANS, because every
+ * backend owes the same refusal and a message copied into four of them is a
+ * message that drifts into four. The SQL backend composes it after its batch
+ * rather than inside it (`remote-sql` has no read inside a transaction), which
+ * changes when both numbers are in hand and not what the caller is told.
+ */
+export function blockNotAboveTip(number: number, tip: number): string {
+	return (
+		`block ${number} is not above the recorded tip ${tip}: a store's blocks only ever move forward, so a writer ` +
+		`offering a height the tip has passed is working from a position that stopped being true. A reorged height ` +
+		`must be REVERTED before its replacement is applied, and a writer that lost the store must stop writing.`
+	);
+}
+
+/**
  * Fold a block hash to one canonical spelling: lower case.
  *
  * Hex case carries no meaning in a block hash (unlike an EIP-55 address), but

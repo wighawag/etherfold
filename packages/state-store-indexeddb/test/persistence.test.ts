@@ -131,12 +131,19 @@ describe('two connections to one database', () => {
 		const b = new IndexedDBStateStore([TOKEN], {databaseName});
 		await Promise.all([a.migrate(), b.migrate()]);
 
-		// each connection owns its own heights, and they are applied concurrently:
-		// one block is one transaction, so the engine serialises them.
-		await Promise.all([
-			...[100, 102, 104].map((number) => a.applyBlock(block(number), [owns(`a-${number}`, '0xalice')])),
-			...[101, 103, 105].map((number) => b.applyBlock(block(number), [owns(`b-${number}`, '0xbob')])),
-		]);
+		// The heights ASCEND across both connections, and that is not decoration: a
+		// store's blocks are ONE sequence, so a block must be above the recorded tip
+		// whichever connection offers it. "Each tab owns its own heights" is therefore
+		// not a way for two writers to share a database -- it never was -- and this
+		// case is about the other thing, that neither handle caches state the other
+		// would contradict. They are still applied concurrently: one block is one
+		// transaction, so the engine serialises them in the order they were issued.
+		const issued = [100, 101, 102, 103, 104, 105].map((number, index) =>
+			index % 2 === 0
+				? a.applyBlock(block(number), [owns(`a-${number}`, '0xalice')])
+				: b.applyBlock(block(number), [owns(`b-${number}`, '0xbob')]),
+		);
+		await Promise.all(issued);
 
 		for (const number of [100, 102, 104]) {
 			expect(await b.getCurrent('token', {id: `a-${number}`})).toMatchObject({owner: '0xalice'});

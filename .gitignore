@@ -64,6 +64,11 @@ prompts
 test-results/
 playwright-report/
 
+# Wrangler's local scratch: `platforms/cf-worker`'s tests run under
+# vitest-pool-workers, which writes a `.wrangler/tmp` beside the worker on every
+# run. Runtime artifact, recreated at will, never source.
+.wrangler/
+
 # Agent tooling scratch (subagent run artifacts)
 .pi-subagents/
 

@@ -54,12 +54,59 @@ export {idValues};
  * passes one -- it is what keeps these functions inspectable on their own, which
  * is why they are pure data in the first place.
  */
-export type WriterGuard = {
-	/** `COALESCE((SELECT token FROM _writer WHERE id = 0), '') = ?` */
-	readonly predicate: string;
-	/** The value that `?` binds to: this writer's claim. Opaque (`writer.ts`). */
+export type WriterGuard = StatementGuard & {
+	/** The value the predicate binds to: this writer's claim. Opaque (`writer.ts`). */
 	readonly token: string;
 };
+
+/**
+ * A PRECONDITION riding one statement: the predicate it is ANDed with, and the
+ * values that predicate binds, in order.
+ *
+ * The writer token is one (`writerGuard`) and the tip is another
+ * (`aboveTipGuard`); `allOf` composes them, so a statement carrying both is
+ * still one predicate with one argument list and the builders below stay
+ * ignorant of how many preconditions there are. The args always go LAST in a
+ * statement's argument list, after whatever the statement itself binds.
+ */
+export type StatementGuard = {
+	/** SQL that is true exactly when this statement may apply. */
+	readonly predicate: string;
+	/** The values its placeholders bind to, in order. */
+	readonly args: readonly unknown[];
+};
+
+/** Every precondition at once, or `undefined` where there is none. */
+export function allOf(...guards: readonly (StatementGuard | undefined)[]): StatementGuard | undefined {
+	const present = guards.filter((guard): guard is StatementGuard => guard !== undefined);
+	if (present.length === 0) return undefined;
+	if (present.length === 1) return present[0];
+	return {
+		predicate: present.map((guard) => `(${guard.predicate})`).join(' AND '),
+		args: present.flatMap((guard) => [...guard.args]),
+	};
+}
+
+/**
+ * The block table holds NOTHING above this height: the tip guard.
+ *
+ * It is what makes a block land only where it is above the recorded tip, and it
+ * has to ride the statements rather than be a read before them, because
+ * `remote-sql` exposes a transaction only as a pre-built batch: a tip read then
+ * a write is two transactions and merely LOOKS atomic (ADR-0054, ADR-0075). The
+ * SAME predicate rides the cursor write and every version statement of the
+ * block, so a refused block moves nothing at all.
+ *
+ * Deliberately `>` and not `>=`: a height that is already recorded is refused by
+ * the block table's PRIMARY KEY, which raises rather than applying to nothing,
+ * and keeping that refusal is what preserves the message a caller re-applying a
+ * block has always been given. Above the tip is therefore the two together.
+ *
+ * It rides the primary key, so it is an index probe rather than a scan.
+ */
+export function aboveTipGuard(height: number, names: TableNames): StatementGuard {
+	return {predicate: `NOT EXISTS (SELECT 1 FROM ${names.blocks} WHERE number > ?)`, args: [height]};
+}
 
 /**
  * The guard for one writer's token.
@@ -70,7 +117,7 @@ export type WriterGuard = {
  * and a writer that thinks it holds one has lost.
  */
 export function writerGuard(token: string, names: TableNames): WriterGuard {
-	return {predicate: `COALESCE((SELECT token FROM ${names.writer} WHERE id = 0), '') = ?`, token};
+	return {predicate: `COALESCE((SELECT token FROM ${names.writer} WHERE id = 0), '') = ?`, args: [token], token};
 }
 
 /**
@@ -121,13 +168,13 @@ export function writerTableExistsStatement(names: TableNames): Statement {
 }
 
 /** `AND <guard>`, or nothing. */
-function andGuard(guard: WriterGuard | undefined): string {
+function andGuard(guard: StatementGuard | undefined): string {
 	return guard ? ` AND ${guard.predicate}` : '';
 }
 
-/** The guard's bound value, or nothing. It always goes LAST in the argument list. */
-function guardArgs(guard: WriterGuard | undefined): unknown[] {
-	return guard ? [guard.token] : [];
+/** The guard's bound values, or nothing. They always go LAST in the argument list. */
+function guardArgs(guard: StatementGuard | undefined): unknown[] {
+	return guard ? [...guard.args] : [];
 }
 
 /**
@@ -143,7 +190,7 @@ function insertRowStatement(
 	table: string,
 	columns: readonly string[],
 	values: readonly unknown[],
-	guard: WriterGuard | undefined,
+	guard: StatementGuard | undefined,
 ): Statement {
 	const placeholders = columns.map(() => '?').join(', ');
 	if (!guard) {
@@ -151,7 +198,7 @@ function insertRowStatement(
 	}
 	return {
 		sql: `INSERT INTO ${table} (${columns.join(', ')}) SELECT ${placeholders} WHERE ${guard.predicate}`,
-		args: [...values, guard.token],
+		args: [...values, ...guardArgs(guard)],
 	};
 }
 
@@ -270,20 +317,6 @@ export function listAsOfStatement(
 	return listStatement(entity, prefix, limit, names, at);
 }
 
-/**
- * The statements that apply ONE block. The caller sends them as one batch: the
- * block row and every entity mutation land together or not at all.
- *
- * A write is close-then-insert:
- *   1. `UPDATE ... SET _upper = N WHERE <id> AND _upper IS NULL` closes the live
- *      version at this height, and
- *   2. `INSERT ... (_lower = N)` opens the new one.
- * A delete is step 1 alone.
- *
- * The block row is inserted plainly rather than upserted: applying the same
- * block twice is a bug in the caller, and a primary-key violation says so
- * immediately instead of silently double-writing versions.
- */
 /** Read one cursor. `undefined` (no row) is "never written", not an error. */
 export function readCursorStatement(key: string, names: TableNames): Statement {
 	return {
@@ -299,7 +332,7 @@ export function readCursorStatement(key: string, names: TableNames): Statement {
  * same block twice is a caller bug the store makes a primary-key violation on
  * purpose, whereas a cursor exists precisely to be overwritten.
  */
-export function writeCursorStatement(key: string, value: string, names: TableNames, guard?: WriterGuard): Statement {
+export function writeCursorStatement(key: string, value: string, names: TableNames, guard?: StatementGuard): Statement {
 	if (!guard) {
 		return {
 			sql:
@@ -314,27 +347,52 @@ export function writeCursorStatement(key: string, value: string, names: TableNam
 		sql:
 			`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) SELECT ?, ? WHERE ${guard.predicate} ` +
 			`ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = excluded.${CURSOR_VALUE}`,
-		args: [key, value, guard.token],
+		args: [key, value, ...guardArgs(guard)],
 	};
 }
 
 /** Forget one cursor. Deleting a row that is not there is a no-op, which is the contract. */
-export function clearCursorStatement(key: string, names: TableNames, guard?: WriterGuard): Statement {
+export function clearCursorStatement(key: string, names: TableNames, guard?: StatementGuard): Statement {
 	return {
 		sql: `DELETE FROM ${names.cursor} WHERE ${CURSOR_KEY} = ?${andGuard(guard)}`,
 		args: [key, ...guardArgs(guard)],
 	};
 }
 
+/**
+ * The statements that apply ONE block. The caller sends them as one batch: the
+ * block row and every entity mutation land together or not at all.
+ *
+ * A write is close-then-insert:
+ *   1. `UPDATE ... SET _upper = N WHERE <id> AND _upper IS NULL` closes the live
+ *      version at this height, and
+ *   2. `INSERT ... (_lower = N)` opens the new one.
+ * A delete is step 1 alone.
+ *
+ * The block row is inserted plainly rather than upserted: applying the same
+ * block twice is a bug in the caller, and a primary-key violation says so
+ * immediately instead of silently double-writing versions.
+ *
+ * EVERY statement carries the tip guard as well as the writer's, for the same
+ * reason every one carries the writer's: a batch is the only transaction there
+ * is, so a precondition that rode only the block row would leave the version
+ * writes and the cursor of a refused block applying to a state nothing recorded
+ * the block for. With it, a block at or below the tip applies to NOTHING, and the
+ * caller learns so from the tip read its batch carries
+ * (`VersionedStateStore.applyBlock`).
+ */
 export function applyBlockStatements(
 	declarations: Iterable<EntityDeclaration> | ReadonlyMap<string, NormalizedEntity>,
 	block: BlockPointer,
 	mutations: readonly Mutation[],
 	names: TableNames,
 	cursor?: {key: string; value: string},
-	guard?: WriterGuard,
+	writer?: WriterGuard,
 ): Statement[] {
 	const entities = asEntityMap(declarations);
+	// the writer's claim and the tip, as ONE predicate: this block may land only if
+	// this writer still holds the store AND the store has not moved past the height.
+	const guard = allOf(writer, aboveTipGuard(block.number, names));
 	const statements: Statement[] = [
 		// the hash is folded to one spelling here, since it is the identity a
 		// consumer pins and later looks up (see `normalizeBlockHash`).
@@ -432,7 +490,7 @@ export function dropVersionsStatement(
 	entity: NormalizedEntity,
 	rowids: readonly number[],
 	names: TableNames,
-	guard?: WriterGuard,
+	guard?: StatementGuard,
 ): Statement {
 	return {
 		sql:
@@ -469,7 +527,7 @@ export function revertToStatements(
 	declarations: Iterable<EntityDeclaration> | ReadonlyMap<string, NormalizedEntity>,
 	keepUpTo: number,
 	names: TableNames,
-	guard?: WriterGuard,
+	guard?: StatementGuard,
 ): Statement[] {
 	const entities = asEntityMap(declarations);
 	const statements: Statement[] = [];

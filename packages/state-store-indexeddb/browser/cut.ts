@@ -229,6 +229,15 @@ async function readPhase(params: Params, timings: Timing[]): Promise<Record<stri
  * rest are refused with `StoreWriterChangedError`, having written nothing. That
  * is the rule working, so it is counted and reported; what would be a defect is
  * a tab whose rows are half there, or a refusal wearing another error's name.
+ *
+ * There are TWO refusals to count, and the second is the more interesting one.
+ * A block must also be ABOVE the recorded tip, and the heights here are
+ * interleaved across tabs, so a tab that reclaims the store after another one
+ * has written a higher height is offering a block the store has already moved
+ * past. "Each tab owns its own heights" was never a way for two writers to share
+ * a database, because a store's blocks are ONE sequence; the tabs demonstrate
+ * that they can all OPEN it, which is the claim ADR-0024 needs, and the writing
+ * is one tab's at a time.
  */
 async function multiTab(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const tab = params.tab as number;
@@ -255,8 +264,9 @@ async function multiTab(params: Params, timings: Timing[]): Promise<Record<strin
 					]);
 					wrote++;
 				} catch (error) {
-					if (error instanceof StoreWriterChangedError) refused++;
-					else unexpected.push(`${(error as Error)?.message ?? error}`);
+					const message = `${(error as Error)?.message ?? error}`;
+					if (error instanceof StoreWriterChangedError || /not above the recorded tip/.test(message)) refused++;
+					else unexpected.push(message);
 				}
 			}
 		});

@@ -24,9 +24,16 @@ import {mountHarness} from 'playwright-browser-harness';
  * one database and use it, where three of four SQLite tabs never got that far.
  * What it no longer shows is four tabs writing at once, because that is exactly
  * what the guard forbids -- only the tab that claimed last may write, and the
- * others are refused with `StoreWriterChangedError` having written nothing. So
- * a refusal is counted as an outcome here, and what is asserted is that no tab
- * failed for any OTHER reason and that the store is coherent afterwards.
+ * others are refused having written nothing. So a refusal is counted as an
+ * outcome here, and what is asserted is that no tab failed for any OTHER reason
+ * and that the store is coherent afterwards.
+ *
+ * Two refusals count as one outcome: a tab whose CLAIM was taken
+ * (`StoreWriterChangedError`) and a tab offering a height the tip has already
+ * passed, which is what the interleaved heights below produce as the store
+ * changes hands. The second is the same news read from the other end -- a
+ * store's blocks are ONE sequence, so owning a height of your own is not owning
+ * a place in it.
  *
  * It is still not the CONTENTION case: every tab writes heights of its own, so
  * no two of them ever race for one height. Several tabs contending for the SAME
@@ -46,7 +53,7 @@ type TabOutcome = {
 	errors: string[];
 	attempted?: number;
 	wrote?: number;
-	/** Writes the writer token refused: this tab was not the one holding the store. */
+	/** Writes the store refused: a claim taken, or a height the tip had passed. */
 	refused?: number;
 	/** Anything that failed for another reason at all, which is what would be a defect. */
 	unexpected?: string[];
