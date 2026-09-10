@@ -1,5 +1,5 @@
 import type {Abi, LastSync, LogEvent} from '@etherfold/core';
-import {createMutationContext, type Mutation, type StateStore} from '@etherfold/state-store';
+import {createMutationContext, type Mutation, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import {serializeLastSync, syncedThrough} from './cursor.js';
 import {blockPointer, forkPoint, groupByBlock} from './stream.js';
@@ -80,7 +80,7 @@ export async function runBlockHandlers<ABI extends Abi, ProcessorConfig>(
  *    its own cursor.
  */
 export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
-	store: StateStore,
+	store: WritableStateStore,
 	processor: EntityProcessor<ABI, ProcessorConfig>,
 	eventStream: readonly LogEvent<ABI>[],
 	config: ProcessorConfig,

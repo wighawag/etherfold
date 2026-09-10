@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
-import type {StateStore} from '@etherfold/state-store';
+import {openForWriting, type StateStoreBackend} from '@etherfold/state-store';
 import {createBrowserStateStore, demoteToReader} from '../src/index.js';
 import {
 	BRANCH_A_TIP,
@@ -59,7 +59,7 @@ const GUARDED = ['applyBlock', 'revertTo', 'writeCursor', 'clearCursor', 'prune'
  * went on calling `writeCursor` and being refused would leave exactly the same
  * rows behind.
  */
-function recordingMutations(store: StateStore): {store: StateStore; mutations: string[]} {
+function recordingMutations(store: StateStoreBackend): {store: StateStoreBackend; mutations: string[]} {
 	const mutations: string[] = [];
 	const recording = new Proxy(store, {
 		get(target, property) {
@@ -76,7 +76,7 @@ function recordingMutations(store: StateStore): {store: StateStore; mutations: s
 				return method(...args);
 			};
 		},
-	}) as StateStore;
+	}) as StateStoreBackend;
 	return {store: recording, mutations};
 }
 
@@ -85,7 +85,7 @@ async function indexedThenTaken(options: {databaseName?: string} = {}) {
 	const databaseName = options.databaseName ?? freshName();
 	const chain = fakeChain();
 	const recorded = recordingMutations(await createBrowserStateStore(processor.entities, {databaseName}));
-	const indexer = indexerFor(recorded.store);
+	const indexer = indexerFor(await openForWriting(recorded.store));
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 	await indexToTip(indexer);
 
@@ -176,7 +176,7 @@ describe('a refused writer demotes itself to a reader', () => {
 	it('stops the AUTO-INDEX loop, which is the path an app actually drives', async () => {
 		const databaseName = freshName();
 		const chain = fakeChain();
-		const store = await createBrowserStateStore(processor.entities, {databaseName});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName}));
 		const indexer = indexerFor(store);
 		await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 
@@ -231,7 +231,7 @@ describe('the same demotion, asked for by a caller', () => {
 	it('demotes on a LEASE LOSS through the one function the refusal handler uses', async () => {
 		const chain = fakeChain();
 		const recorded = recordingMutations(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
-		const indexer = indexerFor(recorded.store);
+		const indexer = indexerFor(await openForWriting(recorded.store));
 		await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 		await indexToTip(indexer);
 
@@ -255,7 +255,7 @@ describe('the same demotion, asked for by a caller', () => {
 
 	it('hands back the stores as READ handles, and stops folding before it does', async () => {
 		const order: string[] = [];
-		const store = await createBrowserStateStore(processor.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName: freshName()}));
 
 		const demotion = demoteToReader(
 			{

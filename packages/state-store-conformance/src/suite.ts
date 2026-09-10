@@ -1,4 +1,4 @@
-import {openForWriting, type StateStoreCapabilities} from '@etherfold/state-store';
+import type {StateStoreCapabilities} from '@etherfold/state-store';
 import {blockAtomicityCases} from './cases/block-atomicity.js';
 import {boundedListingCases} from './cases/bounded-listing.js';
 import {declaredCapabilityCases} from './cases/declared-capabilities.js';
@@ -50,24 +50,21 @@ import type {
  * the factory cannot give -- see `StateStoreConformanceOptions`), and that a
  * DECLARATION means the same thing here as it does on every other backend.
  *
- * ## Every factory-driven chapter is asked TWICE, once per SHAPE
+ * ## ONE shape, asked once
  *
- * A consumer no longer holds one thing. It holds a `WritableStateStore` if it
- * CLAIMED the store (`openForWriting`) and a `ReadableStateStore` if it did not,
- * and the writable one is a handle over the backend rather than the backend
- * itself (ADR-0077). A handle that delegated one verb wrongly would be a store
- * that behaves differently depending on how its holder obtained it, which is
- * exactly the class of defect this suite exists to catch -- so the questions are
- * asked of both, and a backend earns its place behind the seam through either
- * door. When the migration completes and there is one shape again, this loop is
- * what goes.
+ * A backend hands over a `StateStoreBackend` and that is what every chapter here
+ * is asked of. There was briefly a second pass, over the handle `openForWriting`
+ * returns, while the seam carried both halves and consumers migrated one package
+ * at a time; it is gone with the migration, because there is one shape again
+ * (ADR-0077). What the CLAIMED handle owes is asked where it belongs: `a writer
+ * claims by opening` below, and `writable-seam.test.ts` in `@etherfold/state-store`
+ * for the delegation itself.
  *
- * The CONTENTION questions are asked ONCE, and deliberately: `a second writer
- * writes nothing` and the second-handle half of the retention-enforcement
- * chapter are driven by `twoWriters` rather than by the factory, so they are
- * questions about a second HANDLE and not about a shape. Opening a second handle
- * FOR WRITING is its own question with its own chapter (`a writer claims by
- * opening`), likewise asked once.
+ * The CONTENTION questions are driven by `twoWriters` rather than by the factory
+ * (`a second writer writes nothing`, and the second-handle half of the
+ * retention-enforcement chapter), because they are questions about a second
+ * HANDLE on one storage, which a factory promising a fresh database per call
+ * cannot express.
  */
 export async function stateStoreConformanceCases(
 	factory: StateStoreFactory,
@@ -78,13 +75,12 @@ export async function stateStoreConformanceCases(
 
 	return [
 		...factoryDrivenCases(factory, capabilities, options),
-		...throughAClaimedWriter(factory, capabilities),
 		...singleWriterCases(factory, capabilities, options),
 		...openingForWritingCases(factory, capabilities, options),
 	];
 }
 
-/** Everything a fresh store from the factory can be asked, whatever shape it is held as. */
+/** Everything a fresh store from the factory can be asked. */
 function factoryDrivenCases(
 	factory: StateStoreFactory,
 	capabilities: StateStoreCapabilities,
@@ -103,26 +99,6 @@ function factoryDrivenCases(
 		...snapshotBootstrapCases(factory, capabilities),
 		...portableDeclarationCases(factory),
 	];
-}
-
-/**
- * The same questions, asked of the handle a CLAIM hands back.
- *
- * `twoWriters` is deliberately withheld here (see the note on the suite): the
- * contention questions are about a second handle on one storage, and asking them
- * again through a second shape would only run them twice.
- *
- * One case is slightly WEAKER through this door and it is the first pass's to
- * hold: `openForWriting` migrates, so a declaration probe that a backend accepts
- * and then dies on at `migrate()` looks here like a refusal at construction,
- * which the probe permits. The undecorated pass asks that question exactly.
- */
-function throughAClaimedWriter(factory: StateStoreFactory, capabilities: StateStoreCapabilities): ConformanceCase[] {
-	const claiming: StateStoreFactory = async (declarations) => openForWriting(await factory(declarations));
-	return factoryDrivenCases(claiming, capabilities, {}).map((one) => ({
-		...one,
-		group: `${one.group} (through a claimed writer)`,
-	}));
 }
 
 /**

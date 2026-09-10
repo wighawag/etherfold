@@ -1,6 +1,11 @@
 import 'fake-indexeddb/auto';
 import {createClient} from '@libsql/client';
-import {MemoryStateStore, type EntityDeclaration, type StateStore} from '@etherfold/state-store';
+import {
+	MemoryStateStore,
+	openForWriting,
+	type EntityDeclaration,
+	type WritableStateStore,
+} from '@etherfold/state-store';
 import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
@@ -30,10 +35,17 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
  */
 export type Backend = {
 	readonly name: string;
-	/** A store over storage nothing else is using. */
-	open(declarations: readonly EntityDeclaration[]): Promise<StateStore>;
-	/** Another store over the SAME storage: what a restart sees. */
-	reopen(previous: StateStore, declarations: readonly EntityDeclaration[]): Promise<StateStore>;
+	/**
+	 * A store over storage nothing else is using, CLAIMED.
+	 *
+	 * Claimed here rather than at every call site because these cases fold, and
+	 * folding is writing: the ability to mutate is obtained by claiming (ADR-0077),
+	 * so what a test that indexes wants handed to it is the writable handle.
+	 * `openForWriting` migrates on the way.
+	 */
+	open(declarations: readonly EntityDeclaration[]): Promise<WritableStateStore>;
+	/** Another store over the SAME storage, claimed in its turn: what a restart sees. */
+	reopen(previous: WritableStateStore, declarations: readonly EntityDeclaration[]): Promise<WritableStateStore>;
 	/** Whether this backend's storage outlives the store object that wrote it. */
 	readonly durable: boolean;
 };
@@ -41,15 +53,19 @@ export type Backend = {
 let databaseCounter = 0;
 
 /** The libSQL handle each sqlite store was opened over, so `reopen` finds it again. */
-const handles = new WeakMap<StateStore, RemoteLibSQL>();
-/** The IndexedDB database name each store was opened on, for the same reason. */
-const databases = new WeakMap<StateStore, string>();
+const handles = new WeakMap<WritableStateStore, RemoteLibSQL>();
+/**
+ * The IndexedDB database each store was opened on, and the CONNECTION under the
+ * claim, for the same reason: a claimed handle delegates the seam and nothing
+ * else, so `close()` has to be reached on the store itself.
+ */
+const databases = new WeakMap<WritableStateStore, {name: string; connection: IndexedDBStateStore}>();
 
 export const BACKENDS: readonly Backend[] = [
 	{
 		name: 'memory',
 		durable: false,
-		open: async (declarations) => new MemoryStateStore(declarations),
+		open: async (declarations) => openForWriting(new MemoryStateStore(declarations)),
 		reopen: async (previous) => previous,
 	},
 	{
@@ -57,13 +73,13 @@ export const BACKENDS: readonly Backend[] = [
 		durable: true,
 		open: async (declarations) => {
 			const db = new RemoteLibSQL(createClient({url: ':memory:'}));
-			const store = new VersionedStateStore(db, declarations);
+			const store = await openForWriting(new VersionedStateStore(db, declarations));
 			handles.set(store, db);
 			return store;
 		},
 		reopen: async (previous, declarations) => {
 			const db = handles.get(previous) as RemoteLibSQL;
-			const store = new VersionedStateStore(db, declarations);
+			const store = await openForWriting(new VersionedStateStore(db, declarations));
 			handles.set(store, db);
 			return store;
 		},
@@ -73,24 +89,26 @@ export const BACKENDS: readonly Backend[] = [
 		durable: true,
 		open: async (declarations) => {
 			const databaseName = `entity-event-processor-${++databaseCounter}`;
-			const store = new IndexedDBStateStore(declarations, {databaseName});
-			databases.set(store, databaseName);
+			const connection = new IndexedDBStateStore(declarations, {databaseName});
+			const store = await openForWriting(connection);
+			databases.set(store, {name: databaseName, connection});
 			return store;
 		},
 		reopen: async (previous, declarations) => {
-			const databaseName = databases.get(previous) as string;
+			const opened = databases.get(previous) as {name: string; connection: IndexedDBStateStore};
 			// the tab closes before it reopens: a browser cannot hold two connections
 			// through a version change, and a test that leaves one open blocks the next.
-			await (previous as IndexedDBStateStore).close();
-			const store = new IndexedDBStateStore(declarations, {databaseName});
-			databases.set(store, databaseName);
+			await opened.connection.close();
+			const connection = new IndexedDBStateStore(declarations, {databaseName: opened.name});
+			const store = await openForWriting(connection);
+			databases.set(store, {name: opened.name, connection});
 			return store;
 		},
 	},
 	{
 		name: 'patch',
 		durable: false,
-		open: async (declarations) => new PatchStateStore(declarations, {retention: 'revert-only'}),
+		open: async (declarations) => openForWriting(new PatchStateStore(declarations, {retention: 'revert-only'})),
 		reopen: async (previous) => previous,
 	},
 ];

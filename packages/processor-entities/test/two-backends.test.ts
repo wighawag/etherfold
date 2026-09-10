@@ -1,5 +1,13 @@
 import {createClient} from '@libsql/client';
-import {MemoryStateStore, type RetentionOptions, type RetentionSetting, type StateStore} from '@etherfold/state-store';
+import {
+	MemoryStateStore,
+	openForWriting,
+	type RetentionOptions,
+	type RetentionSetting,
+	type StateStore,
+	type StateStoreBackend,
+	type WritableStateStore,
+} from '@etherfold/state-store';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {beforeEach, describe, expect, it} from 'vitest';
@@ -24,7 +32,7 @@ import {processor, transfer, type TestABI} from './utils/fixtures.js';
 /** What a deployment sets about the store, in the one spelling both backends take. */
 type StoreOptions = RetentionOptions & {retention?: RetentionSetting};
 
-type Backend = {name: string; make(options?: StoreOptions): StateStore};
+type Backend = {name: string; make(options?: StoreOptions): StateStoreBackend};
 
 const backends: Backend[] = [
 	{name: 'memory', make: (options) => new MemoryStateStore(processor.entities, options)},
@@ -64,8 +72,7 @@ describe('one processor, several backends', () => {
 	beforeEach(async () => {
 		states = {};
 		for (const backend of backends) {
-			const store = backend.make();
-			await store.migrate();
+			const store = await openForWriting(backend.make());
 			await applyEventStream(store, processor, STREAM, undefined);
 			states[backend.name] = await stateOf(store, IDS);
 		}
@@ -88,11 +95,11 @@ describe('one processor, several backends', () => {
 });
 
 describe.each(backends)('the seam behaves the same on $name', (backend) => {
-	let store: StateStore;
+	let store: WritableStateStore;
 
 	beforeEach(async () => {
-		store = backend.make();
-		await store.migrate();
+		// `openForWriting` migrates on the way, so claiming is the whole of the open.
+		store = await openForWriting(backend.make());
 	});
 
 	it('composes two events in one block through read-your-writes', async () => {
@@ -222,8 +229,7 @@ describe.each(backends)('a retention setting is written the same way on $name', 
 	});
 
 	it('turns a window into the same claim on both, and enforces it on both', async () => {
-		const store = backend.make({retention: {blocks: 128}, finalityDepth: 64});
-		await store.migrate();
+		const store = await openForWriting(backend.make({retention: {blocks: 128}, finalityDepth: 64}));
 		await applyEventStream(store, processor, STREAM, undefined);
 
 		expect(store.capabilities.retention).toEqual({kind: 'window', blocks: 128});
@@ -236,8 +242,7 @@ describe.each(backends)('a retention setting is written the same way on $name', 
 	});
 
 	it('turns `revert-only` into the same claim on both, and the processor still runs on it', async () => {
-		const store = backend.make({retention: 'revert-only'});
-		await store.migrate();
+		const store = await openForWriting(backend.make({retention: 'revert-only'}));
 		await applyEventStream(store, processor, STREAM, undefined);
 
 		expect(store.capabilities.retention).toEqual({kind: 'revert-only'});

@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import {openForWriting} from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
 import {resolveStreamConfig, streamDigestOf, type SourceInvalidation} from '@etherfold/core';
 import {createBrowserStateStore} from '../src/index.js';
@@ -43,7 +44,7 @@ const freshName = () => `event-ranges-${counter++}-${Math.random().toString(36).
 
 /** Index the captured branch to the tip against a source that declares ranges. */
 async function indexedWithRanges(databaseName = freshName(), chain = fakeChain()) {
-	const store = await createBrowserStateStore(processor.entities, {databaseName});
+	const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName}));
 	const indexer = indexerForProcessor(store, processor);
 	await indexer.init({provider: chain.provider, source: SOURCE_RANGED, config: {stream: {finality: FINALITY}}});
 	await indexToTip(indexer);
@@ -137,7 +138,7 @@ describe('an entry appended ABOVE the cursor', () => {
 		indexer.dispose();
 
 		// a new tab, the same IndexedDB database, the upgraded source
-		const store = await createBrowserStateStore(processor.entities, {databaseName});
+		const store = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName}));
 		const reloaded = indexerForProcessor(store, processor);
 		await reloaded.init({
 			provider: chain.provider,

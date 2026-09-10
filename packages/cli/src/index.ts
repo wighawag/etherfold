@@ -18,7 +18,7 @@ import {
 	type RunSummary,
 	type Sleep,
 } from '@etherfold/fetcher-host';
-import type {EntityProcessor, StateStore} from '@etherfold/processor-entities';
+import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import {instantiateProcessor, loadProcessorModule, resolveSource, type ProcessorModule} from '@etherfold/utils';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
@@ -106,11 +106,11 @@ export type PreparedIndexing<
 	 * it and promote one; `build` opens with one and exits, so the container it hands
 	 * back holds exactly that one.
 	 */
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/** The sending half, plus the policy for reading what a cycle did. */
 	host: FetcherHost<ABI>;
 	/** The store the OPENING fold folds into: its own table namespace (ADR-0053). */
-	store: StateStore;
+	store: WritableStateStore;
 	/**
 	 * The ONE libSQL handle this command built, which the store folds into.
 	 *
@@ -374,7 +374,7 @@ async function openSource<ABI extends Abi, ProcessResultType>(
 async function driveCycles<ABI extends Abi, ProcessResultType>(
 	command: ChainFollowingCommand,
 	host: FetcherHost<ABI>,
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>,
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 	deps: IndexingDependencies,
 ): Promise<RunSummary> {
 	const stopAtTip = command === 'build';

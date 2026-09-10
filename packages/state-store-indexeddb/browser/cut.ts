@@ -37,7 +37,7 @@ import {
 	MemoryStateStore,
 	StoreWriterChangedError,
 	type EntityDeclaration,
-	type StateStore,
+	type StateStoreBackend,
 } from '@etherfold/state-store';
 import {runStateStoreConformance} from '@etherfold/state-store-conformance';
 import {deleteDatabase, IndexedDBStateStore} from '../src/index.js';
@@ -462,7 +462,7 @@ async function contentionAudit(params: Params): Promise<Record<string, unknown>>
  * disagreeing with node on both backends is the workload.
  */
 async function reference(timings: Timing[]): Promise<Record<string, unknown>> {
-	const store: StateStore = new MemoryStateStore(processor.entities);
+	const store: StateStoreBackend = new MemoryStateStore(processor.entities);
 	await store.migrate();
 	return {...(await timed('reference', timings, () => runWorkload(store)))};
 }

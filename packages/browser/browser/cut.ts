@@ -3,7 +3,8 @@
  *
  * What runs here is the WHOLE claim of this package, not a piece of it: an
  * application's entity processor, driven by `createIndexerState`, against a
- * `StateStore` that `createBrowserStateStore` built, in an engine that has real
+ * store that `createBrowserStateStore` built and a writer CLAIMED, in an engine
+ * that has real
  * IndexedDB and a real page reload. The node tests
  * (`test/entityIndexing.test.ts`) ask the same questions of the same workload
  * object under `fake-indexeddb`, on every commit; this is where the answers stop
@@ -37,7 +38,6 @@ import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-brow
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
 import {MemoryStateStore} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
-import {createBrowserStateStore} from '../src/index.js';
 import {
 	BRANCH_A_LATER,
 	BRANCH_A_LATER_TIP,
@@ -57,6 +57,7 @@ import {
 	SOURCE_V2,
 	START_BLOCK,
 	versionCount,
+	writableStore,
 } from './workload.js';
 
 type Params = Record<string, unknown>;
@@ -67,7 +68,7 @@ function databaseName(params: Params, suffix: string): string {
 
 /** The captured stream, through the hook, on the default backend. */
 async function indexCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
-	const store = await createBrowserStateStore(processor.entities, {databaseName: databaseName(params, 'index')});
+	const store = await writableStore({databaseName: databaseName(params, 'index')});
 	const {state, lastSync, ranges} = await timed('index', timings, () => runWorkload(store));
 	return {state, lastToBlock: lastSync.lastToBlock, latestBlock: lastSync.latestBlock, ranges};
 }
@@ -75,7 +76,7 @@ async function indexCase(params: Params, timings: Timing[]): Promise<Record<stri
 /** A reorg through the browser path, including the counter that must decrease. */
 async function reorgCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const chain = fakeChain();
-	const store = await createBrowserStateStore(processor.entities, {databaseName: databaseName(params, 'reorg')});
+	const store = await writableStore({databaseName: databaseName(params, 'reorg')});
 	const indexer = indexerFor(store);
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 
@@ -99,18 +100,18 @@ async function reorgCase(params: Params, timings: Timing[]): Promise<Record<stri
  */
 async function backendsCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const onIndexedDB = await timed('indexeddb', timings, async () =>
-		runWorkload(await createBrowserStateStore(processor.entities, {databaseName: databaseName(params, 'backends')})),
+		runWorkload(await writableStore({databaseName: databaseName(params, 'backends')})),
 	);
 	const onPatches = await timed('patch', timings, async () =>
 		runWorkload(
-			await createBrowserStateStore(processor.entities, {
+			await writableStore({
 				backend: (declarations) => new PatchStateStore(declarations, {finalityDepth: FINALITY}),
 			}),
 		),
 	);
 	const inMemory = await timed('memory', timings, async () =>
 		runWorkload(
-			await createBrowserStateStore(processor.entities, {
+			await writableStore({
 				backend: (declarations) => new MemoryStateStore(declarations),
 			}),
 		),
@@ -148,11 +149,11 @@ async function pruneCase(params: Params, timings: Timing[]): Promise<Record<stri
 	const lateBranch = () => fakeChain(BRANCH_A_LATER, BRANCH_A_LATER_TIP);
 
 	const unbounded = await timed('unbounded', timings, async () =>
-		runWorkload(await createBrowserStateStore(processor.entities, {databaseName: names.unbounded}), lateBranch()),
+		runWorkload(await writableStore({databaseName: names.unbounded}), lateBranch()),
 	);
 	const windowed = await timed('window', timings, async () =>
 		runWorkload(
-			await createBrowserStateStore(processor.entities, {
+			await writableStore({
 				databaseName: names.windowed,
 				retention: {blocks: 64},
 				finalityDepth: 64,
@@ -162,7 +163,7 @@ async function pruneCase(params: Params, timings: Timing[]): Promise<Record<stri
 	);
 	const revertOnly = await timed('revert-only', timings, async () =>
 		runWorkload(
-			await createBrowserStateStore(processor.entities, {
+			await writableStore({
 				databaseName: names.revertOnly,
 				retention: 'revert-only',
 				finalityDepth: 64,
@@ -183,7 +184,7 @@ async function pruneCase(params: Params, timings: Timing[]): Promise<Record<stri
 
 /** The tab indexes, then goes away. */
 async function writePhase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
-	const store = await createBrowserStateStore(processor.entities, {databaseName: databaseName(params, 'reload')});
+	const store = await writableStore({databaseName: databaseName(params, 'reload')});
 	const {state, ranges} = await timed('first-tab', timings, () => runWorkload(store));
 	return {state, ranges, firstRangeFrom: ranges[0]?.from};
 }
@@ -197,9 +198,7 @@ async function writePhase(params: Params, timings: Timing[]): Promise<Record<str
  * `START_BLOCK` and say so in `firstRangeFrom`.
  */
 async function readPhase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
-	const store = await timed('cold-start', timings, () =>
-		createBrowserStateStore(processor.entities, {databaseName: databaseName(params, 'reload')}),
-	);
+	const store = await timed('cold-start', timings, () => writableStore({databaseName: databaseName(params, 'reload')}));
 	const {state, ranges} = await timed('second-tab', timings, () => runWorkload(store));
 	return {state, ranges, firstRangeFrom: ranges[0]?.from, startBlock: START_BLOCK};
 }
@@ -213,7 +212,7 @@ async function readPhase(params: Params, timings: Timing[]): Promise<Record<stri
  */
 async function hotProcessorCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const chain = fakeChain();
-	const store = await createBrowserStateStore(processor.entities, {
+	const store = await writableStore({
 		databaseName: databaseName(params, 'hot-processor'),
 	});
 	const indexer = indexerForProcessor(store, processor);
@@ -256,7 +255,7 @@ async function hotProcessorCase(params: Params, timings: Timing[]): Promise<Reco
  */
 async function hotContractCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const chain = fakeChain();
-	const store = await createBrowserStateStore(processor.entities, {databaseName: databaseName(params, 'hot-contract')});
+	const store = await writableStore({databaseName: databaseName(params, 'hot-contract')});
 	const indexer = indexerForProcessor(store, processor);
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 
@@ -274,7 +273,7 @@ async function hotContractCase(params: Params, timings: Timing[]): Promise<Recor
 	// same history, then the contract is redeployed and the new implementation has
 	// emitted nothing at all. What `$state` holds after this is final.
 	const emptyChain = fakeChain();
-	const emptyStore = await createBrowserStateStore(processor.entities, {
+	const emptyStore = await writableStore({
 		databaseName: databaseName(params, 'hot-contract-empty'),
 	});
 	const second = indexerForProcessor(emptyStore, processor);

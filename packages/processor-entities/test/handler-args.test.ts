@@ -1,5 +1,5 @@
 import type {Abi, ExtractAbiEvent, LastSync, LogEvent} from '@etherfold/core';
-import {MemoryStateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting} from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
 import {EntityEventProcessor, type EntityProcessor} from '../src/index.js';
 import type {InputValues} from '../src/types.js';
@@ -169,7 +169,7 @@ const SOURCE = {
 
 describe('a handler covering two versions of one event', () => {
 	it('takes the un-memoed branch for a pre-upgrade log and the memoed one after', async () => {
-		const store = new MemoryStateStore([...ENTITIES]);
+		const store = await openForWriting(new MemoryStateStore([...ENTITIES]));
 		const p = new EntityEventProcessor<UpgradedABI>(store, upgraded);
 		await p.load(SOURCE, {finality: 12});
 
@@ -236,7 +236,7 @@ describe('an event this ABI could not parse', () => {
 			},
 		} as unknown as typeof upgraded;
 
-		const store = new MemoryStateStore([...ENTITIES]);
+		const store = await openForWriting(new MemoryStateStore([...ENTITIES]));
 		const p = new EntityEventProcessor<UpgradedABI>(store, withHandler);
 		await p.load(SOURCE, {finality: 12});
 
@@ -251,7 +251,7 @@ describe('an event this ABI could not parse', () => {
 	});
 
 	it('costs nothing when the author declares no handler, and the batch still applies', async () => {
-		const store = new MemoryStateStore([...ENTITIES]);
+		const store = await openForWriting(new MemoryStateStore([...ENTITIES]));
 		const p = new EntityEventProcessor<UpgradedABI>(store, upgraded);
 		await p.load(SOURCE, {finality: 12});
 

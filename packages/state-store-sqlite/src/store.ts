@@ -30,7 +30,7 @@ import {
 	type RetentionEnforcement,
 	type RetentionOptions,
 	type RetentionSetting,
-	type StateStore,
+	type StateStoreBackend,
 	type StateStoreCapabilities,
 	type CursorWrite,
 } from '@etherfold/state-store';
@@ -151,14 +151,14 @@ export type QueryOptions = {
  * It speaks only the `remote-sql` interface, so the same code runs on a local
  * SQLite file, on libSQL/Turso, and on hosted SQLite reached over HTTP.
  *
- * It is one implementation of `StateStore` (`@etherfold/state-store`), which is
+ * It is one implementation of `StateStoreBackend` (`@etherfold/state-store`), which is
  * the seam a processor is written against. Everything below the `StateStore`
  * methods -- block addressing by hash and by time, and the `queryCurrent` /
  * `queryAsOf` surface that takes caller-supplied SQL -- is this backend's own
  * and deliberately NOT at the seam: a server has a query planner and a handler,
  * running once per event on every backend, does not.
  */
-export class VersionedStateStore implements StateStore {
+export class VersionedStateStore implements StateStoreBackend {
 	private readonly entities: ReadonlyMap<string, NormalizedEntity>;
 	/** Every table and index name this store uses, resolved once. See `tableNamespace`. */
 	private readonly names: TableNames;
@@ -381,7 +381,7 @@ export class VersionedStateStore implements StateStore {
 	}
 
 	/**
-	 * Move a cursor with no block behind it. See `StateStore.writeCursor`.
+	 * Move a cursor with no block behind it. See `StateStoreBackend.writeCursor`.
 	 *
 	 * Guarded like every other mutation, and this is the path that needs it most:
 	 * no block row incidentally protects it, so it is how a writer holding a stale

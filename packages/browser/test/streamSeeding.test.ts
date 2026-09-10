@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import {openForWriting} from '@etherfold/state-store';
 import {
 	captureStream,
 	installStreamSeed,
@@ -20,7 +21,7 @@ import {
 	type EntityStateView,
 	type Mutation,
 	type StateSnapshot,
-	type StateStore,
+	type WritableStateStore,
 } from '@etherfold/processor-entities';
 import {keys as allKeys} from 'idb-keyval';
 import {describe, expect, it} from 'vitest';
@@ -238,13 +239,17 @@ type Client = {
 /** An app with a stream keeper under it, and the hook driving the install. */
 async function appSeededByTheHook(
 	seed: NonNullable<Parameters<typeof indexerWithSeed>[1]>,
-	store?: StateStore,
+	store?: WritableStateStore,
 ): Promise<Client> {
 	const name = freshName();
 	const definition = applyingProcessor();
 	const keeper = keepStreamOnIndexedDB<TestABI>(name);
 	const indexer = indexerWithSeed(
-		{definition, keeper, store: store ?? (await createBrowserStateStore(definition.entities, {databaseName: name}))},
+		{
+			definition,
+			keeper,
+			store: store ?? (await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name}))),
+		},
 		seed,
 	);
 	return {name, definition, indexer, keeper};
@@ -252,7 +257,7 @@ async function appSeededByTheHook(
 
 /** The hook, with a keeper and a `seed` option. `indexerOver` is the same wiring without one. */
 function indexerWithSeed(
-	over: {definition: EntityProcessor<TestABI>; keeper: unknown; store: StateStore},
+	over: {definition: EntityProcessor<TestABI>; keeper: unknown; store: WritableStateStore},
 	seed: {
 		locations: string | readonly string[];
 		fetch?: typeof globalThis.fetch;
@@ -339,7 +344,10 @@ describe('the hook installs the seed at init and publishes what it did', () => {
 		// did.
 		const name = freshName();
 		const definition = applyingProcessor();
-		const indexer = indexerOver(definition, await createBrowserStateStore(definition.entities, {databaseName: name}));
+		const indexer = indexerOver(
+			definition,
+			await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name})),
+		);
 		const seen = recorder(indexer);
 
 		await indexer.init({provider: fakeChain().provider, source: SOURCE, config: PROVIDED_CONFIG});
@@ -360,7 +368,7 @@ describe('the hook installs the seed at init and publishes what it did', () => {
 		// "unreachable" from every mirror and point at the host.
 		const name = freshName();
 		const definition = applyingProcessor();
-		const store = await createBrowserStateStore(definition.entities, {databaseName: name});
+		const store = await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name}));
 		const indexer = indexerOver(definition, store, {seed: {locations: [REMOTE]}});
 
 		await expect(
@@ -383,7 +391,7 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 	const SNAPSHOT_TIP = 102;
 
 	async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<StateSnapshot> {
-		const store = await createBrowserStateStore(definition.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: freshName()}));
 		const indexer = indexerOver(definition, store);
 		await indexer.init({provider: fakeChain(BRANCH_A, SNAPSHOT_TIP).provider, source: SOURCE, config: PROVIDED_CONFIG});
 		const lastSync = await indexToTip(indexer as never);
@@ -423,11 +431,14 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 			url: 'https://mirror.example/state.json',
 			fetch: (async () => ({json: async () => snapshot}) as Response) as unknown as typeof globalThis.fetch,
 		};
-		const {store, outcome} = await openAndBootstrap(
+		const {store: bootstrapped, outcome} = await openAndBootstrap(
 			await createBrowserStateStore(definition.entities, {databaseName: name}),
 			mirror.url,
 			{processor: entityProcessorVersionHash(definition), fetch: mirror.fetch},
 		);
+		// the snapshot-aware handle is what `openAndBootstrap` hands back; the CLAIM
+		// over it is what a generation folds through (ADR-0077).
+		const store = await openForWriting(bootstrapped);
 		expect(outcome).toMatchObject({status: 'bootstrapped', at: SNAPSHOT_TIP});
 		const indexer = indexerWithSeed(
 			{definition, keeper: keepStreamOnIndexedDB<TestABI>(name), store},
@@ -475,7 +486,7 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 			{
 				definition,
 				keeper: keepStreamOnIndexedDB(name),
-				store: await createBrowserStateStore(definition.entities, {databaseName: name}),
+				store: await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name})),
 			},
 			{locations: [REMOTE], fetch: get},
 		);
@@ -537,9 +548,13 @@ describe('an application may drive the install itself, before init or after it',
 		expect(await streamKeysUnder(name)).toHaveLength(2);
 
 		const chain = fakeChain();
-		const indexer = indexerOver(definition, await createBrowserStateStore(definition.entities, {databaseName: name}), {
-			keepStream: keeper,
-		});
+		const indexer = indexerOver(
+			definition,
+			await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name})),
+			{
+				keepStream: keeper,
+			},
+		);
 		await indexer.init({provider: chain.provider, source: SOURCE, config: PROVIDED_CONFIG});
 		await indexToTip(indexer as never);
 
@@ -569,9 +584,13 @@ describe('an application may drive the install itself, before init or after it',
 		const name = freshName();
 		const definition = applyingProcessor();
 		const keeper = keepStreamOnIndexedDB<TestABI>(name);
-		const indexer = indexerOver(definition, await createBrowserStateStore(definition.entities, {databaseName: name}), {
-			keepStream: keeper,
-		});
+		const indexer = indexerOver(
+			definition,
+			await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name})),
+			{
+				keepStream: keeper,
+			},
+		);
 		await indexer.init({provider: fakeChain().provider, source: SOURCE, config: PROVIDED_CONFIG});
 
 		const outcome = await installDirectly(keeper, get);
@@ -596,9 +615,13 @@ describe('an application may drive the install itself, before init or after it',
 		const name = freshName();
 		const definition = applyingProcessor();
 		const keeper = keepStreamOnIndexedDB<TestABI>(name);
-		const indexer = indexerOver(definition, await createBrowserStateStore(definition.entities, {databaseName: name}), {
-			keepStream: keeper,
-		});
+		const indexer = indexerOver(
+			definition,
+			await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: name})),
+			{
+				keepStream: keeper,
+			},
+		);
 		await indexer.init({provider: fakeChain().provider, source: SOURCE, config: PROVIDED_CONFIG});
 		await indexToTip(indexer as never);
 		const before = await streamKeysUnder(name);

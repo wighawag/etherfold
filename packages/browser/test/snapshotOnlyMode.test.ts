@@ -7,6 +7,7 @@ import {
 	type EntityProcessor,
 	type Mutation,
 	type StateSnapshot,
+	openForWriting,
 	type StateStore,
 } from '@etherfold/processor-entities';
 import {get, keys as allKeys} from 'idb-keyval';
@@ -130,7 +131,7 @@ async function liveRowsOf(store: StateStore): Promise<Mutation[]> {
 
 /** A publisher tab: index to `SNAPSHOT_TIP` and publish what it computed. */
 async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<StateSnapshot> {
-	const store = await createBrowserStateStore(definition.entities, {databaseName: freshName()});
+	const store = await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: freshName()}));
 	const indexer = indexerOver(definition, store);
 	await indexer.init({provider: fakeChain(BRANCH_A, SNAPSHOT_TIP).provider, source: SOURCE, config: CONFIG});
 	const lastSync = await indexToTip(indexer as never);
@@ -201,8 +202,8 @@ type ClientOptions = {
  * assertion that could not say WHERE it looked would be vacuous.
  */
 async function snapshotOnlyClient(options: ClientOptions) {
-	const {store, outcome} = await seededFromTheSnapshot(options);
-	return {store, outcome, indexer: indexerOver(options.definition, store)};
+	const {store, aware, outcome} = await seededFromTheSnapshot(options);
+	return {store, aware, outcome, indexer: indexerOver(options.definition, store)};
 }
 
 /**
@@ -225,7 +226,9 @@ async function keptStreamClient(options: ClientOptions) {
 /** The half the two modes SHARE: the seeding. Only the keeper above differs. */
 async function seededFromTheSnapshot(options: ClientOptions) {
 	const remote = mirror(options.snapshot);
-	return openAndBootstrap(
+	// CLAIMED on the way out: `openAndBootstrap` hands back the snapshot-aware
+	// handle, and folding through it is writing (ADR-0077).
+	const {store, outcome} = await openAndBootstrap(
 		await createBrowserStateStore(options.definition.entities, {databaseName: options.databaseName}),
 		remote.url,
 		// `finalityDepth` is the CONSUMER's half of ADR-0028's two-sided defence, and
@@ -235,6 +238,9 @@ async function seededFromTheSnapshot(options: ClientOptions) {
 		// finality the indexer runs under, which is what the guide tells an author.
 		{processor: entityProcessorVersionHash(options.definition), fetch: remote.fetch, finalityDepth: FINALITY},
 	);
+	// the snapshot-aware handle comes back too: `snapshotOrigin` is ITS report, and a
+	// claimed handle delegates the seam and nothing else (ADR-0077).
+	return {store: await openForWriting(store), aware: store, outcome};
 }
 
 /**
@@ -403,7 +409,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
 		const reloaded = await snapshotOnlyClient(client);
 		expect(reloaded.outcome).toEqual({status: 'kept-local', at: BRANCH_A_TIP});
-		expect(reloaded.store.snapshotOrigin).toBe(SNAPSHOT_TIP);
+		expect(reloaded.aware.snapshotOrigin).toBe(SNAPSHOT_TIP);
 		expect(await appliedIn(reloaded.store)).toEqual(applied);
 
 		await reloaded.indexer.init({provider: chain.provider, source: SOURCE, config: CONFIG});
@@ -430,7 +436,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		// refuse one that did not, and only the consumer can protect a client from a
 		// publisher that got it wrong.
 		const definition = applyingProcessor();
-		const store = await createBrowserStateStore(definition.entities, {databaseName: freshName()});
+		const store = await openForWriting(await createBrowserStateStore(definition.entities, {databaseName: freshName()}));
 		const indexer = indexerOver(definition, store);
 		await indexer.init({provider: fakeChain(BRANCH_A, SNAPSHOT_TIP).provider, source: SOURCE, config: CONFIG});
 		const lastSync = await indexToTip(indexer as never);
@@ -455,7 +461,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		// refused, so NOTHING was installed: the tab comes up empty and indexes from the
 		// start block, which is slow and correct rather than fast and possibly wrong
 		expect(await appliedIn(refused.store)).toEqual([]);
-		expect(refused.store.snapshotOrigin).toBeUndefined();
+		expect(refused.aware.snapshotOrigin).toBeUndefined();
 		// and the mode's own claim still holds on the refusal path
 		await expectNoStreamWritten(soloName, before);
 

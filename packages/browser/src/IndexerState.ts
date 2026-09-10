@@ -29,7 +29,7 @@ import {
 	resolveStreamConfig,
 	sameGeneration,
 } from '@etherfold/core';
-import {pruneBudget, type StateStore} from '@etherfold/state-store';
+import {pruneBudget, type WritableStateStore} from '@etherfold/state-store';
 import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {createRootStore, createStore} from './utils/stores.js';
@@ -365,7 +365,7 @@ export type EntityEventProcessorLike<ABI extends Abi, ProcessResultType, Process
  *
  * ```ts
  * const indexer = createIndexerState({
- *   createState: () => createBrowserStateStore(myProcessor.entities),
+ *   createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities)),
  *   createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
  * });
  * ```
@@ -385,11 +385,24 @@ export type EntityEventProcessorLike<ABI extends Abi, ProcessResultType, Process
  * reach what the first one is for.
  */
 export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined> = {
-	/** Where THIS generation's state lives. Called once, before its processor. */
-	createState: (context: GenerationContext) => StateStore | Promise<StateStore>;
+	/**
+	 * Where THIS generation's state lives, CLAIMED. Called once, before its
+	 * processor.
+	 *
+	 * It hands back a `WritableStateStore`, which is what `openForWriting` returns
+	 * and the only way to obtain one: folding is writing, so the factory that builds
+	 * a generation's store is where the claim is taken (ADR-0077). A reader never
+	 * comes through here, which is the whole point of the narrowing -- a tab that only
+	 * renders holds the store as a `StateStore` and cannot mutate it.
+	 *
+	 * The claim is per STORE INSTANCE and `openForWriting` is idempotent over one, so
+	 * the shipped `createState: () => store` shape (one instance for every generation)
+	 * takes ONE claim and every generation writes through it.
+	 */
+	createState: (context: GenerationContext) => WritableStateStore | Promise<WritableStateStore>;
 	/** The fold, over that state. The FACTORY, not its result: its version hash NAMES the generation. */
 	createProcessor: (
-		state: StateStore,
+		state: WritableStateStore,
 		context: GenerationContext,
 	) =>
 		| EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>
@@ -477,7 +490,7 @@ type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfi
  * // the state (and its cursor) live in a store the app chose, and a GENERATION
  * // builds its own: the hook is handed the factories, not their results
  * const indexer = createIndexerState({
- *   createState: () => createBrowserStateStore(myProcessor.entities),
+ *   createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities)),
  *   createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
  * });
  * ```
@@ -485,7 +498,7 @@ type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfi
  * ## Where the state is persisted, and by whom
  *
  * NOT here, and not by a keeper this hook holds. The processor persists through
- * its `StateStore`, which writes the sync cursor in the SAME transaction as the
+ * the store it CLAIMED, which writes the sync cursor in the SAME transaction as the
  * block it describes (ADR-0027) -- which is why the cursor lives behind the
  * storage seam at all. The invariant that buys is that a processor's state and
  * its cursor never diverge: a reader never comes back to state that has advanced
@@ -668,7 +681,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * processor over the tab's existing database), and a swap onto a genuinely
 	 * different store is prunable again after the next `init`.
 	 */
-	const statesByGeneration = new Map<string, StateStore>();
+	const statesByGeneration = new Map<string, WritableStateStore>();
 
 	/** A generation's identity as a map key: the two halves the registry records. */
 	function generationKey(id: {stream: string; processor: string}): string {
@@ -708,7 +721,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		return {
 			createState: (context: GenerationContext) => createState(context),
 			createProcessor: async (state: unknown, context: GenerationContext) => {
-				const built = await createProcessor(state as StateStore, context);
+				const built = await createProcessor(state as WritableStateStore, context);
 				if (built.configure && processorConfig) {
 					built.configure(processorConfig);
 				}
@@ -725,7 +738,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// one that is growing.
 				const key = generationKey({stream: context.stream, processor: built.getVersionHash()});
 				if (!statesByGeneration.has(key)) {
-					statesByGeneration.set(key, state as StateStore);
+					statesByGeneration.set(key, state as WritableStateStore);
 				}
 				return built;
 			},
@@ -1118,7 +1131,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// caller's `createState` that hands back the object it captured, which is what
 		// a hot reload wants), and pruning it twice in one cycle would spend the
 		// budget twice for nothing.
-		const states = new Set<StateStore>();
+		const states = new Set<WritableStateStore>();
 		for (const held of indexer.generations) {
 			const state = statesByGeneration.get(generationKey(held.record));
 			if (state) {

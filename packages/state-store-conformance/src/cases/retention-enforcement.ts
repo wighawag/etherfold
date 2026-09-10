@@ -1,4 +1,4 @@
-import {retentionFloor, type StateStore, type StateStoreCapabilities} from '@etherfold/state-store';
+import {retentionFloor, type StateStoreBackend, type StateStoreCapabilities} from '@etherfold/state-store';
 import {expect} from 'vitest';
 import {CONFORMANCE_ENTITIES, LADDER_BASE, block, cases, opened, owns} from '../fixtures.js';
 import type {ConformanceCase, StateStoreConformanceOptions, StateStoreFactory} from '../types.js';
@@ -41,7 +41,7 @@ export function retentionEnforcementCases(
 	const retention = capabilities.retention;
 
 	/** A store holding two versions of one token, with a tip well above them. */
-	async function stocked(): Promise<StateStore> {
+	async function stocked(): Promise<StateStoreBackend> {
 		const store = await opened(factory);
 		await store.applyBlock(block(LADDER_BASE), [owns('1', '0xalice', 1)]);
 		await store.applyBlock(block(LADDER_BASE + 1), [owns('1', '0xbob', 2)]);

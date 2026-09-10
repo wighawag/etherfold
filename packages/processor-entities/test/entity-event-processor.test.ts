@@ -1,4 +1,4 @@
-import type {StateStore} from '@etherfold/state-store';
+import type {StateStore, WritableStateStore} from '@etherfold/state-store';
 import {beforeEach, describe, expect, it} from 'vitest';
 import {EntityEventProcessor, fromEntityProcessor, SYNC_CURSOR_KEY, type EntityProcessor} from '../src/index.js';
 import {BACKENDS} from './utils/backends.js';
@@ -179,7 +179,7 @@ describe.each(BACKENDS)('the sync cursor on $name', (backend) => {
 });
 
 describe.each(BACKENDS)('a reorg through the component on $name', (backend) => {
-	let store: StateStore;
+	let store: WritableStateStore;
 	let p: EntityEventProcessor<TestABI>;
 
 	beforeEach(async () => {

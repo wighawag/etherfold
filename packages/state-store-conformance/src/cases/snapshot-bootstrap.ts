@@ -5,7 +5,6 @@ import {
 	RevertBeyondSnapshotError,
 	SnapshotProcessorMismatchError,
 	type StateSnapshot,
-	type StateStore,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {expect} from 'vitest';
@@ -70,7 +69,7 @@ export function snapshotBootstrapCases(
 		const store = await openSnapshotAware(inner);
 		await store.migrate();
 		await store.bootstrap(snapshot(at), {processor: 'conformance-processor-v1'});
-		return {inner: inner as StateStore, store};
+		return {inner, store};
 	}
 
 	const shared = cases(GROUP, {

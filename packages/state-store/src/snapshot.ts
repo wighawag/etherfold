@@ -4,7 +4,7 @@ import type {CursorWrite} from './cursor.js';
 import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
 import {assertRetained, type PruneOptions, type PruneReport} from './retention.js';
-import type {StateStore} from './store.js';
+import type {StateStoreBackend} from './store.js';
 import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.js';
 
 /**
@@ -248,7 +248,7 @@ export class RevertBeyondSnapshotError extends Error {
  * The store handle a deployment that MAY start from a snapshot uses -- on every
  * boot, not only on the one that installs it.
  *
- * It is a thin decorator over any `StateStore`, and it does exactly three
+ * It is a thin decorator over any `StateStoreBackend`, and it does exactly three
  * things: it installs a snapshot as one unit, it remembers (durably) which block
  * the contents came from, and it makes every read and every revert respect that
  * floor. A store that was never bootstrapped is a pass-through, reporting
@@ -278,14 +278,14 @@ export class RevertBeyondSnapshotError extends Error {
  * That is the safe direction (it claims LESS than it holds, never more) and it
  * corrects itself on the first `applyBlock`.
  */
-export class SnapshotAwareStateStore implements StateStore {
+export class SnapshotAwareStateStore implements StateStoreBackend {
 	private origin: number | undefined;
 	/** The highest block this handle knows about. See the note on the class. */
 	private knownTip: number | undefined;
 
 	/** Use `openSnapshotAware`, which recovers a previously recorded origin. */
 	constructor(
-		private readonly inner: StateStore,
+		private readonly inner: StateStoreBackend,
 		origin?: number,
 	) {
 		this.origin = origin;
@@ -515,7 +515,7 @@ export class SnapshotAwareStateStore implements StateStore {
  * rows in the store might have come from anywhere, and the safe reading of "I
  * cannot tell whether this state has history" is not "assume it does".
  */
-export async function openSnapshotAware(store: StateStore): Promise<SnapshotAwareStateStore> {
+export async function openSnapshotAware(store: StateStoreBackend): Promise<SnapshotAwareStateStore> {
 	await store.migrate();
 	const recorded = await store.readCursor(SNAPSHOT_ORIGIN_KEY);
 	if (recorded === undefined) return new SnapshotAwareStateStore(store);

@@ -1,5 +1,5 @@
 import {StreamBuilder, type FetchLike} from '@etherfold/core';
-import {EntityEventProcessor} from '@etherfold/processor-entities';
+import {EntityEventProcessor, openForWriting} from '@etherfold/processor-entities';
 import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry} from '@etherfold/server';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {createClient} from '@libsql/client';
@@ -52,7 +52,7 @@ export type RunningReceiver = {
 
 export async function startReceiver(): Promise<RunningReceiver> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	const store = new VersionedStateStore(db, nftProcessor.entities, {finalityDepth: FINALITY});
+	const store = await openForWriting(new VersionedStateStore(db, nftProcessor.entities, {finalityDepth: FINALITY}));
 	const processor = new EntityEventProcessor<typeof abi>(store, nftProcessor, {finalityDepth: FINALITY});
 	// the APPENDER is the host's, exactly as it is in `etherfold index`: the route
 	// writes nothing, and a fold is stored by whoever owns the store (ADR-0052)

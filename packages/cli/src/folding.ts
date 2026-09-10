@@ -11,7 +11,12 @@ import {
 	type StreamBuilder,
 } from '@etherfold/core';
 import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
-import type {EntityProcessor, StateStore} from '@etherfold/processor-entities';
+import {
+	openForWriting,
+	type EntityProcessor,
+	type StateStore,
+	type WritableStateStore,
+} from '@etherfold/processor-entities';
 import type {StatusReport} from '@etherfold/server';
 // TYPE ONLY, so that naming the store this module builds costs no eager import of
 // libSQL: the value arrives through the dynamic import below.
@@ -201,11 +206,11 @@ export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
 	 * its name and to its `/status` reporter, and it is what a `run` adds a
 	 * successor to.
 	 */
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>;
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/** The ONE handle every one of them folds into and a server answers over. */
 	db: RemoteSQL;
-	/** The OPENING fold's store: its own table namespace (ADR-0053). */
-	store: StateStore;
+	/** The OPENING fold's store: its own table namespace (ADR-0053), CLAIMED. */
+	store: WritableStateStore;
 	/** The OPENING fold's processor. */
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/** The OPENING fold's receiver, which is this process's one live wire context. */
@@ -305,7 +310,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 			finalityDepth: context.finalityDepth,
 		});
 
-	const container = await openReceivingIndexer<ABI, ProcessResultType, StateStore>({
+	const container = await openReceivingIndexer<ABI, ProcessResultType, WritableStateStore>({
 		port: server.generationRegistryPortOnSQL(db, context.indexer, {
 			// deleting a generation is a DROP of its namespace, which is the whole reason
 			// the namespace was chosen over a column (ADR-0053). The registry cannot know
@@ -328,8 +333,12 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		appendEmissions: server.emissionAppenderFor(db, context.indexer),
 		replay: server.storedEmissionReplaySource<ABI>(db, context.indexer),
 		generation: {
+			// CLAIMED here, which is the ONE place this process takes the store: folding is
+			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A
+			// second process pointed at this database takes the claim and this one's next
+			// mutation is refused whole rather than half-applied (ADR-0075).
 			createState: (generation) =>
-				stateFor({stream: generation.stream, processor: entityProcessorVersionHash(declared)}),
+				openForWriting(stateFor({stream: generation.stream, processor: entityProcessorVersionHash(declared)})),
 			// The CLI intentionally constructs the processor with NO factory argument (the
 			// server passes its folder); see MEDIUM-3.
 			createProcessor: (state) =>
@@ -365,7 +374,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
  * that built it is written.
  */
 export async function foldingStatusReport<ABI extends Abi, ProcessResultType>(
-	container: ReceivingIndexer<ABI, ProcessResultType, StateStore>,
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 ): Promise<StatusReport> {
 	const canonical = await container.canonical();
 	return readStatusReport({

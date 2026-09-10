@@ -10,7 +10,8 @@ import {
 	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
-	type StateStore,
+	openForWriting,
+	type WritableStateStore,
 } from '@etherfold/processor-entities';
 import {
 	applySchema,
@@ -110,15 +111,19 @@ function oneDatabase(): RemoteSQL {
  */
 function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
 	return {
+		// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
+		// claiming (ADR-0077), exactly as the CLI's own `buildFolding` does it.
 		createState: (context: {stream: string}) =>
-			new VersionedStateStore(db, declared.entities, {
-				tableNamespace: generationDigestOf({
-					stream: context.stream,
-					processor: entityProcessorVersionHash(declared),
+			openForWriting(
+				new VersionedStateStore(db, declared.entities, {
+					tableNamespace: generationDigestOf({
+						stream: context.stream,
+						processor: entityProcessorVersionHash(declared),
+					}),
+					finalityDepth: FINALITY,
 				}),
-				finalityDepth: FINALITY,
-			}),
-		createProcessor: (state: StateStore) =>
+			),
+		createProcessor: (state: WritableStateStore) =>
 			new EntityEventProcessor<typeof abi>(state, declared, {
 				finalityDepth: FINALITY,
 			}) as unknown as EntityEventProcessor<typeof abi>,
@@ -136,7 +141,7 @@ function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
 async function openIndexer(
 	db: RemoteSQL,
 	options: {maxEmissionsPerChunk?: number} = {},
-): Promise<ReceivingIndexer<typeof abi, unknown, StateStore>> {
+): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
 		await new VersionedStateStore(db, nftEntities, {tableNamespace: generationDigestOf(id)}).drop();
 	};
@@ -150,7 +155,7 @@ async function openIndexer(
 		replay: storedEmissionReplaySource(db, INDEXER),
 		...(options.maxEmissionsPerChunk === undefined ? {} : {maxEmissionsPerChunk: options.maxEmissionsPerChunk}),
 		generation: specFor(db, V1),
-	}) as Promise<ReceivingIndexer<typeof abi, unknown, StateStore>>;
+	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
 
 /** One decoded `Transfer`, carrying the REAL topics a stored row keeps, so a replay can decode it again. */
@@ -184,7 +189,7 @@ function transferEvent(
 }
 
 async function push(
-	indexer: ReceivingIndexer<typeof abi, unknown, StateStore>,
+	indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>,
 	over: {toBlock: number; latestBlock: number; logs?: LogEvent<typeof abi>[]},
 ): Promise<void> {
 	const fromBlock = await indexer.ingestion.expectedFromBlock();
@@ -214,7 +219,7 @@ async function stateIn(db: RemoteSQL, namespace: string) {
  * and no processor -- which is exactly why the pointer is the only thing a
  * promotion has to move.
  */
-async function canonicalAnswers(db: RemoteSQL, indexer: ReceivingIndexer<typeof abi, unknown, StateStore>) {
+async function canonicalAnswers(db: RemoteSQL, indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>) {
 	const canonical = await indexer.canonical();
 	if (!canonical) throw new Error('no canonical generation');
 	return stateIn(db, generationDigestOf(canonical));
@@ -258,7 +263,9 @@ async function streamSnapshot(db: RemoteSQL): Promise<string> {
  * while adding no row, so a successor that resumed off the ROWS rather than off
  * the stream's coverage claim would be permanently behind and never promoted.
  */
-async function anIndexerThatHasFolded(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, unknown, StateStore>> {
+async function anIndexerThatHasFolded(
+	db: RemoteSQL,
+): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	await applySchema(db);
 	const incumbent = await openIndexer(db);
 	// [S, S+5]: the history

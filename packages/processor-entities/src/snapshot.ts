@@ -8,6 +8,7 @@ import {
 	type SnapshotHead,
 	type StateSnapshot,
 	type StateStore,
+	type StateStoreBackend,
 } from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import {parseStoredCursor, serializeLastSync, SYNC_CURSOR_KEY} from './cursor.js';
@@ -337,7 +338,7 @@ export async function bootstrapFromSnapshot(
  * is the common case on every run after the first.
  */
 export async function openAndBootstrap(
-	store: StateStore,
+	store: StateStoreBackend,
 	locations: SnapshotLocation | readonly SnapshotLocation[],
 	options: BootstrapOptions,
 ): Promise<{store: SnapshotAwareStateStore; outcome: BootstrapOutcome}> {

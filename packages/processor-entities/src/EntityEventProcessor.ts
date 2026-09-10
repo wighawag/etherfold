@@ -9,7 +9,7 @@ import {
 	type LogEvent,
 	type UsedStreamConfig,
 } from '@etherfold/core';
-import type {PruneOptions, PruneReport, StateStore} from '@etherfold/state-store';
+import type {PruneOptions, PruneReport, WritableStateStore} from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import {applyEventStream} from './apply.js';
 import {parseStoredCursor, SYNC_CURSOR_KEY} from './cursor.js';
@@ -124,7 +124,7 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	private migrated = false;
 
 	constructor(
-		protected readonly store: StateStore,
+		protected readonly store: WritableStateStore,
 		private readonly processor: EntityProcessor<ABI, ProcessorConfig>,
 		private readonly options: EntityEventProcessorOptions = {},
 	) {
@@ -338,7 +338,7 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 export function fromEntityProcessor<ABI extends Abi, ProcessorConfig = undefined>(
 	processor: EntityProcessor<ABI, ProcessorConfig> | (() => EntityProcessor<ABI, ProcessorConfig>),
 	options: EntityEventProcessorOptions = {},
-): (store: StateStore) => EntityEventProcessor<ABI, ProcessorConfig> {
+): (store: WritableStateStore) => EntityEventProcessor<ABI, ProcessorConfig> {
 	return (store) =>
 		new EntityEventProcessor<ABI, ProcessorConfig>(
 			store,

@@ -7,7 +7,8 @@ import type {BlockPointer, BlockUpdate, EntityId, Mutation, NormalizedEntity} fr
 import {writerToken, type WriterToken} from './writer.js';
 
 /**
- * The READS a store answers, plus what it declares and how it is opened.
+ * THE SEAM AS A CONSUMER HOLDS IT: the READS a store answers, plus what it
+ * declares and how it is opened.
  *
  * This is the half a consumer needs to RENDER: the four reads, the bounded
  * listing among them, the cursor read, the capability report, the declarations,
@@ -15,6 +16,9 @@ import {writerToken, type WriterToken} from './writer.js';
  * point -- "a reader cannot write" is a fact of the TYPE rather than a rule to
  * remember, which is the move ADR-0044 already made for the stream seam by
  * handing a follower a read-only stream view instead of asking it to behave.
+ * (Same structural move, OPPOSITE arbiter: a stream's writer is the OLDEST
+ * surviving generation, derived and never raced, while a state store's writer is
+ * the LAST claimant.)
  *
  * `migrate` is here DELIBERATELY, and it is the one member that looks
  * out of place. It is SCHEMA rather than data, it is idempotent, and it runs on
@@ -23,15 +27,18 @@ import {writerToken, type WriterToken} from './writer.js';
  * second handle take the store away from the writer that has it (ADR-0075 states
  * the same exclusion for the writer token, for the same reason).
  *
- * ## What this type is TODAY, and what it becomes
+ * ## The three names, and which one you want
  *
- * `StateStore` below still carries the mutating members, so every consumer
- * written against it compiles unchanged while the migration happens one package
- * at a time. When the last of them holds `WritableStateStore` instead, the
- * mutating members go and `StateStore` becomes this type; until then, this name
- * is how a consumer says it only reads.
+ * - **`StateStore`** (this one) is what a CONSUMER holds: reads only.
+ * - **`StateStoreBackend`** is what an IMPLEMENTOR provides: this plus the five
+ *   mutating verbs. A factory hands one over; nobody folds through one.
+ * - **`WritableStateStore`** is what a CLAIM hands back (`openForWriting`): a
+ *   backend plus the `token` that says the claim was taken rather than assumed.
+ *
+ * So the ability to mutate is obtainable only by claiming, and a mutation
+ * without a claim cannot be expressed (ADR-0077).
  */
-export interface ReadableStateStore {
+export interface StateStore {
 	/** What this store keeps and what it can answer. Readable before `migrate`. */
 	readonly capabilities: StateStoreCapabilities;
 
@@ -114,14 +121,67 @@ export interface ReadableStateStore {
 }
 
 /**
- * The five verbs that CHANGE a store, and therefore the five a writer claims for.
+ * WHAT A BACKEND IMPLEMENTS: the reads, plus the five verbs that CHANGE a store
+ * and therefore the five a writer claims for.
  *
- * They are declared apart from the reads so that the two halves can be handed
- * out separately (`openForWriting` / `openForReading`). Every one of them is
- * guarded on the writer token by a backend that reports `singleWriter`, checked
- * inside the same atomic unit as the write it guards (`writer.ts`, ADR-0075).
+ * Twelve verbs and one report, chosen because they are the whole of what
+ * processing a chain needs and because each of them is cheaply implementable on
+ * every substrate we have measured (versioned SQL rows, an object store, an
+ * in-memory map, a patch log). A concrete backend implements the whole of it and
+ * always will: it IS the storage, so it can do everything the storage can do.
+ *
+ * What is NARROWER is what a HOLDER of the seam may do -- a consumer holds
+ * `StateStore` and reads, or `WritableStateStore` and writes because it claimed --
+ * so this type is the shape a FACTORY hands over and the one a backend class
+ * declares, and it is deliberately not a shape anything folds through.
+ *
+ * The direction of the constraint is what makes this work: the mutation surface
+ * a handler writes through is the MORE constrained one, so a freer substrate can
+ * implement it, while backing arbitrary nested object mutation with versioned
+ * rows cannot be done without materialising the store.
+ *
+ * The listing is the one SET read, and its BOUND is what keeps it cheap
+ * everywhere: a prefix of the declared id plus a required limit, never a
+ * predicate and never a caller-supplied ordering (see `listing.ts`).
+ *
+ * Anything a particular backend can do BETTER stays on that backend's own class:
+ * `@etherfold/state-store-sqlite` keeps a richer query surface (`queryCurrent` /
+ * `queryAsOf`, with caller-supplied SQL) and block addressing by hash and time,
+ * because a server has a query planner and a handler does not.
+ *
+ * Deliberately absent, and each absence is a decision:
+ *
+ * - **Block addressing by hash or time.** `getAsOf` takes a resolved block
+ *   NUMBER, so the seam owes nothing to a block table. Resolving a hash or a
+ *   timestamp to a number, and refusing an address that resolves to nothing
+ *   (`NoSuchBlockError`, ADR-0015), is the read layer above.
+ *
+ * Present, and it USED to be on that list: **the sync cursor**. It was left out
+ * on the grounds that where a processor keeps `LastSync` is the processor
+ * package's business (ADR-0016), which is true of the MEANING and turned out to
+ * be the wrong conclusion about the STORAGE. A cursor kept outside the store is
+ * a second round trip after the block it describes, and a crash in that window
+ * wedges the indexer for good. Only the store holds the transaction, so only the
+ * store can close it -- and the cost is a handful of lines per backend over one
+ * key and one opaque string, which is what keeps ADR-0016 intact: the store
+ * still does not know what a `LastSync` is. See `cursor.ts`.
+ *
+ * ## Every MUTATING verb is guarded, on a backend that claims it
+ *
+ * `applyBlock`, `revertTo`, `writeCursor`, `clearCursor` and `prune` are the
+ * mutating surface here, and a store reporting `singleWriter` carries a WRITER
+ * TOKEN on every one of them, checked inside the same atomic unit as the write
+ * it guards (`writer.ts`, ADR-0075). A backend with mutating verbs of its own
+ * (`applyBlocks` and `drop` on `@etherfold/state-store-sqlite`) owes them the
+ * same guard: the promise is about the STORAGE, so a path that skips it is a
+ * hole in it.
+ *
+ * `migrate` is on the READABLE half and must not claim. It runs on every open,
+ * including from `createBrowserStateStore`, so claiming there would make merely
+ * OPENING a second handle -- which is what several tabs of one app do -- take the
+ * store away from the writer that has it.
  */
-export interface StateStoreMutations {
+export interface StateStoreBackend extends StateStore {
 	/**
 	 * Apply one block: the block itself plus every mutation, as ONE atomic unit.
 	 *
@@ -223,79 +283,13 @@ export interface StateStoreMutations {
 }
 
 /**
- * The seam: what a store must do for a processor to run on it.
- *
- * Twelve verbs and one report, chosen because they are the whole of what
- * processing a chain needs and because each of them is cheaply implementable on
- * every substrate we have measured (versioned SQL rows, an object store, an
- * in-memory map, a patch log). Anything a particular backend can do BETTER stays
- * on that backend's own class: `@etherfold/state-store-sqlite` keeps a richer
- * query surface (`queryCurrent` / `queryAsOf`, with caller-supplied SQL) and
- * block addressing by hash and time, because a server has a query planner and a
- * handler does not.
- *
- * The direction of the constraint is what makes this work: the mutation surface
- * a handler writes through is the MORE constrained one, so a freer substrate can
- * implement it, while backing arbitrary nested object mutation with versioned
- * rows cannot be done without materialising the store.
- *
- * The listing is the one SET read, and its BOUND is what keeps it cheap
- * everywhere: a prefix of the declared id plus a required limit, never a
- * predicate and never a caller-supplied ordering (see `listing.ts`).
- *
- * Deliberately absent, and each absence is a decision:
- *
- * - **Block addressing by hash or time.** `getAsOf` takes a resolved block
- *   NUMBER, so the seam owes nothing to a block table. Resolving a hash or a
- *   timestamp to a number, and refusing an address that resolves to nothing
- *   (`NoSuchBlockError`, ADR-0015), is the read layer above.
- *
- * Present, and it USED to be on that list: **the sync cursor**. It was left out
- * on the grounds that where a processor keeps `LastSync` is the processor
- * package's business (ADR-0016), which is true of the MEANING and turned out to
- * be the wrong conclusion about the STORAGE. A cursor kept outside the store is
- * a second round trip after the block it describes, and a crash in that window
- * wedges the indexer for good. Only the store holds the transaction, so only the
- * store can close it -- and the cost is a handful of lines per backend over one
- * key and one opaque string, which is what keeps ADR-0016 intact: the store
- * still does not know what a `LastSync` is. See `cursor.ts`.
- *
- * ## This type is what a BACKEND implements, and it is being narrowed
- *
- * A concrete backend implements the whole of it, reads and mutations alike, and
- * always will: it is the storage, so it can do everything the storage can do.
- * What is moving is what a CONSUMER holds. `openForWriting` hands back a
- * `WritableStateStore` and `openForReading` hands back a `ReadableStateStore`,
- * and once every consumer holds one of those two, the mutating half of this type
- * is deleted and `StateStore` becomes `ReadableStateStore` (ADR-0077). Until
- * then it carries both halves, so nothing has to migrate on anyone else's
- * schedule.
- *
- * ## Every MUTATING verb is guarded, on a backend that claims it
- *
- * `applyBlock`, `revertTo`, `writeCursor`, `clearCursor` and `prune` are the
- * mutating surface here, and a store reporting `singleWriter` carries a WRITER
- * TOKEN on every one of them, checked inside the same atomic unit as the write
- * it guards (`writer.ts`, ADR-0075). A backend with mutating verbs of its own
- * (`applyBlocks` and `drop` on `@etherfold/state-store-sqlite`) owes them the
- * same guard: the promise is about the STORAGE, so a path that skips it is a
- * hole in it.
- *
- * `migrate` is deliberately EXCLUDED and must not claim. It runs on every open,
- * including from `createBrowserStateStore`, so claiming there would make merely
- * OPENING a second handle -- which is what several tabs of one app do -- take
- * the store away from the writer that has it.
- */
-export interface StateStore extends ReadableStateStore, StateStoreMutations {}
-
-/**
  * A store this caller has CLAIMED: the reads, the mutations, and the token that
  * says the claim was taken rather than assumed.
  *
  * The `token` is what makes this type unforgeable. Without it a
- * `WritableStateStore` would be structurally identical to a `StateStore`, so any
- * store would satisfy it and "you may write because you claimed" would be a
- * comment rather than a compile error. With it, the only way to obtain one is
+ * `WritableStateStore` would be structurally identical to a `StateStoreBackend`,
+ * so any store would satisfy it and "you may write because you claimed" would be
+ * a comment rather than a compile error. With it, the only way to obtain one is
  * `openForWriting`, which claims. That is the same structural move ADR-0044
  * makes for streams: a follower is HANDED a read-only view rather than asked to
  * behave.
@@ -307,7 +301,7 @@ export interface StateStore extends ReadableStateStore, StateStoreMutations {}
  * discipline is a read-then-write that merely looks atomic. This one names the
  * claim at the seam and is compared with nothing.
  */
-export interface WritableStateStore extends ReadableStateStore, StateStoreMutations {
+export interface WritableStateStore extends StateStoreBackend {
 	/** Names THIS claim. Opaque, compared with nothing; see the note above. */
 	readonly token: WriterToken;
 
@@ -348,7 +342,7 @@ export const WRITER_CLAIM_KEY = 'writerClaim';
  * because the entry must not outlive the store: this is a fact about that
  * instance, not a registry of every store the process ever built.
  */
-const claims = new WeakMap<ReadableStateStore, Promise<WritableStateStore>>();
+const claims = new WeakMap<StateStoreBackend, Promise<WritableStateStore>>();
 
 /**
  * CLAIM a store, and get back the handle that may write to it.
@@ -390,8 +384,17 @@ const claims = new WeakMap<ReadableStateStore, Promise<WritableStateStore>>();
  * that has already LOST cannot re-claim through here: the backend never re-mints
  * a claim it has committed (ADR-0075), so the clear is refused and that refusal
  * travels out of this call.
+ *
+ * ## What it takes: a BACKEND, never a store narrowed to its reads
+ *
+ * The argument is `StateStoreBackend`, so a value already narrowed to
+ * `StateStore` cannot be handed here and widened back. That is the point of the
+ * narrowing: a reader that could re-open its handle for writing would have the
+ * type say nothing at all. What a demoted writer does instead is what ADR-0077
+ * already says it does -- build a NEW store and open that, which forces the
+ * re-read correctness wants anyway.
  */
-export function openForWriting(store: StateStore): Promise<WritableStateStore> {
+export function openForWriting(store: StateStoreBackend): Promise<WritableStateStore> {
 	const claimed = claims.get(store);
 	if (claimed !== undefined) return claimed;
 
@@ -406,7 +409,7 @@ export function openForWriting(store: StateStore): Promise<WritableStateStore> {
 	return claiming;
 }
 
-async function claim(store: StateStore): Promise<WritableStateStore> {
+async function claim(store: StateStoreBackend): Promise<WritableStateStore> {
 	await store.migrate();
 	await store.clearCursor(WRITER_CLAIM_KEY);
 
@@ -419,8 +422,8 @@ async function claim(store: StateStore): Promise<WritableStateStore> {
  * Hold a store as a READER: the same store, narrowed to what it can answer.
  *
  * ```ts
- * function render(store: ReadableStateStore) { ... }
- * render(openForReading(store));
+ * function render(store: StateStore) { ... }
+ * render(openForReading(writableStore));
  * ```
  *
  * It returns the very store it was handed and wraps nothing, because there is
@@ -431,7 +434,7 @@ async function claim(store: StateStore): Promise<WritableStateStore> {
  * every call, so a discarded write would be a mutation that looked like it
  * worked, which is the failure this whole split exists to prevent.
  */
-export function openForReading(store: StateStore): ReadableStateStore {
+export function openForReading(store: StateStore): StateStore {
 	return store;
 }
 
@@ -454,7 +457,7 @@ class ClaimedStateStore implements WritableStateStore {
 	readonly applyBlocks?: (updates: readonly BlockUpdate[]) => Promise<void>;
 
 	constructor(
-		private readonly inner: StateStore,
+		private readonly inner: StateStoreBackend,
 		readonly token: WriterToken,
 	) {
 		const packing = (inner as Partial<WritableStateStore>).applyBlocks;

@@ -26,7 +26,7 @@
  *   case is a real accumulated counter going back DOWN.
  */
 import {expect} from 'vitest';
-import type {StateStore} from '@etherfold/processor-entities';
+import {openForWriting, type StateStoreBackend, type WritableStateStore} from '@etherfold/processor-entities';
 import type {EntityDeclaration} from '@etherfold/state-store';
 import * as fs from 'node:fs';
 import {canonical, firstDifferences, loadStream, type WorkloadFixture} from './fixtures.js';
@@ -39,10 +39,12 @@ import {replayIntoStore, type ReplayReport} from './replay.js';
  * suite so that a backend that already runs the suite runs this by reusing the
  * factory it wrote.
  */
-export type WorkloadStoreFactory = (declarations: readonly EntityDeclaration[]) => StateStore | Promise<StateStore>;
+export type WorkloadStoreFactory = (
+	declarations: readonly EntityDeclaration[],
+) => StateStoreBackend | Promise<StateStoreBackend>;
 
 export type WorkloadRun = {
-	readonly store: StateStore;
+	readonly store: WritableStateStore;
 	readonly report: ReplayReport;
 	/** The projected state, canonicalised, ready to compare against the golden text. */
 	readonly state: string;
@@ -57,8 +59,9 @@ export type WorkloadRun = {
  * the reorg case reverts it, and an as-of case would read from it.
  */
 export async function runWorkload(factory: WorkloadStoreFactory, fixture: WorkloadFixture): Promise<WorkloadRun> {
-	const store = await factory(stratagemsProcessor.entities);
-	await store.migrate();
+	// CLAIMED: the workload FOLDS, and the ability to mutate is obtained by claiming
+	// (ADR-0077). `openForWriting` migrates on the way, which is the whole of the open.
+	const store = await openForWriting(await factory(stratagemsProcessor.entities));
 
 	const stream = loadStream(fixture);
 	const report = await replayIntoStore(store, stratagemsProcessor, stream.eventStream);

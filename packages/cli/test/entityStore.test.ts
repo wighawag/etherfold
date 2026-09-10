@@ -1,6 +1,6 @@
 import {createDirectIngestion, LogFetcher, StreamBuilder, type IndexingSource} from '@etherfold/core';
 import {EntityEventProcessor} from '@etherfold/processor-entities';
-import {MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {createClient} from '@libsql/client';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
@@ -112,7 +112,7 @@ describe('--store sqlite', () => {
 		const chain = fakeChain().serve(A_100, A_TIP);
 		const prepared = await indexOnce({}, chain, oneDatabase());
 
-		const elsewhere = new MemoryStateStore(nftProcessor.entities);
+		const elsewhere = await openForWriting(new MemoryStateStore(nftProcessor.entities));
 		const source: IndexingSource<typeof abi> = {
 			chainId: '1',
 			contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
@@ -161,7 +161,7 @@ describe('--store sqlite', () => {
 				sleep: async () => {},
 			},
 		);
-		const store = prepared.store as StateStore;
+		const store = prepared.store as WritableStateStore;
 		expect(store.capabilities.retention).toEqual({kind: 'window', blocks: 500});
 
 		// ADR-0022: pruning is a call the HOST schedules, never a side effect of a

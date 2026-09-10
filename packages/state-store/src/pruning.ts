@@ -1,5 +1,5 @@
 import {pruneBudget, type PruneOptions, type PruneReport} from './retention.js';
-import type {StateStore} from './store.js';
+import type {WritableStateStore} from './store.js';
 
 /**
  * ## THE PASS A HOST SCHEDULES
@@ -71,7 +71,7 @@ export type ScheduledPruneReport = {
  * away from every caller at once.
  */
 export async function pruneMore(
-	states: Iterable<StateStore>,
+	states: Iterable<WritableStateStore>,
 	options: PruneOptions = {},
 ): Promise<ScheduledPruneReport> {
 	// FIRST, and over the whole pass: an unspendable budget is refused before any

@@ -27,7 +27,7 @@ import {
 	type RetentionOptions,
 	type RetentionSetting,
 } from './retention.js';
-import type {StateStore} from './store.js';
+import type {StateStoreBackend} from './store.js';
 import type {BlockPointer, EntityDeclaration, EntityId, Mutation, NormalizedEntity} from './types.js';
 
 export type MemoryStateStoreOptions = RetentionOptions & {
@@ -56,7 +56,7 @@ type Version = {values: Record<string, unknown>; lower: number; upper: number | 
 type Row = {entity: string; id: readonly string[]; versions: Version[]};
 
 /**
- * The reference `StateStore`: versioned rows in a Map.
+ * The reference `StateStoreBackend`: versioned rows in a Map.
  *
  * It is here for two reasons and neither of them is production use. A contract
  * with no runnable implementation is a document, not a specification, so this is
@@ -74,7 +74,7 @@ type Row = {entity: string; id: readonly string[]; versions: Version[]};
  * in memory for as long as the process lives and goes with the process;
  * `@etherfold/state-store-indexeddb` is the browser answer (ADR-0024).
  */
-export class MemoryStateStore implements StateStore {
+export class MemoryStateStore implements StateStoreBackend {
 	private readonly entities: ReadonlyMap<string, NormalizedEntity>;
 	/** entity key -> that key's versions, oldest first. */
 	private readonly rows = new Map<string, Row>();
@@ -198,7 +198,7 @@ export class MemoryStateStore implements StateStore {
 		return this.cursors.get(key);
 	}
 
-	/** Move a cursor with no block behind it. See `StateStore.writeCursor`. */
+	/** Move a cursor with no block behind it. See `StateStoreBackend.writeCursor`. */
 	async writeCursor(key: string, value: string): Promise<void> {
 		this.cursors.set(key, value);
 	}
@@ -352,7 +352,7 @@ export class MemoryStateStore implements StateStore {
 	/**
 	 * The block recorded at a height, or `undefined`.
 	 *
-	 * Not part of `StateStore`: addressing state by hash or by time (and refusing
+	 * Not part of the seam: addressing state by hash or by time (and refusing
 	 * an address that resolves to nothing) is the read layer above the seam. This
 	 * is here so a test can see what was recorded.
 	 */

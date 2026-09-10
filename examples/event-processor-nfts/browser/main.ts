@@ -1,5 +1,5 @@
 import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
-import {fromEntityProcessor} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 import {createConnection} from '@etherplay/connect';
 // Uncomment together with the ONE LINE marked below to run on the light store.
 // import {PatchStateStore} from '@etherfold/state-store-patch';
@@ -218,17 +218,24 @@ async function start() {
 	// `databaseName` are one store by IndexedDB's own definition, and they collide
 	// on the sync cursor as well as the rows, since that cursor lives under a fixed
 	// key.
-	const createState = (context: GenerationContext) =>
-		createBrowserStateStore(NFTProcessor.entities, {
-			databaseName: `etherfold-nfts-${chainId}-${account}-${context.stream}`,
-		});
+	// CLAIMED, because this tab INDEXES: building a store and becoming its writer
+	// are two acts, and `openForWriting` is the second one (ADR-0077). It migrates
+	// on the way, so this is the whole open.
+	const createState = async (context: GenerationContext) =>
+		openForWriting(
+			await createBrowserStateStore(NFTProcessor.entities, {
+				databaseName: `etherfold-nfts-${chainId}-${account}-${context.stream}`,
+			}),
+		);
 	// ...or the light store instead: current state as a plain object, history as
 	// immer reverse patches. It is memory-only by design (ADR-0023), so a reload
 	// starts over rather than resuming -- which is the trade you are making.
-	// const createState = () =>
-	// 	createBrowserStateStore(NFTProcessor.entities, {
-	// 		backend: (entities) => new PatchStateStore(entities, {finalityDepth: 12}),
-	// 	});
+	// const createState = async () =>
+	// 	openForWriting(
+	// 		await createBrowserStateStore(NFTProcessor.entities, {
+	// 			backend: (entities) => new PatchStateStore(entities, {finalityDepth: 12}),
+	// 		}),
+	// 	);
 
 	// Kept because the capability report below is read off the store this
 	// generation was built over: what it CAN DO is what the one line above decides.

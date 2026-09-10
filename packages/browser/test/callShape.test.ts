@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
 import type {Abi} from '@etherfold/core';
 import {EntityEventProcessor, type EntityStateView} from '@etherfold/processor-entities';
-import {MemoryStateStore, type StateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {createBrowserStateStore, createIndexerState} from '../src/index.js';
 import {processor as entityProcessor, fakeChain, FINALITY, SOURCE, type TestABI} from '../browser/workload.js';
 
@@ -26,7 +26,7 @@ type State = {count: number};
 describe('the shape createIndexerState takes', () => {
 	it('takes the two FACTORIES a generation is built from, and seeds its store from the processor READ HANDLE', async () => {
 		const indexer = createIndexerState<TestABI, EntityStateView>({
-			createState: () => new MemoryStateStore(entityProcessor.entities),
+			createState: async () => openForWriting(new MemoryStateStore(entityProcessor.entities)),
 			createProcessor: (store) => new EntityEventProcessor<TestABI>(store, entityProcessor),
 		});
 		// the generation is BUILT at init -- state first, then the fold over it --

@@ -1,4 +1,4 @@
-import type {StateStore} from '@etherfold/processor-entities';
+import type {WritableStateStore} from '@etherfold/processor-entities';
 import {createClient} from '@libsql/client';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
@@ -253,7 +253,7 @@ describe('the fold never deletes', () => {
 			{...SQLITE, retention: WINDOW},
 			depsFor(fakeChain().serve(CHURN, TIP), db),
 		);
-		const store = prepared.store as StateStore;
+		const store = prepared.store as WritableStateStore;
 
 		let applying = 0;
 		let prunesDuringAnApply = 0;
@@ -288,7 +288,7 @@ describe('the fold never deletes', () => {
 it('measures its floor from the last block it applied', async () => {
 	const {prepared} = await buildOnce({retention: WINDOW});
 
-	expect(await (prepared.store as StateStore).prune()).toMatchObject({
+	expect(await (prepared.store as WritableStateStore).prune()).toMatchObject({
 		tip: STORE_TIP,
 		floor: STORE_TIP - Number(WINDOW),
 		versionsDeleted: 0,

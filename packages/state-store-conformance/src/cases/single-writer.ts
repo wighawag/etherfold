@@ -1,4 +1,4 @@
-import {StoreWriterChangedError, type StateStore, type StateStoreCapabilities} from '@etherfold/state-store';
+import {StoreWriterChangedError, type StateStoreBackend, type StateStoreCapabilities} from '@etherfold/state-store';
 import {expect} from 'vitest';
 import {CONFORMANCE_ENTITIES, LADDER_BASE, block, cases, opened, owns} from '../fixtures.js';
 import type {
@@ -65,7 +65,7 @@ export function singleWriterCases(
 	}
 
 	/** Two handles on one storage, both migrated, with the FIRST one holding the store. */
-	const contending = async (): Promise<{first: StateStore; second: StateStore}> => {
+	const contending = async (): Promise<{first: StateStoreBackend; second: StateStoreBackend}> => {
 		const [first, second] = await bothOpened(twoWriters.sharingStorage);
 		// the first writer claims by WRITING, which is the only way to claim
 		await first.applyBlock(block(LADDER_BASE), [owns('1', '0xalice', 1)]);
@@ -73,7 +73,7 @@ export function singleWriterCases(
 	};
 
 	/** The same, after the second writer has taken the store: `first` has lost. */
-	const taken = async (): Promise<{lost: StateStore; holder: StateStore}> => {
+	const taken = async (): Promise<{lost: StateStoreBackend; holder: StateStoreBackend}> => {
 		const {first, second} = await contending();
 		await second.applyBlock(block(LADDER_BASE + 1), [owns('1', '0xbob', 2)]);
 		return {lost: first, holder: second};

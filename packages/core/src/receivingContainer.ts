@@ -818,9 +818,19 @@ export class ReceivingIndexer<
 	 * generation claims is what the sweep collects, so nothing may write a stream
 	 * ahead of its registration.
 	 *
-	 * A cap REFUSES here and nothing partial is left behind: the record is not
-	 * written, no receiver is built, and the state factories this runtime uses
-	 * create no storage until the first write.
+	 * A cap REFUSES here and no GENERATION is left behind: the record is not
+	 * written and no receiver is built, so nothing names or reads whatever the
+	 * state factory happened to open.
+	 *
+	 * What a refusal MAY leave is storage the factory itself created, and that is the
+	 * host's business rather than this container's: a factory that claims its store
+	 * (`openForWriting`, ADR-0077) migrates, and the cap is enforced one step later
+	 * because the record needs the processor's version hash, which needs the
+	 * processor, which needs the state (ADR-0043). The CLI's SQL factory therefore
+	 * leaves an empty namespace behind, reused verbatim if the bound is raised. This
+	 * order cannot be swapped: a pre-check on the COUNT alone would refuse re-opening
+	 * a generation this container already holds, which is the case `create`
+	 * deliberately RESOLVES.
 	 *
 	 * WHETHER IT GETS A RECEIVER OR A REBUILD IS DETERMINED HERE, from the stream
 	 * and from nothing else (ADR-0044). A fold on a stream this container already
