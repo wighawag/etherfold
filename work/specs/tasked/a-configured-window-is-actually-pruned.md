@@ -30,6 +30,9 @@ That second half is the same idiom the retention options already use. `{blocks: 
 Unbounded deployments, which is the default and probably most of them, are untouched by both halves.
 
 ## User Stories
+> **Amended at tasking, 2026-09-09.** Stories 2 and 3 below, and the second half of the Solution above, ask for a construction-time REFUSAL. That is NOT what was built, and the change is deliberate rather than an omission: a store cannot own a scheduler on a platform this project ships to (a Worker may not move I/O across requests), and an attestation knob is a promise rather than a proof. What ships instead is a REPORT (`a-store-reports-whether-its-retention-is-enforced`) plus unconditional pruning in every host this project ships, so the broken configuration is unreachable with a shipped host and discoverable with a bespoke one. The two stories are recorded here as a named non-delivery rather than silently dropped, and an ADR carries the reasoning.
+
+
 
 1. As an operator, I want a configured window to actually reclaim space, so that setting retention is a storage decision rather than only a read restriction.
 2. As an operator, I want a window I configure without the means to enforce it to be refused at startup, so that I cannot deploy the worst-of-both state at all.

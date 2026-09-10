@@ -20,7 +20,7 @@ The corrected statement is narrower and still worth having: no HOST in the repos
 - [ ] The correction distinguishes the two things now different: the backends implement pruning, and no host called it.
 - [ ] The same correction is applied to the one other place repeating it, a docstring under `docs/spikes/sqlite-in-the-browser/`. Amending a spike docstring is in scope; changing spike BEHAVIOUR is not.
 - [ ] No measurement, table or conclusion in the finding is altered. This corrects a claim about CODE, not evidence.
-- [ ] `grep -rn "no pruning at all" docs work` returns only text carrying the dated amendment.
+- [ ] `grep -rn "no pruning at all" work/notes docs/spikes` returns only text carrying the dated amendment. The grep is scoped ON PURPOSE: the same phrase occurs in `work/tasks/done/` records, which are historical and must NOT be rewritten to satisfy a gate.
 - [ ] `pnpm check:refs` and `pnpm check:adr` stay green.
 
 ## Blocked by

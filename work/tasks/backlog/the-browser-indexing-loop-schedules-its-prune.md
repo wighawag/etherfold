@@ -20,7 +20,7 @@ Pruning is not an extra a deployment opts into on top of retention: a floor exis
 
 - [ ] A browser store WITH a floor physically drops versions below it, observed as the stored version count falling, never as a statement being issued.
 - [ ] A `revert-only` store with a `finalityDepth` prunes, because it has a floor. This case is asserted explicitly and is the one a binary window-or-not implementation gets wrong.
-- [ ] An `unbounded` store, and a `revert-only` store with no depth, schedule nothing: there is no floor and no cost is paid.
+- [ ] An `unbounded` store, and a `revert-only` store with no depth, DELETE nothing and do no unbounded work. The host may call unconditionally: ADR-0022 states a prune "is a no-op wherever there is no floor, so a host may schedule it unconditionally", and a host holding the seam cannot tell whether a `revert-only` store has a floor anyway, because the capability report carries no depth. Do NOT invent a new seam read to answer that question.
 - [ ] The LIVE version of an entity survives a prune however old it is. This is the property a naive "drop everything below the floor" destroys.
 - [ ] Each pass is bounded by a budget and the loop continues until the report says `complete`, so a large backlog never blocks one cycle.
 - [ ] Applying a block performs no deleting: `prune` is never reached from the apply path.

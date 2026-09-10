@@ -19,7 +19,7 @@ The same gap on the server side. `VersionedStateStore.prune` is implemented, bud
 ## Acceptance criteria
 
 - [ ] A CLI deployment whose store has a floor drops versions below it, asserted on stored version counts.
-- [ ] A `revert-only` store with a `finalityDepth` prunes; an `unbounded` store and a depth-less `revert-only` store schedule nothing.
+- [ ] A `revert-only` store with a `finalityDepth` prunes, because it has a floor.
 - [ ] The live version of an entity survives a prune however old it is.
 - [ ] The pruning loop takes its budget as a PARAMETER and loops until `complete`, so a caller with a per-invocation query allowance (a D1 host supplying `d1PruneBudget`) can drive the same loop without reimplementing it.
 - [ ] A budgeted sequence of passes reaches the same end state as one unbounded pass, asserted rather than assumed.
