@@ -26,10 +26,10 @@ taskedAfter:
 > - **multiEntry, by measurement.** `docs/spikes/a-multientry-index-over-computed-field-keys/` answers 9 of 9 probes on Chromium, Firefox and WebKit, three runs each, with no engine needing a workaround: rung 2 is viable. What that spike did NOT settle is the write cost, which is now an obligation ON rung 2 rather than a question for this spec.
 > - **GraphQL does not replace the generated read surface**, because that was never really the question: `createReadSurface` costs no bundle, so deleting it saves nothing.
 > - **`block:` combined with `where` IS served in the browser**, inside retention, as current-plus-delta over two indexes that already exist.
+> - **The transport does NOT admit `AsyncIterable`.** `a-reader-learns-when-the-state-moved` owns that decision and answered it: liveness is a SIGNAL on its own channel, not a GraphQL subscription, so `QueryExecutor` stays `Promise`-returning on day one. If subscriptions are ever wanted they arrive as a separate `subscribe` on the same port rather than by widening the executor, which is the cleaner shape regardless: two functions rather than one polymorphic one.
 
-1. **Does the transport type admit `AsyncIterable` from day one?** Decided by `a-reader-learns-when-the-state-moved`, which owns the notification model and whose own question 1 is whether it is a GraphQL subscription or a signal beside the query surface. Recorded here because this spec CONSUMES that answer (the return type either accommodates a stream now or the seam is refactored later) and must not answer it independently.
-2. **What bounds rung 1, and in what unit?** Rows scanned, rows returned, or elapsed time. Rows scanned is the honest one (it is what actually grows), elapsed time is what a user feels, and the two disagree exactly when it matters. One bound now governs BOTH the tip scan and the as-of delta (below), so this is one knob and not two.
-3. **Where does the accessor seam live?** `@etherfold/state-store` (neutral, beside `createReadSurface`, and then the seam has a member no backend can implement without a planner) or its own package that both backends and the schema depend on.
+1. **What bounds rung 1, and in what unit?** Rows scanned, rows returned, or elapsed time. Rows scanned is the honest one (it is what actually grows), elapsed time is what a user feels, and the two disagree exactly when it matters. One bound now governs BOTH the tip scan and the as-of delta (below), so this is one knob and not two.
+2. **Where does the accessor seam live?** `@etherfold/state-store` (neutral, beside `createReadSurface`, and then the seam has a member no backend can implement without a planner) or its own package that both backends and the schema depend on.
 
 <!-- /open-questions -->
 
@@ -102,6 +102,10 @@ type QueryResult = {
 };
 type QueryExecutor = (request: QueryRequest) => Promise<QueryResult>;
 ```
+
+`Promise` and not `Promise | AsyncIterable`, settled rather than provisional: liveness is a separate signal (`a-reader-learns-when-the-state-moved`), so nothing streams through here.
+
+A client relates a notification to a query through the block number, which appears on both: pinned per operation and reported in `extensions` here, and carried by the signal there.
 
 `httpExecutor(url)`, `workerExecutor(port)`, `localExecutor(schema, context)` for tests, and `executorToFetch(executor)` for client libraries that only accept a `fetch`. The worker executor is forced anyway: the resolvers need the store handle, the store is in the worker, so the schema and the `graphql` runtime live there and the main thread can only hold a stub.
 

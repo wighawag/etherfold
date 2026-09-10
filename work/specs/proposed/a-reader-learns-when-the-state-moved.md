@@ -1,26 +1,10 @@
 ---
 title: 'A reader learns when the state moved'
 slug: a-reader-learns-when-the-state-moved
-needsAnswers: true
 taskedAfter: [the-indexer-runs-in-a-worker-and-the-tab-talks-to-it]
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK — stripped by the apply rung on full resolution.
--->
-
-## Open questions
-
-1. **Is this a GraphQL subscription, or a signal beside the query surface?** A subscription is what a GraphQL client already knows how to consume, and it costs the `AsyncIterable` shape in the transport plus a server-side implementation the research has built but not shipped (SSE on a plain Worker, WebSocket hibernation on a Durable Object). A signal beside it ("something changed, at block N") is trivially portable, works identically over a `MessagePort`, a `BroadcastChannel` and SSE, and leaves refetching to the client's own cache. The second is smaller and the first is what a client library expects.
-2. **What does the notification CARRY?** A bare "something changed" forces a refetch of everything on screen. A block number lets a client decide. A list of changed entities lets it decide well, and is the most expensive to produce and the easiest to get wrong under reorg. The store knows exactly which rows a block touched, since it just wrote them, so the information exists; whether it should cross the boundary is the question.
-3. **How is a RETRACTION signalled?** A reorg is not "more data", it is data that stopped being true, and a client that treats the two the same will render the abandoned branch until something else moves. This is the case that makes a bare "changed" signal least adequate.
-4. **Does a notification carry a generation, and what happens on promotion?** Reads resolve the canonical pointer once per operation, so a notification that crosses a promotion could invite a refetch that answers from a different generation than the one the client was rendering.
-5. **Is delivery best-effort or ordered?** Best-effort with a monotonic block number is enough for a UI to converge, since a missed notification is corrected by the next one. Anything stronger implies buffering per client, which on the browser path is a worker holding state per tab.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -67,7 +51,7 @@ One notion, delivered over whichever transport the deployment has: a `MessagePor
 ### Autonomy notes
 
 - **No `humanOnly`.** The shape is constrained on both sides: it must fit the query spec's transport and the election spec's reader, and its failure mode is a stale screen rather than a wrong answer.
-- **`needsAnswers: true`.** Questions 1 and 2 decide the surface an app writes against and how much the producer must compute per block, so both change what the tasks are. Question 3 is the one that must not be answered late, because a model that cannot express a retraction cannot be extended into one without changing every consumer.
+- **No `needsAnswers`.** All five are answered in Implementation Decisions below, and they had to be: a notification model is very hard to widen later, because a "something changed" signal shipped first is consumed by every app and adding retraction or detail afterwards changes every consumer.
 - **`taskedAfter: [the-indexer-runs-in-a-worker-and-the-tab-talks-to-it]`.** That spec provides the port this is delivered over in the browser. Note the direction with the QUERY spec is the other way round: it consumes this spec's answer as its own open question 1, so this must be tasked before it, not after.
 
 ## Implementation Decisions
@@ -79,6 +63,34 @@ One notion, delivered over whichever transport the deployment has: a `MessagePor
 **A retraction is carried explicitly**, however question 2 is answered. The system already has the vocabulary: an emission stream that records what was applied and what was taken back, `removed: true` markers, and a fold that honours those verdicts on replay. Whatever crosses the boundary should be recognisable as the same idea rather than a new one.
 
 **The block number is the coherence anchor.** It is what the query surface pins per operation and reports in `extensions`, so the same number appearing in a notification lets a client relate the two without parsing anything.
+
+### The five answers
+
+**The notification is `{block, coherence, entities}`, and the coherence token is the load-bearing part.**
+
+```ts
+type StateMoved = {
+  block: number;
+  /** Opaque. COMPARE it, never parse it. Changes when cached data may be stale. */
+  coherence: string;
+  /** Entity NAMES this block touched. Bounded by the declaration, not by block size. */
+  entities: readonly string[];
+};
+```
+
+A client's whole rule is two lines: **token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything.**
+
+**A retraction is explicit, and it is why narrow invalidation is not enough on its own.** After a revert the stale entities are the ones the ABANDONED branch touched, and those are generally NOT in the changed-set of whatever block arrives next, so a client invalidating narrowly under-invalidates and keeps dead-branch rows on screen indefinitely. It is cheap to produce: `revertTo` already walks `LOWER_INDEX` and `UPPER_INDEX` above the fork, so it sees exactly which rows it restored or removed. And it names a FORK POINT rather than a set of blocks, which is the vocabulary the emission stream, the `removed` marker and `revertTo` already share.
+
+**Delivery is best-effort, at-most-once and unordered, and the coherence token is what makes that SAFE rather than merely cheap.** The producer holds no per-client state, which is what stops a SharedWorker's memory growing with the number of open tabs. But "a missed notification is repaired by the next one" is FALSE for a retraction on its own: miss it, receive the next append, invalidate narrowly, and the dead-branch rows survive. Best-effort delivery and an explicit retraction event do not compose without something more. The token is that something: the next notification already carries a different one, so a missed retraction is self-correcting, for the cost of one field.
+
+**The token changes on a PROMOTION too, and that is deliberately the same mechanism.** A promotion means a different fold now answers, which from a cache's point of view is indistinguishable from "everything you hold may be wrong". One comparison and one code path rather than two. It also follows the existing convention that a generation is rendered so a consumer "compares the value and never parses it"; this is that idea widened to cover both reasons a cache can go stale.
+
+**The payload names ENTITIES, not ids, in v1.** Entity names are bounded by the declaration, so the payload is O(schema) rather than O(mutations), which matters because the real measured stream's worst block carried **457 mutations** against a median of 7. Type-level invalidation is what a normalised GraphQL cache does well and what most apps use anyway. And ids can be ADDED later as an optional field without breaking a consumer, while they could not be removed, so starting narrow is the reversible direction. There is also a trap in shipping ids early: they invite a client to apply the delta by hand instead of refetching, which is precisely what goes wrong under reorg.
+
+**It is a SIGNAL on its own channel, and a GraphQL subscription is an optional adapter over it rather than the primitive.** The signal has to exist anyway for the worker path, because a `MessagePort` has no GraphQL on it. A subscription is derivable from a signal by wrapping it in an `AsyncIterable`; a signal is NOT derivable from a subscription without a GraphQL runtime, which is exactly what a read-surface-only app has deliberately not loaded. Every client library's invalidation API is a plain callback (`invalidateQueries`, `refetchQueries`, `reexecuteOperation`), so a signal composes with all of them in a few lines, where a subscription needs a second link or exchange configured in each. And a subscription whose payload is "block N changed" is a heavyweight way to deliver a number: subscriptions earn their weight by pushing DATA, and pushing data means per-client state, which the delivery decision above rules out.
+
+**Cross-spec consequence, and it is a simplification.** This answers `the-same-query-runs-against-a-worker-and-a-server`'s open question 1 as NO: `QueryExecutor` stays `Promise`-returning on day one, with no `AsyncIterable`. If subscriptions are ever wanted they arrive as a separate `subscribe` on the same port rather than by widening the executor, which is a cleaner shape regardless: two functions rather than one polymorphic one.
 
 **Sync progress rides the same stream.** A reader cannot compute it (the cursor is behind the storage seam as an opaque string, ADR-0027, and deserialising it in a reader would breach that), so it must be published by the producer. Putting it in a second channel would mean two mechanisms with two failure modes for one question.
 
@@ -99,4 +111,6 @@ One notion, delivered over whichever transport the deployment has: a `MessagePor
 
 ## Further Notes
 
-The reason to spec this rather than let each caller improvise is that a notification model is very hard to widen later. A "something changed" signal shipped first would be consumed by every app, and adding retraction or per-entity detail afterwards means changing every consumer, which is precisely the migration a small early decision avoids. Question 3 is the one to get right on day one; questions 2 and 5 can start conservative and grow.
+The reason to spec this rather than let each caller improvise is that a notification model is very hard to widen later. A "something changed" signal shipped first would be consumed by every app, and adding retraction or per-entity detail afterwards means changing every consumer, which is precisely the migration a small early decision avoids.
+
+**One limit is accepted rather than solved.** If a notification is lost and the chain then goes quiet, a client stays stale until the next block moves. That is inherent to push, and the honest mitigations belong to the client: re-query on visibility change, or a slow poll as a backstop. Building delivery guarantees for it would mean buffering per client, which is exactly the per-client state the delivery decision rejects, so this is recorded as a known edge rather than engineered around.
