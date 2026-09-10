@@ -30,6 +30,7 @@ import {
 	sameGeneration,
 } from '@etherfold/core';
 import {pruneBudget, type StateStore} from '@etherfold/state-store';
+import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
@@ -273,6 +274,33 @@ export type SyncingState<ABI extends Abi> = {
 	 * describes, and clearing there would drop a true report.
 	 */
 	streamSeed?: StreamSeedState;
+	/**
+	 * THIS TAB IS NO LONGER A WRITER, and WHY -- or ABSENT while it still is.
+	 *
+	 * The visible half of the demotion (`demoteToReader`): a writer whose mutation
+	 * was refused, or that was told it lost the write duty, stops fetching and folding
+	 * and goes on ANSWERING READS. Without this field an app following the documented
+	 * `createState` example would get a tab that silently stopped indexing for ever,
+	 * which is the quiet failure the writer guard exists to end.
+	 *
+	 * It is its own field and NOT `error`, on exactly the ground `streamSeed` is: an
+	 * app that renders `error` as a fault would render a crash for a state change,
+	 * and `acknowledgeError()` does not fit an outcome nothing can acknowledge away.
+	 * The data on screen is still correct -- it is the store's, and the store is being
+	 * written by whoever holds it now -- so the honest rendering is "this tab is
+	 * reading" rather than a broken app.
+	 *
+	 * It is reported for the INDEXER and not per generation, because the claim it
+	 * reports is a fact about one unit of STORAGE (ADR-0075) and the shipped pattern
+	 * hands one store to every generation (ADR-0077): a demotion that applied to one
+	 * generation of a shared store and not to its neighbours would be a claim no
+	 * backend makes.
+	 *
+	 * It CLEARS on `dispose()`, because a later `init` builds new generations over
+	 * whatever the factories hand back -- which is where becoming a writer again
+	 * happens, since a store that has lost is never re-claimed (ADR-0077).
+	 */
+	demotion?: Demotion;
 };
 
 export type StatusState = {
@@ -592,6 +620,18 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	// only ever passed back to `clearTimeout`, which takes either.
 	let indexingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let autoIndexingInterval: number = 4;
+
+	/**
+	 * WHETHER THIS TAB HAS STOPPED BEING A WRITER, and why. `undefined` while it is one.
+	 *
+	 * Held here as well as published on `syncing`, because it GATES every path that
+	 * would write: a demoted tab that re-entered `setupIndexing` would load, fold and
+	 * be refused all over again -- which is the loop the demotion exists to end. It
+	 * is one-way for the life of this container: a writer never re-claims a store it
+	 * lost (ADR-0077), so it is cleared only by `dispose`, after which a new `init`
+	 * builds new generations over whatever the factories hand back.
+	 */
+	let demotion: Demotion | undefined;
 
 	/**
 	 * How many times the canonical pointer has moved.
@@ -991,7 +1031,14 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			reportGenerationProgress();
 			return lastSync;
 		} catch (err) {
-			setSyncing({loading: false, error: {message: 'Failed to load', id: 'FAILED_TO_LOAD'}});
+			// A REFUSED WRITER is not a failed load: the load did everything it could and
+			// another writer holds the store. It is reported as a demotion by whoever
+			// called this, so publishing `error` here too would render a fault for a state
+			// change -- and `loading` still has to come down either way.
+			setSyncing({
+				loading: false,
+				...(isStoreWriterChanged(err) ? {} : {error: {message: 'Failed to load', id: 'FAILED_TO_LOAD'}}),
+			});
 			throw err;
 		}
 	}
@@ -1094,23 +1141,120 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					);
 				}
 			} catch (err) {
+				if (isStoreWriterChanged(err)) {
+					// NOT a failed prune: the store is saying this writer no longer holds it, and
+					// a delete against a floor computed from a tip somebody else is moving is
+					// exactly what it must not do. Raised rather than logged, so the one refusal
+					// handler demotes -- swallowing it here would leave a tab that had learnt it
+					// lost and carried on indexing until its next write said so again.
+					throw err;
+				}
 				namedLogger.error(`failed to prune the state of a generation this indexer holds`, err);
 			}
 		}
 	}
 
-	async function indexMore(): Promise<LastSync<ABI>> {
-		await setupIndexing();
-		return advanceOnce();
+	/**
+	 * STOP BEING A WRITER, and publish that.
+	 *
+	 * The mechanism is `demoteToReader` (`./demotion.ts`) and none of it is here:
+	 * this names WHAT this hook's writer is made of -- the loop to stop, the cursor
+	 * to drop, the stores to narrow -- and publishes the result where an app already
+	 * subscribes. The refusal handler and the caller-driven `demoteToReader()` verb
+	 * both come through here, so there is one code path and one published outcome
+	 * whichever way this tab learnt that it lost.
+	 *
+	 * Demoting twice is the first demotion: the second reason would overwrite a true
+	 * report with a later one (a lease released AFTER a write was refused is the
+	 * ordinary order), and nothing is left to stop.
+	 */
+	function demote(reason: DemotionReason): Demotion {
+		if (demotion) {
+			return demotion;
+		}
+		demotion = demoteToReader(
+			{
+				stopFolding() {
+					stopAutoIndexing();
+					// unconditionally, exactly as `dispose` does: a tick may have armed one
+					// between the stop and here.
+					if (indexingTimeout) {
+						clearTimeout(indexingTimeout);
+						indexingTimeout = undefined;
+					}
+					// EVERY generation, which is what this verb already means on the container:
+					// the claim that was taken is the STORAGE's, and the shipped pattern folds
+					// every generation into one store.
+					indexer?.disableProcessing();
+				},
+				forgetCursor() {
+					// `checkTxInclusion` answers from this window and `setupIndexing` gates on
+					// it; both would be reasoning about a store this tab no longer moves.
+					setSyncing({lastSync: undefined});
+				},
+				stores: () => statesByGeneration.values(),
+			},
+			reason,
+		);
+		// The transient flags go with it: nothing is loading, fetching or catching up any
+		// more, and leaving one standing would leave a spinner on screen for ever.
+		setSyncing({
+			demotion,
+			loading: false,
+			fetchingLogs: false,
+			processingFetchedLogs: false,
+			catchingUp: false,
+		});
+		// `Idle` for the reason a refused stream seed leaves it there: the PHASE says
+		// what is happening, and nothing is. WHAT happened is `syncing.demotion`.
+		setStatus({state: 'Idle'});
+		return demotion;
 	}
 
-	async function indexMoreAndCatchupIfNeeded(): Promise<LastSync<ABI>> {
-		await setupIndexing();
-		if (!indexer) {
-			throw new Error(`no indexer`);
+	/**
+	 * Run one step of the indexing loop AS A WRITER, and demote instead of throwing
+	 * where the store refused this one.
+	 *
+	 * Every driver goes through here, because the refusal can surface from any step
+	 * that writes -- `load()` re-folds, an empty cycle still writes the cursor -- and
+	 * a driver that recognised it in one place and retried it in another would spin
+	 * against a store that will never accept it again. `undefined` means DEMOTED and
+	 * means nothing else: every other failure is thrown, exactly as before.
+	 */
+	async function whileWriting<T>(step: () => Promise<T>): Promise<T | undefined> {
+		if (demotion) {
+			return undefined;
 		}
+		try {
+			return await step();
+		} catch (err) {
+			if (!isStoreWriterChanged(err)) {
+				throw err;
+			}
+			demote('write-refused');
+			return undefined;
+		}
+	}
 
-		const lastSync = await advanceOnce();
+	async function indexMore(): Promise<LastSync<ABI> | undefined> {
+		return whileWriting(async () => {
+			await setupIndexing();
+			return advanceOnce();
+		});
+	}
+
+	async function indexMoreAndCatchupIfNeeded(): Promise<LastSync<ABI> | undefined> {
+		const lastSync = await whileWriting(async () => {
+			await setupIndexing();
+			if (!indexer) {
+				throw new Error(`no indexer`);
+			}
+			return advanceOnce();
+		});
+
+		if (!lastSync) {
+			return undefined;
+		}
 
 		if (lastSync.lastToBlock !== lastSync.latestBlock) {
 			return indexToLatest();
@@ -1133,18 +1277,30 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		}
 	}
 
-	async function indexToLatest() {
-		let lastSync: LastSync<ABI> = await setupIndexing();
-		setLastSync(lastSync);
-		setCatchup(lastSync);
-		if (!indexer) {
-			throw new Error(`no indexer`);
-		}
+	/**
+	 * Index to the tip, retrying a transient failure on a timer -- and STOPPING on a
+	 * demotion, which is not one.
+	 *
+	 * The distinction is the whole reason `whileWriting` exists here: this loop
+	 * swallows failures and comes back a second later, which is right for a rate
+	 * limit and catastrophic for a refusal that will be repeated for ever. A demoted
+	 * run answers `undefined` and returns; `syncing.demotion` says why.
+	 */
+	async function indexToLatest(): Promise<LastSync<ABI> | undefined> {
+		let lastSync: LastSync<ABI> | undefined;
 
 		try {
-			lastSync = await advanceOnce();
+			lastSync = await whileWriting(async () => {
+				const loaded = await setupIndexing();
+				setLastSync(loaded);
+				setCatchup(loaded);
+				if (!indexer) {
+					throw new Error(`no indexer`);
+				}
+				return advanceOnce();
+			});
 		} catch (err) {
-			lastSync = await new Promise((resolve) => {
+			return new Promise((resolve) => {
 				setTimeout(async () => {
 					const result = await indexToLatest();
 					resolve(result);
@@ -1153,12 +1309,18 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		}
 
 		if (!lastSync) {
-			throw new Error(`no lastSync`);
+			// demoted, here or before this call: there is no cursor to answer with and
+			// nothing to wait for.
+			return undefined;
 		}
 
 		while (lastSync.lastToBlock !== lastSync.latestBlock) {
 			try {
-				lastSync = await advanceOnce();
+				const advanced = await whileWriting(() => advanceOnce());
+				if (!advanced) {
+					return undefined;
+				}
+				lastSync = advanced;
 			} catch (err) {
 				await new Promise((resolve) => {
 					setTimeout(resolve, 1000);
@@ -1171,7 +1333,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 	async function startAutoIndexing(intervalInSeconds = 4): Promise<boolean> {
 		autoIndexingInterval = intervalInSeconds;
-		await setupIndexing();
+		// A demoted tab does not start indexing again on being asked to: it becomes a
+		// writer again by CLAIMING again (a new store, a new `init`), and a loop started
+		// here would fetch a chain in order to be refused by every write it made.
+		if (!(await whileWriting(() => setupIndexing()))) {
+			return false;
+		}
 		if (!$syncing.autoIndexing) {
 			_auto_index();
 			return true;
@@ -1240,6 +1407,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 		// 3. drop the indexer reference and reset browser-layer state so a later init() starts clean.
 		indexer = undefined;
+		// A DEMOTION does not survive this, and that is the only way back: a later
+		// `init` calls the factories again, and a writer becomes one again by CLAIMING
+		// again (ADR-0077). A `createState` that hands back the store this one LOST is
+		// refused again on its first write, and demotes again -- which is correct: a
+		// backend never re-mints a claim it has committed (ADR-0075), so re-indexing
+		// means a new store.
+		demotion = undefined;
 		// The stores go with it: a later `init` calls the factories again, and holding
 		// the previous container's states here would keep pruning them (and keep them
 		// reachable) long after nothing is indexing into them.
@@ -1253,6 +1427,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			processingFetchedLogs: false,
 			lastSync: undefined,
 			error: undefined,
+			demotion: undefined,
 			nonCanonicalGenerations: [],
 			// The install this hook reports is the one IT ran, at `init`. A later `init`
 			// runs its own (or none), so carrying the previous one across a dispose would
@@ -1289,6 +1464,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		setSyncing({autoIndexing: true});
 		try {
 			const lastSync = await indexMoreAndCatchupIfNeeded();
+			if (!lastSync) {
+				// DEMOTED. The loop is not re-armed: this tab reads from here on, and
+				// `demote` has already stopped it, dropped the cursor and said so. Re-arming
+				// would fetch a chain every four seconds in order to be refused by every
+				// write it made.
+				return;
+			}
 			if (lastSync.latestBlock - lastSync.lastToBlock < 1) {
 				// the latestblock fetched is smaller or equal than the last synced blocked
 				// let's wait
@@ -1386,6 +1568,31 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				throw new Error(`no indexer setup, call init`);
 			}
 			return indexer.promote(id);
+		},
+		/**
+		 * STOP BEING A WRITER: drop the cursor, stop fetching, go on answering reads.
+		 *
+		 * **It is not the inverse of `promote`.** That moves the canonical POINTER
+		 * between generations of this indexer; this drops the WRITE DUTY over the
+		 * storage they fold into, and every generation is a reader afterwards.
+		 *
+		 * The hook calls it for itself when the store refuses a write
+		 * (`'write-refused'`), which is a lost race and not an application error. A
+		 * caller calls it with `'lease-lost'` when this tab is told another one holds
+		 * the write duty -- the one code path for both, which is what leader election
+		 * needs of this package (`work/specs/proposed/one-tab-indexes-and-the-others-read.md`)
+		 * and the whole of what it needs.
+		 *
+		 * It is ONE-WAY for this container: a store that lost is never re-claimed
+		 * (ADR-0077), so indexing again means `dispose()` and a fresh `init` over a
+		 * store built fresh -- which re-reads everything, as it must.
+		 */
+		demoteToReader(reason: DemotionReason = 'lease-lost'): Demotion {
+			return demote(reason);
+		},
+		/** WHY this tab stopped writing, or `undefined` while it still is one. */
+		get demotion(): Demotion | undefined {
+			return demotion;
 		},
 		/** Every generation this indexer holds, in the order it built them. */
 		get generations(): readonly HeldGeneration<ABI, ProcessResultType>[] {

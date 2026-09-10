@@ -1,5 +1,13 @@
 export * from './IndexerState.js';
 
+/**
+ * LOSING IS A DEMOTION: the one function a writer calls when it stops being one,
+ * whether the store refused it or a lease was lost. `isStoreWriterChanged` is
+ * deliberately NOT published: the demotion is what this package offers, and a
+ * second way to ASK the question invites a second answer to it.
+ */
+export {demoteToReader, type DemotableWriter, type Demotion, type DemotionReason} from './demotion.js';
+
 export {simple_hash} from '@etherfold/core';
 /**
  * Re-exported because this package's own public signatures NAME it: `createState`

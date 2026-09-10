@@ -555,12 +555,28 @@ type IndexerState = ReturnType<typeof indexerFor>;
  * `indexToLatest` is not used here on purpose: it swallows a failure and retries
  * on a timer forever, which in a test turns a broken wiring into a hang instead
  * of a red line.
+ *
+ * An advance answers nothing when this tab has been DEMOTED to a reader (another
+ * writer took the store, or a lease was lost), which is not a cursor and cannot
+ * be returned as one. It is raised here NAMING the demotion, so a test that did
+ * not mean to lose the store fails saying what happened rather than on a null
+ * read three lines later; a test that DOES mean to drives `indexMore` itself.
  */
 export async function indexToTip(indexer: IndexerState, maxRounds = 20): Promise<LastSync<TestABI>> {
-	let lastSync = await indexer.indexMore();
+	let lastSync = demotedOrCursor(indexer, await indexer.indexMore());
 	let rounds = 0;
 	while (lastSync.lastToBlock < lastSync.latestBlock && rounds++ < maxRounds) {
-		lastSync = await indexer.indexMore();
+		lastSync = demotedOrCursor(indexer, await indexer.indexMore());
+	}
+	return lastSync;
+}
+
+function demotedOrCursor(indexer: IndexerState, lastSync: LastSync<TestABI> | undefined): LastSync<TestABI> {
+	if (!lastSync) {
+		throw new Error(
+			`this indexer was DEMOTED to a reader (${indexer.syncing.$state.demotion?.reason ?? 'unknown'}), so the ` +
+				`advance answered no cursor: it has stopped fetching and folding and now only reads.`,
+		);
 	}
 	return lastSync;
 }
