@@ -66,7 +66,7 @@ External behaviour only, as everywhere behind this seam.
 - **The refusal at construction**: a bounded window without the scheduling is refused where it is configured, naming both the window and the remedy, and an `unbounded` configuration is unaffected.
 - **In the conformance suite**, parameterised by the factory, so every backend answers it.
 - **The budgeted call**: a prune that cannot finish within its budget reports so, and a caller looping on that report reaches completion.
-- Note that the browser evidence for reclamation belongs in the browser run rather than under `fake-indexeddb`, whose write and storage behaviour is not the engine's (see `work/notes/observations/fake-indexeddb-write-cost-grows-quadratically.md`).
+- Note that the browser evidence for reclamation belongs in the browser run (`packages/state-store-indexeddb/browser/`) rather than under `fake-indexeddb`. The shim is what keeps this backend honest between browser runs and it is fine for the conformance suite's small cases, but its write path is not the engine's: the launched-game replay degrades roughly as `mutations^2` on it (50 blocks in 0.3 s, 250 in 25 s, 500 in 271 s) against 45.6 ms/block on real Chromium. A prune measured on the shim would be measuring the shim.
 
 ## Out of Scope
 
