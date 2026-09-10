@@ -1,0 +1,132 @@
+{
+  "project": "chromium",
+  "ranAt": "2026-09-10T18:27:33.350Z",
+  "contended": {
+    "from": 2000,
+    "heights": 12,
+    "tabs": 4
+  },
+  "tabs": [
+    {
+      "tab": 0,
+      "errors": [],
+      "attempted": 12,
+      "won": [],
+      "refused": 12,
+      "refusedBy": {
+        "StoreWriterChangedError": 12
+      },
+      "unexpected": []
+    },
+    {
+      "tab": 1,
+      "errors": [],
+      "attempted": 12,
+      "won": [],
+      "refused": 12,
+      "refusedBy": {
+        "StoreWriterChangedError": 12
+      },
+      "unexpected": []
+    },
+    {
+      "tab": 2,
+      "errors": [],
+      "attempted": 12,
+      "won": [],
+      "refused": 12,
+      "refusedBy": {
+        "StoreWriterChangedError": 12
+      },
+      "unexpected": []
+    },
+    {
+      "tab": 3,
+      "errors": [],
+      "attempted": 12,
+      "won": [
+        2000,
+        2001,
+        2002,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2008,
+        2009,
+        2010,
+        2011
+      ],
+      "refused": 0,
+      "refusedBy": {},
+      "unexpected": []
+    }
+  ],
+  "audit": {
+    "heights": [
+      {
+        "height": 2000,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2001,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2002,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2003,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2004,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2005,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2006,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2007,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2008,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2009,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2010,
+        "recorded": true,
+        "owner": "0x3"
+      },
+      {
+        "height": 2011,
+        "recorded": true,
+        "owner": "0x3"
+      }
+    ],
+    "applied": 12,
+    "cursor": "2011:3"
+  }
+}

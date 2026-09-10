@@ -15,6 +15,14 @@ import {freshDatabaseName} from './utils/database.js';
  * the check and the write are one indivisible unit and there is no window for a
  * rival to land in. That is why nothing below uses a timer: the ordering is the
  * engine's to decide, and the guarantee holds whichever way it decides it.
+ *
+ * What this file does NOT show is that property on an ENGINE: it runs under
+ * `fake-indexeddb`, which is the IndexedDB API in one process and cannot
+ * demonstrate cross-tab serialisation at all. Two handles here are two objects,
+ * not two tabs. The observation lives in the browser run instead --
+ * `browser/multi-tab.spec.ts`, the contention case, on Chromium, Firefox and
+ * WebKit -- and its output is kept in
+ * `docs/spikes/indexeddb-row-backend-browser-default/results/`.
  */
 
 const TOKEN: EntityDeclaration = {name: 'token', id: ['id'], fields: {owner: 'text'}};

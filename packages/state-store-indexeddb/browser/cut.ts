@@ -21,6 +21,11 @@
  *   blocks. This is the case both wasm-SQLite VFSs fail at open. Since the
  *   writer token (ADR-0075) only one tab may WRITE at a time, so a tab reports
  *   what it wrote and what it was refused, and the audit checks the two agree.
+ * - `contention-claim` / `contention` / `contention-audit`: the same four tabs
+ *   offering the SAME heights, which is the race `multi-tab` avoids by
+ *   construction. Three cases rather than one because the tabs need a BARRIER
+ *   between claiming and racing: see `contentionClaim` below for why that is
+ *   the case's subject and not its setup.
  *
  * The conformance run also carries the CONTENTION chapter, two handles on one
  * database, which is where the writer token (ADR-0075) meets the engine that
@@ -314,6 +319,141 @@ async function multiTabAudit(params: Params): Promise<Record<string, unknown>> {
 }
 
 /**
+ * The handle THIS tab claimed the contended database with, kept between runs.
+ *
+ * A claim belongs to a HANDLE and is never re-minted (`store.ts`), so the tab
+ * that claims in `contention-claim` has to race through the same object in
+ * `contention`. Module state survives between `run` calls because they are two
+ * `page.evaluate` calls into one loaded page, and a reload would clear it --
+ * which is correct, since a reloaded tab is a new writer that has claimed
+ * nothing.
+ */
+let contender: IndexedDBStateStore | undefined;
+
+/**
+ * One contending tab CLAIMS the shared database, and writes no block at all.
+ *
+ * This is a case of its own so the spec can hold every tab at a barrier: all
+ * four claim, and only then does any of them offer a height. The alternative --
+ * racing straight from an unclaimed handle -- tests something else, because a
+ * handle's FIRST mutation claims unconditionally, so the losers would be refused
+ * for offering a height already recorded rather than for having lost the store.
+ *
+ * The claim is a cursor write under a key of this tab's own, which is the
+ * shortest mutation that claims and cannot be refused for any other reason:
+ * `writeCursor` has no block precondition at all, which is why ADR-0075 calls it
+ * the path the guard exists for most. Every tab's claim therefore commits, and
+ * the LAST of them holds the store.
+ */
+async function contentionClaim(params: Params): Promise<Record<string, unknown>> {
+	const tab = params.tab as number;
+	const store = new IndexedDBStateStore([TOKEN], {databaseName: databaseName(params, 'contention')});
+	await store.migrate();
+	await store.writeCursor(`claimed-by-${tab}`, `${Date.now()}`);
+	contender = store;
+	return {tab, claimed: true};
+}
+
+/**
+ * One contending tab offers EVERY height in the shared range, as fast as it can.
+ *
+ * Every tab offers the same block at each height -- the same number, the same
+ * hash -- because two tabs contending are two indexers folding one chain, and a
+ * store's blocks are ONE sequence. What differs is the ROW each writes, so the
+ * audit afterwards can say which tab's write landed, and the CURSOR, which
+ * carries the height and the tab so that "the cursor is not behind its data" is
+ * a checkable sentence rather than a feeling.
+ *
+ * Exactly one tab still holds the claim, so exactly one write lands per height
+ * and every other tab is refused with `StoreWriterChangedError` having written
+ * nothing. Refusals are counted BY ERROR NAME rather than lumped together: this
+ * case is the one that says a loser is refused by that name specifically, so a
+ * refusal wearing another name has to be visible rather than absorbed.
+ *
+ * The handle is closed at the end, so the audit that follows is a connection
+ * that took no part in the race.
+ */
+async function contention(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const tab = params.tab as number;
+	const from = (params.from as number) ?? 2_000;
+	const blocks = (params.blocks as number) ?? 12;
+	const store = contender;
+	if (!store) throw new Error('contention: this tab never claimed; run `contention-claim` first');
+
+	const won: number[] = [];
+	const refusedBy: Record<string, number> = {};
+	const unexpected: string[] = [];
+	try {
+		await timed(`contention-tab-${tab}`, timings, async () => {
+			for (let index = 0; index < blocks; index++) {
+				const number = from + index;
+				try {
+					await store.applyBlock(
+						{number, hash: `0x${number.toString(16)}`, timestamp: 1_700_000_000 + number * 12},
+						[{type: 'upsert', entity: 'token', id: {id: `height-${number}`}, values: {owner: `0x${tab}`}}],
+						{key: 'lastSync', value: `${number}:${tab}`},
+					);
+					won.push(number);
+				} catch (error) {
+					// `instanceof` first and the NAME as the fallback, because a bundled app
+					// can hold two copies of `@etherfold/state-store` -- the same reason
+					// `@etherfold/browser` recognises this refusal both ways
+					const name =
+						error instanceof StoreWriterChangedError
+							? 'StoreWriterChangedError'
+							: ((error as Error)?.name ?? 'unknown');
+					if (name === 'StoreWriterChangedError') refusedBy[name] = (refusedBy[name] ?? 0) + 1;
+					else unexpected.push(`${name}: ${(error as Error)?.message ?? error}`);
+				}
+			}
+		});
+
+		// every attempt is accounted for: landed, refused by name, or refused by
+		// something this case treats as a defect
+		const refused = blocks - won.length;
+		return {tab, attempted: blocks, won, refused, refusedBy, unexpected};
+	} finally {
+		await store.close();
+		contender = undefined;
+	}
+}
+
+/**
+ * After the race: what one independent connection finds at each contended
+ * height.
+ *
+ * Facts, not verdicts -- whether they COHERE is the spec's assertion, because
+ * only it knows what each tab was told it wrote. The block record and the row
+ * are read separately on purpose: they are written in ONE transaction, so a
+ * height carrying one without the other is a half-applied block, which is the
+ * thing this audit exists to be able to see.
+ */
+async function contentionAudit(params: Params): Promise<Record<string, unknown>> {
+	const from = (params.from as number) ?? 2_000;
+	const blocks = (params.blocks as number) ?? 12;
+	const store = new IndexedDBStateStore([TOKEN], {databaseName: databaseName(params, 'contention')});
+	// a READ-ONLY visitor: `migrate` never claims (ADR-0075), so auditing a store
+	// cannot take it away from the tab that won it
+	await store.migrate();
+	try {
+		const heights: {height: number; recorded: boolean; owner: string | null}[] = [];
+		for (let index = 0; index < blocks; index++) {
+			const height = from + index;
+			const record = await store.getBlock(height);
+			const row = await store.getCurrent<{owner: string}>('token', {id: `height-${height}`});
+			heights.push({height, recorded: record !== undefined, owner: row?.owner ?? null});
+		}
+		return {
+			heights,
+			applied: heights.filter((entry) => entry.recorded).length,
+			cursor: await store.readCursor('lastSync'),
+		};
+	} finally {
+		await store.close();
+	}
+}
+
+/**
  * The reference store, run through the same workload in the same page.
  *
  * Not a substitute for the node-side comparison (which is what makes it a
@@ -355,6 +495,15 @@ const cut: CodeUnderTest = {
 						break;
 					case 'multi-tab-audit':
 						results = await multiTabAudit(ctx.params);
+						break;
+					case 'contention-claim':
+						results = await contentionClaim(ctx.params);
+						break;
+					case 'contention':
+						results = await contention(ctx.params, timings);
+						break;
+					case 'contention-audit':
+						results = await contentionAudit(ctx.params);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

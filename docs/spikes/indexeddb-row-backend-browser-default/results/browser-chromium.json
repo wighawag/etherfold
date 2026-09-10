@@ -1,6 +1,6 @@
 {
   "project": "chromium",
-  "ranAt": "2026-08-23T11:13:42.688Z",
+  "ranAt": "2026-09-10T18:27:40.551Z",
   "runs": [
     {
       "project": "chromium",
@@ -14,36 +14,36 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 127
+          "ms": 977.6000000238419
         },
         {
           "label": "conformance:window-128",
-          "ms": 143.9000000357628
+          "ms": 1223.7999999523163
         },
         {
           "label": "conformance:revert-only",
-          "ms": 103.79999995231628
+          "ms": 1143.7999999523163
         }
       ],
       "results": {
-        "passed": 162,
+        "passed": 671,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 55,
+            "passed": 227,
             "failed": 0,
-            "databases": 56
+            "databases": 244
           },
           "window-128": {
-            "passed": 61,
+            "passed": 243,
             "failed": 0,
-            "databases": 62
+            "databases": 260
           },
           "revert-only": {
-            "passed": 46,
+            "passed": 201,
             "failed": 0,
-            "databases": 47
+            "databases": 218
           }
         }
       },
@@ -61,11 +61,11 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 12.100000023841858
+          "ms": 34.5
         },
         {
           "label": "reference",
-          "ms": 0.6000000238418579
+          "ms": 0.8000000715255737
         }
       ],
       "results": {
@@ -292,15 +292,15 @@
       "timings": [
         {
           "label": "write",
-          "ms": 22.30000001192093
+          "ms": 44.5
         },
         {
           "label": "cold-start",
-          "ms": 0.699999988079071
+          "ms": 0.7999999523162842
         },
         {
           "label": "read",
-          "ms": 0.40000003576278687
+          "ms": 0.30000007152557373
         }
       ],
       "results": {

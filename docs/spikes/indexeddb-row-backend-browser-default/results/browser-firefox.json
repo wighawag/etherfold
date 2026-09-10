@@ -1,6 +1,6 @@
 {
   "project": "firefox",
-  "ranAt": "2026-08-23T11:13:49.029Z",
+  "ranAt": "2026-09-10T18:28:05.721Z",
   "runs": [
     {
       "project": "firefox",
@@ -14,36 +14,36 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 281
+          "ms": 1796
         },
         {
           "label": "conformance:window-128",
-          "ms": 304
+          "ms": 1902
         },
         {
           "label": "conformance:revert-only",
-          "ms": 209
+          "ms": 2044
         }
       ],
       "results": {
-        "passed": 162,
+        "passed": 671,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 55,
+            "passed": 227,
             "failed": 0,
-            "databases": 56
+            "databases": 244
           },
           "window-128": {
-            "passed": 61,
+            "passed": 243,
             "failed": 0,
-            "databases": 62
+            "databases": 260
           },
           "revert-only": {
-            "passed": 46,
+            "passed": 201,
             "failed": 0,
-            "databases": 47
+            "databases": 218
           }
         }
       },
@@ -61,7 +61,7 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 11
+          "ms": 15
         },
         {
           "label": "reference",
@@ -292,11 +292,11 @@
       "timings": [
         {
           "label": "write",
-          "ms": 30
+          "ms": 47
         },
         {
           "label": "cold-start",
-          "ms": 1
+          "ms": 3
         },
         {
           "label": "read",
