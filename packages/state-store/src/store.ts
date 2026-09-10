@@ -1,5 +1,6 @@
 import type {StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
+import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
 import type {PruneOptions, PruneReport} from './retention.js';
 import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.js';
@@ -7,7 +8,7 @@ import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.j
 /**
  * The seam: what a store must do for a processor to run on it.
  *
- * Eleven verbs and one report, chosen because they are the whole of what
+ * Twelve verbs and one report, chosen because they are the whole of what
  * processing a chain needs and because each of them is cheaply implementable on
  * every substrate we have measured (versioned SQL rows, an object store, an
  * in-memory map, a patch log). Anything a particular backend can do BETTER stays
@@ -164,6 +165,25 @@ export interface StateStore {
 	 * state, and deleting by age alone destroys it (see `retentionFloor`).
 	 */
 	prune(options?: PruneOptions): Promise<PruneReport>;
+
+	/**
+	 * Whether this store's retention is actually being ENFORCED against its
+	 * storage: no floor to enforce, a floor and never pruned, or a floor and
+	 * pruned to a block.
+	 *
+	 * The second half of retention only happens if a host schedules it (`prune`,
+	 * above), so a host that rolled its own loop and never does gets the refusals
+	 * of a bounded store and the footprint of an unbounded one. This is what makes
+	 * that state discoverable instead of silent.
+	 *
+	 * It is ASYNCHRONOUS and separate from `capabilities` because the answer is
+	 * DURABLE: a store pruned before the process died must not come back saying
+	 * never, so it lives in storage, and the capability getter is synchronous and
+	 * readable before the storage is even open. See `enforcement.ts`.
+	 *
+	 * It is a read, so it never claims the writer token and never writes.
+	 */
+	readRetentionEnforcement(): Promise<RetentionEnforcement>;
 
 	/** One entity as it stands at the tip. */
 	getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined>;

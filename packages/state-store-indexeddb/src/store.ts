@@ -8,8 +8,11 @@ import {
 	normalizeBlockHash,
 	normalizeEntities,
 	pruneBudget,
+	pruneRecord,
 	resolveRetention,
+	retentionEnforcementOf,
 	retentionFloor,
+	RETENTION_ENFORCEMENT_KEY,
 	StoreWriterChangedError,
 	writerToken,
 	type BlockPointer,
@@ -22,6 +25,7 @@ import {
 	type PruneOptions,
 	type PruneReport,
 	type Retention,
+	type RetentionEnforcement,
 	type RetentionOptions,
 	type RetentionSetting,
 	type StateStore,
@@ -567,7 +571,11 @@ export class IndexedDBStateStore implements StateStore {
 		// the read and the delete -- the read-then-write that merely LOOKS atomic.
 		// Widening the transaction is what closes that, and the writer token is what
 		// makes the closure hold across tabs (ADR-0075).
-		const tx = db.transaction([VERSIONS, BLOCKS, WRITER], 'readwrite');
+		// CURSORS is in here for the record this pass leaves under
+		// `RETENTION_ENFORCEMENT_KEY`, so that what was deleted and the claim that a
+		// pass ran commit together rather than in two transactions a crash can
+		// separate.
+		const tx = db.transaction([VERSIONS, BLOCKS, CURSORS, WRITER], 'readwrite');
 		const versions = tx.objectStore(VERSIONS);
 		const settled = committed(tx);
 		// a prune that turns out to delete nothing still claims: pruning is a write
@@ -581,6 +589,9 @@ export class IndexedDBStateStore implements StateStore {
 			await settled;
 			return {tip, floor: undefined, versionsDeleted: 0, complete: true};
 		}
+
+		const record = pruneRecord(floor);
+		if (record !== undefined) tx.objectStore(CURSORS).put(record, RETENTION_ENFORCEMENT_KEY);
 
 		let versionsDeleted = 0;
 		await walk(versions.index(UPPER_INDEX).openCursor(IDBKeyRange.upperBound(floor)), (cursor) => {
@@ -596,6 +607,27 @@ export class IndexedDBStateStore implements StateStore {
 		// caller guess.
 		const complete = versionsDeleted < budget || !(await this.hasPrunableVersions(floor));
 		return {tip, floor, versionsDeleted, complete};
+	}
+
+	/**
+	 * Whether the retention this store reports is enforced against its storage.
+	 *
+	 * Durable across a reload, which on this backend is the case that matters
+	 * most: a tab that pruned yesterday comes back reporting the block it pruned
+	 * to, because the record is a cursor-port entry in the same database as the
+	 * versions rather than a flag in a closure the reload threw away.
+	 *
+	 * A READ, so it opens no `readwrite` transaction and never claims: asking
+	 * whether a store is being pruned must not take the store away from the tab
+	 * that is pruning it.
+	 */
+	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return retentionEnforcementOf(
+			this.provided,
+			this.finalityDepth,
+			await this.tipBlockNumber(),
+			await this.readCursor(RETENTION_ENFORCEMENT_KEY),
+		);
 	}
 
 	/**

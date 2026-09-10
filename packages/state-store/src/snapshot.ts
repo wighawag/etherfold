@@ -1,6 +1,7 @@
 import {assertBlockNumber} from './blocks.js';
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
+import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
 import {assertRetained, type PruneOptions, type PruneReport} from './retention.js';
 import type {StateStore} from './store.js';
@@ -409,6 +410,21 @@ export class SnapshotAwareStateStore implements StateStore {
 		// the max of the two), so the store can only ever keep more than the
 		// report promises, which is the safe direction for a deletion.
 		return this.inner.prune(options);
+	}
+
+	/**
+	 * Delegated whole, and NOT narrowed the way `capabilities` is.
+	 *
+	 * The two questions are about different things, which is why the same handle
+	 * answers them differently. `capabilities` is narrowed because a bootstrapped
+	 * store must not CLAIM history it never received. This one is about whether
+	 * versions are physically dropped, and the snapshot floor drops nothing: there
+	 * is nothing below it to delete, because the snapshot IS the oldest state this
+	 * store has. So an `unbounded` store bootstrapped from a snapshot reports a
+	 * window here and `no-floor` there, and both are true of it.
+	 */
+	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return this.inner.readRetentionEnforcement();
 	}
 
 	async getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined> {

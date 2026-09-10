@@ -305,3 +305,39 @@ describe('what pruning deliberately does NOT touch', () => {
 		);
 	});
 });
+
+describe('the record a prune leaves behind survives the process it ran in', () => {
+	it('is read back by a store opened on the same database, rather than starting at never', async () => {
+		const db = createTestDB();
+		const options = {retention: {blocks: 64}, finalityDepth: FINALITY} as const;
+
+		const first = new VersionedStateStore(db, [TOKEN, ACCOUNT], options);
+		await first.migrate();
+		await first.applyBlock(block(1_000), [owns('1', '0xalice', 1)]);
+		await first.applyBlock(block(1_001), [owns('1', '0xbob', 2)]);
+		// far enough ahead that the floor is above the close at 1,001
+		await first.applyBlock(block(1_100), []);
+		const pass = await first.prune();
+		expect(pass.versionsDeleted).toBeGreaterThan(0);
+
+		// a redeploy, a restarted process, or the read tier of a split deployment
+		// opening the database the folding tier wrote: nothing in memory survived,
+		// and the store must not come back claiming it has never been pruned.
+		const reopened = new VersionedStateStore(db, [TOKEN, ACCOUNT], options);
+		await reopened.migrate();
+
+		expect(await reopened.readRetentionEnforcement()).toEqual({kind: 'pruned', floor: 1_036, prunedTo: 1_036});
+	});
+
+	it('leaves an unbounded store reporting `no-floor` after a pass, with no record written', async () => {
+		const db = createTestDB();
+		const store = new VersionedStateStore(db, [TOKEN, ACCOUNT]);
+		await store.migrate();
+		await store.applyBlock(block(1_000), [owns('1', '0xalice', 1)]);
+
+		await store.prune();
+
+		expect(await store.readRetentionEnforcement()).toEqual({kind: 'no-floor'});
+		expect(await rows(db, `SELECT key FROM _cursor`)).toEqual([]);
+	});
+});

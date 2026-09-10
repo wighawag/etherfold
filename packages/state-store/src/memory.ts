@@ -3,6 +3,12 @@ import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import {entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
 import {
+	pruneRecord,
+	retentionEnforcementOf,
+	RETENTION_ENFORCEMENT_KEY,
+	type RetentionEnforcement,
+} from './enforcement.js';
+import {
 	assertListingLimit,
 	boundedListing,
 	compareIds,
@@ -316,7 +322,31 @@ export class MemoryStateStore implements StateStore {
 			}
 		}
 
+		// AFTER the deletion, so the record can never claim a pass that did not
+		// happen. A crash in between leaves the store reporting `never-pruned` over
+		// rows that did go, which under-claims enforcement and is corrected by the
+		// next pass -- the safe direction for a diagnostic.
+		const record = pruneRecord(floor);
+		if (record !== undefined) this.cursors.set(RETENTION_ENFORCEMENT_KEY, record);
+
 		return {tip, floor, versionsDeleted: doomed.size, complete: doomed.size === unreachable.length};
+	}
+
+	/**
+	 * Whether the retention this store reports is enforced against its storage.
+	 *
+	 * Durable in the only sense this backend HAS a durable sense: the record rides
+	 * the same cursor map as every other cursor, and goes with the process exactly
+	 * as the rows do. A backend whose storage outlives the process reads back what
+	 * an earlier one wrote, which is what makes the report worth having there.
+	 */
+	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		return retentionEnforcementOf(
+			this.provided,
+			this.finalityDepth,
+			this.tip,
+			this.cursors.get(RETENTION_ENFORCEMENT_KEY),
+		);
 	}
 
 	/**

@@ -15,8 +15,11 @@ import {
 	mustGet,
 	normalizeEntities,
 	pruneBudget,
+	pruneRecord,
 	resolveRetention,
+	retentionEnforcementOf,
 	retentionFloor,
+	RETENTION_ENFORCEMENT_KEY,
 	StoreWriterChangedError,
 	writerToken,
 	type EntityIdPrefix,
@@ -24,6 +27,7 @@ import {
 	type PruneOptions,
 	type PruneReport,
 	type Retention,
+	type RetentionEnforcement,
 	type RetentionOptions,
 	type RetentionSetting,
 	type StateStore,
@@ -546,12 +550,47 @@ export class VersionedStateStore implements StateStore {
 			}
 		}
 
+		// AFTER the deletes, so the record can never claim a pass that did not
+		// happen, and in a batch of its own because `remote-sql` exposes transactions
+		// only as `batch` -- a prune here is already a SEQUENCE of batches rather than
+		// one transaction, so there is no wider unit to join. A crash in between
+		// leaves the store reporting `never-pruned` over rows that did go, which
+		// under-claims enforcement and is corrected by the next pass.
+		const record = pruneRecord(floor);
+		if (record !== undefined) {
+			await this.sendGuarded('prune', guard, [
+				writeCursorStatement(RETENTION_ENFORCEMENT_KEY, record, this.names, guard),
+			]);
+		}
+
 		// Without a budget every table was drained, so the pass is complete by
 		// construction. With one, "is there more" is a question only the database can
 		// answer, and one bounded probe is cheaper than making the caller guess.
 		const complete = versionsDeleted < budget || !(await this.hasPrunableVersions(floor));
 		logger.info(`pruned ${versionsDeleted} versions closed at or below block ${floor} (tip ${tip})`);
 		return {tip, floor, versionsDeleted, complete};
+	}
+
+	/**
+	 * Whether the retention this store reports is enforced against its storage.
+	 *
+	 * Durable because the record is a row in the cursor table beside the versions,
+	 * so a process that prunes and dies is answered for by the next one to open
+	 * the database -- which on this backend is the ordinary case, since a serving
+	 * tier and a folding tier are frequently two processes over one file.
+	 *
+	 * A READ: two ordinary selects, no guard and no write, so asking whether a
+	 * store is being pruned cannot take it away from the writer that is pruning
+	 * it.
+	 */
+	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
+		const tip = (await this.select<RecordedBlock>(latestBlockStatement(this.names)))[0]?.number;
+		return retentionEnforcementOf(
+			this.provided,
+			this.finalityDepth,
+			tip,
+			await this.readCursor(RETENTION_ENFORCEMENT_KEY),
+		);
 	}
 
 	/** Whether any version is still unreachable at `floor`: one indexed probe per table. */
