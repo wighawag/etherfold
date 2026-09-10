@@ -4,8 +4,21 @@ slug: applyblock-refuses-a-height-below-the-recorded-tip
 spec: a-second-writer-writes-nothing
 blockedBy: [every-mutating-path-carries-a-writer-token]
 covers: []
-needsAnswers: true
 ---
+
+## A previous attempt produced an EMPTY DIFF — read this before deciding there is nothing to do
+
+A previous run of this task ended with no source change at all and no recorded reason, so the runner treated it as a stop. **That judgement was checked and is wrong.** The tightening is genuinely NOT implemented on `main`:
+
+`applyBlock` in `packages/state-store-indexeddb/src/store.ts` still refuses only a DUPLICATE height. Inside its transaction it does exactly three checks, in order: `claimOrCheck` (the writer token, added by `every-mutating-path-carries-a-writer-token`), then `blocks.get(block.number)` refusing a height already recorded, then the hash-index lookup refusing a duplicate hash. **There is no comparison against the recorded TIP anywhere in it.** So a writer holding a stale cursor can still apply at a height the tip has passed, as long as that exact height is not already recorded, which is the hole this task exists to close.
+
+Do not re-derive "already done" from the presence of the writer-token guard. That guard answers WHO is writing. This task answers WHETHER THE HEIGHT IS ABOVE THE TIP. They are different questions and the second one is unanswered.
+
+### If you genuinely need to STOP, stop LOUDLY, not with an empty diff
+
+This task's prompt asks you to confirm its premise yourself and says that finding a caller which legitimately applies at or below the tip is a STOP. That instruction stands. But an empty diff is NOT how to report it: it loses your reasoning entirely, which is what happened last time and cost a full run.
+
+If you conclude this task should not proceed, WRITE THAT CONCLUSION DOWN as a `work/notes/observations/` note naming the exact call site, the file and line, and why it legitimately applies at or below the tip. That note IS your deliverable and it is a non-empty diff. A stop that leaves a record is useful; a stop that leaves nothing is indistinguishable from a failure.
 
 ## What to build
 
