@@ -5,11 +5,18 @@ import {portableDeclarationCases} from './cases/portable-declarations.js';
 import {readYourWritesCases} from './cases/read-your-writes.js';
 import {reorgRevertCases} from './cases/reorg-revert.js';
 import {retentionPruningCases} from './cases/retention-pruning.js';
+import {singleWriterCases} from './cases/single-writer.js';
 import {snapshotBootstrapCases} from './cases/snapshot-bootstrap.js';
 import {syncCursorCases} from './cases/sync-cursor.js';
 import {versionedReadCases} from './cases/versioned-reads.js';
 import {CONFORMANCE_ENTITIES} from './fixtures.js';
-import type {ConformanceCase, ConformanceFailure, ConformanceResult, StateStoreFactory} from './types.js';
+import type {
+	ConformanceCase,
+	ConformanceFailure,
+	ConformanceResult,
+	StateStoreConformanceOptions,
+	StateStoreFactory,
+} from './types.js';
 
 /**
  * Every case a backend must pass, chosen against what that backend CLAIMS.
@@ -31,10 +38,16 @@ import type {ConformanceCase, ConformanceFailure, ConformanceResult, StateStoreF
  * same claim-driven selection: what a store may drop is what it stopped
  * promising to answer), what a store bootstrapped from a snapshot may claim
  * about history it never received (claim-driven again, and the one trap a new
- * backend would otherwise rediscover in a browser tab), and that a DECLARATION
- * means the same thing here as it does on every other backend.
+ * backend would otherwise rediscover in a browser tab), that a SECOND WRITER
+ * writes nothing on a backend that claims it can enforce one (the same
+ * claim-driven selection again, and the one chapter that needs a second handle
+ * the factory cannot give -- see `StateStoreConformanceOptions`), and that a
+ * DECLARATION means the same thing here as it does on every other backend.
  */
-export async function stateStoreConformanceCases(factory: StateStoreFactory): Promise<ConformanceCase[]> {
+export async function stateStoreConformanceCases(
+	factory: StateStoreFactory,
+	options: StateStoreConformanceOptions = {},
+): Promise<ConformanceCase[]> {
 	const probe = await factory(CONFORMANCE_ENTITIES);
 	const capabilities = probe.capabilities;
 
@@ -48,6 +61,7 @@ export async function stateStoreConformanceCases(factory: StateStoreFactory): Pr
 		...blockAtomicityCases(factory),
 		...syncCursorCases(factory),
 		...snapshotBootstrapCases(factory, capabilities),
+		...singleWriterCases(factory, capabilities, options),
 		...portableDeclarationCases(factory),
 	];
 }
@@ -63,8 +77,11 @@ export async function stateStoreConformanceCases(factory: StateStoreFactory): Pr
  * It does not stop at the first failure, because "which of the twelve did I
  * break" is the question a backend author actually has.
  */
-export async function runStateStoreConformance(factory: StateStoreFactory): Promise<ConformanceResult> {
-	const cases = await stateStoreConformanceCases(factory);
+export async function runStateStoreConformance(
+	factory: StateStoreFactory,
+	options: StateStoreConformanceOptions = {},
+): Promise<ConformanceResult> {
+	const cases = await stateStoreConformanceCases(factory, options);
 	const failures: ConformanceFailure[] = [];
 
 	for (const one of cases) {

@@ -29,8 +29,8 @@ import {TOKEN, block, owns} from './utils/fixtures.js';
  * not at all.
  */
 
-const unbounded: StateStoreCapabilities = {retention: {kind: 'unbounded'}, asOf: true};
-const revertOnly: StateStoreCapabilities = {retention: {kind: 'revert-only'}, asOf: false};
+const unbounded: StateStoreCapabilities = {retention: {kind: 'unbounded'}, asOf: true, singleWriter: false};
+const revertOnly: StateStoreCapabilities = {retention: {kind: 'revert-only'}, asOf: false, singleWriter: false};
 
 describe('what counts as a block number', () => {
 	it('is a whole, non-negative number and nothing else', () => {

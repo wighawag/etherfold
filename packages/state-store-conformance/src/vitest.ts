@@ -1,6 +1,6 @@
 import {describe, it} from 'vitest';
 import {stateStoreConformanceCases} from './suite.js';
-import type {ConformanceCase, StateStoreFactory} from './types.js';
+import type {ConformanceCase, StateStoreConformanceOptions, StateStoreFactory} from './types.js';
 
 /**
  * Register the whole suite as vitest tests. One factory, one call:
@@ -17,9 +17,18 @@ import type {ConformanceCase, StateStoreFactory} from './types.js';
  * collection does, and each case is registered as its own `it` -- which is the
  * point of the adapter: a failure is reported as the behaviour that broke rather
  * than as one opaque red suite.
+ *
+ * The optional third argument is what a backend can say BEYOND a factory: today
+ * that is how to open a SECOND handle on one storage, which is what the
+ * contention chapter needs and what a fresh-database-per-call factory cannot
+ * express. See `StateStoreConformanceOptions`.
  */
-export async function describeStateStoreConformance(label: string, factory: StateStoreFactory): Promise<void> {
-	const cases = await stateStoreConformanceCases(factory);
+export async function describeStateStoreConformance(
+	label: string,
+	factory: StateStoreFactory,
+	options: StateStoreConformanceOptions = {},
+): Promise<void> {
+	const cases = await stateStoreConformanceCases(factory, options);
 
 	describe(label, () => {
 		for (const [group, list] of byGroup(cases)) {

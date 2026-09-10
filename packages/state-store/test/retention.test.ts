@@ -37,6 +37,8 @@ import {TOKEN} from './utils/fixtures.js';
 const capabilities = (retention: Retention, asOf = retention.kind !== 'revert-only'): StateStoreCapabilities => ({
 	retention,
 	asOf,
+	// nothing here asks about contention; the retention refusal is the subject
+	singleWriter: false,
 });
 
 /** Every `.ts` under a root, so the guard below scans sources rather than a list someone maintains. */
@@ -275,12 +277,12 @@ describe('the refusal', () => {
 describe('a store claims what it enforces', () => {
 	it('reports `revert-only`, and reports that it answers no as-of read', () => {
 		const store = new MemoryStateStore([TOKEN], {retention: 'revert-only'});
-		expect(store.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false});
+		expect(store.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false, singleWriter: false});
 	});
 
 	it('reports the window it was set to, because it enforces both halves of it', () => {
 		const store = new MemoryStateStore([TOKEN], {retention: {blocks: 128}, finalityDepth: 64});
-		expect(store.capabilities).toEqual({retention: {kind: 'window', blocks: 128}, asOf: true});
+		expect(store.capabilities).toEqual({retention: {kind: 'window', blocks: 128}, asOf: true, singleWriter: false});
 	});
 
 	it('rejects a window below the finality depth at construction, before any read', () => {

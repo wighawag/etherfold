@@ -61,6 +61,8 @@ A namespace is `[A-Za-z0-9]+` and is checked when the store is constructed. The 
 
 The namespace goes INSIDE the reserved `_` prefix (`token` becomes `genA_token`, and `_blocks` becomes `_genA_blocks`), so everything this store owns still starts with `_` and is still recognisable as a fixed table on the one database a combined deployment shares with the server. **With no namespace configured, the names are exactly what they have always been, byte for byte.**
 
+`_writer` is in the namespace too, and that is what scopes the **writer token**: every mutating statement this store emits is guarded on the token in its own `_writer` row, and the same batch reads the token back, because `remote-sql` reports no affected-row count and a read-back is therefore the only evidence a writer has (ADR-0054's mechanism, applied here by ADR-0075). A writer claims on its first write; a second writer's first write claims in turn, so the first one's next mutation matches zero rows everywhere and is reported as `StoreWriterChangedError` with nothing written. Two generations with different namespaces never contend, which is the concurrency the generation model requires; two stores on ONE namespace are one store, and the second writer takes it. `applyBlocks` is many batches, so the guard is per batch: a refusal mid-sequence leaves the batches that already committed applied and every later one unwritten. `drop` is DDL and cannot carry a predicate, so it compare-and-swaps the claim's RELEASE first and drops nothing if that fails. `migrate` never claims.
+
 ## Usage
 
 ```ts

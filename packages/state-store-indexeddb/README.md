@@ -45,7 +45,7 @@ cursors   key                     -> the opaque string a caller wrote (the sync 
 ```
 
 - **A version is a complete row** with a half-open block-validity range (`lower` inclusive, `upper` exclusive, `null` meaning live), which is what `@etherfold/state-store-sqlite` keeps as columns. A `set` writes a whole row, so a declared field the write did not list becomes NULL; a `delete` closes the live version without opening a new one.
-- **A store per entity was rejected.** Creating an object store needs a version change, and an upgrade transaction can be BLOCKED by another open tab, so a store per entity would make "the processor declares one more entity" a migration a second tab can stall. The schema version is this PACKAGE's and never a processor's: declaring another entity is not a migration, and every access path a table would have given is still a key range. (It moved to 2 once, when `cursors` was added; the upgrade is additive, so an existing database keeps every row.)
+- **A store per entity was rejected.** Creating an object store needs a version change, and an upgrade transaction can be BLOCKED by another open tab, so a store per entity would make "the processor declares one more entity" a migration a second tab can stall. The schema version is this PACKAGE's and never a processor's: declaring another entity is not a migration, and every access path a table would have given is still a key range. (It moved to 2 when `cursors` was added and to 3 when `writer` was; each upgrade is additive, so an existing database keeps every row.)
 - **One block is one transaction**, and the SYNC CURSOR is in it. A block applies whole or not at all, two tabs writing one database serialise instead of interleaving, and the cursor that says "I have reached this block" commits with the block or not at all (ADR-0027). A cursor kept outside the store would be a second write, and a crash between them wedges an indexer.
 - **`revertTo` does not touch `cursors`.** How far the CALLER got is not entity state; the caller moves it when it applies the canonical branch.
 
@@ -75,6 +75,8 @@ Note the trap: a window of N BLOCKS is not N updates of history. On the real mea
 ## Multi-tab
 
 Several tabs of one app share one database by construction (that is what a database name IS), and that is the case both wasm-SQLite VFSs fail at open. `browser/multi-tab.spec.ts` runs four tabs against one database, each writing its own block heights, and audits from a fifth connection that every row is there: four of four, zero mismatches, on all three engines.
+
+Two tabs both INDEXING into one database is the other half of that, and it is guarded rather than tolerated: every mutating path carries a **writer token** in the `writer` store, read and checked in the same `readwrite` transaction that writes (ADR-0075). A tab claims by writing; a second tab's first write claims in turn, so the first tab's next mutation is refused with `StoreWriterChangedError` and writes nothing. Because the transaction is the atomic unit, there is no window between the check and the write for a second tab to land in -- the fencing is exact, not best-effort, and nothing here assumes anything about timing. The claim is scoped to the `databaseName` and nothing else, so two unrelated indexers on one origin, and two generations of one indexer named apart, never contend. `migrate` never claims: opening is not writing, and every tab opens.
 
 ## Tests
 

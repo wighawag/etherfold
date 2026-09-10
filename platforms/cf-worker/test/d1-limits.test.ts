@@ -83,9 +83,10 @@ describe("D1's documented limits reach the store's batch bounds", () => {
 		await store.applyBlocks(updates(blocks, {from: 1_000_000, id: 'paid'}));
 
 		// one round trip carrying every block, which is 20x what the Free-tier
-		// default would allow in one batch
+		// default would allow in one batch -- plus the two statements the writer
+		// guard adds to any batch: the claim and the read-back (ADR-0075)
 		expect(db.batches.length).toBe(1);
-		expect(db.batches[0].length).toBe(blocks * STATEMENTS_PER_UPDATE);
+		expect(db.batches[0].length).toBe(blocks * STATEMENTS_PER_UPDATE + 2);
 		expect(db.batches[0].length).toBeGreaterThan(d1BatchBounds('free').maxStatementsPerBatch);
 		expect((await store.getCurrent<{transferCount: number}>('token', {id: 'paid'}))?.transferCount).toBe(
 			1_000_000 + blocks - 1,
@@ -143,8 +144,9 @@ describe('a prune runs inside the plan it was configured for', () => {
 	it('sizes the per-invocation budget so the rounds it costs fit the plan', () => {
 		for (const plan of ['free', 'paid'] as const) {
 			const rounds = d1PruneBudget(plan) / d1BatchBounds(plan).maxRowsPerStatement;
-			// each round is one SELECT of row ids plus one DELETE naming them
-			expect(rounds * 2).toBeLessThanOrEqual(D1_LIMITS[plan].queriesPerInvocation);
+			// each round is one SELECT of row ids, one DELETE naming them, and the
+			// writer read-back that says the DELETE was ours to make
+			expect(rounds * 3).toBeLessThanOrEqual(D1_LIMITS[plan].queriesPerInvocation);
 			expect(rounds).toBeGreaterThanOrEqual(1);
 		}
 		expect(d1PruneBudget('paid')).toBeGreaterThan(d1PruneBudget('free'));

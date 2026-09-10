@@ -117,6 +117,50 @@ export class BlockNotRetainedError extends BlockUnavailableError {
 	}
 }
 
+/**
+ * Thrown by a mutation whose writer no longer holds the store's claim.
+ *
+ * A second writer claimed the storage, which invalidated this writer's claim, so
+ * this mutation was refused INSIDE the atomic unit that would have written it:
+ * nothing was applied, nothing was applied late, and the store is exactly as it
+ * was. See `writer.ts` for the mechanism and ADR-0075 for why it is ADR-0054
+ * rather than a new idea.
+ *
+ * **It is not an application error, and it is the opposite of the other refusal
+ * on this path.** "Applying the same block twice is a caller bug" says the
+ * CALLER is wrong; this says the caller LOST A RACE it could not have avoided,
+ * and the correct response is to drop the in-memory `LastSync` that is now a
+ * lie, stop fetching, and become a reader. That demotion is the caller's and is
+ * specified separately; what the store owes is a distinct, catchable name.
+ *
+ * It lives at the seam because EVERY backend that enforces a single writer
+ * throws it and core catches it, and two classes of one name in two packages
+ * would break `instanceof` across the boundary -- the same reason
+ * `BlockNotRetainedError` is here.
+ *
+ * It carries no token. A token is opaque (`writer.ts`): nothing compares two of
+ * them for order, parses one, or reads a time out of one, and publishing one in
+ * an error message would be the first invitation to do so.
+ */
+export class StoreWriterChangedError extends Error {
+	readonly name = 'StoreWriterChangedError';
+
+	constructor(
+		/** Which mutating path was refused, e.g. `applyBlock`. */
+		readonly operation: string,
+		message?: string,
+	) {
+		super(
+			message ??
+				`${operation} was refused: another writer has claimed this store, so this writer's claim is no longer ` +
+					`held and NOTHING was written. This is a lost race rather than a caller bug: a second instance of the ` +
+					`indexer is writing to the same storage. Drop the in-memory cursor, which is now a lie, and stop ` +
+					`writing; if the two were meant to be independent, address them apart (a database name, a table ` +
+					`namespace) rather than sharing one store.`,
+		);
+	}
+}
+
 /** A value in a message, without `JSON.stringify` throwing on a BigInt or a cycle. */
 function describeValue(value: unknown): string {
 	if (typeof value === 'bigint') return `${value}n`;

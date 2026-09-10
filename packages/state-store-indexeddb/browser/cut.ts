@@ -17,12 +17,23 @@
  *   `IDBObjectStore.openCursor` rather than off a shim.
  * - `write` / `read` phases: persistence across a REAL page reload, which is the
  *   thing no node test can show.
- * - `multi-tab`: one database, four tabs, each writing its own blocks. This is
- *   the case both wasm-SQLite VFSs fail at open.
+ * - `multi-tab`: one database, four tabs, each OPENING it and writing its own
+ *   blocks. This is the case both wasm-SQLite VFSs fail at open. Since the
+ *   writer token (ADR-0075) only one tab may WRITE at a time, so a tab reports
+ *   what it wrote and what it was refused, and the audit checks the two agree.
+ *
+ * The conformance run also carries the CONTENTION chapter, two handles on one
+ * database, which is where the writer token (ADR-0075) meets the engine that
+ * gives it its teeth.
  */
 import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-browser-harness/contract';
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
-import {MemoryStateStore, type EntityDeclaration, type StateStore} from '@etherfold/state-store';
+import {
+	MemoryStateStore,
+	StoreWriterChangedError,
+	type EntityDeclaration,
+	type StateStore,
+} from '@etherfold/state-store';
 import {runStateStoreConformance} from '@etherfold/state-store-conformance';
 import {deleteDatabase, IndexedDBStateStore} from '../src/index.js';
 import {processor, runWorkload} from './workload.js';
@@ -54,13 +65,30 @@ async function conformance(params: Params, timings: Timing[]): Promise<Record<st
 
 	for (const {claim, options} of claims) {
 		let sequence = 0;
+		const named = () => `${databaseName(params, claim)}-${sequence++}`;
 		const result = await timed(`conformance:${claim}`, timings, () =>
 			runStateStoreConformance(
-				(declarations) =>
-					new IndexedDBStateStore(declarations, {
-						databaseName: `${databaseName(params, claim)}-${sequence++}`,
-						...options,
-					}),
+				(declarations) => new IndexedDBStateStore(declarations, {databaseName: named(), ...options}),
+				{
+					// the CONTENTION chapter, which needs two handles on ONE database and
+					// is therefore the one part of the suite a factory cannot express. It
+					// belongs in a real engine more than anywhere else: `readwrite`
+					// transactions serialising across connections is the property
+					// ADR-0075 rests on, and `fake-indexeddb` cannot demonstrate it.
+					twoWriters: {
+						sharingStorage: (declarations) => {
+							const databaseName = named();
+							return [
+								new IndexedDBStateStore(declarations, {databaseName, ...options}),
+								new IndexedDBStateStore(declarations, {databaseName, ...options}),
+							];
+						},
+						addressedApart: (declarations) => [
+							new IndexedDBStateStore(declarations, {databaseName: named(), ...options}),
+							new IndexedDBStateStore(declarations, {databaseName: named(), ...options}),
+						],
+					},
+				},
 			),
 		);
 		passed += result.passed;
@@ -190,9 +218,17 @@ async function readPhase(params: Params, timings: Timing[]): Promise<Record<stri
 /**
  * One tab of a multi-tab run: its own heights, into the database they share.
  *
- * Each tab writes a block range of its own and then reads back EVERY tab's rows,
- * so a tab that could not open the database, or that lost a write to another
- * tab's transaction, shows up as a mismatch rather than as a slow run.
+ * Each tab OPENS the shared database, writes a block range of its own and then
+ * reads back what it managed to write, so a tab that could not open the
+ * database at all -- the failure mode both wasm-SQLite VFSs have here -- shows
+ * up as an error rather than as a slow run.
+ *
+ * **A refused write is an OUTCOME here, not a failure.** Since ADR-0075 the
+ * store carries a writer token, so several tabs may hold a connection at once
+ * and only ONE of them may write: whichever claimed last keeps going and the
+ * rest are refused with `StoreWriterChangedError`, having written nothing. That
+ * is the rule working, so it is counted and reported; what would be a defect is
+ * a tab whose rows are half there, or a refusal wearing another error's name.
  */
 async function multiTab(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const tab = params.tab as number;
@@ -202,17 +238,26 @@ async function multiTab(params: Params, timings: Timing[]): Promise<Record<strin
 	await store.migrate();
 
 	try {
+		let wrote = 0;
+		let refused = 0;
+		const unexpected: string[] = [];
 		await timed(`tab-${tab}`, timings, async () => {
 			for (let index = 0; index < blocks; index++) {
 				const number = 1_000 + index * tabs + tab;
-				await store.applyBlock({number, hash: `0x${number.toString(16)}`, timestamp: 1_700_000_000 + number * 12}, [
-					{
-						type: 'upsert',
-						entity: 'token',
-						id: {id: `tab-${tab}-${index}`},
-						values: {owner: `0x${tab}`, transferCount: index},
-					},
-				]);
+				try {
+					await store.applyBlock({number, hash: `0x${number.toString(16)}`, timestamp: 1_700_000_000 + number * 12}, [
+						{
+							type: 'upsert',
+							entity: 'token',
+							id: {id: `tab-${tab}-${index}`},
+							values: {owner: `0x${tab}`, transferCount: index},
+						},
+					]);
+					wrote++;
+				} catch (error) {
+					if (error instanceof StoreWriterChangedError) refused++;
+					else unexpected.push(`${(error as Error)?.message ?? error}`);
+				}
 			}
 		});
 
@@ -221,16 +266,28 @@ async function multiTab(params: Params, timings: Timing[]): Promise<Record<strin
 			const row = await store.getCurrent<{owner: string}>('token', {id: `tab-${tab}-${index}`});
 			if (row?.owner === `0x${tab}`) mine++;
 		}
-		return {tab, wrote: blocks, readBack: mine, mismatches: blocks - mine};
+		// `mismatches` keeps its meaning: rows this tab was TOLD it wrote and cannot
+		// read back. A refused write is not one of them -- it wrote nothing.
+		return {tab, attempted: blocks, wrote, refused, unexpected, readBack: mine, mismatches: wrote - mine};
 	} finally {
 		await store.close();
 	}
 }
 
-/** After every tab has finished: does one connection see all of their rows? */
+/**
+ * After every tab has finished: does one connection see exactly the rows the
+ * tabs were told they wrote?
+ *
+ * `expected` is what the TABS reported writing rather than `tabs * blocks`,
+ * because only one tab may write at a time now (ADR-0075) and a refused write
+ * wrote nothing. The audit is what makes that claim checkable from outside: a
+ * row from a refused writer, or a missing row from an accepted one, is torn
+ * state and shows up here.
+ */
 async function multiTabAudit(params: Params): Promise<Record<string, unknown>> {
 	const tabs = params.tabs as number;
 	const blocks = (params.blocks as number) ?? 20;
+	const expected = (params.expected as number) ?? tabs * blocks;
 	const store = new IndexedDBStateStore([TOKEN], {databaseName: databaseName(params, 'multi-tab')});
 	await store.migrate();
 	try {
@@ -240,7 +297,7 @@ async function multiTabAudit(params: Params): Promise<Record<string, unknown>> {
 				if (await store.getCurrent('token', {id: `tab-${tab}-${index}`})) found++;
 			}
 		}
-		return {expected: tabs * blocks, found, missing: tabs * blocks - found};
+		return {expected, found, missing: expected - found, surplus: found - expected};
 	} finally {
 		await store.close();
 	}

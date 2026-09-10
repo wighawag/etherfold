@@ -60,4 +60,32 @@ export type StateStoreCapabilities = {
 	 * reports `asOf: false`, and a caller that needs history knows at startup.
 	 */
 	readonly asOf: boolean;
+	/**
+	 * Whether a SECOND writer on this store's storage is refused rather than
+	 * allowed to corrupt it.
+	 *
+	 * `true` means every mutating path carries a writer token checked in the same
+	 * atomic unit as the write it guards, so a writer whose claim has been taken
+	 * over is refused with `StoreWriterChangedError` and writes nothing
+	 * (`writer.ts`, ADR-0075).
+	 *
+	 * It is REPORTED rather than assumed because not every backend can hold a
+	 * meaningful guard, and pretending otherwise produces a vacuous test.
+	 * `MemoryStateStore` and the patch store keep their storage in instance
+	 * fields, so no second writer can reach it and a token there could only ever
+	 * be compared with itself: green, tested, and meaningless. They report `false`
+	 * honestly, and the conformance suite selects the contention cases on this
+	 * claim.
+	 *
+	 * It is a fact about one unit of STORAGE and not about a process, a tab or an
+	 * origin: two stores addressed apart (a second `databaseName`, a second table
+	 * namespace) never contend, which is what keeps two generations of one indexer
+	 * writing at once.
+	 *
+	 * Distinct from the ONE-WRITER RULE on the stream keeper, which says only the
+	 * indexing generation APPENDS TO A STREAM and is structural (a follower is
+	 * handed a read-only view, ADR-0044). Same words, different seam: that one
+	 * decides who may write, this one enforces that whoever does is alone.
+	 */
+	readonly singleWriter: boolean;
 };
