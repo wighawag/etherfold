@@ -55,6 +55,22 @@ describe('the browser default', () => {
 		expect(windowed.capabilities).toEqual({retention: {kind: 'window', blocks: 128}, asOf: true});
 	});
 
+	it("takes 'revert-only' as well, and reports asOf: false as its docstring says it will", async () => {
+		// the setting `BrowserStateStoreConfig.retention` points a browser app at
+		// for reorg safety with no history. It is a `retention` VALUE, so it is
+		// available on the DEFAULT backend and not only on the light store that is
+		// `revert-only` by construction -- and the store says up front that it
+		// answers no historical read, which is the whole reason to prefer it to a
+		// small window that would refuse them one at a time instead.
+		const revertOnly = await createBrowserStateStore(ENTITIES, {
+			databaseName: freshName(),
+			retention: 'revert-only',
+			finalityDepth: 64,
+		});
+
+		expect(revertOnly.capabilities).toEqual({retention: {kind: 'revert-only'}, asOf: false});
+	});
+
 	it('refuses a window below the finality depth where it was configured', async () => {
 		// not at the first read it would have answered wrongly
 		await expect(

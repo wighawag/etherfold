@@ -35,7 +35,19 @@ import {BlockNotRetainedError} from './errors.js';
  * rate and the contract's activity, not against how much history it feels like.
  */
 export type RetentionSetting =
+	/**
+	 * Reorg safety and no history, said honestly: superseded versions survive only
+	 * as long as reorg revert needs them (its floor is the `finalityDepth` stated
+	 * beside it, which is also what it prunes to), and no historical read is
+	 * answered at all. Such a store reports `asOf: false`, so a caller that needs
+	 * history learns it at STARTUP rather than from a refused read later.
+	 *
+	 * This is what to write for "no history", rather than approximating it with a
+	 * small window: a window is a distance in BLOCK NUMBERS (above), so a short one
+	 * refuses nearly every historical read while looking configured for history.
+	 */
 	| 'revert-only'
+	/** Keep everything: nothing is ever pruned, and the whole history is readable. */
 	| 'unbounded'
 	/** Keep superseded versions for `blocks` block numbers behind the tip. */
 	| {readonly blocks: number};
