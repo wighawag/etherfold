@@ -2,11 +2,11 @@
   "config": {
     "argv": [
       "/home/wighawag/.volta/tools/image/node/24.11.1/bin/node",
-      "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/node_modules/@playwright/test/cli.js",
+      "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/node_modules/@playwright/test/cli.js",
       "test"
     ],
-    "configFile": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/playwright.config.ts",
-    "rootDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/browser",
+    "configFile": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/playwright.config.ts",
+    "rootDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
@@ -22,7 +22,7 @@
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -30,7 +30,7 @@
         },
         "id": "chromium",
         "name": "chromium",
-        "testDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -38,7 +38,7 @@
         "timeout": 300000
       },
       {
-        "outputDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -46,7 +46,7 @@
         },
         "id": "firefox",
         "name": "firefox",
-        "testDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -54,7 +54,7 @@
         "timeout": 300000
       },
       {
-        "outputDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -62,7 +62,7 @@
         },
         "id": "webkit",
         "name": "webkit",
-        "testDir": "/home/wighawag/.dorfl/work/github-com__jolly-roger-eth__ethereum-indexer__indexeddb-row-backend-browser-default/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -118,12 +118,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 569,
+                  "duration": 1422,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:40.784Z",
+                  "startTime": "2026-09-10T18:27:30.611Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -133,7 +133,41 @@
           ],
           "id": "3facdf5ef3bd951cb354-418f43b46b97780bb781",
           "file": "multi-tab.spec.ts",
-          "line": 32,
+          "line": 66,
+          "column": 1
+        },
+        {
+          "title": "several tabs contending for the same heights leave one winner and no torn state",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1108,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-10T18:27:32.253Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "3facdf5ef3bd951cb354-08ed05375a5d9ecbe3d5",
+          "file": "multi-tab.spec.ts",
+          "line": 173,
           "column": 1
         },
         {
@@ -152,12 +186,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 2465,
+                  "duration": 6113,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:43.110Z",
+                  "startTime": "2026-09-10T18:27:41.321Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -167,7 +201,41 @@
           ],
           "id": "3facdf5ef3bd951cb354-19d083728d32ff88ace1",
           "file": "multi-tab.spec.ts",
-          "line": 32,
+          "line": 66,
+          "column": 1
+        },
+        {
+          "title": "several tabs contending for the same heights leave one winner and no torn state",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "firefox",
+              "projectName": "firefox",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4052,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-10T18:27:48.345Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "3facdf5ef3bd951cb354-ebca208b4da6f945aacb",
+          "file": "multi-tab.spec.ts",
+          "line": 173,
           "column": 1
         },
         {
@@ -186,12 +254,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1695,
+                  "duration": 2623,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:49.816Z",
+                  "startTime": "2026-09-10T18:28:07.395Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -201,7 +269,41 @@
           ],
           "id": "3facdf5ef3bd951cb354-ab71023fc445313a78fc",
           "file": "multi-tab.spec.ts",
-          "line": 32,
+          "line": 66,
+          "column": 1
+        },
+        {
+          "title": "several tabs contending for the same heights leave one winner and no torn state",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "webkit",
+              "projectName": "webkit",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2733,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-10T18:28:10.230Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "3facdf5ef3bd951cb354-2f96aa0763c9c34fcf66",
+          "file": "multi-tab.spec.ts",
+          "line": 173,
           "column": 1
         }
       ]
@@ -228,12 +330,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 534,
+                  "duration": 4041,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:41.541Z",
+                  "startTime": "2026-09-10T18:27:33.775Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -262,12 +364,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 179,
+                  "duration": 1335,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:42.086Z",
+                  "startTime": "2026-09-10T18:27:37.887Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -296,12 +398,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 176,
+                  "duration": 529,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:42.275Z",
+                  "startTime": "2026-09-10T18:27:39.301Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -330,12 +432,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 217,
+                  "duration": 604,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:42.459Z",
+                  "startTime": "2026-09-10T18:27:39.877Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -364,12 +466,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1177,
+                  "duration": 7758,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:46.340Z",
+                  "startTime": "2026-09-10T18:27:52.906Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -398,12 +500,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 391,
+                  "duration": 3054,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:47.536Z",
+                  "startTime": "2026-09-10T18:28:00.711Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -432,12 +534,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 410,
+                  "duration": 825,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:47.944Z",
+                  "startTime": "2026-09-10T18:28:03.855Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -466,12 +568,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 647,
+                  "duration": 964,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:48.366Z",
+                  "startTime": "2026-09-10T18:28:04.725Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -500,12 +602,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1075,
+                  "duration": 6409,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:51.740Z",
+                  "startTime": "2026-09-10T18:28:13.459Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -534,12 +636,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 391,
+                  "duration": 1755,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:52.838Z",
+                  "startTime": "2026-09-10T18:28:20.024Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -568,12 +670,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 420,
+                  "duration": 799,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:53.242Z",
+                  "startTime": "2026-09-10T18:28:21.832Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -602,12 +704,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 437,
+                  "duration": 669,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-23T11:13:53.690Z",
+                  "startTime": "2026-09-10T18:28:22.685Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -625,9 +727,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-08-23T11:13:40.355Z",
-    "duration": 13880.451,
-    "expected": 15,
+    "startTime": "2026-09-10T18:27:29.701Z",
+    "duration": 53979.043000000005,
+    "expected": 18,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0
