@@ -2,25 +2,9 @@
 title: 'A second writer writes nothing'
 slug: a-second-writer-writes-nothing
 humanOnly: true
-needsAnswers: true
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK — stripped by the apply rung on full resolution.
--->
-
-## Open questions
-
-> The two that governed the shape are CLOSED, and their answers are in Implementation Decisions below: the write surface splits at construction (`openForWriting` / `openForReading`), and the claim is scoped to the store's own storage identity because it lives inside it. Three remain, none of which changes that shape.
-
-1. **Do `MemoryStateStore` and `@etherfold/state-store-patch` carry the guard, or declare its absence?** The check is trivial in one heap, and uniformity is what the conformance suite is for; against that, a memory store's second writer is a second object in one process, which is a different hazard from a second tab. A backend that declares the guard absent creates a second variant of the seam contract, which is the cost to weigh.
-2. **Should `applyBlock` also refuse a height that is not ABOVE the recorded tip?** A single writer maintains that invariant, but it must be checked against the paths that apply out of order by design if any exist: a replay, a rebuild chunk, a seeded generation installing below its own position. Not investigated; this needs reading those paths rather than reasoning about them.
-3. **Opaque token or monotonic counter?** ADR-0054 rejected a counter because `remote-sql` reports no affected-row count, so a loser reading `expected + 1` could not tell a win from a loss. That reason does not apply on IndexedDB, where the check is a read inside the writing transaction. Uniformity across the two backends argues for the opaque token anyway.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -80,7 +64,7 @@ A refused writer is not an application error. It is a writer learning it lost, a
 ### Autonomy notes
 
 - **`humanOnly: true`.** Splitting the store's construction into a writing and a reading factory is a breaking change to `StateStore`, every backend, the conformance suite and `@etherfold/processor-entities`. The decision is taken (below) and the rationale is recorded, but accepting that blast radius on the project's central seam is a human's call, not an auto-tasker's.
-- **`needsAnswers: true`.** Three open questions remain. None blocks the shape, and question 2 is the one that actually blocks tasking: whether any path legitimately applies a block below the recorded tip is a fact about the replay, rebuild and seeding code that nobody has read yet, and cutting an acceptance criterion for a monotonicity check before reading them would pin the wrong behaviour.
+- **No `needsAnswers`.** All three are answered in Implementation Decisions below. Two were preferences with a clear argument; the third was a question about existing code, and it was settled by reading `applyEventStream` rather than by choosing.
 
 ## Implementation Decisions
 
@@ -126,7 +110,13 @@ declare function openForReading(...): Promise<ReadableStateStore>;
 
 **Losing is not throwing at the app.** The generation that catches it drops its in-memory `LastSync`, stops fetching, and becomes a reader. That demotion already has a precedent in the shape a follower takes.
 
-**Two invariants worth adding while the transaction is open**, both cheap because the transaction already exists: `applyBlock` refusing a height not above the recorded tip (subject to open question 4), and the cursor write inside `applyBlock` being guarded with the block rather than beside it.
+**Two invariants worth adding while the transaction is open**, both cheap because the transaction already exists: `applyBlock` refusing a height not above the recorded tip, and the cursor write inside `applyBlock` being guarded with the block rather than beside it.
+
+**`applyBlock` refuses a height that is not ABOVE the recorded tip, and this is a tightening rather than a behaviour change.** Settled by reading `applyEventStream` (`@etherfold/processor-entities`), which is the one production caller: it takes the stream's fork point, calls `revertTo(fork)` FIRST, and only then applies the grouped blocks in stream order. Its own docstring states the property this relies on: "Revert precedes apply, which is also what makes replay safe. A store records a block plainly and a re-applied block raises on purpose. `revertTo(fork)` drops every block above the fork, and the canonical events in the same stream are all at or above `fork + 1`, so the replacements cannot collide with the branch they replace." So after the revert the tip is at or below `fork` and every apply is at or above `fork + 1`: strictly above, already, on the path that matters. A replay takes the same route, and a bootstrap installs into a store whose tip is empty. Two implementation notes follow rather than exceptions: an EMPTY store admits any height (there is no tip to be above), and the check reads the tip inside the same transaction as the write, so a revert lowering the tip and an apply above it cannot interleave with a second writer.
+
+**The guard is an OPAQUE token, not a counter.** ADR-0054's own reason for rejecting a counter does not apply here: it could not distinguish a win from a loss because `remote-sql` reports no affected-row count, and on IndexedDB the check is a read inside the writing transaction, so a counter would work. It is still an opaque token, for uniformity: one mechanism satisfied two ways lets the conformance suite ask both backends the same question, where two mechanisms would make the SQL and browser cases read differently for no gain.
+
+**Every backend carries the guard, including `MemoryStateStore` and `@etherfold/state-store-patch`.** The check is trivial in one heap, and the alternative is worse than its cost: a backend that declares the guard absent creates a second variant of the seam contract, so the conformance suite would have to ask a different question per backend, which is precisely what that suite exists to avoid. A second writer in one process is a different hazard from a second tab, but it is not an absent one.
 
 ## Testing Decisions
 

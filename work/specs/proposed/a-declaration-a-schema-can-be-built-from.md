@@ -2,25 +2,9 @@
 title: 'A declaration a schema can be built from'
 slug: a-declaration-a-schema-can-be-built-from
 humanOnly: true
-needsAnswers: true
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK — stripped by the apply rung on full resolution.
--->
-
-## Open questions
-
-1. **How is a relation declared: on the CHILD, on the PARENT, or both?** The child already carries the truth, since its id begins with its parent's key, so the minimal declaration names which leading id columns are the parent and which entity they name. A parent-side `@derivedFrom`-style field is then DERIVED from that rather than declared twice, which is the property that makes the two halves unable to disagree. Against it: a schema generator wants the parent-side field NAME, which nothing on the child supplies.
-2. **Is a semantic type a new `FieldType`, or a tag beside the storage class?** `u256` as a `FieldType` reads best (`fields: {amount: 'u256'}`) and forces every backend's DDL, the conformance suite and the write path to grow a case. A tag beside it (`{amount: {storage: 'text', as: 'u256'}}`) leaves storage alone and makes decode/encode/compare a layer above. ADR-0025 says a field must carry "a semantic type (or a codec) alongside its storage class" without choosing.
-3. **Are interfaces and enums in scope, or explicitly deferred?** The research prototype modelled both (a `Node` interface, a `Rarity` enum) and produced a concrete finding about interfaces: a `UNION ALL` returns only the shared columns plus `__typename`, so answering `... on Token { rarity }` needs a per-type hydration pass. Enums are cheap; interfaces are a query-planning feature with a browser twin nobody has designed.
-4. **Does a relation imply anything about WRITES?** Today nothing enforces that a child's parent exists, and a subgraph does not either. Declaring the relation makes a referential check expressible, which is a new refusal on the write path with a cost per mutation, on a path that runs once per event on every backend.
-5. **What happens to a declaration that names a relation a backend cannot serve?** The seam's rule is that declaration legality is a fact about the declaration and not about the backend (refused at declaration time, on every backend), so a relation must either be universally serviceable or refused universally.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -77,15 +61,45 @@ Two additions, each described so that it says what the system ALREADY does rathe
 ### Autonomy notes
 
 - **`humanOnly: true`.** This changes `EntityDeclaration`, which is the central schema source: every backend's DDL and read path, the conformance suite, the generated read surface, and the shape every processor is authored against. The scope questions (relations only, or interfaces and enums too) also decide how much of subgraph parity this project is committing to, which is a product boundary.
-- **`needsAnswers: true`.** Five questions, of which 1 and 2 change the type itself and therefore every task cut from this spec. Question 4 is the one that can quietly grow the work: a referential check on the write path runs once per event on every backend, and deciding it late would mean re-cutting the storage tasks.
+- **No `needsAnswers`.** Every question this spec launched with was a TYPE or a SCOPE question, which is exactly the kind that must be settled before tasking, so all five are answered in Implementation Decisions below. What is deliberately left to the build is implementation preference, which a spec should not freeze.
 
 ## Implementation Decisions
 
-**Declared on the child, derived for the parent.** The child's id already begins with its parent's key, so the child is where the fact lives and the parent-side collection is a projection of it. That keeps one source of truth and makes the halves unable to disagree (question 1 is about what else the parent side needs, chiefly a field name, not about where the truth lives).
+**A relation is declared ONCE, on the child, and carries the parent-side name.** The child's id is where the fact lives, so the parent-side collection is a projection of it and the two halves cannot disagree. The parent-side field NAME is the one thing the child's id does not supply, so it travels in the same declaration rather than being guessed by pluralising, which is a rule that works in English and not reliably even there:
+
+```ts
+{
+  name: 'placementPlayer',
+  id: ['window', 'ordinal', 'position', 'moveOrdinal'],
+  fields: {color: 'integer', address: 'text'},
+  parent: {entity: 'placement', as: 'players'},
+}
+```
+
+**The child's leading id columns must BE the parent's whole id**, matched by name and in order, and that is checked at declaration time. Not a prefix of the parent's id, not a mapping, not a subset: the whole key. The strictness is the point, because it is what makes the declared relation TRUE rather than conventional. A child that carries only part of its parent's key belongs to no single parent, and a collection derived from it would silently union across the missing columns.
+
+**That rules out one shape in the existing conformance workload, and the case is informative rather than inconvenient.** `placement` is keyed `['window', 'ordinal']` and `placementPlayer` is keyed `['ordinal', 'position', 'moveOrdinal']`: the child drops `window`, so it cannot declare the relation as written. It works today only because there is one window at a time, which is an assumption living in a comment. Declaring the relation requires putting `window` back in the child's id, and the resulting id is a more honest description of what the row is. So the rule does not just describe existing practice, it can improve it, and where it refuses it refuses something that was relying on an invariant nothing enforced.
 
 **The read a relation compiles to already exists.** A parent's children is `listCurrent` / `listAsOf` with the parent's key as the prefix and a required limit, which is one indexed range scan on every backend by construction (ADR-0021, and on IndexedDB literally `IDBKeyRange.bound([entity, ...prefix], [entity, ...prefix, []])`). Nothing new is added to the seam's read shape; a name is added to something that is already a prefix.
 
+**A semantic type is a TAG BESIDE the storage class, not a new `FieldType`.** `FieldType` stays the four-value intersection of what backends can hold, and a field may instead declare `{storage, as}`:
+
+```ts
+fields: {
+  owner: 'text',                              // unchanged, and still means exactly this
+  amount: {storage: 'blob', as: 'u256'},      // stored as bytes, MEANS a u256
+}
+```
+
+Three reasons it is not a fifth `FieldType`. Storage and meaning are **different axes**: `u256` and an address are both plausibly `text` or `blob`, so folding them onto one axis forces every future semantic type to also be a storage decision, and forces every backend's DDL to grow a case for something that is not a storage question. Storage stays the honest **intersection** of what the backends can hold, which is what `FieldType` is for and why it has four values. And it is **backward compatible by construction**, since a bare `'text'` keeps meaning exactly what it means today, which is what makes every existing declaration keep working untouched.
+
 **A semantic type owns three things or it is not worth having**: a canonical encoding, an equality, and an ordering. Any two without the third leaves the bug the workload already documents. The encoding must be one every backend can store and order, and the spike result is directly usable: binary keys sort bytewise on Chromium, Firefox and WebKit, so a big-endian fixed-width encoding is orderable in IndexedDB and is the same shape as the sortable BLOB the SQL research recommends.
+
+**Enums are IN, interfaces are OUT.** An enum is a declared value set: it is pure declaration, checkable at write time for the cost of a set lookup, maps to a GraphQL enum with nothing to plan, and needs no per-backend query support. An interface is a different kind of thing entirely: the research produced a concrete finding that a `UNION ALL` returns only the shared columns plus `__typename`, so answering `... on Token { rarity }` needs a per-type hydration pass, and no browser counterpart to that has been designed at all. Deferring it is not a judgement that it is unwanted, it is a refusal to declare something one backend could not serve.
+
+**A relation implies NOTHING about writes.** No referential check, no ordering constraint on which of a parent and child is written first. Three reasons. A subgraph does not enforce it either, and its `@derivedFrom` collection is explicitly "never actually created during indexing". The check would cost per mutation on the path that runs once per event on **every** backend, which is the exact budget ADR-0021 narrowed the seam to protect. And handlers legitimately write a child before its parent within one block, since read-your-writes makes the order a handler's business rather than the store's. The declaration is **descriptive**: it says how to READ the relationship the ids encode.
+
+**Every declared relation is serviceable on every backend, so the "what if a backend cannot serve it" case does not arise.** A relation compiles to the bounded id-prefix listing, which is one indexed range scan on every backend by construction (ADR-0021). That keeps the seam's existing rule intact: declaration legality is a fact about the DECLARATION and not about the backend, refused at declaration time everywhere, exactly as the identifier and reserved-namespace rules already are.
 
 **Existing declarations must keep working.** Everything here is additive and opt-in: a declaration with no relations and no semantic types means exactly what it means today, on every backend.
 
