@@ -8,6 +8,15 @@ export * from './IndexerState.js';
  */
 export {demoteToReader, type DemotableWriter, type Demotion, type DemotionReason} from './demotion.js';
 
+/**
+ * WHERE THE INDEXER RUNS, and what a tab holds when it is not here (ADR-0082).
+ *
+ * A **host** owns a **container** and drives it; a tab holds a **port** to it.
+ * `hostIndexerInThisWorker` is what an app's five-line worker entry point calls,
+ * and `connectToIndexerHost(dedicatedWorkerHost(worker))` is what its tab calls.
+ */
+export * from './host/index.js';
+
 export {simple_hash} from '@etherfold/core';
 /**
  * Re-exported because this package's own public signatures NAME it: `createState`

@@ -29,6 +29,10 @@
  *   that already has indexed history. They run here rather than only under
  *   `fake-indexeddb` because a discard is a real `revertTo` against a real
  *   database, followed by a real re-index, in a page that never reloaded.
+ * - `hosted-in-a-worker`: the fold in a DEDICATED WORKER, with the tab holding
+ *   only a port. It runs here and nowhere else: a worker is the one thing no node
+ *   test can have, and "the UI thread is not doing the fold" is a claim about two
+ *   execution contexts rather than about two objects.
  * - `write` / `read` phases: reload continuity across a REAL page reload, which
  *   is the thing no node test can show. The `read` phase runs in a page that has
  *   never seen the `write` phase's objects; the only thing that crossed is
@@ -36,11 +40,21 @@
  */
 import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-browser-harness/contract';
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
-import {MemoryStateStore} from '@etherfold/state-store';
+import {EntityStateView} from '@etherfold/processor-entities';
+import {MemoryStateStore, openForReading} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
+import {
+	connectToIndexerHost,
+	createBrowserStateStore,
+	dedicatedWorkerHost,
+	executionScopeName,
+	type HostProgress,
+	type IndexerPort,
+} from '../src/index.js';
 import {
 	BRANCH_A_LATER,
 	BRANCH_A_LATER_TIP,
+	BRANCH_A_TIP,
 	BRANCH_B,
 	BRANCH_B_TIP,
 	entityProcessorOver,
@@ -305,6 +319,82 @@ async function hotContractCase(params: Params, timings: Timing[]): Promise<Recor
 	};
 }
 
+/**
+ * THE FOLD IN A DEDICATED WORKER, and a tab that only holds a port.
+ *
+ * The page constructs a `Worker` and nothing else: no container, no store handle
+ * it could write through, no provider. Everything the fold needs was IMPORTED by
+ * the worker entry point (`indexer.worker.ts`), which is the shape an application
+ * writes.
+ *
+ * What is read back afterwards is the state the WORKER wrote, opened from the
+ * page for READING -- the same origin, the same database, the writer's claim
+ * untouched. That comparison is the point: the rows a worker folded are the rows
+ * the main-thread path folds from the same bytes, which the `index` case above
+ * asserts against the same constant.
+ */
+async function hostedInAWorkerCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'hosted-in-a-worker');
+	// The form every current bundler understands, and the reason the APP owns this
+	// line: the URL has to be a literal its bundler can trace (ADR-0082). The
+	// harness builds `indexer.worker.ts` to `worker.js` beside this bundle.
+	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url), {
+		type: 'module',
+	});
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	try {
+		const progress = await timed('fold-in-a-worker', timings, () => untilAtTip(indexer));
+		const state = await timed('read-back', timings, async () =>
+			readState(
+				new EntityStateView(
+					openForReading(await createBrowserStateStore(processor.entities, {databaseName: database})),
+				),
+			),
+		);
+		return {
+			// WHERE the answer was computed, measured in the answering context rather
+			// than declared by the caller
+			scope: progress.scope,
+			tabScope: executionScopeName(),
+			host: progress.host,
+			indexing: progress.indexing,
+			lastToBlock: progress.lastToBlock,
+			latestBlock: progress.latestBlock,
+			// everything the tab was handed, in full
+			portSurface: Object.keys(indexer).sort(),
+			state,
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/**
+ * Ask until the fold is level with THIS FIXTURE'S tip, and fail SAYING SO if the
+ * host stopped.
+ *
+ * The tip is NAMED rather than inferred from equality. A container that has
+ * loaded and not yet fetched publishes `0` for both numbers, so
+ * `lastToBlock === latestBlock` holds before a single log has been asked for;
+ * waiting on that returns instantly and leaves the read below racing the fold,
+ * which is what it did on Chromium (and not on the other two) until this said
+ * `BRANCH_A_TIP`.
+ */
+async function untilAtTip(indexer: IndexerPort, attempts = 600): Promise<HostProgress> {
+	let progress = await indexer.progress();
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		if (progress.failure) {
+			throw new Error(`the host stopped: ${progress.failure.name}: ${progress.failure.message}`);
+		}
+		if (progress.latestBlock === BRANCH_A_TIP && progress.lastToBlock === progress.latestBlock) {
+			return progress;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		progress = await indexer.progress();
+	}
+	throw new Error(`the fold did not reach the tip: ${JSON.stringify(progress)}`);
+}
+
 const cut: CodeUnderTest = {
 	name: '@etherfold/browser',
 	async run(ctx: RunContext): Promise<RunResult> {
@@ -336,6 +426,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'hot-contract':
 						results = await hotContractCase(ctx.params, timings);
+						break;
+					case 'hosted-in-a-worker':
+						results = await hostedInAWorkerCase(ctx.params, timings);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

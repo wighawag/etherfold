@@ -35,4 +35,29 @@ describe('@etherfold/browser', () => {
 
 		expect(result.errors).toEqual([]);
 	});
+
+	/**
+	 * The WORKER ENTRY POINT an application writes is a second thing that has to
+	 * build, and it builds differently: it is its own bundle, with its own entry,
+	 * produced by whatever the app's bundler is.
+	 *
+	 * `browser/indexer.worker.ts` is that file in the shape an app writes it --
+	 * import the processor, import the entry helper, call it -- and the Playwright
+	 * run bundles it through the harness. This says the same thing on every commit,
+	 * where the browser binaries that run does not exist: a worker entry resolves
+	 * for a browser target with nothing external, so the processor really does
+	 * cross as an IMPORT and pulls no runtime built-in behind it.
+	 */
+	it('bundles an application worker entry point for a browser', async () => {
+		const result = await build({
+			entryPoints: [new URL('../browser/indexer.worker.ts', import.meta.url).pathname],
+			bundle: true,
+			platform: 'browser',
+			format: 'esm',
+			write: false,
+			logLevel: 'silent',
+		});
+
+		expect(result.errors).toEqual([]);
+	});
 });
