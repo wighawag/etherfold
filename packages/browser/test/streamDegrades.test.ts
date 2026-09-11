@@ -63,9 +63,6 @@ describe('the keeper RAISES when its store is gone, and the caller decides what 
 		const logged = await captureLogs();
 		const keeper = keepStreamOnIndexedDB<TestABI>(freshName(), {store: unavailableStore});
 
-		// including the legacy-blob probe this keeper does BEFORE the segmented read:
-		// it is this module's own IndexedDB call, outside the helper's rules, and it now
-		// raises through like every other
 		// What an APP experiences over this keeper -- it still loads, still indexes and
 		// still answers -- is asserted below in 'an app whose stream store is unusable',
 		// which is where the rule now lives and which is unchanged by the relocation.

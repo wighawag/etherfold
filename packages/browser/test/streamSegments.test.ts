@@ -33,7 +33,7 @@ import {
  * `streamSegments.test.ts`); what is asserted HERE is everything that is about
  * this substrate and cannot be seen from there: the array address, the key
  * ranges, the one `readwrite` transaction the commit is, the store it shares with
- * every other keeper, and the legacy blob.
+ * every other keeper.
  *
  * Cost is asserted as WORK at the INSTRUMENTED OBJECT STORE and never as
  * wall-clock: `fake-indexeddb` is itself quadratic
@@ -395,70 +395,6 @@ describe('clear removes the subtree and nothing else', () => {
 	});
 });
 
-describe('the legacy flat-key blob', () => {
-	it('is REPORTED as unusable by `fetchFrom`, which deletes nothing', async () => {
-		const tag = freshName();
-		const keeper = keepStreamOnIndexedDB<TestABI>(tag);
-		const address = addressOf(tag);
-		const logged = await captureLogs();
-
-		// exactly what the shipped keeper wrote: one flat key, the whole stream
-		await set(address.legacy, {lastSync: cursorAt(100, 104), eventStream: [event(100), event(104)]});
-
-		// A blob this build cannot read is DAMAGE, not absence: an installer reads
-		// `absent` as permission to write. This used to `del` the blob and clear the
-		// subtree inline, which made it the last read on this seam that mutated
-		// (ADR-0069) -- so a FOLLOWER could destroy its writer's subtree on this one
-		// path, and the seed installer's probe could destroy-then-read-absent.
-		expect(await keeper.fetchFrom(SOURCE, 100)).toMatchObject({status: 'inconsistent'});
-		expect(await get(address.legacy)).toBeDefined();
-		logged.restore();
-	});
-
-	it('is still DELETED promptly, on the state-KEPT branch as well as the discarded one', async () => {
-		// The guarantee the inline delete used to provide, and the reason it was inline:
-		// `indexer.ts`'s state-kept branch guards its own `clear` behind
-		// `if (existingStreamData)`, so a blob found only by an `else` would survive
-		// indefinitely. `readStoredStream` now clears on every non-`stream` verdict
-		// regardless of branch, so the blob goes on the first load either way -- which
-		// is what makes deferring the delete to the caller safe rather than a leak.
-		const tag = freshName();
-		const keeper = keepStreamOnIndexedDB<TestABI>(tag);
-		// the address the INDEXER's keeper will use: the blob is addressed under the
-		// resolved stream config, so the default-config address is a different subtree
-		const address = addressOf(tag, {finality: FINALITY});
-		const definition = applyingProcessor();
-		const store = await browserStore(freshName(), definition);
-		const indexer = indexerOver(definition, store, {keepStream: keeper});
-
-		const chain = fakeChain(BRANCH_A, BRANCH_A_TIP);
-		await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
-		await indexToTip(indexer as never);
-		indexer.dispose();
-
-		// a blob appears beside a healthy stream, and the next boot keeps its STATE
-		await set(address.legacy, {lastSync: cursorAt(100, 104), eventStream: [event(100)]});
-		const second = indexerOver(definition, store, {keepStream: keeper});
-		await second.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
-		// `init` alone does not read the stream: `load()` runs on the first cycle
-		await indexToTip(second as never);
-		second.dispose();
-
-		expect(await get(address.legacy)).toBeUndefined();
-	});
-
-	it('is deleted by `clear` too', async () => {
-		const tag = freshName();
-		const keeper = keepStreamOnIndexedDB<TestABI>(tag);
-		const address = addressOf(tag);
-
-		await set(address.legacy, {lastSync: cursorAt(100, 104), eventStream: []});
-		await keeper.clear(SOURCE);
-
-		expect(await get(address.legacy)).toBeUndefined();
-	});
-});
-
 // ---------------------------------------------------------------------------
 // The START BLOCK, end to end.
 // ---------------------------------------------------------------------------
@@ -476,15 +412,18 @@ describe('a stream that does not reach back to the requested fromBlock', () => {
 		const definition = applyingProcessor();
 		const store = await browserStore(tag, definition);
 
-		// A tab whose stream was the shipped blob: the state is good, the blob is
-		// deleted on load, and nothing re-fetches -- so the NEXT save opens a subtree
-		// whose first segment begins mid-history. This is the state a self-clear
-		// creates, and it is why the cursor record carries a start block at all.
+		// The state a SELF-CLEAR leaves behind: the STATE is good and the stream
+		// subtree is gone, so nothing re-fetches and the NEXT save opens a subtree
+		// whose first segment begins mid-history. That is why the cursor record
+		// carries a start block at all.
 		const first = indexerOver(definition, store);
 		await first.init({provider: chain.provider, source: SOURCE, config: CONFIG});
 		await indexToTip(first as never);
 		first.dispose();
-		await set(address.legacy, {lastSync: cursorAt(START_BLOCK, BRANCH_A_TIP), eventStream: []});
+		// the keeper addresses a stream by its RESOLVED config, and this one has not
+		// been driven by an indexer yet, so it is told which stream to clear
+		stream.setStreamConfig(resolveStreamConfig(CONFIG.stream));
+		await stream.clear(SOURCE);
 
 		chain.serve(BRANCH_A_EXTENDED, DIVERGED_TIP);
 		const second = indexerOver(definition, store, {keepStream: stream});

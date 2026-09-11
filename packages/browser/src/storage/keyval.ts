@@ -7,11 +7,10 @@ import {createStore, type UseStore} from 'idb-keyval';
  * to get a `UseStore` -- the escape hatch `createStore` returns, and the only
  * route to a key RANGE -- over the very store the bare `get`/`set` calls reach.
  * That is load-bearing rather than incidental. A keeper that quietly opened a
- * store of its own would never SEE the legacy blob it is required to delete, it
- * would make "an unrelated key in the same store survives `clear`" vacuous, and
- * it would remove the whole ground for banning `idb-keyval`'s `clear()`, which
- * is dangerous exactly BECAUSE the stream shares one store with everything else
- * this package writes.
+ * store of its own would make "an unrelated key in the same store survives
+ * `clear`" vacuous, and it would remove the whole ground for banning
+ * `idb-keyval`'s `clear()`, which is dangerous exactly BECAUSE the stream shares
+ * one store with everything else this package writes.
  *
  * It lives in a module of its own because the stream keeper is no longer the
  * only thing addressing that store: the generation registry keeps its records

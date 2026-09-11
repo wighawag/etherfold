@@ -95,11 +95,7 @@ export function streamAddress<ABI extends Abi>(
 	source: IndexingSource<ABI>,
 	streamConfig: UsedStreamConfig,
 ) {
-	return {
-		...streamSubtree(name, streamDigestOf(source, streamConfig)),
-		/** The SHIPPED keeper's flat key, which is deleted rather than adopted. */
-		legacy: `${STREAM}_${name}_${source.chainId}`,
-	};
+	return streamSubtree(name, streamDigestOf(source, streamConfig));
 }
 
 /**
@@ -250,72 +246,8 @@ export function keepStreamOnIndexedDB<ABI extends Abi>(
 	let streamConfig = resolveStreamConfig(undefined);
 	const segmented = createSegmentedStream<ABI>(portOver<ABI>(name, store, () => streamConfig));
 
-	/**
-	 * The shipped keeper's blob is DELETED, not adopted, and it is detected HERE
-	 * rather than only in `clear`.
-	 *
-	 * `indexer.ts`'s state-kept branch guards its `clear` behind
-	 * `if (existingStreamData)`, so a blob found only by `clear` would survive
-	 * indefinitely. Adopting it in place would spare a re-index for users who do
-	 * not exist (`CONTEXT.md`: nothing is published), and it would drag a
-	 * read-cursor precedence rule and a set of ordinal carve-outs along with it.
-	 * Anything beside it in the new subtree goes too: the two together are not one
-	 * stream, and half of each is worse than neither.
-	 */
-	/**
-	 * Whether a legacy whole-blob stream is sitting at this address.
-	 *
-	 * It REPORTS and deletes nothing, like every other read on this seam since
-	 * ADR-0069. It used to `del` the blob and `clear` the segmented subtree here,
-	 * inside `fetchFrom` -- which made this keeper the last read that still mutated,
-	 * and left the two holes the rest of that ADR closed: a FOLLOWER reading through
-	 * `readOnlyStream` could still destroy its writer's subtree on this one path,
-	 * and the seed installer's probe could still destroy-then-read-absent-then-
-	 * install. The caller's `clear` removes BOTH the legacy key and the subtree
-	 * (see `clear` below), so nothing about the migration is lost by deferring it.
-	 */
-	async function hasLegacyBlob(source: IndexingSource<ABI>): Promise<boolean> {
-		return (await get(streamAddress(name, source, streamConfig).legacy, store)) !== undefined;
-	}
-
-	/**
-	 * THIS KEEPER'S OWN IndexedDB CALLS, which sit OUTSIDE the segment port.
-	 *
-	 * The legacy-blob probe in `fetchFrom` (and the `del` in `clear`) are this
-	 * module's own, so an unopenable database fails HERE first, before a single port
-	 * operation runs. Nothing wraps them and nothing swallows them: they RAISE
-	 * THROUGH, exactly as the segment port's own failures now do, because what an
-	 * unreadable substrate MEANS is the caller's to decide -- "absent is safe" is
-	 * true of a generation that answers absence by re-indexing and false of an
-	 * installer that answers it by writing (ADR-0068). This used to be wrapped in
-	 * `degradingStream`, which decided for both.
-	 */
-	const withLegacyBlobProbe: ExistingStream<ABI> = {
-		async fetchFrom(source, fromBlock) {
-			// A blob this build cannot read is DAMAGE, not absence, and the difference is
-			// load-bearing: an installer reads `absent` as permission to write, and writing
-			// a seed beside an unread legacy blob would leave both. Reported so the caller
-			// clears -- which for a generation rebuilds from the chain exactly as before,
-			// and for a follower is a no-op that leaves its writer's data alone.
-			if (await hasLegacyBlob(source)) {
-				return {
-					status: 'inconsistent',
-					reason: `the cached stream is in the old whole-blob format and cannot be adopted`,
-				};
-			}
-			return segmented.fetchFrom(source, fromBlock);
-		},
-		saveNewEvents(source, stream) {
-			return segmented.saveNewEvents(source, stream);
-		},
-		async clear(source) {
-			await del(streamAddress(name, source, streamConfig).legacy, store);
-			await segmented.clear(source);
-		},
-	};
-
 	return {
-		...withLegacyBlobProbe,
+		...segmented,
 		setStreamConfig(next) {
 			streamConfig = next;
 		},
