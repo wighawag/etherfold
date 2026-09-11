@@ -27,6 +27,7 @@ import {
 	FINALITY,
 	idOf,
 	makeLog,
+	memoryStream,
 	shapeOf,
 	SOURCE,
 	START_BLOCK,
@@ -718,12 +719,16 @@ describe('the follower decides on the emissions themselves', () => {
 // ---------------------------------------------------------------------------
 // THE PROVIDER MUST NOT HAVE CHANGED CHAINS UNDER THE FETCH
 // ---------------------------------------------------------------------------
-// The chain is checked twice per cycle, before the fetch and again after it, and
-// the two guards catch different things. The BEFORE guard catches a provider that
-// was already pointing elsewhere; the AFTER guard catches the one that moved
-// DURING the fetch -- which is the case where logs from the wrong chain are in
-// hand and about to be written. Only the second can produce a corrupt fold, and
-// it was the one with no test.
+// The chain is checked ONCE per cycle, AFTER the fetch, and that one call is the
+// guard (ADR-0081). It catches a provider that moved DURING the fetch, which is
+// the case where logs from the wrong chain are in hand and about to be written --
+// the only one of the two that can produce a corrupt fold. The before-fetch call
+// that used to sit beside it caught nothing this one does not; it only failed
+// fast, so a provider that moved BETWEEN cycles now pays for a range it will not
+// keep and is refused a moment later, with the same nothing reaching the fold.
+//
+// Both outcomes are pinned below, and so is the CALL COUNT: restoring the deleted
+// call for symmetry must fail here rather than pass quietly.
 // ---------------------------------------------------------------------------
 
 describe('a provider that changes chain mid-cycle', () => {
@@ -732,8 +737,18 @@ describe('a provider that changes chain mid-cycle', () => {
 		const base = fakeChain(logs, tip);
 		let chainId = '0x1';
 		let flipDuringFetch: string | undefined;
+		// The cycle's ORDER of operations, which is what "after the fetch and before
+		// anything is applied" is asserted against: a count alone cannot say WHERE the
+		// surviving call sits. `eth_blockNumber` is left out because the tip read is not
+		// what these tests are about.
+		const trace: string[] = [];
 		return {
 			...base,
+			trace,
+			/** Drop what `load()` cost, so the trace that follows is ONE cycle's. */
+			forgetCalls() {
+				trace.length = 0;
+			},
 			setChainId(next: string) {
 				chainId = next;
 			},
@@ -744,6 +759,7 @@ describe('a provider that changes chain mid-cycle', () => {
 			provider: {
 				async request(args: {method: string; params?: any}): Promise<any> {
 					if (args.method === 'eth_chainId') {
+						trace.push('eth_chainId');
 						return chainId;
 					}
 					return base.provider.request(args);
@@ -751,6 +767,7 @@ describe('a provider that changes chain mid-cycle', () => {
 			} as any,
 			fetcher: {
 				async getLogEvents(range: {fromBlock: number; toBlock: number}) {
+					trace.push('eth_getLogs');
 					const result = await base.fetcher.getLogEvents(range);
 					if (flipDuringFetch) {
 						chainId = flipDuringFetch;
@@ -764,12 +781,46 @@ describe('a provider that changes chain mid-cycle', () => {
 
 	function indexerOn(chain: ReturnType<typeof movableChain>) {
 		const processor = fakeProcessor();
+		const fold = processor.processor.process.bind(processor.processor);
+		processor.processor.process = async (events: any, lastSync: any) => {
+			chain.trace.push('fold');
+			return fold(events, lastSync);
+		};
+		// A keeper, so "nothing from the wrong chain reached the STREAM" is a claim about
+		// something rather than about an absent seam.
+		const stream = memoryStream();
+		const keeper: ExistingStream<Abi> = {
+			...stream.keeper,
+			saveNewEvents: async (source, data) => {
+				chain.trace.push('stream write');
+				return stream.keeper.saveNewEvents(source, data);
+			},
+		};
 		const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
 			stream: {finality: FINALITY},
+			keepStream: keeper,
 		});
 		(indexer as any).logEventFetcher = chain.fetcher;
-		return {indexer, processor};
+		return {indexer, processor, stream};
 	}
+
+	it('costs ONE `eth_chainId` for a cycle, after the fetch and before the write and the fold', async () => {
+		const chain = movableChain([makeLog(100, '0xa100')], 200);
+		const {indexer, processor} = indexerOn(chain);
+		await indexer.load();
+		chain.forgetCalls();
+
+		await indexer.indexMore();
+
+		// ONE identity round trip per cycle and not two (ADR-0081), asserted as a COUNT
+		// so a before-fetch call added back fails this test instead of passing quietly
+		expect(chain.trace.filter((step) => step === 'eth_chainId')).toEqual(['eth_chainId']);
+		// ...and it sits where the answer is worth having: the logs are in hand and
+		// nothing has been written or folded yet
+		expect(chain.trace).toEqual(['eth_getLogs', 'eth_chainId', 'stream write', 'fold']);
+		// not vacuous: the cycle really did fold the range it fetched
+		expect(processor.state).toEqual([idOf(makeLog(100, '0xa100'))]);
+	});
 
 	it('is REFUSED when it moves DURING the fetch, rather than folding the wrong chain', async () => {
 		// the case only the post-fetch guard can catch: the range was fetched from one
@@ -785,15 +836,27 @@ describe('a provider that changes chain mid-cycle', () => {
 		expect(processor.state).toEqual([]);
 	});
 
-	it('is REFUSED before it fetches at all when it moved between cycles', async () => {
+	it('is REFUSED when it moved BETWEEN cycles too, and the range it wasted is re-derived', async () => {
+		// This used to assert the refusal happened before a single range was requested,
+		// which was the fail-fast call's only contribution and is what the deletion gave
+		// up. What it PROTECTED is unchanged and is what is asserted now: a moved
+		// provider reaches neither the stream nor the fold, and the cursor stays put, so
+		// the range it paid for is asked for again rather than skipped.
 		const chain = movableChain([makeLog(100, '0xa100')], 200);
-		const {indexer, processor} = indexerOn(chain);
+		const {indexer, processor, stream} = indexerOn(chain);
 		await indexer.load();
 		chain.setChainId('0x2');
 
-		await expect(indexer.indexMore()).rejects.toThrow(/chainId changed before fetch/);
-		// refused before a single range was requested
-		expect(chain.ranges).toEqual([]);
+		await expect(indexer.indexMore()).rejects.toThrow(/chainId changed after fetch/);
 		expect(processor.state).toEqual([]);
+		expect(stream.writes).toEqual([]);
+		expect(stream.cursor).toBe(undefined);
+
+		// the cursor did not move, so the next cycle re-derives the SAME range
+		const refusedRange = chain.ranges[chain.ranges.length - 1];
+		chain.setChainId('0x1');
+		await indexer.indexMore();
+		expect(chain.ranges[chain.ranges.length - 1]).toEqual(refusedRange);
+		expect(processor.state).toEqual([idOf(makeLog(100, '0xa100'))]);
 	});
 });
