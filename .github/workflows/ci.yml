@@ -59,6 +59,14 @@ jobs:
       - name: Check work/ references resolve
         run: pnpm check:refs
 
+      # Front-runs `changeset status`, which is the authority but sits behind a full
+      # install and build: a changeset naming a PRIVATE package beside a published
+      # one is refused, and that one-line mistake used to cost an entire run. Kept
+      # in step with `dorfl.json`'s gate deliberately -- see the note below on what
+      # an asymmetry between the two runners costs.
+      - name: Check changesets name published packages
+        run: pnpm check:changesets
+
       # `prepare` already built during install; this re-runs it explicitly so a
       # build failure is attributed to the build rather than to installation.
       - name: Build packages and platforms
