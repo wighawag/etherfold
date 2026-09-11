@@ -33,6 +33,11 @@
  *   only a port. It runs here and nowhere else: a worker is the one thing no node
  *   test can have, and "the UI thread is not doing the fold" is a claim about two
  *   execution contexts rather than about two objects.
+ * - `reads-across-the-port`: the store's four reads, asked of a surface over a
+ *   port to a real worker AND of a surface over a store on this thread, with ONE
+ *   case list and the same workload behind both. Reading while the fold is still
+ *   running is part of it, because that is what makes an app usable during a
+ *   first sync rather than after it.
  * - `write` / `read` phases: reload continuity across a REAL page reload, which
  *   is the thing no node test can show. The `read` phase runs in a page that has
  *   never seen the `write` phase's objects; the only thing that crossed is
@@ -41,16 +46,18 @@
 import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-browser-harness/contract';
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
 import {EntityStateView} from '@etherfold/processor-entities';
-import {MemoryStateStore, openForReading} from '@etherfold/state-store';
+import {MemoryStateStore, createReadSurface, openForReading} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {
 	connectToIndexerHost,
 	createBrowserStateStore,
+	createPortReadSurface,
 	dedicatedWorkerHost,
 	executionScopeName,
 	type HostProgress,
 	type IndexerPort,
 } from '../src/index.js';
+import {foldOnThisThread, readEntities, readWritableStore, runReadSurfaceCases} from './readWorkload.js';
 import {
 	BRANCH_A_LATER,
 	BRANCH_A_LATER_TIP,
@@ -370,6 +377,70 @@ async function hostedInAWorkerCase(params: Params, timings: Timing[]): Promise<R
 }
 
 /**
+ * THE FOUR READS ACROSS A REAL PORT TO A REAL WORKER, and the same questions
+ * asked of a store on this thread.
+ *
+ * The claim is an EQUALITY, so it is asserted as one: `readSurfaceCases` is run
+ * twice, over two surfaces of the same TYPE, built over two stores that were
+ * written by the same processor from the same captured logs. A divergence is a
+ * failed case with a name, not a difference somebody has to notice.
+ *
+ * It also reads BEFORE the fold has finished -- the first read is issued as soon
+ * as the port exists, while the worker is still folding -- because an app being
+ * usable during a first sync is the point of the store living in the host rather
+ * than a bonus.
+ */
+async function readsAcrossThePortCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'reads-across-the-port');
+	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url), {
+		type: 'module',
+	});
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	try {
+		// A read issued while the worker is still opening its store and folding: it
+		// WAITS for the store rather than being refused, and answers with whatever
+		// the fold has written by then (`undefined` included -- an absent row is an
+		// ordinary answer).
+		const whileFolding = await timed('while-folding', timings, async () => {
+			const surface = createPortReadSurface(indexer, readEntities);
+			const row = await surface.token.getCurrent({id: '1'});
+			return {answered: true, owner: row?.owner ?? null, progress: await indexer.progress()};
+		});
+
+		const progress = await timed('fold-in-a-worker', timings, () => untilAtTip(indexer));
+		const acrossThePort = await timed('cases-across-the-port', timings, () =>
+			runReadSurfaceCases(createPortReadSurface(indexer, readEntities)),
+		);
+
+		const store = await readWritableStore({databaseName: `${database}-same-thread`});
+		await timed('fold-on-this-thread', timings, () => foldOnThisThread(store, fakeChain()));
+		const onThisThread = await timed('cases-on-this-thread', timings, () =>
+			runReadSurfaceCases(createReadSurface(store, readEntities)),
+		);
+
+		return {
+			// WHERE the rows were read from, measured in the context that read them
+			scope: progress.scope,
+			tabScope: executionScopeName(),
+			host: progress.host,
+			whileFolding: {
+				answered: whileFolding.answered,
+				// how far the fold had got when that read was answered
+				lastToBlock: whileFolding.progress.lastToBlock ?? null,
+				indexing: whileFolding.progress.indexing,
+			},
+			acrossThePort,
+			onThisThread,
+			// everything the tab was handed, in full
+			portSurface: Object.keys(indexer).sort(),
+			readSurface: Object.keys(createPortReadSurface(indexer, readEntities).token).sort(),
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/**
  * Ask until the fold is level with THIS FIXTURE'S tip, and fail SAYING SO if the
  * host stopped.
  *
@@ -429,6 +500,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'hosted-in-a-worker':
 						results = await hostedInAWorkerCase(ctx.params, timings);
+						break;
+					case 'reads-across-the-port':
+						results = await readsAcrossThePortCase(ctx.params, timings);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

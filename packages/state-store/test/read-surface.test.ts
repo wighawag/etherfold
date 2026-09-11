@@ -3,6 +3,7 @@ import {
 	BlockNotRetainedError,
 	InvalidBlockNumberError,
 	MemoryStateStore,
+	UnknownEntityError,
 	createReadSurface,
 	declareEntities,
 	type MemoryStateStoreOptions,
@@ -134,6 +135,25 @@ describe('errors stay errors: the surface propagates a refusal rather than swall
 
 		expect(() => createReadSurface(store, renamed)).toThrow(/token/);
 		expect(() => createReadSurface(store, declareEntities([{name: 'ghost', id: 'id', fields: {}}]))).toThrow(/ghost/);
+	});
+
+	it('refuses an entity the store does not declare with a NAMED error, here and at the store', async () => {
+		// Named rather than a bare `Error` because this is the refusal a caller
+		// furthest from the store meets -- a surface generated from one set of
+		// declarations asked of a store built with another -- and because a class does
+		// not survive a `postMessage` while a `name` does, which is what a tab reading
+		// across a port acts on (`@etherfold/browser`).
+		const store = await stocked();
+		const ghost = declareEntities([{name: 'ghost', id: 'id', fields: {}}]);
+
+		expect(() => createReadSurface(store, ghost)).toThrow(UnknownEntityError);
+		// the same refusal, with the same name, from the untyped read every backend
+		// answers through
+		await expect(store.getCurrent('ghost', {id: '1'})).rejects.toThrow(UnknownEntityError);
+		await expect(store.getCurrent('ghost', {id: '1'})).rejects.toMatchObject({
+			name: 'UnknownEntityError',
+			entity: 'ghost',
+		});
 	});
 });
 

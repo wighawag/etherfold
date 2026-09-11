@@ -12,8 +12,8 @@ import {
 	type HostAccess,
 	type HostProgress,
 	type IndexerPort,
-	type MessageEndpoint,
 } from '../src/index.js';
+import {wire} from './utils/port.js';
 import {
 	BRANCH_A_TIP,
 	EXPECTED_A,
@@ -35,32 +35,15 @@ import {
  * of objects. These are the same claims on every commit, because that run needs
  * browser binaries a clean checkout does not have.
  *
- * The two ends here are joined by a `MessageChannel`, which is the same
- * structured-clone boundary a worker is: nothing that could not cross to a worker
- * crosses here either. What it does not have is a second thread -- so this names
- * itself the `main-thread` shape, honestly, rather than pretending to be a worker
- * it is not.
+ * The two ends here are joined by a `MessageChannel` (`test/utils/port.ts`),
+ * which is the same structured-clone boundary a worker is: nothing that could
+ * not cross to a worker crosses here either. What it does not have is a second
+ * thread -- so this names itself the `main-thread` shape, honestly, rather than
+ * pretending to be a worker it is not.
  */
 
 let counter = 0;
 const freshName = () => `hosted-indexer-${counter++}-${Math.random().toString(36).slice(2, 8)}`;
-
-/** The two ends of one wire, as the two sides' `HostAccess`. */
-function wire(): {host: HostAccess; tab: HostAccess; tabEndpoint: MessageEndpoint; close: () => void} {
-	const channel = new MessageChannel();
-	const hostEnd = channel.port1 as unknown as MessageEndpoint;
-	const tabEnd = channel.port2 as unknown as MessageEndpoint;
-	const close = () => {
-		channel.port1.close();
-		channel.port2.close();
-	};
-	return {
-		host: {host: 'main-thread', endpoint: hostEnd},
-		tab: {host: 'main-thread', endpoint: tabEnd, close},
-		tabEndpoint: tabEnd,
-		close,
-	};
-}
 
 function hostOver(access: HostAccess, databaseName: string, chain = fakeChain()) {
 	return serveIndexerHost<TestABI, EntityStateView>(
@@ -147,9 +130,10 @@ describe('an indexer hosted behind a port', () => {
 
 		try {
 			// The writer/reader split as a fact of the TYPE: there is no mutating verb
-			// to call, because there is no store on this side at all. `pnpm typecheck`
-			// runs the other half of this claim (the refusals below do not compile).
-			expect(Object.keys(port).sort()).toEqual(['close', 'host', 'progress']);
+			// to call, because there is no store on this side at all -- `reads` is the
+			// store's four READS and nothing beside them. `pnpm typecheck` runs the
+			// other half of this claim (the refusals below do not compile).
+			expect(Object.keys(port).sort()).toEqual(['close', 'host', 'progress', 'reads']);
 			const surface = port as unknown as Record<string, unknown>;
 			for (const mutating of ['applyBlock', 'revertTo', 'writeCursor', 'clearCursor', 'prune', 'token']) {
 				expect(surface[mutating]).toBeUndefined();
