@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS _meta (
 -- nothing else. When the version was recorded in TypeScript, a D1-migrated
 -- database came up with the table present and no version row, and reported
 -- itself unhealthy forever. Keep this row in step with SCHEMA_VERSION in
--- schema.ts; a test asserts they agree.
+-- schema.ts; a test asserts they agree, and that docstring says when to bump it
+-- (and why it starts at 1 over a schema this repository has already reshaped
+-- several times: nothing is published, so no database was ever created by an
+-- earlier build).
 -- ---------------------------------------------------------------------------
 -- THE EMISSION STREAM (ADR-0006)
 -- ---------------------------------------------------------------------------
@@ -269,5 +272,5 @@ CREATE TABLE IF NOT EXISTS _generation_pointer (
     revision TEXT NOT NULL
 );
 
-INSERT INTO _meta (key, value) VALUES ('schemaVersion', '4')
+INSERT INTO _meta (key, value) VALUES ('schemaVersion', '1')
     ON CONFLICT (key) DO UPDATE SET value = excluded.value;
