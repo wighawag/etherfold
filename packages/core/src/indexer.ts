@@ -1,4 +1,4 @@
-import {getBlockNumber} from './internal/engine/ethereum.js';
+import {getBlockNumber, getChainId} from './internal/engine/ethereum.js';
 
 import {EIP1193ProviderWithoutEvents} from 'eip-1193';
 
@@ -1681,15 +1681,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			await this.load();
 		}
 
-		// as precautious measure, we check chainId in case the provider is now pointing to a new chain
-		// while this is valid use, it is important to warn the indexer as soon as possible via chainChanged event
-		// and pausing the call to index until the correct chain is connected again
-		const before_fetch_chainIdAsHex = await unlessCancelled(this.provider.request({method: 'eth_chainId'}));
-		const before_fetch_chainId = parseInt(before_fetch_chainIdAsHex.slice(2), 16).toString();
-		if (before_fetch_chainId !== this.source.chainId) {
-			throw new Error(`chainId changed before fetch`);
-		}
-
 		// A per-cycle genesis check used to sit here, commented out, carrying the
 		// `earliest`-means-genesis bug this file no longer has. It is DELETED rather
 		// than repaired: dead code cannot be tested, so it would have gone stale
@@ -1701,9 +1692,29 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		const previousLastSync = this.lastSync as LastSync<ABI>;
 		const {lastSync: newLastSync, eventStream} = await this.fetchLogsFromProvider(previousLastSync, unlessCancelled);
 
-		// as precautious measure, we check chainId in case the provider is now pointing to a new chain
-		const chainIdAsHex = await unlessCancelled(this.provider.request({method: 'eth_chainId'}));
-		const chainId = parseInt(chainIdAsHex.slice(2), 16).toString();
+		// ----------------------------------------------------------------------------------------
+		// THE CHAIN IS STILL THE ONE THE SOURCE NAMES -- CHECKED ONCE, AND HERE (ADR-0081)
+		// ----------------------------------------------------------------------------------------
+		// A host may legitimately point its provider at another chain while this loop
+		// runs, so the cycle asks. It asks ONCE, and AFTER the fetch on purpose: the
+		// window that can corrupt anything is the fetch itself, where logs from chain B
+		// would be folded into chain A's stream and written to its cache. A second call
+		// used to sit BEFORE the fetch; it is deleted, because it only failed fast --
+		// saving a wasted range when the provider had already moved -- and caught nothing
+		// this one does not. The pair looked symmetric and was not, so do not restore it
+		// for symmetry, and do not delete this one as the cheaper-looking of the two.
+		//
+		// This is also the ONLY chain-swap detection that exists. The comment this
+		// replaces promised a `chainChanged` event would warn the indexer sooner; nobody
+		// built it, no listener exists anywhere, and `EIP1193ProviderWithoutEvents` -- the
+		// provider type every deployment uses, `@etherfold/browser` included -- cannot
+		// structurally carry a subscription. Building one would not retire this check
+		// either: an event is delivered asynchronously and can land mid-cycle, with the
+		// fetch in flight or the logs awaiting the fold, whereas a check at a KNOWN point
+		// -- after the fetch, before anything is applied -- is what makes the answer
+		// meaningful. So it is unconditional and has no flag; that was proposed and
+		// withdrawn, and the reasons are in ADR-0081.
+		const chainId = await unlessCancelled(getChainId(this.provider));
 		if (chainId !== this.source.chainId) {
 			throw new Error(`chainId changed after fetch`);
 		}
