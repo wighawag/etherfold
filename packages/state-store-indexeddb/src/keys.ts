@@ -42,7 +42,32 @@ import {
  * 1,246 for the wasm-SQLite candidate) and a tip listing that never reads a
  * superseded version, and it costs one extra copy of the live set.
  */
-export const SCHEMA_VERSION = 3;
+
+/**
+ * The version this package opens its database at. `open(name, version)` takes
+ * one, so there is no not having it; what it MEANS is decided here.
+ *
+ * **It is 1, and it stays 1 until this repository has published a build.** The
+ * object stores in this package have changed three times in git history (the
+ * cursor store, the writer token, and the seam's own records taking the writer
+ * store over), and this number climbed to 3 narrating them. That was a ladder
+ * for databases that do not exist: nothing is published, so no browser anywhere
+ * holds a database an earlier build created, and every step of the ladder was an
+ * upgrade nothing could ever perform.
+ *
+ * **Bump it when THIS PACKAGE adds or renames an object store**, which is the
+ * only thing that can need one -- a processor declaring one more entity is not a
+ * migration here, because the entity name is part of the KEY rather than the
+ * name of a store (above), and that is what keeps an upgrade transaction, which
+ * a second open tab BLOCKS, out of the ordinary path.
+ *
+ * `upgrade` (in `store.ts`) is written to CONVERGE rather than to step: every
+ * creation is `contains`-guarded, so one function brings a database at any
+ * earlier version to the declared shape and no per-step branch is ever written.
+ * That is what makes a future bump cheap, and it is forward-looking rather than
+ * a relic -- it is how the FIRST upgrade after publish will be written.
+ */
+export const SCHEMA_VERSION = 1;
 export const CURRENT = 'current';
 export const VERSIONS = 'versions';
 export const BLOCKS = 'blocks';

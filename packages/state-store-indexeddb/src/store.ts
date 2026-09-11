@@ -732,14 +732,18 @@ export class IndexedDBStateStore implements StateStoreBackend {
 }
 
 /**
- * Create the fixed schema, and add whatever a newer version of this package
- * introduced.
+ * Bring the database to the declared shape, whatever version it was at.
  *
- * The version is this PACKAGE's and never a processor's: the object stores do not
- * depend on the declarations (`keys.ts` says why), so a processor gaining an
- * entity never needs an upgrade transaction that an open tab could block. Every
- * step is `contains`-guarded so an existing database gains the missing store and
- * keeps every row it had.
+ * It CONVERGES rather than stepping: every creation is `contains`-guarded, so
+ * this one function handles any `oldVersion` and no per-step branch is ever
+ * written. There is nothing behind it to step over today (`SCHEMA_VERSION` is 1
+ * and nothing is published), and that is exactly why it is written this way
+ * rather than as a ladder: the first upgrade after publish adds its store here
+ * and needs no version arithmetic at all.
+ *
+ * The version is this PACKAGE's and never a processor's: the object stores do
+ * not depend on the declarations (`keys.ts` says why), so a processor gaining an
+ * entity never needs an upgrade transaction that an open tab could block.
  */
 function upgrade(db: IDBDatabase): void {
 	if (!db.objectStoreNames.contains(SEAM)) db.createObjectStore(SEAM);
