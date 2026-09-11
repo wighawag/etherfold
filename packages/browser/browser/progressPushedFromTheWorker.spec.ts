@@ -82,7 +82,18 @@ test('pushes progress from the worker to its own tab, and stops when the tab let
 		expect(run.results.lateSubscriber).toEqual({phase: 'at-tip', lastToBlock: BRANCH_A_TIP});
 
 		// Everything the tab was handed, in full.
-		expect(run.results.portSurface).toEqual(['close', 'host', 'onProgress', 'progress', 'reads']);
+		expect(run.results.portSurface).toEqual([
+			'close',
+			'generations',
+			'host',
+			'onProgress',
+			'progress',
+			'promotion',
+			'reads',
+			'reconfigure',
+			'startIndexing',
+			'stopIndexing',
+		]);
 	} finally {
 		await harness.dispose();
 	}

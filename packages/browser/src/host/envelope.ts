@@ -18,6 +18,7 @@
  * posts to it, and a message that is not ours must be IGNORED rather than
  * answered with an error about an unknown case.
  */
+import type {Abi, GenerationRecord, IndexingSource, UsedPromotionConfig} from '@etherfold/core';
 import type {EntityId, EntityIdPrefix, Listing, NormalizedEntity} from '@etherfold/state-store';
 import type {PortError} from './errors.js';
 
@@ -197,6 +198,94 @@ export type HostProgress = {
 };
 
 /**
+ * ONE GENERATION THIS HOST HOLDS, and how far its fold has got.
+ *
+ * The FOUR FIELDS `GenerationProgress` already carries (`@etherfold/browser`'s
+ * own vocabulary for this, published on `SyncingState.nonCanonicalGenerations`)
+ * under their existing names and rules, plus the one thing a LIST of every
+ * generation needs that a list of the OTHERS did not: which of them is answering
+ * reads. A main-thread app moving to a port therefore binds the same words to
+ * the same meanings.
+ *
+ * It REPORTS and it does not decide, exactly as that type does: whether a second
+ * generation existing means the answers on screen should be rendered, dimmed or
+ * hidden is something only the app knows, because only the app knows whether its
+ * reconfigure made the old answers WRONG or merely INCOMPLETE.
+ */
+export type HostGeneration = {
+	/** WHICH generation: the stream it folds, the processor that folds it, and when it was registered. */
+	readonly record: GenerationRecord;
+	/**
+	 * Whether this is the one ANSWERING READS -- the **canonical pointer**, as this
+	 * host's container resolves it.
+	 *
+	 * A flag per entry rather than a separate id beside the list, so a tab cannot
+	 * hold a pointer that names nothing in the list it came with.
+	 */
+	readonly canonical: boolean;
+	/**
+	 * Whether it FOLLOWS a stream another generation writes rather than fetching
+	 * its own.
+	 *
+	 * REPORTED and never chosen (ADR-0044): it is a consequence of sharing a
+	 * stream. It is also what a reconfigure COSTS, said in one field -- a generation
+	 * that follows re-folds logs that are already on disk, and one that does not has
+	 * to ask the node for them again.
+	 */
+	readonly follows: boolean;
+	/**
+	 * How far its fold has got, or absent before it has loaded.
+	 *
+	 * Absent rather than `0`, because "it has folded nothing yet" and "it is level
+	 * at block 0" are different claims and an app that dims on progress has to tell
+	 * them apart.
+	 */
+	readonly lastToBlock?: number;
+	/**
+	 * How far BEHIND the generation that answers reads, in blocks: `0` means level
+	 * (or ahead, which `manual` allows).
+	 *
+	 * Absent when either cursor is unknown. Behind the CANONICAL generation and not
+	 * behind the chain tip -- which is the distance `HostProgress.blocksBehindTip`
+	 * carries, under a name that says which tip it measures against precisely so
+	 * these two cannot be confused.
+	 */
+	readonly blocksBehind?: number;
+};
+
+/**
+ * WHAT A RECONFIGURE DID, as the tab is told.
+ *
+ * A reconfigure under the generation model ADDS a generation beside the live one
+ * rather than resetting the live one, so what there is to report is the
+ * generation that now exists and whether asking for it created anything.
+ *
+ * Deliberately NOT `@etherfold/core`'s `ReconfigureOutcome`, which is a
+ * different question's answer: that one rides out of `updateIndexer`, the
+ * IN-PLACE verb, and says whether the fold it reconfigured was DISCARDED and
+ * what the source comparison decided. Nothing is discarded here -- that is the
+ * whole of what "a reconfigure is not an outage" means -- so there is no reset
+ * verdict to carry, and the two names are kept apart so neither is read as the
+ * other.
+ */
+export type HostReconfigure = {
+	/** The generation that folds the source as asked for, and where it has got to. */
+	readonly generation: HostGeneration;
+	/**
+	 * Whether this reconfigure CREATED that generation, or RESOLVED to one the host
+	 * already held.
+	 *
+	 * `false` is the "nothing moved" answer and it is an ordinary one: a source
+	 * whose hashable shape did not change (a regenerated ABI that only added a
+	 * function, an object rebuilt from the same bytes) names the generation that is
+	 * already running, and the container resolves to it rather than putting a second
+	 * engine over one state. A tab that would otherwise render "rebuilding" for a
+	 * reconfigure that changed nothing can tell the two apart.
+	 */
+	readonly added: boolean;
+};
+
+/**
  * ONE ROW, as the port carries it: the DECLARED columns and nothing else.
  *
  * It is projected in the HOST, by the same `declaredRow` the same-thread surface
@@ -236,10 +325,87 @@ export type PortRow = Record<string, unknown>;
  * planner (ADR-0021). Richer queries arrive on this same port as the EXECUTOR
  * `the-same-query-runs-against-a-worker-and-a-server` defines, which owns its
  * own serialisation -- not as more methods on this proxy.
+ *
+ * ## The LIFECYCLE calls, as cases of their own
+ *
+ * `startIndexing`, `stopIndexing`, `reconfigure`, `generations` and `promotion`
+ * are the control half of ADR-0082's "status and control" surface, and they are
+ * REQUESTS WITH ANSWERS rather than fire-and-forget messages: a tab that asks for
+ * a reconfigure learns whether it was accepted, what it created, or -- through the
+ * refusal path -- why not. There is deliberately no case that advances the fold by
+ * ONE step: a round trip per cycle is the polling this port replaced, and the
+ * driver that does the advancing lives in the host.
  */
 export type PortCases = {
 	/** How far the fold has got. Takes nothing. */
 	readonly progress: {readonly request: undefined; readonly response: HostProgress};
+	/**
+	 * START THE DRIVER, and answer where the fold is now.
+	 *
+	 * Starting a host that is already indexing is an ANSWER and not a refusal:
+	 * "index" is a state a caller asks for rather than an edge it triggers, so a
+	 * settings screen that asks twice, or two components that each ask once, leave
+	 * the host in the state they both asked for. What comes back says which state
+	 * that is (`HostProgress.indexing`). One arriving while a STOP is still being
+	 * honoured waits for that stop to land and then starts afresh, so the pair
+	 * cannot race into a host that was asked to index and is not.
+	 */
+	readonly startIndexing: {readonly request: undefined; readonly response: HostProgress};
+	/**
+	 * STOP THE DRIVER, and answer where the fold stopped.
+	 *
+	 * It ANSWERS WHEN THE CYCLE IN FLIGHT HAS FINISHED, which is what makes it
+	 * honest: no chain request is made after this response is posted, and the cursor
+	 * is where a completed cycle would have left it rather than somewhere half a
+	 * cycle in. A cut-off cycle is not on offer at all -- the cursor is written in
+	 * the same transaction as the block it describes (ADR-0027), so the consistent
+	 * thing to do with an advance already under way is to let it land.
+	 */
+	readonly stopIndexing: {readonly request: undefined; readonly response: HostProgress};
+	/**
+	 * RECONFIGURE THE SOURCE: fold it in a generation BESIDE the live one.
+	 *
+	 * The SOURCE and nothing else, because the source is the only half of a
+	 * generation that is DATA. A generation is a stream and a fold over it; the fold
+	 * is code, so changing it is a new worker bundle rather than a message (ADR-0082),
+	 * and the stream CONFIG is one mutable value on the one keeper a container holds,
+	 * so it is not settable per generation (`GenerationSpec.source`).
+	 *
+	 * What the host does with it is the generation machinery unchanged: the new
+	 * generation folds beside the canonical one, which goes on answering every read,
+	 * and the **canonical pointer** moves when the promotion policy says so --
+	 * `on-catch-up` once the new fold reaches the cursor the live one has,
+	 * `immediate` at once, `manual` never on its own.
+	 *
+	 * A REFUSAL crosses as the refusal it is (`GenerationCapReachedError`, which is
+	 * the one this case meets), carrying its own fields: see `PortError`. What the
+	 * new generation meets later, while it FOLDS, is reported on `progress` like any
+	 * other driver failure.
+	 */
+	readonly reconfigure: {
+		readonly request: {readonly source: IndexingSource<Abi>};
+		readonly response: HostReconfigure;
+	};
+	/**
+	 * EVERY GENERATION THIS HOST HOLDS, in the order it built them, with the one
+	 * answering reads marked.
+	 *
+	 * Asked rather than pushed: a generation list changes when a caller
+	 * RECONFIGURES or a pointer moves, which is a handful of times in a session, and
+	 * pushing it would be a second signal to keep in step with one nobody is
+	 * watching between reconfigures.
+	 */
+	readonly generations: {readonly request: undefined; readonly response: readonly HostGeneration[]};
+	/**
+	 * THE PROMOTION POLICY IN FORCE, as the container resolved it.
+	 *
+	 * Reported rather than re-derived, and NOTHING IS DEFAULTED AT THIS BOUNDARY:
+	 * there is one default everywhere (`on-catch-up`), it lives with the type it
+	 * belongs to, and a second copy of it in the browser -- or in the tab, one step
+	 * further out -- is how two runtimes come to disagree about which value an app is
+	 * running under (`CONTEXT.md`, *canonical pointer*).
+	 */
+	readonly promotion: {readonly request: undefined; readonly response: UsedPromotionConfig};
 	/**
 	 * START PUSHING progress to this tab, and answer where the fold is NOW.
 	 *

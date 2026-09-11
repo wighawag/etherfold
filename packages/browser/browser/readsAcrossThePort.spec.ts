@@ -58,7 +58,18 @@ test('reads the store across a port to a real worker, and matches a same-thread 
 
 		// Everything the tab was handed, in full: four reads per entity, and
 		// nothing beside them that could write (ADR-0077, ADR-0082).
-		expect(run.results.portSurface).toEqual(['close', 'host', 'onProgress', 'progress', 'reads']);
+		expect(run.results.portSurface).toEqual([
+			'close',
+			'generations',
+			'host',
+			'onProgress',
+			'progress',
+			'promotion',
+			'reads',
+			'reconfigure',
+			'startIndexing',
+			'stopIndexing',
+		]);
 		expect(run.results.readSurface).toEqual(['getAsOf', 'getCurrent', 'listAsOf', 'listCurrent']);
 	} finally {
 		await harness.dispose();

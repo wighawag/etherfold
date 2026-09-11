@@ -133,7 +133,23 @@ describe('an indexer hosted behind a port', () => {
 			// to call, because there is no store on this side at all -- `reads` is the
 			// store's four READS and nothing beside them. `pnpm typecheck` runs the
 			// other half of this claim (the refusals below do not compile).
-			expect(Object.keys(port).sort()).toEqual(['close', 'host', 'onProgress', 'progress', 'reads']);
+			//
+			// The CONTROL verbs beside them do not weaken it. Starting, stopping and
+			// reconfiguring ask the HOST to fold differently; none of them writes a row,
+			// and the handle that could is the one the host opened for writing and never
+			// let out of its own context.
+			expect(Object.keys(port).sort()).toEqual([
+				'close',
+				'generations',
+				'host',
+				'onProgress',
+				'progress',
+				'promotion',
+				'reads',
+				'reconfigure',
+				'startIndexing',
+				'stopIndexing',
+			]);
 			const surface = port as unknown as Record<string, unknown>;
 			for (const mutating of ['applyBlock', 'revertTo', 'writeCursor', 'clearCursor', 'prune', 'token']) {
 				expect(surface[mutating]).toBeUndefined();
