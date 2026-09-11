@@ -34,6 +34,20 @@ import {FINALITY, fakeChain, processor, SOURCE, type TestABI} from './workload.j
  */
 const databaseName = new URL(self.location.href).searchParams.get('db') ?? 'etherfold-hosted-indexer';
 
+/**
+ * HOW WIDE A RANGE this run fetches, where a case wants the fold to take several
+ * advances rather than one.
+ *
+ * An application states this in its own configuration; it is a query parameter
+ * here for the same reason the database name is -- the harness owns the URL, and
+ * a case that wants to watch progress ADVANCE needs the fixture's five blocks to
+ * arrive in more than one piece. Unset by default, so every other case fetches
+ * exactly as it always did. It must stay ABOVE `FINALITY`: a range narrower than
+ * the unconfirmed window re-asks for the blocks it already has and the cursor
+ * never moves.
+ */
+const fetchWidth = Number(new URL(self.location.href).searchParams.get('fetch') ?? '0');
+
 hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// The store is opened for WRITING here, in the host. That is the writer/reader
 	// split reaching across the boundary: the tab holds a port, and a port names no
@@ -42,7 +56,10 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
 	provider: fakeChain().provider,
 	source: SOURCE,
-	config: {stream: {finality: FINALITY}},
+	config: {
+		stream: {finality: FINALITY},
+		...(fetchWidth > 0 ? {fetch: {numBlocksToFetchAtStart: fetchWidth, maxBlocksPerFetch: fetchWidth}} : {}),
+	},
 	// The fixture's tip never moves, so there is nothing to wait four seconds for.
 	tipIntervalInSeconds: 0.25,
 });

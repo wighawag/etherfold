@@ -33,6 +33,11 @@
  *   only a port. It runs here and nowhere else: a worker is the one thing no node
  *   test can have, and "the UI thread is not doing the fold" is a claim about two
  *   execution contexts rather than about two objects.
+ * - `progress-pushed-from-the-worker`: the fold in a dedicated worker, with the
+ *   tab COLLECTING what the worker pushes at it. It runs here because the claim
+ *   is about a signal crossing a real `postMessage` from a context that is not
+ *   the UI thread, unprompted -- and because "nothing polls" is only worth
+ *   asserting where there is a second thread that could have been polled.
  * - `reads-across-the-port`: the store's four reads, asked of a surface over a
  *   port to a real worker AND of a surface over a store on this thread, with ONE
  *   case list and the same workload behind both. Reading while the fold is still
@@ -52,6 +57,7 @@ import {
 	connectToIndexerHost,
 	createBrowserStateStore,
 	createPortReadSurface,
+	createProgressReadable,
 	dedicatedWorkerHost,
 	executionScopeName,
 	type HostProgress,
@@ -441,6 +447,112 @@ async function readsAcrossThePortCase(params: Params, timings: Timing[]): Promis
 }
 
 /**
+ * THE WORKER TELLING ITS OWN TAB HOW IT IS DOING, in a real browser.
+ *
+ * Nothing in here asks. The page subscribes once, and everything it learns after
+ * that arrives unprompted from a `DedicatedWorkerGlobalScope` -- which is what
+ * makes this the run the node tests cannot make: a push that crossed a real
+ * `postMessage` between two execution contexts, rather than between two objects.
+ *
+ * The three claims that need a real worker:
+ *
+ * - the pushes ARRIVE, carry the phases in order, and the distance to the tip
+ *   shrinks to zero as the fold advances (the fixture is fetched four blocks at
+ *   a time so that there is more than one advance to watch);
+ * - an UNSUBSCRIBED tab stops receiving them ON THE WIRE, counted on the `Worker`
+ *   object itself rather than in a callback that is merely no longer called;
+ * - a tab that attaches LATE -- here, after the fold is already at the tip and
+ *   will therefore never move again -- is told where things stand anyway.
+ */
+async function progressPushedCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'progress-pushed');
+	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4`, import.meta.url), {
+		type: 'module',
+	});
+
+	// EVERY message the worker posts at this tab, ours or not, so "it stopped
+	// pushing" is a fact about the wire.
+	const posted: {kind?: string}[] = [];
+	worker.addEventListener('message', (event) => posted.push(event.data as {kind?: string}));
+
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	try {
+		// The helper an app binds to a progress display, built BEFORE anything has
+		// been pushed: what it holds until the host answers is nothing at all.
+		const progress = createProgressReadable(indexer);
+		const helperBeforeAnyPush = progress.$state === undefined;
+
+		const pushes: HostProgress[] = [];
+		const atTip = new Promise<HostProgress>((resolve) => {
+			const stop = indexer.onProgress((value) => {
+				pushes.push(value);
+				if (value.phase === 'at-tip') {
+					resolve(value);
+					// Released from inside, once the fold SAID it was done: this case waits
+					// on a value and never on a duration.
+					queueMicrotask(() => stop());
+				}
+			});
+		});
+		const done = await timed('pushed-to-the-tip', timings, () => atTip);
+
+		// IDENTITY: the helper holds the host's own last report, by reference. It is
+		// a view over the signal and not a value it assembled.
+		const helperHoldsTheLastPush = progress.$state === pushes[pushes.length - 1];
+		progress.close();
+
+		// Both subscriptions are released now. One round trip so the unsubscribes
+		// cannot still be in flight, then count what arrives while the worker goes on
+		// advancing at the tip.
+		await indexer.progress();
+		const quietFrom = posted.length;
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		const pushedWhileUnsubscribed = posted.slice(quietFrom).filter((message) => message?.kind === 'push').length;
+
+		// A tab attaching to a fold that has ALREADY finished: it can only learn
+		// where things stand if attaching tells it, because nothing is going to move.
+		const late = await timed(
+			'late-subscriber',
+			timings,
+			() =>
+				new Promise<HostProgress>((resolve) => {
+					const stop = indexer.onProgress((value) => {
+						resolve(value);
+						queueMicrotask(() => stop());
+					});
+				}),
+		);
+
+		return {
+			// WHERE the pushes were computed, measured in the context that computed them
+			scope: done.scope,
+			tabScope: executionScopeName(),
+			host: done.host,
+			// the phases as they changed, in order
+			phases: pushes.map((push) => push.phase).filter((phase, index, all) => phase !== all[index - 1]),
+			// how far behind the tip each report that knew a tip said it was
+			blocksBehindTip: pushes.map((push) => push.blocksBehindTip).filter((behind) => behind !== undefined),
+			firstPhase: pushes[0]?.phase,
+			done: {
+				phase: done.phase,
+				lastToBlock: done.lastToBlock,
+				latestBlock: done.latestBlock,
+				blocksBehindTip: done.blocksBehindTip,
+				numBlocksProcessedSoFar: done.numBlocksProcessedSoFar,
+				syncPercentage: done.syncPercentage,
+			},
+			helperBeforeAnyPush,
+			helperHoldsTheLastPush,
+			pushedWhileUnsubscribed,
+			lateSubscriber: {phase: late.phase, lastToBlock: late.lastToBlock},
+			portSurface: Object.keys(indexer).sort(),
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/**
  * Ask until the fold is level with THIS FIXTURE'S tip, and fail SAYING SO if the
  * host stopped.
  *
@@ -503,6 +615,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'reads-across-the-port':
 						results = await readsAcrossThePortCase(ctx.params, timings);
+						break;
+					case 'progress-pushed-from-the-worker':
+						results = await progressPushedCase(ctx.params, timings);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

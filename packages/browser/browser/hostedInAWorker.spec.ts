@@ -59,7 +59,7 @@ test('folds a real workload in a dedicated worker, and the tab asks how far it g
 		// Everything the tab was handed. There is no store on this side and no verb
 		// that could write one: the host holds the writer (ADR-0077, ADR-0082), and
 		// `reads` is the store's four READS proxied (`readsAcrossThePort.spec.ts`).
-		expect(run.results.portSurface).toEqual(['close', 'host', 'progress', 'reads']);
+		expect(run.results.portSurface).toEqual(['close', 'host', 'onProgress', 'progress', 'reads']);
 	} finally {
 		await harness.dispose();
 	}
