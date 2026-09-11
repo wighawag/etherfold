@@ -185,9 +185,11 @@ describe('the split log-fetcher fetches no transaction data either', () => {
 		const outcome = await fetcher.fetchAndPush();
 
 		expect(outcome.status).toBe('pushed');
+		// the identity call follows the log call: it is made once a cycle, after the
+		// fetch and before the push (ADR-0081)
 		expect([...new Set(calls)].filter((method) => method !== 'eth_blockNumber')).toEqual([
-			'eth_chainId',
 			'eth_getLogs',
+			'eth_chainId',
 		]);
 		for (const log of target.pushed[0].logs) {
 			expect(Object.keys(log)).not.toContain('transaction');

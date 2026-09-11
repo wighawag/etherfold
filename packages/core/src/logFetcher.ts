@@ -292,7 +292,8 @@ const passThrough = <T>(promise: Promise<T>) => promise;
  * the engine's declared surface (`declaredMethodsOnly`, ADR-0073), so a
  * reintroduced per-block read is refused here rather than paid for. The
  * receiver makes NO chain call at all, so the chain identity check is one only
- * this side can perform, and it is made both before fetching and before pushing.
+ * this side can perform, and it is made ONCE a cycle, after the fetch and before
+ * the push (ADR-0081).
  */
 export class LogFetcher<ABI extends Abi> {
 	/** The `{source, config}` every batch asserts. Computed exactly as the receiver computes it. */
@@ -413,8 +414,6 @@ export class LogFetcher<ABI extends Abi> {
 	 * `UnexpectedChainError`, `SuspectedTruncationError`, `ArchiveRefusedError`).
 	 */
 	async fetchAndPush(): Promise<FetchCycleOutcome> {
-		await this.assertChain('before');
-
 		let fromBlock = this.expectedFromBlockHint ?? (await this.askWhereToStart());
 		const latestBlock = await this.withRetries(() => getBlockNumber(this.provider), 'reading the chain tip');
 
@@ -441,9 +440,18 @@ export class LogFetcher<ABI extends Abi> {
 			// this side reads the timestamp off the log and never fetches one.
 			assertLogsCarryTimestamps(events, `the node's answer for [${fromBlock}, ${toBlock}]`);
 
-			// after the fetch and BEFORE the push, because this is the last moment at
-			// which logs from another chain can still be stopped from being indexed
-			await this.assertChain('after');
+			// THE CHAIN IS STILL THE ONE THE SOURCE NAMES -- CHECKED ONCE, AND HERE (ADR-0081).
+			// After the fetch and BEFORE the push, because this is the last moment at which
+			// logs from another chain can still be stopped from being indexed. A second call
+			// used to open this method; it is deleted, because it only failed fast -- saving a
+			// wasted range when the provider had already moved between cycles -- and caught
+			// nothing this one does not. The pair looked symmetric and was not, so do not
+			// restore it for symmetry, and do not delete this one as the cheaper-looking half.
+			//
+			// Unconditional and with no flag: making it optional was proposed and withdrawn,
+			// because it is the ONLY chain-swap detection that exists on this path and nothing
+			// has measured what it costs (ADR-0081).
+			await this.assertChain();
 
 			const batch: WireBatch<ABI> = {context: this.context, fromBlock, toBlock, latestBlock, logs: events};
 			// the receiver's OWN envelope check, run here first. It costs nothing and it
@@ -635,11 +643,17 @@ export class LogFetcher<ABI extends Abi> {
 	 * fetcher pointed at the wrong endpoint would hand it another chain's logs
 	 * under a perfectly valid identity, and every layer below would treat them as
 	 * ours.
+	 *
+	 * Asked at ONE point in a cycle, after the fetch (ADR-0081), so the `'after'`
+	 * the refusal carries is the only side this can be. The retry policy is kept
+	 * around it deliberately: a flaky `eth_chainId` is a provider problem, not a
+	 * chain swap, and a refusal here is not retried because `UnexpectedChainError`
+	 * reports itself unretryable.
 	 */
-	private async assertChain(when: 'before' | 'after'): Promise<void> {
-		const chainId = await this.withRetries(() => getChainId(this.provider), `checking the chain id (${when} fetch)`);
+	private async assertChain(): Promise<void> {
+		const chainId = await this.withRetries(() => getChainId(this.provider), 'checking the chain id (after fetch)');
 		if (chainId !== this.source.chainId) {
-			throw new UnexpectedChainError(this.source.chainId, chainId, when);
+			throw new UnexpectedChainError(this.source.chainId, chainId, 'after');
 		}
 	}
 

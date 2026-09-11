@@ -390,8 +390,9 @@ export class NoFetchProgressError extends Error {
 /**
  * A provider that is not serving the chain the source names.
  *
- * Checked by the log-fetcher before it fetches and again before it pushes,
- * because it is the one corruption the receiving half cannot possibly catch: the
+ * Checked by the log-fetcher ONCE a cycle, after the fetch and before the push
+ * (ADR-0081), because it is the one corruption the receiving half cannot
+ * possibly catch: the
  * receiver makes no chain calls at all (ADR-0003), so logs from the wrong chain
  * arrive carrying a perfectly valid `{source, config}` and are indexed as if
  * they were ours. An endpoint behind a load balancer, or a wallet provider the
@@ -405,6 +406,12 @@ export class UnexpectedChainError extends Error {
 	constructor(
 		readonly expectedChainId: string,
 		readonly actualChainId: string,
+		/**
+		 * Which side of the fetch caught it. `'before'` is no longer reachable from a
+		 * fetch cycle (ADR-0081 deleted the before-fetch call) and the parameter keeps
+		 * it anyway: this error is exported, narrowing it is a breaking change, and a
+		 * host classifying a refusal still has to name a side.
+		 */
 		when: 'before' | 'after',
 	) {
 		super(

@@ -859,6 +859,114 @@ describe('what only this side can check', () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// THE CHAIN IDENTITY COSTS ONE ROUND TRIP A CYCLE (ADR-0081)
+// ---------------------------------------------------------------------------
+// `fetchAndPush` used to bracket its range fetch with two `eth_chainId` calls.
+// The pair looked symmetric and was not: only the AFTER call is a guard, because
+// the window that can corrupt anything is the fetch itself, where chain B's logs
+// would cross the wire under chain A's `{source, config}` and be indexed as ours
+// by a receiver that makes no chain calls (ADR-0003) and so cannot check. The
+// BEFORE call only failed fast, and it is deleted.
+//
+// So the two outcomes are pinned below -- moved DURING the fetch, and moved
+// BETWEEN cycles (in `what only this side can check`, above) -- and so is the
+// CALL COUNT and its POSITION: restoring the deleted call for symmetry, or
+// keeping the wrong one of the pair, must fail here rather than pass quietly.
+// ---------------------------------------------------------------------------
+
+describe('a provider that changes chain mid-fetch', () => {
+	/**
+	 * A chain whose `eth_chainId` answer can be moved from inside the fetch, and
+	 * the cycle's order of operations as the fetcher performs it.
+	 *
+	 * The shape is the engine's (`follower.test.ts`, `a provider that changes chain
+	 * mid-cycle`), because a COUNT alone cannot say WHERE the surviving call sits:
+	 * the trace is what `after the fetch and before the push` is asserted against.
+	 * `eth_blockNumber` is left out of it because the tip read is not what these
+	 * tests are about.
+	 */
+	function movableChain(options: ChainOptions) {
+		const chain = makeChain(options);
+		const trace: string[] = [];
+		let flipDuringFetch: string | undefined;
+		const provider = {
+			async request(args: {method: string; params?: any}): Promise<any> {
+				if (args.method !== 'eth_blockNumber') {
+					trace.push(args.method);
+				}
+				const result = await chain.provider.request(args);
+				if (args.method === 'eth_getLogs' && flipDuringFetch !== undefined) {
+					chain.state.chainId = flipDuringFetch;
+				}
+				return result;
+			},
+		};
+		return {
+			...chain,
+			provider: provider as any,
+			trace,
+			/** The provider moves WHILE the logs are being fetched, the dangerous case. */
+			flipDuringFetchTo(next: string) {
+				flipDuringFetch = next;
+			},
+		};
+	}
+
+	/** The receiver's half of the same trace: the push is what the guard must precede. */
+	function tracingTarget(target: IngestionTarget, trace: string[]): IngestionTarget {
+		return {
+			expectedFromBlock: (context) => target.expectedFromBlock(context),
+			send: (batch) => {
+				trace.push('push');
+				return target.send(batch);
+			},
+		};
+	}
+
+	it('costs ONE `eth_chainId` for a cycle, after the fetch and before the push', async () => {
+		const chain = movableChain({latestBlock: 110, logsPerBlock: {101: [rawLog(101, '0xa101', 1)]}});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+
+		const outcome = await fetcherOn(chain.provider, tracingTarget(receiver.target, chain.trace)).fetchAndPush();
+
+		// ONE identity round trip per cycle and not two (ADR-0081), asserted as a COUNT
+		// so a before-fetch call added back fails this test instead of passing quietly
+		expect(chain.trace.filter((step) => step === 'eth_chainId')).toEqual(['eth_chainId']);
+		// ...and it sits where the answer is worth having: the logs are in hand and
+		// nothing has crossed the wire yet
+		expect(chain.trace).toEqual(['eth_getLogs', 'eth_chainId', 'push']);
+		// not vacuous: the cycle really did push the range it fetched
+		expect(outcome).toMatchObject({status: 'pushed', fromBlock: 100, toBlock: 110, logs: 1});
+	});
+
+	it('is REFUSED when it moves DURING the fetch, rather than pushing the wrong chain', async () => {
+		// the case only the post-fetch call can catch: the range was fetched from one
+		// chain and the provider is now answering for another, so the logs in hand are
+		// about to cross the wire under a `{source, config}` they did not come from
+		const chain = movableChain({latestBlock: 110, logsPerBlock: {101: [rawLog(101, '0xa101', 1)]}});
+		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
+		chain.flipDuringFetchTo('137');
+
+		const error = await fetcherOn(chain.provider, tracingTarget(receiver.target, chain.trace))
+			.fetchAndPush()
+			.then(
+				() => undefined,
+				(err) => err,
+			);
+
+		expect(error).toBeInstanceOf(UnexpectedChainError);
+		// the refusal names both chains and the side of the fetch that caught it, which
+		// is the surviving one
+		expect(error).toMatchObject({expectedChainId: '1', actualChainId: '137', retryable: false});
+		expect(error.message).toContain('checked after fetching');
+		// and nothing from the wrong chain crossed the wire
+		expect(receiver.sends).toBe(0);
+		expect(receiver.received).toEqual([]);
+		expect(chain.trace).toEqual(['eth_getLogs', 'eth_chainId']);
+	});
+});
+
 describe('the HTTP transport, on the answers a server should not give', () => {
 	// the round-trip test covers what a CORRECT server answers; these are the ones
 	// that only appear when something else is on the other end of the URL
