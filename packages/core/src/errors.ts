@@ -388,15 +388,77 @@ export class NoFetchProgressError extends Error {
 }
 
 /**
+ * WHERE a chain-identity check caught a provider on the wrong chain.
+ *
+ * One axis, not two: every value names a POINT at which the question is asked,
+ * and the two deployment shapes (ADR-0003) simply ask it at different points.
+ * `'before'` and `'after'` are the split deployment's log-fetcher, named for
+ * the side of the fetch they sit on; `'cycle'`, `'load'` and `'reconfigure'`
+ * are the in-process engine's three.
+ *
+ * `'before'` is no longer reachable from a fetch cycle (ADR-0081 deleted the
+ * before-fetch call) and is kept anyway: this error is exported, narrowing the
+ * union is a breaking change, and a host classifying a refusal still has to be
+ * able to name that side.
+ */
+export type ChainIdentityCheckPoint = 'before' | 'after' | 'cycle' | 'load' | 'reconfigure';
+
+/**
+ * What each check point says about ITSELF: where it caught the provider, and
+ * the consequence that actually holds there.
+ *
+ * The consequence is per-point and NOT one sentence for all of them, because
+ * the fetcher's -- "nothing is pushed, and the receiver could not have caught
+ * this" -- is a claim about a RECEIVER, which exists on that path alone. Said
+ * from the engine it would describe machinery the deployment does not have,
+ * and a refusal that asserts something untrue about the path it was thrown
+ * from is worse than one that says less. The wording lives HERE, in one table,
+ * rather than at the throw sites, so the five refusals cannot drift into five
+ * spellings of one condition, which is the state ADR-0081 exists to end.
+ */
+const CHAIN_IDENTITY_CHECK_POINTS: Record<ChainIdentityCheckPoint, {where: string; consequence: string}> = {
+	before: {
+		where: 'checked before fetching',
+		consequence: 'Nothing is pushed: the receiver makes no chain calls, so it could not catch this.',
+	},
+	after: {
+		where: 'checked after fetching',
+		consequence: 'Nothing is pushed: the receiver makes no chain calls, so it could not catch this.',
+	},
+	cycle: {
+		where: 'checked after the fetch, before anything was written or folded',
+		consequence:
+			'Nothing is written or folded: the fetched logs are dropped and the cursor stays where it was, so the ' +
+			'next cycle asks for the same range again.',
+	},
+	load: {
+		where: 'checked at load, before a single log was fetched',
+		consequence:
+			'Nothing is loaded or indexed: point the indexer at a node for the chain this source names, or correct ' +
+			"the source's chainId if the node is the one you meant.",
+	},
+	reconfigure: {
+		where: "checked while reconfiguring, against the previous context's chain",
+		consequence:
+			'Nothing is reconfigured: a provider on another chain needs a source for that chain, which resets the ' +
+			'state derived from the previous one. Did you forget to pass a new source?',
+	},
+};
+
+/**
  * A provider that is not serving the chain the source names.
  *
- * Checked by the log-fetcher ONCE a cycle, after the fetch and before the push
- * (ADR-0081), because it is the one corruption the receiving half cannot
- * possibly catch: the
+ * The ONE refusal for that condition, in both deployment shapes (ADR-0081), so
+ * that an operator reads one refusal rather than a spelling per call site. The
+ * log-fetcher asks once a cycle, after the fetch and before the push, because
+ * it is the one corruption the receiving half cannot possibly catch: the
  * receiver makes no chain calls at all (ADR-0003), so logs from the wrong chain
  * arrive carrying a perfectly valid `{source, config}` and are indexed as if
- * they were ours. An endpoint behind a load balancer, or a wallet provider the
- * user switched networks on, is enough to produce it.
+ * they were ours. The in-process engine asks at its own three points (see
+ * {@link ChainIdentityCheckPoint}), where there is no receiver and nothing is
+ * pushed -- which is why the consequence is per-point and the two ids are not.
+ * An endpoint behind a load balancer, or a wallet provider the user switched
+ * networks on, is enough to produce any of them.
  */
 export class UnexpectedChainError extends Error {
 	readonly name = 'UnexpectedChainError';
@@ -406,17 +468,13 @@ export class UnexpectedChainError extends Error {
 	constructor(
 		readonly expectedChainId: string,
 		readonly actualChainId: string,
-		/**
-		 * Which side of the fetch caught it. `'before'` is no longer reachable from a
-		 * fetch cycle (ADR-0081 deleted the before-fetch call) and the parameter keeps
-		 * it anyway: this error is exported, narrowing it is a breaking change, and a
-		 * host classifying a refusal still has to name a side.
-		 */
-		when: 'before' | 'after',
+		/** Where it was caught, which also decides the consequence the message states. */
+		when: ChainIdentityCheckPoint,
 	) {
+		const {where, consequence} = CHAIN_IDENTITY_CHECK_POINTS[when];
 		super(
 			`the provider is on chain ${actualChainId} but this source indexes chain ${expectedChainId} ` +
-				`(checked ${when} fetching). Nothing is pushed: the receiver makes no chain calls, so it could not catch this.`,
+				`(${where}). ${consequence}`,
 		);
 	}
 }

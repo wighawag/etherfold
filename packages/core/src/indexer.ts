@@ -46,6 +46,7 @@ import {
 	GenesisHashMismatchError,
 	InvalidBatchError,
 	isOutOfSpace,
+	UnexpectedChainError,
 } from './errors.js';
 import {declaredMethodsOnly, type MethodDeclaringProvider} from './providerSurface.js';
 
@@ -863,16 +864,9 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// for now we do a minimum check of chainId
 		// if this has been updated but the source remain unchanged, then the developer must have forgot to send a different source
 		if (!resetNeeded) {
-			const newChainIdAsHex = await newProvider.request({method: 'eth_chainId'});
-			const newChainId = parseInt(newChainIdAsHex.slice(2), 16).toString();
+			const newChainId = await getChainId(newProvider);
 			if (newChainId !== oldSource.chainId) {
-				throw new Error(
-					`
-					Connected to a different chain (chainId : ${newChainId}) than the previous indexer context (${oldSource.chainId}).
-					Indexer should reset.
-					Did you forget to pass some new source?
-					`,
-				);
+				throw new UnexpectedChainError(oldSource.chainId, newChainId, 'reconfigure');
 			}
 		} else {
 			if (this.config?.logLevel && this.config.logLevel >= 1) {
@@ -1158,11 +1152,9 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	protected async promiseToLoad(): Promise<LastSync<ABI>> {
-		const chainId = await this.provider.request({method: 'eth_chainId'});
-		if (parseInt(chainId.slice(2), 16).toString() !== this.source.chainId) {
-			throw new Error(
-				`Connected to a different chain (chainId : ${chainId}). Expected chainId === ${this.source.chainId}`,
-			);
+		const chainId = await getChainId(this.provider);
+		if (chainId !== this.source.chainId) {
+			throw new UnexpectedChainError(this.source.chainId, chainId, 'load');
 		}
 		if (this.source.genesisHash && !this.config.skipGenesisCheck) {
 			await this.checkGenesisHash(this.source.genesisHash);
@@ -1716,7 +1708,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// withdrawn, and the reasons are in ADR-0081.
 		const chainId = await unlessCancelled(getChainId(this.provider));
 		if (chainId !== this.source.chainId) {
-			throw new Error(`chainId changed after fetch`);
+			throw new UnexpectedChainError(this.source.chainId, chainId, 'cycle');
 		}
 
 		// ----------------------------------------------------------------------------------------
