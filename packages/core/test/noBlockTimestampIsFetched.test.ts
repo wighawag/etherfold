@@ -185,9 +185,11 @@ describe('the split log-fetcher fetches no block data either', () => {
 		const outcome = await fetcher.fetchAndPush();
 
 		expect(outcome.status).toBe('pushed');
+		// the identity call follows the log call: it is made once a cycle, after the
+		// fetch and before the push (ADR-0081)
 		expect([...new Set(calls)].filter((method) => method !== 'eth_blockNumber')).toEqual([
-			'eth_chainId',
 			'eth_getLogs',
+			'eth_chainId',
 		]);
 		// the receiving half makes no chain call at all (ADR-0003), so what crossed
 		// the wire is the only timestamp it will ever have
