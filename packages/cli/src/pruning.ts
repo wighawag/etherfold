@@ -70,6 +70,23 @@ import {pruneMore, type PruneOptions, type PruneReport, type ScheduledPruneRepor
 export const DEFAULT_PRUNE_BUDGET = 10_000;
 
 /**
+ * How often a receiver runs a scheduled prune pass, in seconds.
+ *
+ * `run` and `build` need no such number: both have a CYCLE, so they prune in a
+ * gap that already exists. `index` has none -- it is a server that folds what a
+ * sender pushes at it and otherwise waits -- so the schedule has to be a clock,
+ * and a clock needs an interval.
+ *
+ * A minute, because nothing here is racing anything. What a prune reclaims is
+ * disk, the pass is bounded so a backlog drains over several ticks rather than
+ * in one, and a store with no floor makes the whole thing a no-op it costs one
+ * tip read to discover. Tuning this down buys a slightly smaller high-water
+ * mark on disk; tuning it up buys nothing measurable, because the work is
+ * proportional to what is dropped and not to how often it is asked for.
+ */
+export const DEFAULT_PRUNE_INTERVAL_SECONDS = 60;
+
+/**
  * THE STATES THIS PROCESS HOLDS: one per generation, deduplicated.
  *
  * Every generation held, not only the canonical one. A successor folding beside

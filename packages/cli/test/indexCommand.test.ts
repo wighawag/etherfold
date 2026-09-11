@@ -1,7 +1,13 @@
 import {serializeWireBatch, type LogEvent, type WireBatch} from '@etherfold/core';
 import type {RunningFetcher} from '@etherfold/platform-nodejs-fetcher';
 import {afterEach, describe, expect, it} from 'vitest';
-import {index, fetch as startFetch, type IndexDependencies, type RunningReceiver} from '../src/index.js';
+import {
+	canonicalStateNamespaceIn,
+	index,
+	fetch as startFetch,
+	type IndexDependencies,
+	type RunningReceiver,
+} from '../src/index.js';
 import type {StoreCursorReport} from '../src/cursorReport.js';
 import type {Options} from '../src/types.js';
 import {abi, ALICE, BOB, entityModule, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
@@ -490,5 +496,88 @@ describe('the receiver is chain-free, and its refusals say so', () => {
 			(transfers) => transfers === SPREAD.length,
 			'every pushed log to be folded',
 		);
+	});
+});
+
+/**
+ * THE RECEIVER RECLAIMS WHAT ITS RETENTION NO LONGER COVERS.
+ *
+ * `--retention` is `optional` on `index` exactly as it is on `run`
+ * (`config.ts`), and the flag's own help text promises that what falls outside
+ * the window is "both refused on read and DROPPED from storage". The refusal
+ * half always worked. The storage half did not: `run` and `build` prune in the
+ * gap their cycle already waits, and a receiver has no cycle, so a bounded
+ * `index` deployment got the answers of a windowed store and the footprint of an
+ * unbounded one. That is the worst-of-both `a-configured-window-is-actually-pruned`
+ * exists to kill, and it was reachable from a documented flag.
+ *
+ * The schedule is a TIMER because a receiver has nothing else. ADR-0022 forbids
+ * a prune as a side effect of a write, and ingest is the only other thing that
+ * happens here, so "between batches" would be that side effect renamed. A clock
+ * is host-owned, which is what the ADR asks for.
+ */
+describe('the receiver prunes what its retention no longer covers', () => {
+	/** Every version row the canonical generation holds, across both entities. */
+	async function versionsIn(receiver: RunningReceiver): Promise<number> {
+		const namespace = await canonicalStateNamespaceIn(receiver.db);
+		if (namespace === undefined) throw new Error(`no generation answers reads in this database`);
+		let total = 0;
+		for (const entity of ['nft', 'counter']) {
+			const counted = await receiver.db
+				.prepare(`SELECT COUNT(*) AS n FROM "${namespace}_${entity}"`)
+				.all<{n: number}>();
+			total += Number(counted.results[0]?.n ?? 0);
+		}
+		return total;
+	}
+
+	it('drops the versions below its floor, on its own schedule, with no cycle to hide in', async () => {
+		// a floor of 20 blocks behind a tip of START_BLOCK + 100 leaves the counter
+		// versions closed early well below it, while every token's LIVE version
+		// survives however old it is
+		running = await index(
+			{...RECEIVING, retention: '20'},
+			// fast enough to observe without waiting a minute; a deployment uses the default
+			depsFor({pruneIntervalSeconds: 0.05}),
+		);
+		const chain = fakeChain().serve(SPREAD, TIP);
+		sender = await senderAgainst(running, chain);
+
+		await until(
+			() => statusCursor(running!.url),
+			(cursor) => cursor?.lastToBlock === TIP,
+			'the cursor to reach the tip',
+		);
+
+		// the count FALLS, which is the whole claim: a statement that retention is
+		// configured is not evidence that anything was reclaimed
+		const settled = await until(
+			() => versionsIn(running!),
+			(count) => count < SPREAD.length * 2,
+			'the scheduled prune to drop the versions below the floor',
+		);
+		expect(settled).toBeLessThan(SPREAD.length * 2);
+
+		// and it went on answering correctly from what it kept: the live version of
+		// every token is current state however far below the floor it was written
+		expect(await transfersIn(running)).toBe(SPREAD.length);
+		expect(await ownerOf(running, 0n)).toBe(ALICE.toLowerCase());
+	});
+
+	it('deletes nothing where the deployment stated no floor, which is the default', async () => {
+		running = await index(RECEIVING, depsFor({pruneIntervalSeconds: 0.05}));
+		const chain = fakeChain().serve(SPREAD, TIP);
+		sender = await senderAgainst(running, chain);
+
+		await until(
+			() => statusCursor(running!.url),
+			(cursor) => cursor?.lastToBlock === TIP,
+			'the cursor to reach the tip',
+		);
+		const unbounded = await versionsIn(running);
+
+		// several ticks pass with no floor to prune to, and the store is untouched
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(await versionsIn(running)).toBe(unbounded);
 	});
 });

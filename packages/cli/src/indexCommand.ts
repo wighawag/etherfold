@@ -15,6 +15,7 @@ import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
 import {foldingStatusReport, openFolding, openFoldingDatabase, openExplicitSource, streamConfigFor} from './folding.js';
+import {DEFAULT_PRUNE_BUDGET, DEFAULT_PRUNE_INTERVAL_SECONDS, pruneHeldMore} from './pruning.js';
 import type {IndexConfig, Options} from './types.js';
 
 const logger = logs('etherfold');
@@ -96,6 +97,16 @@ export type IndexDependencies = {
 	handleSignals?: boolean;
 	/** Stops the receiver from outside, the way a signal handler would. */
 	signal?: AbortSignal;
+	/**
+	 * Seconds between scheduled prune passes. Defaults to
+	 * `DEFAULT_PRUNE_INTERVAL_SECONDS`; `0` disables the schedule entirely.
+	 *
+	 * A test sets it low to observe a pass without waiting a minute, or to `0`
+	 * when a background delete would race what it is asserting. A DEPLOYMENT
+	 * leaves it alone: retention is configured with `--retention`, and starving
+	 * the schedule is not how a deployment says it wants nothing dropped.
+	 */
+	pruneIntervalSeconds?: number;
 	/** Where the startup lines go. Defaults to the console. */
 	log?: (...args: unknown[]) => void;
 	/** The environment flags fall back to. Defaults to `process.env`. */
@@ -298,7 +309,65 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			getCursorReport: () => foldingStatusReport(container),
 		});
 
+		// RECLAIM WHAT THE RETENTION NO LONGER COVERS, on a clock, because this
+		// command has no cycle to prune between.
+		//
+		// `--retention` is accepted here exactly as it is on `run` (`config.ts`), and
+		// its own help text promises that what falls outside the window is "both
+		// refused on read and DROPPED from storage". The refusal half has always
+		// worked; without this the storage half did not, so a bounded receiver got the
+		// answers of a windowed store and the footprint of an unbounded one -- the
+		// worst-of-both `a-configured-window-is-actually-pruned` exists to kill.
+		//
+		// A TIMER is the honest schedule for a receiver. ADR-0022 forbids a prune as a
+		// side effect of a write, and the ingest path is the only other thing that
+		// happens here, so "between batches" would be exactly that side effect wearing
+		// a different hat. A clock is owned by the HOST, which is what that ADR asks
+		// for, and this process is a long-lived Node one that can hold a timer -- the
+		// constraint recorded for Workers (`work/notes/findings/
+		// a-worker-cannot-hold-a-timer-across-requests.md`) is about a STORE on that
+		// platform and does not reach a CLI host.
+		//
+		// It calls UNCONDITIONALLY: a prune with no floor is a no-op (ADR-0022), and a
+		// host holding the seam cannot tell whether a `revert-only` store has one
+		// anyway, because the capability report carries no depth.
+		const pruneEverySeconds = deps.pruneIntervalSeconds ?? DEFAULT_PRUNE_INTERVAL_SECONDS;
+		// Guards the ONE case a clock has that a cycle does not: a pass slower than the
+		// interval. Ticks would otherwise stack, and several concurrent passes over one
+		// store spend the budget several times for the deletes a single pass would have
+		// made.
+		let pruning = false;
+		const pruneTimer =
+			pruneEverySeconds > 0
+				? setInterval(() => {
+						if (pruning) return;
+						pruning = true;
+						void (async () => {
+							try {
+								const pruned = await pruneHeldMore(container, {maxVersions: DEFAULT_PRUNE_BUDGET});
+								if (!pruned.complete) {
+									logger.info(
+										`index: pruned ${pruned.versionsDeleted} versions and the budget of ${DEFAULT_PRUNE_BUDGET} ` +
+											`stopped the pass before the store reached its floor. The next tick continues.`,
+									);
+								}
+							} catch (err) {
+								// Receiving is what this process is FOR. A delete that could not run
+								// leaves a store larger than it asked to be, which is worth saying and
+								// not worth refusing a batch over.
+								logger.error(`index: a scheduled prune failed; the fold is unaffected and the next tick retries`, err);
+							} finally {
+								pruning = false;
+							}
+						})();
+					}, pruneEverySeconds * 1000)
+				: undefined;
+		// A prune is never a reason for the process to stay alive: what holds it up is
+		// the server listening.
+		pruneTimer?.unref?.();
+
 		const close = async () => {
+			if (pruneTimer) clearInterval(pruneTimer);
 			releaseSignals();
 			deps.signal?.removeEventListener('abort', stop);
 			await server.close();

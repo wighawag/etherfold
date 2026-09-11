@@ -41,7 +41,13 @@ export {
 } from './folding.js';
 export {canonicalGenerationIn, canonicalStateNamespaceIn, heldGenerationsIn, type ReadTierOptions} from './readTier.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
-export {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete, statesHeldBy} from './pruning.js';
+export {
+	DEFAULT_PRUNE_BUDGET,
+	DEFAULT_PRUNE_INTERVAL_SECONDS,
+	pruneHeldMore,
+	pruneHeldUntilComplete,
+	statesHeldBy,
+} from './pruning.js';
 export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch.js';
 export {index, indexMain, type IndexDependencies, type RunningReceiver} from './indexCommand.js';
 export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
