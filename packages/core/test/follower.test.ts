@@ -3,6 +3,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {openIndexer, type AnyGenerationSpec, type Indexer} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
 import {sameGeneration, writerOf, type GenerationRecord} from '../src/generation/registry.js';
+import {UnexpectedChainError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
 import {streamDigestOf} from '../src/stream/identity.js';
@@ -729,6 +730,12 @@ describe('the follower decides on the emissions themselves', () => {
 //
 // Both outcomes are pinned below, and so is the CALL COUNT: restoring the deleted
 // call for symmetry must fail here rather than pass quietly.
+//
+// The REFUSAL is asserted by TYPE and by the two chain ids it carries, never by
+// its sentence, so the wording can improve without a test rewrite. Its two
+// siblings -- the load path and the reconfigure path, which throw the same type
+// from their own check points -- are pinned in
+// `aChainIdentityRefusalNamesBothChains.test.ts`.
 // ---------------------------------------------------------------------------
 
 describe('a provider that changes chain mid-cycle', () => {
@@ -831,7 +838,24 @@ describe('a provider that changes chain mid-cycle', () => {
 		await indexer.load();
 		chain.flipDuringFetchTo('0x2');
 
-		await expect(indexer.indexMore()).rejects.toThrow(/chainId changed after fetch/);
+		const error = await indexer.indexMore().then(
+			() => undefined,
+			(err) => err,
+		);
+
+		expect(error).toBeInstanceOf(UnexpectedChainError);
+		// the operator reads which chain was expected, which one answered, and that the
+		// answer came in after the range had been fetched
+		expect(error).toMatchObject({expectedChainId: '1', actualChainId: '2', retryable: false});
+		// both ids are READABLE, not merely carried on fields: the sentence is not
+		// pinned, only that neither number is missing from it
+		expect(error.message).toMatch(/\b1\b/);
+		expect(error.message).toMatch(/\b2\b/);
+		expect(error.message).toMatch(/after the fetch/);
+		// and it claims nothing the in-process shape cannot have: the fetcher's
+		// "nothing is pushed, the receiver could not catch this" is about a receiver,
+		// and there is none here
+		expect(error.message).not.toMatch(/receiver|pushed/i);
 		// and nothing from the wrong chain reached the fold
 		expect(processor.state).toEqual([]);
 	});
@@ -847,7 +871,13 @@ describe('a provider that changes chain mid-cycle', () => {
 		await indexer.load();
 		chain.setChainId('0x2');
 
-		await expect(indexer.indexMore()).rejects.toThrow(/chainId changed after fetch/);
+		const error = await indexer.indexMore().then(
+			() => undefined,
+			(err) => err,
+		);
+
+		expect(error).toBeInstanceOf(UnexpectedChainError);
+		expect(error).toMatchObject({expectedChainId: '1', actualChainId: '2'});
 		expect(processor.state).toEqual([]);
 		expect(stream.writes).toEqual([]);
 		expect(stream.cursor).toBe(undefined);

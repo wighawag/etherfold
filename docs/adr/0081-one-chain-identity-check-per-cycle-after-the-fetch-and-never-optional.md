@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # One chain-identity check per cycle, after the fetch, and never optional
 
 Every indexing cycle brackets its log fetch with two `eth_chainId` calls and refuses to proceed if either answer is not the chain the source names. There are two such pairs, one per deployment shape: the in-process engine's, in `promiseToIndex`, and the split deployment's fetcher, in `assertChain('before' | 'after')`. We decided to **delete the BEFORE-fetch call in both, keep the AFTER-fetch call, and keep it unconditional and unconfigurable.** That halves the identity cost of every cycle in every deployment while detecting exactly what was detected before.
