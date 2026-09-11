@@ -11,6 +11,9 @@
  * - `reads.ts` is the store's four reads as a tab holds them: the untyped
  *   proxy on the port, and the TYPED surface generated over it from an app's
  *   own declarations.
+ * - `progress.ts` is the small reactive wrapper over the PUSHED progress signal,
+ *   for the app that just wants a progress bar. It is a convenience over
+ *   `IndexerPort.onProgress` and never a second source of truth.
  * - `envelope.ts` is what crosses: one request/response with correlation, the
  *   surfaces multiplexed on it as CASES.
  * - `dedicatedWorker.ts` is a shape, and holds the only CODE in this package that
@@ -22,5 +25,6 @@ export * from './endpoint.js';
 export * from './envelope.js';
 export * from './errors.js';
 export * from './port.js';
+export * from './progress.js';
 export * from './reads.js';
 export * from './serve.js';

@@ -2,6 +2,7 @@ import {assertClonable} from './clone.js';
 import {listen, type HostAccess} from './endpoint.js';
 import {
 	INDEXER_PORT_PROTOCOL,
+	isPortPush,
 	isPortResponse,
 	type HostProgress,
 	type HostingShape,
@@ -17,8 +18,9 @@ import type {PortStateReads} from './reads.js';
  * THE PORT: the typed boundary a tab holds onto a host that is not its own
  * thread.
  *
- * Every verb here is a CASE on the envelope, and there is deliberately exactly
- * one so far. What is not here is as much the point as what is: a tab holds no
+ * Every verb here is a CASE on the envelope, except `onProgress`, which is the
+ * one thing that travels the other way: a PUSH the host sends unprompted
+ * (ADR-0082). What is not here is as much the point as what is: a tab holds no
  * store, no container and no processor, so there is nothing on this type that
  * could mutate the state the host is folding into. The writer/reader split
  * (ADR-0077, ADR-0079) reaches across the boundary as a fact of the TYPE rather
@@ -43,6 +45,33 @@ export type IndexerPort = {
 	 * leaving a tab to infer it from a number that stopped moving.
 	 */
 	progress(): Promise<HostProgress>;
+	/**
+	 * BE TOLD where the fold has got to, whenever it MOVES. Returns the detach.
+	 *
+	 * This is the channel ADR-0082 decides on: status is PUSHED, and an app builds
+	 * whatever reactive wrapper its framework wants over this signal --
+	 * `createProgressReadable(port)` is the one this package ships for the common
+	 * case. Nothing here polls, and nothing on a timer moves it: the host posts
+	 * when a batch has been APPLIED or the phase changed, and posts nothing when
+	 * the report would repeat the last one.
+	 *
+	 * ```ts
+	 * const stop = indexer.onProgress(({phase, blocksBehindTip}) => {
+	 *   banner.textContent = phase === 'at-tip' ? 'live' : `syncing, ${blocksBehindTip} blocks behind`;
+	 * });
+	 * ```
+	 *
+	 * The listener is called with WHERE THE FOLD IS NOW as soon as the host
+	 * answers, so a tab that attached half way through a fold renders the truth
+	 * without waiting for the next batch to land.
+	 *
+	 * A SUBSCRIPTION and not a slot: several listeners may hold it at once, and
+	 * each releases its own -- unlike the container's `onLastSyncUpdated` and its
+	 * neighbours, which are single assignable callbacks on an object only the host
+	 * can reach. When the LAST one lets go, the host is told to stop posting, so an
+	 * unsubscribed tab stops receiving pushes rather than merely ignoring them.
+	 */
+	onProgress(listener: (progress: HostProgress) => void): () => void;
 	/**
 	 * THE STORE'S FOUR READS, served by the host from the store its canonical
 	 * generation folds into.
@@ -88,7 +117,31 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 	let nextId = 1;
 	let closed = false;
 
+	/**
+	 * WHO IS LISTENING, and the LAST THING THE HOST SAID.
+	 *
+	 * The value is held for one reason: a listener added while a subscription is
+	 * already open has missed the answer that opened it, and would otherwise render
+	 * nothing until the fold next moved (which, at the tip, is never). It is the
+	 * host's own last word verbatim and is replaced wholesale, never merged into --
+	 * a tab that MAINTAINED a progress object would be the duplicated state ADR-0082
+	 * refuses.
+	 */
+	const listeners = new Set<(progress: HostProgress) => void>();
+	let latest: HostProgress | undefined;
+
+	function announce(progress: HostProgress): void {
+		latest = progress;
+		for (const listener of listeners) listener(progress);
+	}
+
 	const stopListening = listen(access.endpoint, (data) => {
+		if (isPortPush(data)) {
+			// Narrowed by NAME, which is what makes a second push a `case` here rather
+			// than a cast.
+			if (data.push === 'progress') announce(data.value);
+			return;
+		}
 		if (!isPortResponse(data)) return;
 		const waiting = pending.get(data.id);
 		// An answer to a call nobody is waiting for: a response that arrived after
@@ -138,6 +191,35 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 	return {
 		host: access.host,
 		progress: () => request('progress', undefined),
+		onProgress(listener) {
+			const first = listeners.size === 0;
+			listeners.add(listener);
+			if (first) {
+				// The answer IS the current progress, so there is no window in which a
+				// freshly attached tab holds nothing and no race with a first push.
+				request('subscribeToProgress', undefined).then(announce, () => {
+					// A port closed before the host answered. The caller's own `close` is
+					// what rejected it, and there is no call here to report it to.
+				});
+			} else if (latest) {
+				// Already subscribed, so this listener missed the answer that opened it.
+				// Asynchronously, so a listener never fires before the call that added it
+				// returned its detach.
+				const known = latest;
+				queueMicrotask(() => {
+					if (listeners.has(listener)) listener(known);
+				});
+			}
+			return () => {
+				if (!listeners.delete(listener)) return;
+				if (listeners.size > 0 || closed) return;
+				latest = undefined;
+				// The HOST stops posting, rather than this end stopping listening: a tab
+				// that went on receiving what it unsubscribed from would still be paying
+				// for it. Nothing awaits this -- there is no answer worth having.
+				void request('unsubscribeFromProgress', undefined).catch(() => undefined);
+			};
+		},
 		reads: {
 			declarations: () => request('declarations', undefined),
 			getCurrent: (entity, id) => request('getCurrent', {entity, id}),
@@ -148,6 +230,8 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 		close() {
 			if (closed) return;
 			closed = true;
+			listeners.clear();
+			latest = undefined;
 			stopListening();
 			const closing = new Error(`the indexer port was closed while this call was in flight.`);
 			for (const [id, waiting] of pending) {
