@@ -55,6 +55,7 @@ export type ConfigInput =
 	| 'store'
 	| 'db'
 	| 'retention'
+	| 'pruneInterval'
 	| 'port'
 	| 'host'
 	| 'autoSetup'
@@ -164,6 +165,14 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'refused on read and DROPPED from storage: this command schedules the prune its retention ' +
 			'implies, on a schedule it owns and never inside a write (ADR-0022)',
 	},
+	pruneInterval: {
+		flag: '--prune-interval <seconds>',
+		variable: 'PRUNE_INTERVAL',
+		describe:
+			'seconds between scheduled prune passes, for a command that has no cycle to prune between ' +
+			'(default 60; 0 disables the schedule). NOT a way to say you want nothing dropped: that is ' +
+			'--retention unbounded, which is the default',
+	},
 	port: {flag: '--port <port>', variable: 'PORT', describe: 'port to listen on'},
 	host: {flag: '--host <hostname>', describe: 'hostname to bind'},
 	autoSetup: {flag: '--no-auto-setup', describe: 'do not apply the fixed-table schema at startup'},
@@ -239,6 +248,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		store: 'required',
 		db: 'required',
 		retention: 'optional',
+		pruneInterval: 'refused',
 		port: 'optional',
 		host: 'optional',
 		autoSetup: 'optional',
@@ -254,6 +264,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		store: 'required',
 		db: 'required',
 		retention: 'optional',
+		pruneInterval: 'refused',
 		port: 'refused',
 		host: 'refused',
 		autoSetup: 'refused',
@@ -269,6 +280,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		store: 'refused',
 		db: 'refused',
 		retention: 'refused',
+		pruneInterval: 'refused',
 		port: 'refused',
 		host: 'refused',
 		autoSetup: 'refused',
@@ -284,6 +296,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		store: 'required',
 		db: 'required',
 		retention: 'optional',
+		pruneInterval: 'optional',
 		port: 'optional',
 		host: 'optional',
 		autoSetup: 'optional',
@@ -299,6 +312,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		store: 'refused',
 		db: 'required',
 		retention: 'refused',
+		pruneInterval: 'refused',
 		port: 'optional',
 		host: 'optional',
 		autoSetup: 'optional',
@@ -375,9 +389,23 @@ const INDEX_RECEIVES =
 	'`index` RECEIVES pushes rather than sending them, so it has no endpoint to push to. The address it ' +
 	'listens on is --port / --host (PORT).';
 
+const PRUNES_PER_CYCLE =
+	'this command has a CYCLE, so it prunes in the gap it already waits between passes and its prune ' +
+	'cadence IS its poll interval -- there is no second clock to set. The flag exists for `index`, which ' +
+	'receives pushes and has no cycle to hang a prune on. What is KEPT is --retention, everywhere.';
+
+const NOTHING_TO_PRUNE_FETCH =
+	'a fetcher holds no state, so there is nothing to prune and no schedule to give it. Pruning belongs ' +
+	'to whatever owns the database: `index`, or `run` / `build`.';
+
+const NOTHING_TO_PRUNE_SERVE =
+	'a read tier folds nothing and enforces no retention, so it prunes nothing: it reads a database ' +
+	'something else wrote, and that writer is what schedules the prune.';
+
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
-	run: {ingestEndpoint: NO_WIRE_COMBINED, ingestToken: NO_WIRE_COMBINED},
+	run: {pruneInterval: PRUNES_PER_CYCLE, ingestEndpoint: NO_WIRE_COMBINED, ingestToken: NO_WIRE_COMBINED},
 	build: {
+		pruneInterval: PRUNES_PER_CYCLE,
 		port: NOT_SERVING_BUILD,
 		host: NOT_SERVING_BUILD,
 		autoSetup: ALWAYS_MIGRATES_BUILD,
@@ -389,6 +417,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		store: NO_STATE_FETCH,
 		db: NO_STATE_FETCH,
 		retention: NO_STATE_FETCH,
+		pruneInterval: NOTHING_TO_PRUNE_FETCH,
 		port: NOT_SERVING_FETCH,
 		host: NOT_SERVING_FETCH,
 		autoSetup: NOT_SERVING_FETCH,
@@ -401,6 +430,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		rps: NO_CHAIN_SERVE,
 		store: NO_STORE_SERVE,
 		retention: NO_STORE_SERVE,
+		pruneInterval: NOTHING_TO_PRUNE_SERVE,
 		indexer: NO_NAME_SERVE,
 		ingestEndpoint: NO_WIRE_SERVE,
 		ingestToken: NO_WIRE_SERVE,
@@ -447,6 +477,8 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			return options.db;
 		case 'retention':
 			return options.retention;
+		case 'pruneInterval':
+			return options.pruneInterval;
 		case 'port':
 			return options.port;
 		case 'host':
@@ -672,6 +704,32 @@ export function parseRetention(value: string | undefined): RetentionSetting {
 	);
 }
 
+/**
+ * The seconds between scheduled prune passes, for the one command that needs a
+ * clock.
+ *
+ * `0` is ACCEPTED here and means "no schedule", unlike a prune BUDGET of zero,
+ * which is refused at the seam because a caller that computed one wrongly would
+ * otherwise watch a prune run on schedule while the store grew. The difference
+ * is that this number is a cadence and not an amount: turning the schedule off
+ * is a thing an operator can coherently want (a database pruned by something
+ * else, a machine where the deletes are scheduled outside), while asking for
+ * passes that delete nothing is not.
+ *
+ * What it is NOT is a way to say you want nothing dropped. That is
+ * `--retention unbounded`, which is the default, and saying it there means the
+ * store answers every historical read rather than refusing the ones it has
+ * silently stopped keeping.
+ */
+export function parsePruneInterval(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	if (/^\d+(\.\d+)?$/.test(value)) return Number(value);
+	throw new Error(
+		`--prune-interval ${JSON.stringify(value)} is not a number of seconds (e.g. --prune-interval 60, or 0 to ` +
+			`disable the schedule). To keep everything instead, that is --retention unbounded, which is the default.`,
+	);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // The whole of it
 // ---------------------------------------------------------------------------------------------------
@@ -762,6 +820,7 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					processor: requireProcessor('index', options, env),
 					source: requireExplicitSource<ABI>('index', options, env, NO_CHAIN_INDEX),
 					destination: resolveStoreTarget('index', options, env),
+					pruneIntervalSeconds: parsePruneInterval(given('pruneInterval', options, env)),
 					serving: resolveServing(options, env),
 					wire: {
 						kind: 'receiving',

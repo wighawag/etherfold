@@ -108,6 +108,7 @@ export type IndexDependencies = {
 	 */
 	pruneIntervalSeconds?: number;
 	/** Where the startup lines go. Defaults to the console. */
+
 	log?: (...args: unknown[]) => void;
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
@@ -331,7 +332,11 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// It calls UNCONDITIONALLY: a prune with no floor is a no-op (ADR-0022), and a
 		// host holding the seam cannot tell whether a `revert-only` store has one
 		// anyway, because the capability report carries no depth.
-		const pruneEverySeconds = deps.pruneIntervalSeconds ?? DEFAULT_PRUNE_INTERVAL_SECONDS;
+		// The FLAG wins where it was given, then the test's injection, then the default.
+		// A deployment sets `--prune-interval` (or `PRUNE_INTERVAL`) and never the
+		// dependency, which exists so a test can observe a pass without waiting a minute.
+		const pruneEverySeconds =
+			config.pruneIntervalSeconds ?? deps.pruneIntervalSeconds ?? DEFAULT_PRUNE_INTERVAL_SECONDS;
 		// Guards the ONE case a clock has that a cycle does not: a pass slower than the
 		// interval. Ticks would otherwise stack, and several concurrent passes over one
 		// store spend the budget several times for the deletes a single pass would have

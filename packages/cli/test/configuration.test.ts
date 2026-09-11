@@ -477,6 +477,66 @@ describe('retention is BLOCK NUMBERS (ADR-0019), and defaults to the store\u2019
 	});
 });
 
+describe('--prune-interval is the cadence a command with no cycle needs', () => {
+	/** A resolvable receiver, which is the one command that owns this flag. */
+	const RECEIVING: Options = {
+		processor: './p.js',
+		store: 'sqlite',
+		db: ':memory:',
+		deployments: './d',
+		indexer: 'alpha',
+		ingestToken: 't',
+	};
+
+	it('reads seconds, and leaves the default alone when nothing was said', () => {
+		expect(resolveCommandConfig('index', {...RECEIVING, pruneInterval: '300'}, {}).pruneIntervalSeconds).toBe(300);
+		// undefined and not a number: the DEFAULT lives in one place (`pruning.ts`),
+		// so the resolver saying nothing is how it stays there
+		expect(resolveCommandConfig('index', RECEIVING, {}).pruneIntervalSeconds).toBeUndefined();
+	});
+
+	it('stands behind the flag as PRUNE_INTERVAL, like every other input', () => {
+		expect(resolveCommandConfig('index', RECEIVING, {PRUNE_INTERVAL: '120'}).pruneIntervalSeconds).toBe(120);
+		expect(
+			resolveCommandConfig('index', {...RECEIVING, pruneInterval: '30'}, {PRUNE_INTERVAL: '120'}).pruneIntervalSeconds,
+		).toBe(30);
+	});
+
+	it('takes 0 as "no schedule", which a prune BUDGET of zero is not', () => {
+		// the two zeroes mean different things: no cadence is coherent (something else
+		// prunes this database), while passes that delete nothing is a miscomputed
+		// budget the seam refuses outright
+		expect(resolveCommandConfig('index', {...RECEIVING, pruneInterval: '0'}, {}).pruneIntervalSeconds).toBe(0);
+	});
+
+	it('refuses a value that is not seconds, and points at the flag that keeps things instead', () => {
+		expect(() => resolveCommandConfig('index', {...RECEIVING, pruneInterval: '5 minutes'}, {})).toThrow(/seconds/i);
+		expect(() => resolveCommandConfig('index', {...RECEIVING, pruneInterval: 'never'}, {})).toThrow(
+			/--retention unbounded/,
+		);
+	});
+
+	it('is REFUSED by every command that prunes on a cycle, naming the cadence it already has', () => {
+		// the asymmetry is the point, and it is documented rather than silent: `run`
+		// and `build` prune in the gap they already wait, so a second clock would be a
+		// second answer to a question their poll interval settles
+		for (const command of ['run', 'build'] as const) {
+			expect(() => resolveCommandConfig(command, {...FOLDING, pruneInterval: '60'}, {})).toThrow(/CYCLE/);
+		}
+	});
+
+	it('is REFUSED by the commands that hold no state to prune', () => {
+		expect(() =>
+			resolveCommandConfig(
+				'fetch',
+				{deployments: './d', indexer: 'a', ingestEndpoint: 'http://x', pruneInterval: '60'},
+				{},
+			),
+		).toThrow(/no state/i);
+		expect(() => resolveCommandConfig('serve', {db: ':memory:', pruneInterval: '60'}, {})).toThrow(/folds nothing/i);
+	});
+});
+
 describe('--rps is a rate, and REQUESTS_PER_SECOND stands behind it', () => {
 	it('parses the flag to a number, so the provider is not handed a string', () => {
 		expect(resolveCommandConfig('build', {...FOLDING, rps: '5'}, {}).rps).toBe(5);

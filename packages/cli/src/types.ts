@@ -44,6 +44,8 @@ export type Options = {
 	db?: string;
 	/** `--retention <blocks|revert-only|unbounded>`. */
 	retention?: string;
+	/** `--prune-interval <seconds>`, behind it `PRUNE_INTERVAL`. */
+	pruneInterval?: string;
 	/** `--port <port>`, behind it `PORT`. */
 	port?: string;
 	/** `--host <hostname>`. */
@@ -182,6 +184,11 @@ export type IndexConfig<ABI extends Abi = Abi> = {
 	readonly processor: string;
 	readonly source: ExplicitSource<ABI>;
 	readonly destination: StoreTarget;
+	/**
+	 * Seconds between scheduled prune passes, or `undefined` for the default.
+	 * `0` disables the schedule. See `parsePruneInterval`.
+	 */
+	readonly pruneIntervalSeconds: number | undefined;
 	readonly serving: Serving;
 	readonly wire: ReceivingWire;
 };
