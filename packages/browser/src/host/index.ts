@@ -8,6 +8,9 @@
  *
  * - `serve.ts` is the host, and names no shape.
  * - `port.ts` is what a tab holds, and names no shape.
+ * - `reads.ts` is the store's four reads as a tab holds them: the untyped
+ *   proxy on the port, and the TYPED surface generated over it from an app's
+ *   own declarations.
  * - `envelope.ts` is what crosses: one request/response with correlation, the
  *   surfaces multiplexed on it as CASES.
  * - `dedicatedWorker.ts` is a shape, and holds the only CODE in this package that
@@ -19,4 +22,5 @@ export * from './endpoint.js';
 export * from './envelope.js';
 export * from './errors.js';
 export * from './port.js';
+export * from './reads.js';
 export * from './serve.js';

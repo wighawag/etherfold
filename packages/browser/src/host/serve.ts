@@ -9,7 +9,14 @@ import type {
 	GenerationContext,
 } from '@etherfold/core';
 import {isRetryable, openIndexer, openMemoryGenerationRegistry} from '@etherfold/core';
-import type {WritableStateStore} from '@etherfold/state-store';
+import {
+	declaredRow,
+	mustGet,
+	type Listing,
+	type NormalizedEntity,
+	type StateStore,
+	type WritableStateStore,
+} from '@etherfold/state-store';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerState.js';
@@ -21,8 +28,10 @@ import {
 	INDEXER_PORT_PROTOCOL,
 	isPortRequest,
 	type HostProgress,
+	type PortCases,
 	type PortRequest,
 	type PortResponse,
+	type PortRow,
 } from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
 
@@ -120,6 +129,42 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	let failure: PortError | undefined;
 	let stopped = false;
 
+	/**
+	 * WHICH STORE EACH GENERATION FOLDS INTO, so a read is answered by the
+	 * generation that is ANSWERING READS.
+	 *
+	 * Recorded here for the same reason `createIndexerState` records it: a
+	 * generation's state is the caller's own object, built by the caller's own
+	 * factory, and this is the one place that CALLED that factory. A host holds one
+	 * generation today and will hold several once the control surface lands, so
+	 * resolving the CANONICAL one per read is what stops a tab being answered from
+	 * a generation the pointer has moved off -- which is the staleness the
+	 * container's own indirect handle exists to prevent.
+	 */
+	const statesByGeneration = new Map<string, WritableStateStore>();
+	const generationKey = (id: {stream: string; processor: string}) => `${id.stream}/${id.processor}`;
+
+	/**
+	 * A READ MAY ARRIVE BEFORE THE FIRST STORE EXISTS, and waits rather than being
+	 * refused.
+	 *
+	 * The host returns as soon as it is LISTENING, and opening the container is
+	 * under way by then, so a tab that connects and reads immediately would
+	 * otherwise race the open. Waiting is the honest answer to "read me the rows":
+	 * the store is moments away. What must never happen is waiting FOREVER, so a
+	 * host that stops before it ever built one rejects this with the failure that
+	 * stopped it -- a hung promise is the worst available outcome (ADR-0082).
+	 */
+	let announceFirstState: (() => void) | undefined;
+	let refuseFirstState: ((error: unknown) => void) | undefined;
+	const firstState = new Promise<void>((resolve, reject) => {
+		announceFirstState = resolve;
+		refuseFirstState = reject;
+	});
+	// Nobody may ever read, and a promise that rejects with no handler is a warning
+	// in every runtime this ships to.
+	firstState.catch(() => undefined);
+
 	function progress(): HostProgress {
 		return {
 			host: access.host,
@@ -131,16 +176,93 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	}
 
 	/**
-	 * ONE CASE, and the switch a later task extends.
+	 * THE STORE A READ IS ANSWERED FROM: the one the CANONICAL generation folds
+	 * into.
 	 *
-	 * Async because most of what joins it is: the store proxy's four reads and
-	 * every control call return promises. This one does not await anything and
-	 * says so by having nothing to await.
+	 * Resolved per read rather than captured once, because the pointer moves: a
+	 * promotion makes another generation the one that answers, and a read served
+	 * from the retired one would be answering from a fold nobody is advancing. The
+	 * `StateStore` narrowing is what the port hands the read path -- the host holds
+	 * the writable handle and nothing here can reach the mutating half.
+	 */
+	async function storeForReads(): Promise<StateStore> {
+		await firstState;
+		const canonical = container?.canonical.record;
+		const state = canonical && statesByGeneration.get(generationKey(canonical));
+		if (!state) {
+			throw new Error(
+				`this host holds no state for the generation that answers reads, so there is nothing to read from. A ` +
+					`generation's store is built by the factory this host was given, and the canonical generation's was not.`,
+			);
+		}
+		return state;
+	}
+
+	/**
+	 * ONE READ, projected to the DECLARED columns before it crosses.
+	 *
+	 * Projected HERE, by the same `declaredRow` the same-thread surface uses, which
+	 * is what makes "the rows are identical" one implementation rather than two
+	 * that agree by inspection: the version columns never leave the host, and an
+	 * unlisted declared field crosses as `null` exactly as the store wrote it.
+	 *
+	 * An entity the store was not built with is refused by `mustGet`, which every
+	 * backend already raises through, so the refusal a tab gets is the refusal a
+	 * same-thread caller gets (`UnknownEntityError`, named so it survives the
+	 * crossing as something an app can act on).
+	 */
+	async function served<T>(
+		entityName: string,
+		read: (store: StateStore, entity: NormalizedEntity) => Promise<T>,
+	): Promise<T> {
+		const store = await storeForReads();
+		return read(store, mustGet(store.declarations, entityName));
+	}
+
+	const projected = (entity: NormalizedEntity, raw: PortRow | undefined): PortRow | undefined =>
+		raw === undefined ? undefined : declaredRow(entity, raw);
+
+	const listed = (entity: NormalizedEntity, found: Listing<PortRow>): Listing<PortRow> => ({
+		rows: found.rows.map((raw) => declaredRow(entity, raw)),
+		truncated: found.truncated,
+	});
+
+	/**
+	 * THE CASES, and the switch a later task extends.
+	 *
+	 * Async because most of what is on it is: the store's four reads and every
+	 * control call return promises.
 	 */
 	async function serveCase(request: PortRequest): Promise<unknown> {
 		switch (request.case) {
 			case 'progress':
 				return progress();
+			case 'declarations':
+				return [...(await storeForReads()).declarations.values()];
+			case 'getCurrent': {
+				const asked = request.payload as PortCases['getCurrent']['request'];
+				return served(asked.entity, async (store, entity) =>
+					projected(entity, await store.getCurrent(entity.name, asked.id)),
+				);
+			}
+			case 'getAsOf': {
+				const asked = request.payload as PortCases['getAsOf']['request'];
+				return served(asked.entity, async (store, entity) =>
+					projected(entity, await store.getAsOf(entity.name, asked.id, asked.at)),
+				);
+			}
+			case 'listCurrent': {
+				const asked = request.payload as PortCases['listCurrent']['request'];
+				return served(asked.entity, async (store, entity) =>
+					listed(entity, await store.listCurrent(entity.name, asked.prefix, asked.limit)),
+				);
+			}
+			case 'listAsOf': {
+				const asked = request.payload as PortCases['listAsOf']['request'];
+				return served(asked.entity, async (store, entity) =>
+					listed(entity, await store.listAsOf(entity.name, asked.prefix, asked.at, asked.limit)),
+				);
+			}
 			default:
 				throw new Error(
 					`this indexer host does not know the case '${String((request as {case: string}).case)}'. A tab and its ` +
@@ -217,9 +339,19 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 				source: spec.source,
 				config: spec.config ?? {},
 				...(spec.promotion ? {promotion: spec.promotion} : {}),
-				generations: [generationSpecOf(spec)],
+				generations: [
+					generationSpecOf(spec, (id, state) => {
+						// The FIRST one wins, exactly as the container resolves a generation it
+						// already holds rather than adding a second engine over it.
+						const key = generationKey(id);
+						if (!statesByGeneration.has(key)) statesByGeneration.set(key, state);
+					}),
+				],
 			});
 			container = opened;
+			// The container is open, so the generation it was given has been built and
+			// its state is recorded: a read that was waiting can be answered.
+			announceFirstState?.();
 			opened.onLastSyncUpdated = (updated) => {
 				lastSync = updated;
 			};
@@ -241,6 +373,9 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			}
 		} catch (error) {
 			failure = portErrorOf(error);
+			// A read waiting for a store that will now never exist is answered with what
+			// stopped the host, rather than left hanging.
+			refuseFirstState?.(error);
 			namedLogger.error(`the indexer host STOPPED: nothing waiting can fix what it was refused`, error);
 		} finally {
 			indexing = false;
@@ -254,6 +389,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		dispose() {
 			stopped = true;
 			indexing = false;
+			refuseFirstState?.(new Error(`this indexer host was disposed, so it holds no store to read from.`));
 			stopListening();
 			if (container) {
 				container.onLastSyncUpdated = undefined;
@@ -276,6 +412,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
  */
 function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
+	recordState: (id: {stream: string; processor: string}, state: WritableStateStore) => void,
 ) {
 	return {
 		createState: (context: GenerationContext) => spec.createState(context),
@@ -284,6 +421,10 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 			if (built.configure && spec.processorConfig) {
 				built.configure(spec.processorConfig);
 			}
+			// Recorded HERE and not in `createState`, because this is the first moment
+			// both halves of a generation's identity exist: the stream is known up
+			// front, the fold's version hash only once the processor is built.
+			recordState({stream: context.stream, processor: built.getVersionHash()}, state as WritableStateStore);
 			return built;
 		},
 		stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>

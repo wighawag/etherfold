@@ -11,6 +11,7 @@ import {
 	type PortResponseValue,
 } from './envelope.js';
 import {errorFromPort} from './errors.js';
+import type {PortStateReads} from './reads.js';
 
 /**
  * THE PORT: the typed boundary a tab holds onto a host that is not its own
@@ -24,11 +25,12 @@ import {errorFromPort} from './errors.js';
  * than as a rule anybody has to remember -- the host opened the store for
  * WRITING, and what a tab can name is this.
  *
- * A tab that wants to READ the rows the host wrote opens the same store for
- * READING (`openForReading`), which is what the same-origin IndexedDB default
- * makes possible today; proxying those four reads over this port, so that the
- * surface works for a store a tab cannot open, is
- * `a-tab-reads-the-store-across-the-port`'s case to add.
+ * What a tab reads WITH is `reads` below: the store's four reads, proxied, with
+ * nothing beside them that could write. A tab may also open the same store for
+ * READING itself (`openForReading`), which the same-origin IndexedDB default
+ * makes possible -- the port is what makes the surface work for a store a tab
+ * cannot open, and what keeps an app from having to know which of the two it is
+ * in.
  */
 export type IndexerPort = {
 	/** WHICH hosting shape this port leads to, as the access that built it named it. */
@@ -41,6 +43,19 @@ export type IndexerPort = {
 	 * leaving a tab to infer it from a number that stopped moving.
 	 */
 	progress(): Promise<HostProgress>;
+	/**
+	 * THE STORE'S FOUR READS, served by the host from the store its canonical
+	 * generation folds into.
+	 *
+	 * Untyped here, by entity NAME, exactly as `EntityStateView` is on this thread:
+	 * what an app should hold is the TYPED surface generated from its own
+	 * declarations over these, which is `createPortReadSurface(port, entities)`.
+	 *
+	 * There is nothing beside them that could mutate, and that is a fact of this
+	 * type rather than a rule to remember: the host opened the store for WRITING
+	 * and what crosses is four reads (ADR-0077, ADR-0082).
+	 */
+	readonly reads: PortStateReads;
 	/**
 	 * Stop holding the host.
 	 *
@@ -123,6 +138,13 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 	return {
 		host: access.host,
 		progress: () => request('progress', undefined),
+		reads: {
+			declarations: () => request('declarations', undefined),
+			getCurrent: (entity, id) => request('getCurrent', {entity, id}),
+			getAsOf: (entity, id, at) => request('getAsOf', {entity, id, at}),
+			listCurrent: (entity, prefix, limit) => request('listCurrent', {entity, prefix, limit}),
+			listAsOf: (entity, prefix, at, limit) => request('listAsOf', {entity, prefix, at, limit}),
+		},
 		close() {
 			if (closed) return;
 			closed = true;

@@ -1,5 +1,6 @@
 import type {EntityIdOf, EntityPrefixOf, EntityRow} from './declarations.js';
 import {normalizeEntity} from './entities.js';
+import {UnknownEntityError} from './errors.js';
 import type {Listing} from './listing.js';
 import type {StateStore} from './store.js';
 import type {EntityDeclaration, NormalizedEntity} from './types.js';
@@ -118,7 +119,7 @@ export function createReadSurface<S extends StateStore, const D extends readonly
 	const surface: Record<string, EntityReads<S, EntityDeclaration>> = {};
 	for (const declaration of declarations) {
 		const entity = normalizeEntity(declaration);
-		assertSameDeclaration(store, entity);
+		assertDeclaredBy(store.declarations, entity);
 		surface[entity.name] = readsFor(store, entity);
 	}
 	return surface as ReadSurface<S, D>;
@@ -172,20 +173,28 @@ function listing<T>(entity: NormalizedEntity, found: Listing<Record<string, unkn
 }
 
 /**
- * The store and the surface must be reading the SAME declaration.
+ * The reader and the store must be reading the SAME declaration.
  *
  * Compared on the whole shape (id columns in order, fields and their storage
  * classes) rather than on the name alone, because a surface generated from a
  * stale copy would type its rows off columns the store does not have and project
  * them to `null` -- a plausible wrong answer, which is the failure mode this
  * seam refuses everywhere else.
+ *
+ * Exported because the declarations a surface is generated from are not always
+ * on the same THREAD as the store that holds the rows: the port proxy in
+ * `@etherfold/browser` asks its host for them and compares them here, so a
+ * cross-boundary surface refuses the same disagreement, in the same words, as
+ * the same-thread one -- rather than growing a second, weaker rule of its own.
  */
-function assertSameDeclaration(store: StateStore, entity: NormalizedEntity): void {
-	const known = store.declarations.get(entity.name);
+export function assertDeclaredBy(declarations: ReadonlyMap<string, NormalizedEntity>, entity: NormalizedEntity): void {
+	const known = declarations.get(entity.name);
 	if (!known) {
-		throw new Error(
+		throw new UnknownEntityError(
+			entity.name,
+			[...declarations.keys()],
 			`entity ${entity.name} is not declared to this store, which was built with ` +
-				`(${[...store.declarations.keys()].join(', ') || 'no entities'}). A read surface is generated from the ` +
+				`(${[...declarations.keys()].join(', ') || 'no entities'}). A read surface is generated from the ` +
 				`declarations the store itself was given.`,
 		);
 	}

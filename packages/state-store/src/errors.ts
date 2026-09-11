@@ -95,6 +95,47 @@ export class InvalidBlockNumberError extends TypeError {
 	}
 }
 
+/**
+ * Thrown by a read or a write that names an entity the declarations do not
+ * describe.
+ *
+ * It is a NAMED refusal rather than a bare `Error` because it is the one the
+ * caller furthest from the store meets: a read surface generated from one set of
+ * declarations, asked of a store built with another. Same-thread, the mismatch
+ * is caught at CONSTRUCTION and the class is there to catch; across a port, an
+ * error's class does not survive structured clone and the `name` is what a tab
+ * acts on, so pinning it as a readonly field is what makes the refusal
+ * actionable at all (`@etherfold/browser`, ADR-0082).
+ *
+ * It lives at the seam, like `BlockNotRetainedError` and for the same reason:
+ * every backend raises it through `mustGet`, and two classes of one name in two
+ * packages would break `instanceof` across the package boundary.
+ *
+ * It is deliberately NOT a `BlockUnavailableError`: that family is about a BLOCK
+ * this store cannot answer for, which a caller answers by re-pinning or widening
+ * retention. This says the declarations and the store disagree, which no store
+ * configuration makes answerable -- the remedy is the ONE declaration this seam
+ * exists to have (`{name, id, fields}` drives the storage AND the reads).
+ */
+export class UnknownEntityError extends Error {
+	readonly name = 'UnknownEntityError';
+
+	constructor(
+		/** The entity that was asked for. */
+		readonly entity: string,
+		/** What the store WAS built with, so the refusal names both halves of the disagreement. */
+		readonly declared: readonly string[],
+		/** An override for a caller that can say more about where the surface came from. */
+		message?: string,
+	) {
+		super(
+			message ??
+				`unknown entity ${JSON.stringify(entity)}: it was not declared to the store, which was built with ` +
+					`(${declared.join(', ') || 'no entities'}).`,
+		);
+	}
+}
+
 /** Which way a historical read fell outside what the store keeps. */
 export type NotRetainedReason =
 	/** The store answers as-of reads, but not that far back: it is outside the window. */

@@ -18,6 +18,7 @@
  * posts to it, and a message that is not ours must be IGNORED rather than
  * answered with an error about an unknown case.
  */
+import type {EntityId, EntityIdPrefix, Listing, NormalizedEntity} from '@etherfold/state-store';
 import type {PortError} from './errors.js';
 
 export type {PortError} from './errors.js';
@@ -93,17 +94,86 @@ export type HostProgress = {
 };
 
 /**
+ * ONE ROW, as the port carries it: the DECLARED columns and nothing else.
+ *
+ * It is projected in the HOST, by the same `declaredRow` the same-thread surface
+ * projects with, which is what makes the rows a tab gets the rows a same-thread
+ * caller gets rather than two shapes that agree by inspection. Version columns
+ * (`_lower`, `_upper`) are storage and never cross; an unlisted declared field
+ * crosses as `null`, exactly as the store wrote it.
+ *
+ * Untyped here on purpose: the envelope carries the entity NAME as a string,
+ * and the TYPES come from the declarations an app already wrote, applied on the
+ * tab side by `createPortReadSurface`. Typing the wire off a generic would type
+ * nothing -- the host answers for whatever entity it was asked about.
+ */
+export type PortRow = Record<string, unknown>;
+
+/**
  * EVERY SURFACE THE PORT CARRIES, as a map from case name to what it takes and
  * what it answers.
  *
- * One key today. A later task adds a key and gets its request typed, its response
- * typed and its clone-safety checked, with no change to the transport, the
- * correlation or either end's plumbing -- which is the property ADR-0082 asked
- * for.
+ * A later task adds a key and gets its request typed, its response typed and its
+ * clone-safety checked, with no change to the transport, the correlation or
+ * either end's plumbing -- which is the property ADR-0082 asked for, and which
+ * the four reads below are the first demonstration of.
+ *
+ * ## The store's FOUR reads, as four cases
+ *
+ * One case per read rather than one `read` case with a verb inside it: the
+ * requests differ in what they carry (an id or a prefix, with or without a
+ * block), so a single case would be a union a host has to narrow by hand, and
+ * the envelope's own dispatch already is that narrowing. The names are the
+ * seam's own (`getCurrent` / `getAsOf` / `listCurrent` / `listAsOf`), so there
+ * is one vocabulary from the store, through the port, to the surface a tab
+ * holds.
+ *
+ * There are FOUR and there will not be a fifth: the seam has no predicate and no
+ * ordering, because a handler runs once per event on a substrate with no query
+ * planner (ADR-0021). Richer queries arrive on this same port as the EXECUTOR
+ * `the-same-query-runs-against-a-worker-and-a-server` defines, which owns its
+ * own serialisation -- not as more methods on this proxy.
  */
 export type PortCases = {
 	/** How far the fold has got. Takes nothing. */
 	readonly progress: {readonly request: undefined; readonly response: HostProgress};
+	/**
+	 * WHAT THE HOST'S STORE WAS BUILT WITH, so a tab's surface can be checked
+	 * against it.
+	 *
+	 * The same-thread surface compares its declarations with the store's at
+	 * CONSTRUCTION and refuses a disagreement naming both (`assertDeclaredBy`),
+	 * because a surface generated from a stale copy types its rows off columns the
+	 * store does not have. A port cannot answer that question synchronously, so it
+	 * is asked here -- once, when a surface is built -- and the refusal lands on
+	 * the first read instead of on the constructor.
+	 */
+	readonly declarations: {readonly request: undefined; readonly response: readonly NormalizedEntity[]};
+	/** One entity at the tip, or `undefined` if it is absent. */
+	readonly getCurrent: {
+		readonly request: {readonly entity: string; readonly id: EntityId};
+		readonly response: PortRow | undefined;
+	};
+	/** One entity as of a block NUMBER. Refused, never answered from the tip, outside retention. */
+	readonly getAsOf: {
+		readonly request: {readonly entity: string; readonly id: EntityId; readonly at: number};
+		readonly response: PortRow | undefined;
+	};
+	/** The rows of an id PREFIX at the tip, ascending, bounded by a REQUIRED limit. */
+	readonly listCurrent: {
+		readonly request: {readonly entity: string; readonly prefix: EntityIdPrefix; readonly limit: number};
+		readonly response: Listing<PortRow>;
+	};
+	/** The same listing as of a block NUMBER. */
+	readonly listAsOf: {
+		readonly request: {
+			readonly entity: string;
+			readonly prefix: EntityIdPrefix;
+			readonly at: number;
+			readonly limit: number;
+		};
+		readonly response: Listing<PortRow>;
+	};
 };
 
 export type PortCaseName = keyof PortCases & string;

@@ -1,3 +1,4 @@
+import {UnknownEntityError} from './errors.js';
 import type {EntityId, FieldType, EntityDeclaration, NormalizedEntity} from './types.js';
 
 /**
@@ -182,7 +183,7 @@ function differOnlyInCase(what: string, declared: string, clashing: string): str
 export function mustGet(entities: ReadonlyMap<string, NormalizedEntity>, name: string): NormalizedEntity {
 	const entity = entities.get(name);
 	if (!entity) {
-		throw new Error(`unknown entity ${JSON.stringify(name)}: it was not declared to the store`);
+		throw new UnknownEntityError(name, [...entities.keys()]);
 	}
 	return entity;
 }
