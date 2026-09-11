@@ -1694,7 +1694,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// `earliest`-means-genesis bug this file no longer has. It is DELETED rather
 		// than repaired: dead code cannot be tested, so it would have gone stale
 		// again, and reviving a per-cycle genesis read is a decision about cost per
-		// cycle (`work/specs/proposed/one-chain-identity-check-per-cycle-not-two.md`)
+		// cycle (`work/specs/tasked/one-chain-identity-check-per-cycle-not-two.md`)
 		// rather than a line to uncomment. `checkGenesisHash` above is the one place
 		// this question is asked, and whoever revives it calls that.
 

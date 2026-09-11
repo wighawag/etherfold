@@ -58,7 +58,7 @@ Explicitly independent of `measure-the-indexing-loop-before-optimising-it`: thes
 
 ## Out of Scope
 
-- **The `eth_chainId` guard's round trips.** A cycle also pays for the chain-identity check that brackets the fetch, and reducing it is a SAFETY decision rather than a parsing one, so it has its own spec: `work/specs/proposed/one-chain-identity-check-per-cycle-not-two.md`.
+- **The `eth_chainId` guard's round trips.** A cycle also pays for the chain-identity check that brackets the fetch, and reducing it is a SAFETY decision rather than a parsing one, so it has its own spec: `work/specs/tasked/one-chain-identity-check-per-cycle-not-two.md`.
 
 - **Aligning fetch ranges to fixed buckets.** That is a cache-key precondition rather than a fetcher improvement, and it only pays off if a shared cache is built. It lives with `work/notes/ideas/a-shared-log-cache-in-front-of-the-node.md`.
 - **Anything about the FOLD's round trips.** Separate spec.
