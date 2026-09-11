@@ -153,6 +153,27 @@ export const SOURCE_V2: IndexingSource<typeof abiV2> = {
 };
 
 /**
+ * THE SAME CONTRACT, INDEXED FROM A LATER BLOCK: a reconfigure whose answers are
+ * visibly different.
+ *
+ * `startBlock` is hashed into the block-0 skeleton entry, so this is a different
+ * SOURCE, a different fetch filter and therefore a different STREAM: a
+ * generation folding it fetches its own logs rather than following the one
+ * already held. That is the expensive half of a reconfigure, which is what makes
+ * it the honest subject for one.
+ *
+ * What it is for is the question "which generation answered this read". Block
+ * 100's two transfers are below it and 102's and 104's three are not, so the
+ * counter reads 3 here against `EXPECTED_A`'s 5 -- one number, decided purely by
+ * which fold answered, with no instrumentation.
+ */
+export const RECONFIGURED_FROM_BLOCK = 102;
+export const SOURCE_FROM_LATER_BLOCK: IndexingSource<TestABI> = {
+	chainId: '1',
+	contracts: [{abi, address: CONTRACT, startBlock: RECONFIGURED_FROM_BLOCK}],
+};
+
+/**
  * The SAME events, plus the members a REGENERATION routinely adds.
  *
  * A view function, an error and a constructor: none of them is indexed, none
@@ -404,6 +425,20 @@ export const EXPECTED_A = {
 export const EXPECTED_B = {
 	owners: {'1': BOB, '2': BOB, '3': undefined, '4': CAROL},
 	transfers: 4,
+};
+
+/**
+ * The state a fold of branch A that STARTED AT `RECONFIGURED_FROM_BLOCK`
+ * produces.
+ *
+ * Block 100's two transfers are below that start block, so they were never
+ * fetched: the counter is 3 where `EXPECTED_A` is 5, and token 1's first owner
+ * is the one block 102 gave it. Everything else agrees, which is what makes the
+ * counter the field that says which generation answered.
+ */
+export const EXPECTED_A_FROM_LATER_BLOCK = {
+	owners: {'1': BOB, '2': ERIN, '3': DAN, '4': undefined},
+	transfers: 3,
 };
 
 /** The state `BRANCH_A_LATER` produces: branch A, plus the one late transfer. */

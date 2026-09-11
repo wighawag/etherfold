@@ -48,11 +48,30 @@ const databaseName = new URL(self.location.href).searchParams.get('db') ?? 'ethe
  */
 const fetchWidth = Number(new URL(self.location.href).searchParams.get('fetch') ?? '0');
 
+/**
+ * WHETHER EACH GENERATION FOLDS INTO A DATABASE OF ITS OWN.
+ *
+ * The container's rule is that a generation's state is keyed on
+ * `context.stream`: two generations under one storage location are ONE store, so
+ * their rows and their cursors collide, and the whole point of a reconfigure --
+ * the live generation going on answering complete old answers while the new one
+ * catches up -- does not survive that. An application that reconfigures keys it
+ * unconditionally, and the CONTROL case here asks for it.
+ *
+ * It is a parameter rather than the default in this fixture for one fixture-only
+ * reason: the cases that predate the control surface read the worker's database
+ * back BY NAME from the page, and a page cannot guess a stream digest. Unset, the
+ * name is exactly what it always was.
+ */
+const perGeneration = new URL(self.location.href).searchParams.has('generations');
+const databaseFor = (stream: string) => (perGeneration ? `${databaseName}-${stream}` : databaseName);
+
 hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// The store is opened for WRITING here, in the host. That is the writer/reader
 	// split reaching across the boundary: the tab holds a port, and a port names no
 	// mutating verb.
-	createState: async () => openForWriting(await createBrowserStateStore(processor.entities, {databaseName})),
+	createState: async (context) =>
+		openForWriting(await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)})),
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
 	provider: fakeChain().provider,
 	source: SOURCE,

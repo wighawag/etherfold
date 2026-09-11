@@ -38,6 +38,11 @@
  *   is about a signal crossing a real `postMessage` from a context that is not
  *   the UI thread, unprompted -- and because "nothing polls" is only worth
  *   asserting where there is a second thread that could have been polled.
+ * - `controls-the-indexer`: start, stop, reconfigure and generation visibility,
+ *   asked of a real worker from a real tab. It runs here because the claim that
+ *   needs a second execution context is that the LIFECYCLE crosses: a tab that
+ *   holds nothing but a port stops the fold, changes the source, and is answered
+ *   from the generation the pointer moved to.
  * - `reads-across-the-port`: the store's four reads, asked of a surface over a
  *   port to a real worker AND of a surface over a store on this thread, with ONE
  *   case list and the same workload behind both. Reading while the fold is still
@@ -71,6 +76,8 @@ import {
 	BRANCH_B,
 	BRANCH_B_TIP,
 	entityProcessorOver,
+	EXPECTED_A,
+	EXPECTED_A_FROM_LATER_BLOCK,
 	fakeChain,
 	FINALITY,
 	indexerFor,
@@ -81,6 +88,7 @@ import {
 	readState,
 	runWorkload,
 	SOURCE,
+	SOURCE_FROM_LATER_BLOCK,
 	SOURCE_V2,
 	START_BLOCK,
 	versionCount,
@@ -553,6 +561,122 @@ async function progressPushedCase(params: Params, timings: Timing[]): Promise<Re
 }
 
 /**
+ * THE LIFECYCLE ACROSS A REAL PORT TO A REAL WORKER: stop, start, reconfigure,
+ * and see which generation answers.
+ *
+ * The page holds a port and nothing else -- no container, no store handle, no
+ * provider -- so every one of these is a message that crossed a real
+ * `postMessage` and an answer that came back from a `DedicatedWorkerGlobalScope`.
+ *
+ * The reconfigure is the one with weight, and it is asserted on the COUNTER,
+ * which is the one value in this fixture decided purely by which fold answered:
+ * the new source starts at block 102, so the two transfers in block 100 are not
+ * in it, and a read answering `3` where it answered `5` is the promoted
+ * generation answering rather than the retired one.
+ *
+ * Each generation folds into a database of its own (`generations` on the worker
+ * URL), which is the rule the container states for `createState` and which a
+ * reconfigure is what makes load-bearing.
+ */
+async function controlsTheIndexerCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'controls-the-indexer');
+	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}&generations=1`, import.meta.url), {
+		type: 'module',
+	});
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	try {
+		const folded = await timed('fold-in-a-worker', timings, () => untilAtTip(indexer));
+		const before = await transfersAcrossThePort(indexer);
+
+		// STOP, from the tab: what a settings screen or a backgrounded tab does so an
+		// app stops burning a user's rate limit.
+		const stopped = await timed('stop', timings, () => indexer.stopIndexing());
+		// ...and a stopped host is still a host: the store goes on answering, because
+		// stopping the DRIVER is not closing the CONTAINER.
+		const readWhileStopped = await transfersAcrossThePort(indexer);
+		const started = await timed('start', timings, () => indexer.startIndexing());
+
+		// RECONFIGURE: a generation beside the live one, on a stream of its own.
+		const reconfigured = await timed('reconfigure', timings, () =>
+			indexer.reconfigure({source: SOURCE_FROM_LATER_BLOCK}),
+		);
+		const duringCatchUp = await transfersAcrossThePort(indexer);
+
+		const promoted = await timed('promotion', timings, () =>
+			untilPromoted(indexer, reconfigured.generation.record.stream),
+		);
+		const afterPromotion = await transfersAcrossThePort(indexer);
+
+		return {
+			// WHERE the host is running, measured in the context that answered
+			scope: folded.scope,
+			tabScope: executionScopeName(),
+			host: folded.host,
+			before,
+			expectedBefore: EXPECTED_A.transfers,
+			stopped: {indexing: stopped.indexing, phase: stopped.phase, lastToBlock: stopped.lastToBlock},
+			readWhileStopped,
+			startedIndexing: started.indexing,
+			reconfigure: {
+				added: reconfigured.added,
+				follows: reconfigured.generation.follows,
+				canonicalAtOnce: reconfigured.generation.canonical,
+				sameStream: reconfigured.generation.record.stream === promoted.incumbent,
+			},
+			// what the app was answered WHILE the new generation was still folding
+			duringCatchUp,
+			generations: promoted.generations,
+			afterPromotion,
+			expectedAfter: EXPECTED_A_FROM_LATER_BLOCK.transfers,
+			promotion: await indexer.promotion(),
+			// everything the tab was handed, in full
+			portSurface: Object.keys(indexer).sort(),
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/** The counter, read THROUGH THE PORT: whatever the canonical generation says it is. */
+async function transfersAcrossThePort(indexer: IndexerPort): Promise<number | null> {
+	const row = (await indexer.reads.getCurrent('counter', {name: 'transfers'})) as {value?: number} | undefined;
+	return row?.value ?? null;
+}
+
+/**
+ * Ask the generation list until the pointer has moved to `stream`, and answer
+ * with what the list said.
+ *
+ * A VALUE and never a duration: the promotion has happened when the host says
+ * the generation is canonical.
+ */
+async function untilPromoted(
+	indexer: IndexerPort,
+	stream: string,
+	attempts = 600,
+): Promise<{generations: unknown; incumbent: string | undefined}> {
+	const first = await indexer.generations();
+	const incumbent = first.find((generation) => generation.canonical)?.record.stream;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const generations = await indexer.generations();
+		const canonical = generations.find((generation) => generation.canonical);
+		if (canonical?.record.stream === stream) {
+			return {
+				incumbent,
+				generations: generations.map((generation) => ({
+					canonical: generation.canonical,
+					follows: generation.follows,
+					lastToBlock: generation.lastToBlock ?? null,
+					blocksBehind: generation.blocksBehind ?? null,
+				})),
+			};
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	throw new Error(`the reconfigured generation was never promoted: ${JSON.stringify(await indexer.generations())}`);
+}
+
+/**
  * Ask until the fold is level with THIS FIXTURE'S tip, and fail SAYING SO if the
  * host stopped.
  *
@@ -618,6 +742,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'progress-pushed-from-the-worker':
 						results = await progressPushedCase(ctx.params, timings);
+						break;
+					case 'controls-the-indexer':
+						results = await controlsTheIndexerCase(ctx.params, timings);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

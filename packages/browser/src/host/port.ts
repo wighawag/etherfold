@@ -1,10 +1,13 @@
+import type {Abi, IndexingSource, UsedPromotionConfig} from '@etherfold/core';
 import {assertClonable} from './clone.js';
 import {listen, type HostAccess} from './endpoint.js';
 import {
 	INDEXER_PORT_PROTOCOL,
 	isPortPush,
 	isPortResponse,
+	type HostGeneration,
 	type HostProgress,
+	type HostReconfigure,
 	type HostingShape,
 	type PortCaseName,
 	type PortRequest,
@@ -72,6 +75,69 @@ export type IndexerPort = {
 	 * unsubscribed tab stops receiving pushes rather than merely ignoring them.
 	 */
 	onProgress(listener: (progress: HostProgress) => void): () => void;
+	/**
+	 * START INDEXING, and answer where the fold is now.
+	 *
+	 * What a settings screen turns back on. Asking a host that is already indexing
+	 * is an ANSWER rather than a refusal, because this names a STATE and not an
+	 * edge: two components that each ask once leave the host in the state they both
+	 * asked for.
+	 */
+	startIndexing(): Promise<HostProgress>;
+	/**
+	 * STOP INDEXING, and answer where the fold stopped.
+	 *
+	 * What a backgrounded tab or a settings screen calls so an app stops burning a
+	 * user's rate limit. It RESOLVES WHEN THE CYCLE IN FLIGHT HAS LANDED, so a
+	 * caller that has been answered knows no further chain request will be made and
+	 * that the cursor is where a completed cycle would have left it -- a stopped
+	 * indexer resumes without re-indexing and without skipping.
+	 *
+	 * Stopping a host that is not indexing answers where it is and changes nothing.
+	 */
+	stopIndexing(): Promise<HostProgress>;
+	/**
+	 * RECONFIGURE THE SOURCE, and be told what that produced.
+	 *
+	 * A reconfigure is not an outage: the new generation folds BESIDE the live one,
+	 * which goes on answering every read until the promotion policy moves the
+	 * **canonical pointer** (`promotion()` reports which policy is in force). Nothing
+	 * is discarded, and a source whose hashable shape did not move resolves to the
+	 * generation that is already running rather than rebuilding anything
+	 * (`HostReconfigure.added`).
+	 *
+	 * ```ts
+	 * const {generation, added} = await indexer.reconfigure({source: nextSource});
+	 * if (added && !generation.follows) banner.textContent = 'refetching this contract\u2019s history';
+	 * ```
+	 *
+	 * The SOURCE is the only half of a generation that can cross: the fold is code,
+	 * so changing it is a new worker bundle rather than a message (ADR-0082).
+	 * A REFUSAL -- the generation caps, which is the one this call meets -- rejects
+	 * it carrying its own name and its own fields, so an app branches on the refusal
+	 * rather than reading its sentence. What the new generation then meets while it
+	 * FOLDS (a node on another chain, a refused write) reaches the tab where every
+	 * other driver failure does, on `progress`.
+	 */
+	reconfigure(update: {readonly source: IndexingSource<Abi>}): Promise<HostReconfigure>;
+	/**
+	 * EVERY GENERATION THE HOST HOLDS, with the one answering reads marked and each
+	 * one's progress.
+	 *
+	 * Asked rather than pushed, because a generation list moves when somebody
+	 * RECONFIGURES or a pointer moves and not while a fold advances -- which is also
+	 * why a tab that has just reconfigured is the one that asks.
+	 */
+	generations(): Promise<readonly HostGeneration[]>;
+	/**
+	 * THE PROMOTION POLICY IN FORCE, as the host's container resolved it.
+	 *
+	 * Nothing is defaulted on this side. There is one default everywhere
+	 * (`on-catch-up`) and it lives with the type it belongs to, so a value invented
+	 * here would be a second answer to "which policy is this app running under"
+	 * (`CONTEXT.md`, *canonical pointer*).
+	 */
+	promotion(): Promise<UsedPromotionConfig>;
 	/**
 	 * THE STORE'S FOUR READS, served by the host from the store its canonical
 	 * generation folds into.
@@ -173,11 +239,12 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 			case: name,
 			payload,
 		};
-		// REFUSED HERE, naming the field, rather than thrown out of `postMessage`
-		// naming an object. It is the caller's own call that rejects, synchronously
-		// in the promise it is already awaiting.
-		assertClonable(payload, `the '${name}' request`);
 		return new Promise<PortResponseValue<Case>>((resolve, reject) => {
+			// REFUSED HERE, naming the field, rather than thrown out of `postMessage`
+			// naming an object. Inside the promise, so the caller's own call REJECTS: a
+			// method that answers a promise everywhere else must not throw past an
+			// `await ... .catch(...)` on the one input it refuses.
+			assertClonable(payload, `the '${name}' request`);
 			pending.set(id, {resolve: resolve as (value: never) => void, reject});
 			try {
 				access.endpoint.postMessage(message);
@@ -220,6 +287,11 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 				void request('unsubscribeFromProgress', undefined).catch(() => undefined);
 			};
 		},
+		startIndexing: () => request('startIndexing', undefined),
+		stopIndexing: () => request('stopIndexing', undefined),
+		reconfigure: (update) => request('reconfigure', {source: update.source}),
+		generations: () => request('generations', undefined),
+		promotion: () => request('promotion', undefined),
 		reads: {
 			declarations: () => request('declarations', undefined),
 			getCurrent: (entity, id) => request('getCurrent', {entity, id}),
