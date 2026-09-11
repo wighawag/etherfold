@@ -41,28 +41,21 @@
  * stored" after a processor upgrade and silently index on top of the previous
  * processor's rows. See `SYNC_CURSOR_KEY` in `@etherfold/processor-entities`.
  *
- * ## The port is a SHARED namespace, and the seam itself uses two keys of it
+ * ## The port is ENTIRELY the caller's, and there is nothing to remember
  *
- * The sync cursor is this port's first user, not its definition. Because the
- * slot is durable, unversioned, never reverted and never pruned, it is also
- * where the seam keeps the two small facts a store must not forget across a
- * reload: `SNAPSHOT_ORIGIN_KEY` (`snapshot.ts` -- the block a bootstrapped
- * store's rows came from, so it cannot claim history it never received) and
- * `RETENTION_ENFORCEMENT_KEY` (`enforcement.ts` -- the floor the last prune
- * pass ran at, so a store pruned before the process died does not come back
- * saying never), plus `WRITER_CLAIM_KEY` (`store.ts`) for the claim itself.
- * A caller choosing its own key should avoid those three.
+ * Every key here is one a caller chose, and no name is taken. The seam keeps
+ * its own three durable facts -- the snapshot origin, the last prune's floor and
+ * the writer claim -- in a keyspace of its own that no caller can address
+ * (`records.ts`), so `writeCursor('snapshotOrigin', ...)` is a cursor with an
+ * odd name and collides with nothing.
  *
- * **The rule is a CONVENTION, and an attempt to enforce it establishes why.**
- * Refusing these keys on the writable handle looks like the obvious guard and
- * breaks bootstrap: `openSnapshotAware` composes ABOVE the claim in the real
+ * That SEPARATION is the design, and it is what a guard could never have been.
+ * Refusing reserved names on the writable handle looks like the obvious fix and
+ * breaks bootstrap: `openSnapshotAware` composes ABOVE the claim on the real
  * boot path (`openAndBootstrap` claims, then wraps), so the snapshot layer
- * writes its own marker THROUGH the same handle a caller holds, and no runtime
- * boundary there tells the seam's writes from a caller's. Enforcing it needs a
- * separate internal port for the seam's own facts rather than a check on the
- * public verb, which is a design rather than a guard. Until then the collision
- * is silent: an app that stores its position under `snapshotOrigin` overwrites
- * the marker, and the store then answers historical reads it has no rows for.
+ * wrote its own marker THROUGH the same handle a caller holds and no runtime
+ * boundary there told the seam's writes from a caller's. Giving the seam a
+ * namespace removes the question instead of policing it.
  */
 
 /**

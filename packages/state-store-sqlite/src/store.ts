@@ -19,7 +19,6 @@ import {
 	resolveRetention,
 	retentionEnforcementOf,
 	retentionFloor,
-	RETENTION_ENFORCEMENT_KEY,
 	StoreWriterChangedError,
 	writerToken,
 	type EntityIdPrefix,
@@ -33,6 +32,7 @@ import {
 	type StateStoreBackend,
 	type StateStoreCapabilities,
 	type CursorWrite,
+	type SeamRecordKey,
 } from '@etherfold/state-store';
 import {ROWID, dropSchemaStatements, migrationStatements, tableNames, type TableNames} from './ddl.js';
 import {assertStorableEntityNames} from './identifiers.js';
@@ -54,9 +54,12 @@ import {
 	listCurrentStatement,
 	prunableVersionsStatement,
 	readCursorStatement,
+	readSeamRecordStatement,
 	releaseWriterStatement,
 	revertToStatements,
+	clearSeamRecordStatement,
 	writeCursorStatement,
+	writeSeamRecordStatement,
 	writerGuard,
 	writerTableExistsStatement,
 	type WriterGuard,
@@ -84,18 +87,19 @@ export type VersionedStateStoreOptions = RetentionOptions & {
 	 * one is canonical; ADR-0053 makes a generation's state a table-name namespace
 	 * inside one database (a generation COLUMN and a database-per-generation were
 	 * both rejected there). It covers everything THIS store owns -- the entity
-	 * tables, `_blocks`, `_cursor` and the indexes derived from them -- and nothing
+	 * tables, `_blocks`, `_cursor`, `_seam` and the indexes derived from them -- and nothing
 	 * the server owns: `_meta`, `_emissions` and the generation registry are per
 	 * NAMED INDEXER and are shared across its generations on purpose, because a
 	 * processor-only change re-folds the SAME stored stream and that is what makes
 	 * it free.
 	 *
-	 * `_blocks` and `_cursor` are in it, not just the entity tables, and that is
-	 * the half that is easy to get wrong: two generations on one chain would
+	 * `_blocks`, `_cursor` and `_seam` are in it, not just the entity tables, and
+	 * that is the half that is easy to get wrong: two generations on one chain would
 	 * otherwise share one block table, where one generation's `revertTo` deletes
 	 * rows the other still needs, and one fixed cursor key (`lastSync`, the same
 	 * string for every fold), where the second fold silently resumes on the first's
-	 * position.
+	 * position -- and one snapshot origin, where a generation bootstrapped from a
+	 * snapshot would impose its floor on a sibling that indexed from the start block.
 	 *
 	 * It is a NAME the caller chooses, and the caller is whoever holds the
 	 * generation identity: `{stream digest, processor version hash}` is computable
@@ -252,7 +256,7 @@ export class VersionedStateStore implements StateStoreBackend {
 	 * Remove this store's tables, and nothing else: what RETIRING a generation is.
 	 *
 	 * Under a namespace it drops exactly that generation's entity tables, its
-	 * `_blocks` and its `_cursor`, with their indexes; every other generation in the
+	 * `_blocks`, its `_cursor` and its `_seam`, with their indexes; every other generation in the
 	 * database is left complete and READABLE, which is the property that makes
 	 * moving the canonical pointer back a revert rather than a re-index. It is the
 	 * verb a host wires into the generation registry's `dropState`
@@ -396,6 +400,33 @@ export class VersionedStateStore implements StateStoreBackend {
 	async clearCursor(key: string): Promise<void> {
 		const guard = this.guard();
 		await this.sendGuarded('clearCursor', guard, [clearCursorStatement(key, this.names, guard)]);
+	}
+
+	/**
+	 * The seam's own record under `key`, out of the table no caller can address.
+	 * See `records.ts` at the seam and `SEAM_RECORD_TABLE` in `ddl.ts`.
+	 *
+	 * A READ: one ordinary select, no guard and no write, because
+	 * `openSnapshotAware` calls it on every boot and opening is not writing.
+	 */
+	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		const rows = await this.select<{value: string}>(readSeamRecordStatement(key, this.names));
+		return rows[0]?.value;
+	}
+
+	/** Write one of the seam's records, guarded like every other mutation. */
+	async writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		const guard = this.guard();
+		await this.sendGuarded('writeSeamRecord', guard, [writeSeamRecordStatement(key, value, this.names, guard)]);
+	}
+
+	/**
+	 * Forget one of the seam's records. A `DELETE` matching nothing is the no-op
+	 * the contract asks for -- and is how `openForWriting` claims.
+	 */
+	async clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		const guard = this.guard();
+		await this.sendGuarded('clearSeamRecord', guard, [clearSeamRecordStatement(key, this.names, guard)]);
 	}
 
 	/**
@@ -559,7 +590,7 @@ export class VersionedStateStore implements StateStoreBackend {
 		const record = pruneRecord(floor);
 		if (record !== undefined) {
 			await this.sendGuarded('prune', guard, [
-				writeCursorStatement(RETENTION_ENFORCEMENT_KEY, record, this.names, guard),
+				writeSeamRecordStatement('retentionEnforcement', record, this.names, guard),
 			]);
 		}
 
@@ -574,8 +605,8 @@ export class VersionedStateStore implements StateStoreBackend {
 	/**
 	 * Whether the retention this store reports is enforced against its storage.
 	 *
-	 * Durable because the record is a row in the cursor table beside the versions,
-	 * so a process that prunes and dies is answered for by the next one to open
+	 * Durable because the record is a row in the seam's own table beside the
+	 * versions, so a process that prunes and dies is answered for by the next to open
 	 * the database -- which on this backend is the ordinary case, since a serving
 	 * tier and a folding tier are frequently two processes over one file.
 	 *
@@ -589,7 +620,7 @@ export class VersionedStateStore implements StateStoreBackend {
 			this.provided,
 			this.finalityDepth,
 			tip,
-			await this.readCursor(RETENTION_ENFORCEMENT_KEY),
+			await this.readSeamRecord('retentionEnforcement'),
 		);
 	}
 

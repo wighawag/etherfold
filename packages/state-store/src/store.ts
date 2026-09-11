@@ -2,6 +2,7 @@ import type {StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
+import type {SeamRecordKey} from './records.js';
 import type {PruneOptions, PruneReport} from './retention.js';
 import type {BlockPointer, BlockUpdate, EntityId, Mutation, NormalizedEntity} from './types.js';
 import {writerToken, type WriterToken} from './writer.js';
@@ -144,6 +145,12 @@ export interface StateStore {
  * everywhere: a prefix of the declared id plus a required limit, never a
  * predicate and never a caller-supplied ordering (see `listing.ts`).
  *
+ * It also carries the seam's own three-key RECORD PORT (`readSeamRecord` and
+ * friends, `records.ts`), which is here rather than on `StateStore` for the
+ * reason the split exists at all: a reader has no business with where a
+ * bootstrapped store's rows came from, and cannot reach it because the type it
+ * holds does not have it.
+ *
  * Anything a particular backend can do BETTER stays on that backend's own class:
  * `@etherfold/state-store-sqlite` keeps a richer query surface (`queryCurrent` /
  * `queryAsOf`, with caller-supplied SQL) and block addressing by hash and time,
@@ -214,6 +221,39 @@ export interface StateStoreBackend extends StateStore {
 	applyBlock(block: BlockPointer, mutations?: readonly Mutation[], cursor?: CursorWrite): Promise<void>;
 
 	/**
+	 * The seam's own record under `key`, or `undefined` if none was written.
+	 *
+	 * Opaque in the same way a cursor is -- whatever string was last written,
+	 * byte for byte -- and kept somewhere a CALLER cannot address, which is the
+	 * whole point of the port (`records.ts`). A store that kept these beside the
+	 * cursors would be handing the seam's memory to whoever picked the same name.
+	 *
+	 * A READ, so it never claims: `openSnapshotAware` runs on every boot,
+	 * including in a tab that only renders.
+	 */
+	readSeamRecord(key: SeamRecordKey): Promise<string | undefined>;
+
+	/**
+	 * Write one of the seam's records.
+	 *
+	 * A MUTATION, guarded exactly as `writeCursor` is on a backend that enforces a
+	 * single writer: the snapshot origin is a claim about what the storage holds,
+	 * so a writer that has lost the store must not be able to move it.
+	 */
+	writeSeamRecord(key: SeamRecordKey, value: string): Promise<void>;
+
+	/**
+	 * Forget one of the seam's records. A no-op where none was written.
+	 *
+	 * It is a MUTATION even when it deletes nothing, and a backend that claims
+	 * `singleWriter` must claim on it anyway. That is what `openForWriting` rests
+	 * on: clearing a record nothing ever wrote is the one verb that is a
+	 * guaranteed no-op on every backend, so it is how a claim is taken without
+	 * touching a byte -- and now without touching the caller's namespace either.
+	 */
+	clearSeamRecord(key: SeamRecordKey): Promise<void>;
+
+	/**
 	 * Move a cursor on its own, with no block.
 	 *
 	 * Needed because progress is not only blocks. A processor that scanned a range
@@ -234,9 +274,8 @@ export interface StateStoreBackend extends StateStore {
 	 * without its state would have a caller resume into an empty store.
 	 *
 	 * It is a MUTATION even when it deletes nothing, and a backend that claims
-	 * `singleWriter` must claim on it anyway. That is what `openForWriting` rests
-	 * on: clearing a key nothing ever wrote is the one seam verb that is a
-	 * guaranteed no-op, so it is how a claim is taken without touching a byte.
+	 * `singleWriter` must claim on it anyway -- the same obligation
+	 * `clearSeamRecord` carries, which is the one `openForWriting` actually uses.
 	 */
 	clearCursor(key: string): Promise<void>;
 
@@ -319,22 +358,6 @@ export interface WritableStateStore extends StateStoreBackend {
 }
 
 /**
- * The cursor-port key `openForWriting` clears in order to claim.
- *
- * Nothing ever WRITES it, which is the whole of why it exists: clearing a key
- * that was never written is the one seam verb that is a guaranteed no-op on
- * every backend ("Forget a cursor. A no-op where none was written"), and it is
- * still a MUTATION, so a backend that enforces a single writer claims on it. So
- * an open takes the store without touching a byte a caller can observe, using
- * the surface every backend already implements rather than a claim verb the
- * concrete classes would all have had to grow.
- *
- * It is exported so that a host choosing its own cursor keys can avoid it, the
- * same way `SNAPSHOT_ORIGIN_KEY` is.
- */
-export const WRITER_CLAIM_KEY = 'writerClaim';
-
-/**
  * One claim per store INSTANCE, so a second open is the same claim.
  *
  * Keyed by the store handed in AND by the handle handed back, so
@@ -356,9 +379,13 @@ const claims = new WeakMap<StateStoreBackend, Promise<WritableStateStore>>();
  *
  * It migrates (the same reason `openSnapshotAware` does: claiming is a write,
  * and a store that has not been migrated has nothing to write to), then it takes
- * the claim by clearing `WRITER_CLAIM_KEY`, which changes nothing and is a
- * mutation, so a backend that enforces a single writer SWAPS its stored token
- * there. An earlier writer's next mutation is then refused
+ * the claim by clearing the seam's `writerClaim` record, which changes nothing
+ * and is a mutation, so a backend that enforces a single writer SWAPS its stored
+ * token there. That record lives in the seam's OWN keyspace (`records.ts`), so
+ * the act of claiming is invisible in the cursor port a caller writes to --
+ * which is not merely tidy: while it was a reserved cursor key, a caller that
+ * chose the same name was clearing its own progress marker every time a writer
+ * opened. An earlier writer's next mutation is then refused
  * (`StoreWriterChangedError`), and it is refused from the moment this call
  * returns rather than from the moment this writer gets round to writing.
  *
@@ -411,7 +438,7 @@ export function openForWriting(store: StateStoreBackend): Promise<WritableStateS
 
 async function claim(store: StateStoreBackend): Promise<WritableStateStore> {
 	await store.migrate();
-	await store.clearCursor(WRITER_CLAIM_KEY);
+	await store.clearSeamRecord('writerClaim');
 
 	const handle = new ClaimedStateStore(store, writerToken());
 	claims.set(handle, Promise.resolve(handle));
@@ -490,6 +517,18 @@ class ClaimedStateStore implements WritableStateStore {
 
 	async clearCursor(key: string): Promise<void> {
 		return this.inner.clearCursor(key);
+	}
+
+	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		return this.inner.readSeamRecord(key);
+	}
+
+	async writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		return this.inner.writeSeamRecord(key, value);
+	}
+
+	async clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		return this.inner.clearSeamRecord(key);
 	}
 
 	async prune(options?: PruneOptions): Promise<PruneReport> {

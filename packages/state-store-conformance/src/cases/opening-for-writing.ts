@@ -1,9 +1,4 @@
-import {
-	openForWriting,
-	StoreWriterChangedError,
-	WRITER_CLAIM_KEY,
-	type StateStoreCapabilities,
-} from '@etherfold/state-store';
+import {openForWriting, StoreWriterChangedError, type StateStoreCapabilities} from '@etherfold/state-store';
 import {expect} from 'vitest';
 import {CONFORMANCE_ENTITIES, LADDER_BASE, block, cases, opened, owns} from '../fixtures.js';
 import type {ConformanceCase, StateStoreConformanceOptions, StateStoreFactory} from '../types.js';
@@ -23,12 +18,13 @@ const CURSOR = 'lastSync';
  * the new one gets round to writing (ADR-0077).
  *
  * It is asked of BACKENDS rather than only of the seam because the mechanism
- * runs through one: the claim is taken by clearing `WRITER_CLAIM_KEY`, a key
- * nothing ever writes, which is a mutation that changes no byte. A backend whose
- * `clearCursor` took a short cut when there was nothing to delete would skip the
- * claim, and every case here would go red -- which is the whole reason these
- * cases are in the conformance suite and not in `@etherfold/state-store`'s own
- * tests, where the only store available reports `singleWriter: false`.
+ * runs through one: the claim is taken by clearing the seam's `writerClaim`
+ * record, which nothing ever writes, so it is a mutation that changes no byte. A
+ * backend whose `clearSeamRecord` took a short cut when there was nothing to
+ * delete would skip the claim, and every case here would go red -- which is the
+ * whole reason these cases are in the conformance suite and not in
+ * `@etherfold/state-store`'s own tests, where the only store available reports
+ * `singleWriter: false`.
  *
  * The gating is the suite's usual claim-driven selection: a backend whose
  * storage is an instance field cannot be beaten by a second writer, so the
@@ -45,13 +41,17 @@ export function openingForWritingCases(
 		'leaves the cursor port exactly as it found it': async () => {
 			const store = await opened(factory);
 			await store.writeCursor(CURSOR, '{"lastToBlock":100}');
+			// a caller MAY name a cursor after the record the claim clears, because the
+			// two namespaces are separate: this is the collision that used to be silent.
+			await store.writeCursor('writerClaim', 'a cursor with an odd name');
 
 			const writable = await openForWriting(store);
 
 			// the claim is a WRITE with no content: it moves the token a backend keeps
 			// for itself and touches nothing a caller put there.
 			expect(await writable.readCursor(CURSOR)).toBe('{"lastToBlock":100}');
-			expect(await writable.readCursor(WRITER_CLAIM_KEY)).toBeUndefined();
+			expect(await writable.readCursor('writerClaim')).toBe('a cursor with an odd name');
+			expect(await writable.readSeamRecord('writerClaim')).toBeUndefined();
 		},
 
 		'hands back a store that can drive the whole mutating surface': async () => {

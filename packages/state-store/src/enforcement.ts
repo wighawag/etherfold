@@ -44,22 +44,21 @@ import {retentionFloor} from './retention.js';
  *
  * ## Where the answer is kept
  *
- * At the cursor port, under `RETENTION_ENFORCEMENT_KEY`, exactly as the snapshot
- * origin is (`SNAPSHOT_ORIGIN_KEY`, ADR-0028). The port is a keyed slot for an
- * opaque string the store never interprets, is never versioned, never reverted
- * and never pruned -- which is precisely the durability this needs, and why it
- * is one more KEY rather than a new port or a new table on four backends.
- */
-
-/**
- * The cursor-port key a prune records itself under.
+ * Under `retentionEnforcement`, one of the seam's own three records
+ * (`records.ts`), which is a keyspace INSIDE each store that no caller can
+ * address: an opaque string the store never interprets, never versioned, never
+ * reverted and never pruned, which is precisely the durability this needs. It
+ * rode the cursor port at first, beside the snapshot origin, and moved out with
+ * it for the reason that port records: a caller choosing `retentionEnforcement`
+ * for its own cursor would have made a pruned store report it never pruned, and
+ * a store that under-reports its own enforcement looks exactly like a store that
+ * is fine.
  *
- * A caller never reads it directly: `readRetentionEnforcement` is the read, and
- * the string under here is the seam's own business. It is exported because the
- * port is a shared namespace and a host writing its own cursors needs to know
- * which keys are taken (`SYNC_CURSOR_KEY`, `SNAPSHOT_ORIGIN_KEY`, this).
+ * It is the one record that never travels through the port's calls. A backend
+ * writes it INSIDE the same transaction as the deletion it describes -- which is
+ * the whole reason the number recorded and the number deleted against cannot
+ * drift -- and reads it back in its own `readRetentionEnforcement`.
  */
-export const RETENTION_ENFORCEMENT_KEY = 'retentionEnforcement';
 
 /**
  * Bumped when the record's SHAPE changes in a way an older reader would misread.
@@ -70,7 +69,7 @@ export const RETENTION_ENFORCEMENT_KEY = 'retentionEnforcement';
  */
 const RECORD_FORMAT = 1;
 
-/** What is written under `RETENTION_ENFORCEMENT_KEY`: small, versioned, self-describing. */
+/** What is written under `retentionEnforcement`: small, versioned, self-describing. */
 type PruneRecord = {readonly format: number; readonly floor: number};
 
 /**
@@ -121,8 +120,8 @@ export type RetentionEnforcement =
 	  };
 
 /**
- * The record a backend writes at the cursor port for a prune pass, or
- * `undefined` when there was no floor to run at.
+ * The record a backend writes for a prune pass, or `undefined` when there was no
+ * floor to run at.
  *
  * It takes the FLOOR the pass ran at -- `PruneReport.floor`, which is
  * `retentionFloor`, which is `retainedRange(...).from`, which is the boundary a
@@ -143,7 +142,7 @@ export function pruneRecord(floor: number | undefined): string | undefined {
 
 /**
  * Assemble the report from what a backend knows: its retention, its tip, and
- * whatever is recorded at the cursor port.
+ * whatever that backend has recorded for its last prune pass.
  *
  * Written once here rather than four times, because the three situations are a
  * property of the MODEL and not of any substrate, and a backend that answered

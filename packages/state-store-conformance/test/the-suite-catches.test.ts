@@ -10,6 +10,7 @@ import {
 	type PruneOptions,
 	type PruneReport,
 	type RetentionEnforcement,
+	type SeamRecordKey,
 	type StateStoreBackend,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
@@ -102,6 +103,18 @@ class Decorated implements StateStoreBackend {
 
 	clearCursor(key: string): Promise<void> {
 		return this.inner.clearCursor(key);
+	}
+
+	readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		return this.inner.readSeamRecord(key);
+	}
+
+	writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		return this.inner.writeSeamRecord(key, value);
+	}
+
+	clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		return this.inner.clearSeamRecord(key);
 	}
 
 	prune(options?: PruneOptions): Promise<PruneReport> {

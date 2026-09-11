@@ -3,6 +3,7 @@ import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
+import type {SeamRecordKey} from './records.js';
 import {assertRetained, type PruneOptions, type PruneReport} from './retention.js';
 import type {StateStoreBackend} from './store.js';
 import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.js';
@@ -130,22 +131,19 @@ export type StateSnapshot = {
 export type SnapshotHead = Omit<StateSnapshot, 'rows'>;
 
 /**
- * Where the snapshot origin is kept: one more key at the cursor port.
+ * What is written under the seam's `snapshotOrigin` record: small, versioned,
+ * self-describing.
  *
- * The port is a keyed slot for an opaque string that the store never
- * interprets, is never versioned, never reverted and never pruned -- which is
- * exactly the durability a history floor needs, and why this is a second KEY
- * rather than a new port. The sync cursor is the port's first user, not its
- * definition (the conformance suite already asserts that two keys are kept
- * apart).
+ * It lives in the seam's OWN keyspace (`records.ts`) rather than at the cursor
+ * port, and that is not filing. The cursor port is the CALLER's namespace, so a
+ * marker kept there was one an app could overwrite by picking the same name for
+ * its own cursor -- after which this store goes straight back to claiming
+ * history it never received, which is the exact failure this module exists to
+ * prevent, arriving through the door the fix opened.
  *
  * It has to be durable at all because the trap comes back on RELOAD otherwise:
- * a floor held only in a JS closure is gone the next time the tab opens, and the
- * store goes back to claiming history it never received.
+ * a floor held only in a JS closure is gone the next time the tab opens.
  */
-export const SNAPSHOT_ORIGIN_KEY = 'snapshotOrigin';
-
-/** What is written under `SNAPSHOT_ORIGIN_KEY`: small, versioned, self-describing. */
 type SnapshotOrigin = {readonly format: number; readonly block: number};
 
 /** A snapshot whose envelope this build does not know how to read. */
@@ -380,7 +378,7 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 		}
 
 		const marker: SnapshotOrigin = {format: ENTITY_SNAPSHOT_FORMAT, block: snapshot.takenAt.number};
-		await this.inner.writeCursor(SNAPSHOT_ORIGIN_KEY, JSON.stringify(marker));
+		await this.inner.writeSeamRecord('snapshotOrigin', JSON.stringify(marker));
 		this.origin = snapshot.takenAt.number;
 		this.knownTip = snapshot.takenAt.number;
 
@@ -402,6 +400,18 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 
 	async clearCursor(key: string): Promise<void> {
 		return this.inner.clearCursor(key);
+	}
+
+	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		return this.inner.readSeamRecord(key);
+	}
+
+	async writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		return this.inner.writeSeamRecord(key, value);
+	}
+
+	async clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		return this.inner.clearSeamRecord(key);
 	}
 
 	async prune(options?: PruneOptions): Promise<PruneReport> {
@@ -466,7 +476,7 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	async revertTo(keepUpTo: number): Promise<void> {
 		if (keepUpTo < 0) {
 			await this.inner.revertTo(keepUpTo);
-			await this.inner.clearCursor(SNAPSHOT_ORIGIN_KEY);
+			await this.inner.clearSeamRecord('snapshotOrigin');
 			this.origin = undefined;
 			this.knownTip = undefined;
 			return;
@@ -498,7 +508,7 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
  * Open a store as one that may have been bootstrapped, recovering its floor.
  *
  * This is the call that has to be on the boot path rather than only on the
- * install path: the snapshot origin is persisted (see `SNAPSHOT_ORIGIN_KEY`)
+ * install path: the snapshot origin is persisted (see `SnapshotOrigin`)
  * precisely so that the SECOND run of an app is as honest as the first, and a
  * handle constructed without reading it back would report `unbounded` over rows
  * whose history begins a million blocks up.
@@ -517,7 +527,7 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
  */
 export async function openSnapshotAware(store: StateStoreBackend): Promise<SnapshotAwareStateStore> {
 	await store.migrate();
-	const recorded = await store.readCursor(SNAPSHOT_ORIGIN_KEY);
+	const recorded = await store.readSeamRecord('snapshotOrigin');
 	if (recorded === undefined) return new SnapshotAwareStateStore(store);
 
 	let origin: SnapshotOrigin;
@@ -525,7 +535,7 @@ export async function openSnapshotAware(store: StateStoreBackend): Promise<Snaps
 		origin = JSON.parse(recorded) as SnapshotOrigin;
 	} catch (error) {
 		throw new Error(
-			`the snapshot origin recorded under \`${SNAPSHOT_ORIGIN_KEY}\` is not readable (${String(error)}). This ` +
+			`the snapshot origin this store recorded is not readable (${String(error)}). This ` +
 				`store's rows may have come from a snapshot, in which case they have no history below it, and treating ` +
 				`the marker as absent would have the store claim history it never received. Clear the state and ` +
 				`re-bootstrap.`,

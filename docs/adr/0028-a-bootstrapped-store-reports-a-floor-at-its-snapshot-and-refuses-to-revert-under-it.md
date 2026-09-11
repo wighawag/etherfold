@@ -1,3 +1,7 @@
+---
+status: superseded in part by ADR-0080
+---
+
 # A bootstrapped store carries current rows only, reports a retention floor at its snapshot's block, and refuses to revert under it
 
 A client may start from state somebody else computed (`StateSnapshot` at the storage seam, `bootstrapFromSnapshot` in `@etherfold/processor-entities`) instead of replaying the chain from the start block, which is the capability the free-form path has always had through `keepStateOnIndexedDB(name, remote)`. A snapshot carries the **LIVE rows at one block** plus the cursor that belongs to them, and the two install as one `applyBlock`; the store then reports its retention as a **window whose oldest block is the snapshot's**, refuses an as-of read below it with `BlockNotRetainedError`, and refuses a revert that would reach under it with `RevertBeyondSnapshotError`, changing nothing.

@@ -2,12 +2,7 @@ import {blockAlreadyRecorded, blockHashAlreadyRecorded, blockNotAboveTip, normal
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import {entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
-import {
-	pruneRecord,
-	retentionEnforcementOf,
-	RETENTION_ENFORCEMENT_KEY,
-	type RetentionEnforcement,
-} from './enforcement.js';
+import {pruneRecord, retentionEnforcementOf, type RetentionEnforcement} from './enforcement.js';
 import {
 	assertListingLimit,
 	boundedListing,
@@ -17,6 +12,7 @@ import {
 	type EntityIdPrefix,
 	type Listing,
 } from './listing.js';
+import type {SeamRecordKey} from './records.js';
 import {
 	assertRetained,
 	pruneBudget,
@@ -82,6 +78,11 @@ export class MemoryStateStore implements StateStoreBackend {
 	private readonly hashes = new Map<string, number>();
 	/** The sync cursors, opaque strings under caller-chosen keys. See `cursor.ts`. */
 	private readonly cursors = new Map<string, string>();
+	/**
+	 * The seam's own records, in a map of their OWN so a caller's cursor key can
+	 * never land on one. See `records.ts`.
+	 */
+	private readonly records = new Map<SeamRecordKey, string>();
 	private readonly provided: Retention;
 	private readonly finalityDepth: number | undefined;
 	private tip: number | undefined;
@@ -205,6 +206,21 @@ export class MemoryStateStore implements StateStoreBackend {
 		this.cursors.delete(key);
 	}
 
+	/** The seam's own record under `key`. A separate map from the cursors, deliberately. */
+	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		return this.records.get(key);
+	}
+
+	/** Write one of the seam's records. See `records.ts`. */
+	async writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		this.records.set(key, value);
+	}
+
+	/** Forget one of the seam's records. A no-op where none was written. */
+	async clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		this.records.delete(key);
+	}
+
 	async getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined> {
 		return this.read<T>(entity, id, (version) => version.upper === null);
 	}
@@ -324,7 +340,7 @@ export class MemoryStateStore implements StateStoreBackend {
 		// rows that did go, which under-claims enforcement and is corrected by the
 		// next pass -- the safe direction for a diagnostic.
 		const record = pruneRecord(floor);
-		if (record !== undefined) this.cursors.set(RETENTION_ENFORCEMENT_KEY, record);
+		if (record !== undefined) this.records.set('retentionEnforcement', record);
 
 		return {tip, floor, versionsDeleted: doomed.size, complete: doomed.size === unreachable.length};
 	}
@@ -332,17 +348,17 @@ export class MemoryStateStore implements StateStoreBackend {
 	/**
 	 * Whether the retention this store reports is enforced against its storage.
 	 *
-	 * Durable in the only sense this backend HAS a durable sense: the record rides
-	 * the same cursor map as every other cursor, and goes with the process exactly
-	 * as the rows do. A backend whose storage outlives the process reads back what
-	 * an earlier one wrote, which is what makes the report worth having there.
+	 * Durable in the only sense this backend HAS a durable sense: the record sits
+	 * in an instance field and goes with the process exactly as the rows do. A
+	 * backend whose storage outlives the process reads back what an earlier one
+	 * wrote, which is what makes the report worth having there.
 	 */
 	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
 		return retentionEnforcementOf(
 			this.provided,
 			this.finalityDepth,
 			this.tip,
-			this.cursors.get(RETENTION_ENFORCEMENT_KEY),
+			this.records.get('retentionEnforcement'),
 		);
 	}
 

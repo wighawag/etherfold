@@ -14,7 +14,6 @@ import {
 	resolveRetention,
 	retentionEnforcementOf,
 	retentionFloor,
-	RETENTION_ENFORCEMENT_KEY,
 	StoreWriterChangedError,
 	writerToken,
 	type BlockPointer,
@@ -33,6 +32,7 @@ import {
 	type StateStoreBackend,
 	type StateStoreCapabilities,
 	type CursorWrite,
+	type SeamRecordKey,
 } from '@etherfold/state-store';
 import {committed, openDatabase, request, walk} from './idb.js';
 import {
@@ -47,10 +47,10 @@ import {
 	rowKey,
 	rowOfVersionKey,
 	SCHEMA_VERSION,
+	SEAM,
 	UPPER_INDEX,
 	versionKey,
 	VERSIONS,
-	WRITER,
 	WRITER_KEY,
 	type BlockRecord,
 	type CurrentRecord,
@@ -219,7 +219,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 * nothing. The loser finds out at its next mutation, which is the point.
 	 */
 	private async claimOrCheck(tx: IDBTransaction, settled: Promise<void>, operation: string): Promise<void> {
-		const writer = tx.objectStore(WRITER);
+		const writer = tx.objectStore(SEAM);
 		if (!this.claimed) {
 			this.token ??= writerToken();
 			writer.put(this.token, WRITER_KEY);
@@ -290,7 +290,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		});
 
 		const db = await this.database();
-		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, CURSORS, WRITER], 'readwrite');
+		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, CURSORS, SEAM], 'readwrite');
 		const current = tx.objectStore(CURRENT);
 		const versions = tx.objectStore(VERSIONS);
 		const blocks = tx.objectStore(BLOCKS);
@@ -361,7 +361,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 */
 	async writeCursor(key: string, value: string): Promise<void> {
 		const db = await this.database();
-		const tx = db.transaction([CURSORS, WRITER], 'readwrite');
+		const tx = db.transaction([CURSORS, SEAM], 'readwrite');
 		const settled = committed(tx);
 		await this.claimOrCheck(tx, settled, 'writeCursor');
 		tx.objectStore(CURSORS).put(value, key);
@@ -371,10 +371,47 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	/** Forget it. Deleting a key that is not there is the no-op the contract asks for. */
 	async clearCursor(key: string): Promise<void> {
 		const db = await this.database();
-		const tx = db.transaction([CURSORS, WRITER], 'readwrite');
+		const tx = db.transaction([CURSORS, SEAM], 'readwrite');
 		const settled = committed(tx);
 		await this.claimOrCheck(tx, settled, 'clearCursor');
 		tx.objectStore(CURSORS).delete(key);
+		await settled;
+	}
+
+	/**
+	 * The seam's own record under `key`, out of the object store the CALLER cannot
+	 * reach. See `records.ts` at the seam and `SEAM` in `keys.ts`.
+	 *
+	 * A READ, so it opens a `readonly` transaction and never claims: this is what
+	 * `openSnapshotAware` calls on every boot, including in a tab that only
+	 * renders.
+	 */
+	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		const db = await this.database();
+		const store = db.transaction(SEAM, 'readonly').objectStore(SEAM);
+		return (await request(store.get(key))) as string | undefined;
+	}
+
+	/** Write one of the seam's records, guarded like every other mutation. */
+	async writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		const db = await this.database();
+		const tx = db.transaction(SEAM, 'readwrite');
+		const settled = committed(tx);
+		await this.claimOrCheck(tx, settled, 'writeSeamRecord');
+		tx.objectStore(SEAM).put(value, key);
+		await settled;
+	}
+
+	/**
+	 * Forget one of the seam's records. Deleting a key that is not there is the
+	 * no-op the contract asks for -- and is how `openForWriting` claims.
+	 */
+	async clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		const db = await this.database();
+		const tx = db.transaction(SEAM, 'readwrite');
+		const settled = committed(tx);
+		await this.claimOrCheck(tx, settled, 'clearSeamRecord');
+		tx.objectStore(SEAM).delete(key);
 		await settled;
 	}
 
@@ -503,7 +540,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		// not entity state, and the caller moves it when it applies the canonical
 		// branch. See `cursor.ts`.
 		const db = await this.database();
-		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, WRITER], 'readwrite');
+		const tx = db.transaction([CURRENT, VERSIONS, BLOCKS, SEAM], 'readwrite');
 		const current = tx.objectStore(CURRENT);
 		const versions = tx.objectStore(VERSIONS);
 		const blocks = tx.objectStore(BLOCKS);
@@ -568,11 +605,10 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		// the read and the delete -- the read-then-write that merely LOOKS atomic.
 		// Widening the transaction is what closes that, and the writer token is what
 		// makes the closure hold across tabs (ADR-0075).
-		// CURSORS is in here for the record this pass leaves under
-		// `RETENTION_ENFORCEMENT_KEY`, so that what was deleted and the claim that a
-		// pass ran commit together rather than in two transactions a crash can
-		// separate.
-		const tx = db.transaction([VERSIONS, BLOCKS, CURSORS, WRITER], 'readwrite');
+		// SEAM is in here for the guard AND for the `retentionEnforcement` record this
+		// pass leaves, so that what was deleted and the claim that a pass ran commit
+		// together rather than in two transactions a crash can separate.
+		const tx = db.transaction([VERSIONS, BLOCKS, SEAM], 'readwrite');
 		const versions = tx.objectStore(VERSIONS);
 		const settled = committed(tx);
 		// a prune that turns out to delete nothing still claims: pruning is a write
@@ -588,7 +624,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		}
 
 		const record = pruneRecord(floor);
-		if (record !== undefined) tx.objectStore(CURSORS).put(record, RETENTION_ENFORCEMENT_KEY);
+		if (record !== undefined) tx.objectStore(SEAM).put(record, 'retentionEnforcement' satisfies SeamRecordKey);
 
 		let versionsDeleted = 0;
 		await walk(versions.index(UPPER_INDEX).openCursor(IDBKeyRange.upperBound(floor)), (cursor) => {
@@ -611,8 +647,8 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 *
 	 * Durable across a reload, which on this backend is the case that matters
 	 * most: a tab that pruned yesterday comes back reporting the block it pruned
-	 * to, because the record is a cursor-port entry in the same database as the
-	 * versions rather than a flag in a closure the reload threw away.
+	 * to, because the record is a row in the same database as the versions rather
+	 * than a flag in a closure the reload threw away.
 	 *
 	 * A READ, so it opens no `readwrite` transaction and never claims: asking
 	 * whether a store is being pruned must not take the store away from the tab
@@ -623,7 +659,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 			this.provided,
 			this.finalityDepth,
 			await this.tipBlockNumber(),
-			await this.readCursor(RETENTION_ENFORCEMENT_KEY),
+			await this.readSeamRecord('retentionEnforcement'),
 		);
 	}
 
@@ -701,13 +737,12 @@ export class IndexedDBStateStore implements StateStoreBackend {
  *
  * The version is this PACKAGE's and never a processor's: the object stores do not
  * depend on the declarations (`keys.ts` says why), so a processor gaining an
- * entity never needs an upgrade transaction that an open tab could block. It
- * moved to 2 when the cursor came behind the seam and to 3 when the writer token
- * arrived, and every step is `contains`-guarded so an existing database gains
- * the missing store and keeps every row it had.
+ * entity never needs an upgrade transaction that an open tab could block. Every
+ * step is `contains`-guarded so an existing database gains the missing store and
+ * keeps every row it had.
  */
 function upgrade(db: IDBDatabase): void {
-	if (!db.objectStoreNames.contains(WRITER)) db.createObjectStore(WRITER);
+	if (!db.objectStoreNames.contains(SEAM)) db.createObjectStore(SEAM);
 	if (!db.objectStoreNames.contains(CURSORS)) db.createObjectStore(CURSORS);
 	if (!db.objectStoreNames.contains(CURRENT)) db.createObjectStore(CURRENT);
 	if (!db.objectStoreNames.contains(VERSIONS)) {

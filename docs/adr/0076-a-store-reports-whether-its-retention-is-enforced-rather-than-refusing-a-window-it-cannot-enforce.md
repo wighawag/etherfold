@@ -1,3 +1,7 @@
+---
+status: superseded in part by ADR-0080
+---
+
 # A store REPORTS whether its retention is enforced, rather than refusing a window it cannot enforce
 
 `work/specs/tasked/a-configured-window-is-actually-pruned.md` launched asking for a construction-time REFUSAL: configure a bounded retention without the scheduling to enforce it, and the store refuses where it was configured, naming the remedy (its user stories **2** and **3**). That is not what was built, and the change is deliberate rather than an omission. **Stories 2 and 3 were answered differently rather than delivered**, and this ADR is the record of the answer, because the task body that decided it moves to `work/tasks/done/` and the spec's own amendment is a pointer rather than an argument.

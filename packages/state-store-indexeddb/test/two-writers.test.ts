@@ -110,7 +110,7 @@ describe('the transaction the tip is read in', () => {
 		// difference here, so the transaction itself is what is pinned -- the same
 		// reason the prune case below pins one.
 		expect(opened.transactions).toEqual([
-			{stores: ['current', 'versions', 'blocks', 'cursors', 'writer'], mode: 'readwrite'},
+			{stores: ['current', 'versions', 'blocks', 'cursors', 'seam'], mode: 'readwrite'},
 		]);
 	});
 
@@ -144,11 +144,13 @@ describe('the transaction a prune runs in', () => {
 		// what is pinned -- the same reason `listing-access-path.test.ts` records
 		// requests rather than results.
 		//
-		// `cursors` is in the same transaction for a narrower reason: the record this
-		// pass leaves under `RETENTION_ENFORCEMENT_KEY` is the claim that a pass RAN,
-		// and a claim committed apart from the deletion it describes is a claim a
-		// crash can separate from its own evidence.
-		expect(opened.transactions[0]).toEqual({stores: ['versions', 'blocks', 'cursors', 'writer'], mode: 'readwrite'});
+		// `seam` is in the same transaction for two reasons at once: it holds the
+		// writer token every mutation is guarded on, and it holds the
+		// `retentionEnforcement` record this pass leaves, which is the claim that a
+		// pass RAN -- and a claim committed apart from the deletion it describes is a
+		// claim a crash can separate from its own evidence. `cursors` is deliberately
+		// NOT here any more: that namespace is the caller's.
+		expect(opened.transactions[0]).toEqual({stores: ['versions', 'blocks', 'seam'], mode: 'readwrite'});
 		expect(opened.transactions.filter((tx) => tx.mode === 'readonly' && tx.stores.includes('blocks'))).toEqual([]);
 	});
 });

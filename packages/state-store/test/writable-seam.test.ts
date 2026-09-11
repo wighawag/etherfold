@@ -5,7 +5,6 @@ import {
 	openForReading,
 	openForWriting,
 	StoreWriterChangedError,
-	WRITER_CLAIM_KEY,
 	type StateStore,
 	type StateStoreBackend,
 	type WritableStateStore,
@@ -105,17 +104,20 @@ describe('opening a store for writing', () => {
 	});
 
 	it('leaves the cursor port exactly as it found it', async () => {
-		// the claim is performed through the one seam verb that is a guaranteed
-		// no-op -- clearing a key nothing ever wrote -- so opening for writing
-		// changes no byte a caller can observe.
+		// the claim is performed through the one verb that is a guaranteed no-op --
+		// clearing a SEAM RECORD nothing ever wrote -- so opening for writing
+		// changes no byte a caller can observe, and does not even touch the
+		// namespace a caller writes in.
 		const store = built();
 		await store.migrate();
 		await store.writeCursor('lastSync', '{"lastToBlock":100}');
+		await store.writeCursor('writerClaim', 'a cursor with an odd name');
 
 		await openForWriting(store);
 
 		expect(await store.readCursor('lastSync')).toBe('{"lastToBlock":100}');
-		expect(await store.readCursor(WRITER_CLAIM_KEY)).toBeUndefined();
+		expect(await store.readCursor('writerClaim')).toBe('a cursor with an odd name');
+		expect(await store.readSeamRecord('writerClaim')).toBeUndefined();
 	});
 
 	it('carries the whole mutating surface, so a writer needs nothing else', async () => {

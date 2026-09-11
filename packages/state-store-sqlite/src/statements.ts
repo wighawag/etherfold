@@ -6,6 +6,7 @@ import {
 	normalizeEntities,
 	prefixValues,
 	type EntityIdPrefix,
+	type SeamRecordKey,
 } from '@etherfold/state-store';
 import {CURSOR_KEY, CURSOR_VALUE, LOWER, ROWID, UPPER, type TableNames} from './ddl.js';
 import {quoted, quotedList} from './identifiers.js';
@@ -319,10 +320,7 @@ export function listAsOfStatement(
 
 /** Read one cursor. `undefined` (no row) is "never written", not an error. */
 export function readCursorStatement(key: string, names: TableNames): Statement {
-	return {
-		sql: `SELECT ${CURSOR_VALUE} AS value FROM ${names.cursor} WHERE ${CURSOR_KEY} = ? LIMIT 1`,
-		args: [key],
-	};
+	return readKeyedStatement(names.cursor, key);
 }
 
 /**
@@ -333,10 +331,58 @@ export function readCursorStatement(key: string, names: TableNames): Statement {
  * purpose, whereas a cursor exists precisely to be overwritten.
  */
 export function writeCursorStatement(key: string, value: string, names: TableNames, guard?: StatementGuard): Statement {
+	return writeKeyedStatement(names.cursor, key, value, guard);
+}
+
+/** Forget one cursor. Deleting a row that is not there is a no-op, which is the contract. */
+export function clearCursorStatement(key: string, names: TableNames, guard?: StatementGuard): Statement {
+	return clearKeyedStatement(names.cursor, key, guard);
+}
+
+/**
+ * The same three over the SEAM's OWN table, which is the whole difference
+ * between them: identical SQL, a different keyspace, and no caller can name it.
+ *
+ * The key is a `SeamRecordKey` rather than a string, so the closed set the seam
+ * keeps (`records.ts`) is checked by the compiler here as well as at the seam.
+ */
+export function readSeamRecordStatement(key: SeamRecordKey, names: TableNames): Statement {
+	return readKeyedStatement(names.seamRecords, key);
+}
+
+/** Write one of the seam's records. Guarded like any other mutation. */
+export function writeSeamRecordStatement(
+	key: SeamRecordKey,
+	value: string,
+	names: TableNames,
+	guard?: StatementGuard,
+): Statement {
+	return writeKeyedStatement(names.seamRecords, key, value, guard);
+}
+
+/** Forget one of the seam's records: the no-op a claim is taken by. */
+export function clearSeamRecordStatement(key: SeamRecordKey, names: TableNames, guard?: StatementGuard): Statement {
+	return clearKeyedStatement(names.seamRecords, key, guard);
+}
+
+/**
+ * The key/value shape `_cursor` and `_seam` share, written once.
+ *
+ * Both tables are `("key" TEXT PRIMARY KEY, "value" TEXT NOT NULL)`, so the
+ * three operations differ only in which table they name. Keeping one
+ * implementation is what makes "the seam's records behave exactly as a cursor
+ * does, in a place a caller cannot reach" true by construction rather than by
+ * two copies staying in step.
+ */
+function readKeyedStatement(table: string, key: string): Statement {
+	return {sql: `SELECT ${CURSOR_VALUE} AS value FROM ${table} WHERE ${CURSOR_KEY} = ? LIMIT 1`, args: [key]};
+}
+
+function writeKeyedStatement(table: string, key: string, value: string, guard?: StatementGuard): Statement {
 	if (!guard) {
 		return {
 			sql:
-				`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, ?) ` +
+				`INSERT INTO ${table} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, ?) ` +
 				`ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = excluded.${CURSOR_VALUE}`,
 			args: [key, value],
 		};
@@ -345,16 +391,15 @@ export function writeCursorStatement(key: string, value: string, names: TableNam
 	// carries a WHERE: without one, `ON` would be ambiguous with a join.
 	return {
 		sql:
-			`INSERT INTO ${names.cursor} (${CURSOR_KEY}, ${CURSOR_VALUE}) SELECT ?, ? WHERE ${guard.predicate} ` +
+			`INSERT INTO ${table} (${CURSOR_KEY}, ${CURSOR_VALUE}) SELECT ?, ? WHERE ${guard.predicate} ` +
 			`ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = excluded.${CURSOR_VALUE}`,
 		args: [key, value, ...guardArgs(guard)],
 	};
 }
 
-/** Forget one cursor. Deleting a row that is not there is a no-op, which is the contract. */
-export function clearCursorStatement(key: string, names: TableNames, guard?: StatementGuard): Statement {
+function clearKeyedStatement(table: string, key: string, guard?: StatementGuard): Statement {
 	return {
-		sql: `DELETE FROM ${names.cursor} WHERE ${CURSOR_KEY} = ?${andGuard(guard)}`,
+		sql: `DELETE FROM ${table} WHERE ${CURSOR_KEY} = ?${andGuard(guard)}`,
 		args: [key, ...guardArgs(guard)],
 	};
 }

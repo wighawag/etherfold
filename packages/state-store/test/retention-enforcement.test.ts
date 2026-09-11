@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {MemoryStateStore, RETENTION_ENFORCEMENT_KEY, retentionEnforcementOf} from '../src/index.js';
+import {MemoryStateStore, retentionEnforcementOf} from '../src/index.js';
 import {ACCOUNT, TOKEN, block, owns} from './utils/fixtures.js';
 
 /**
@@ -115,21 +115,23 @@ describe('a store reports whether its retention is enforced', () => {
 });
 
 describe('the record a prune leaves behind', () => {
-	it('is written at the cursor port, which is the durable slot a reload reads back', async () => {
+	it("is written in the seam's own keyspace, which is the durable slot a reload reads back", async () => {
 		const store = await withHistory(await windowed());
 
 		await store.prune();
 
-		// The port is a keyed slot for an opaque string that is never versioned,
-		// never reverted and never pruned -- the same durability the snapshot origin
-		// rides on, and the reason a reload is as honest as the first run.
-		expect(await store.readCursor(RETENTION_ENFORCEMENT_KEY)).toBeDefined();
+		// A keyed slot for an opaque string that is never versioned, never reverted
+		// and never pruned -- the same durability the snapshot origin rides on, and
+		// the reason a reload is as honest as the first run. It is deliberately NOT
+		// the cursor port, which is the caller's namespace: see `records.ts`.
+		expect(await store.readSeamRecord('retentionEnforcement')).toBeDefined();
+		expect(await store.readCursor('retentionEnforcement')).toBeUndefined();
 	});
 
 	it('is what a store built over the SAME storage reads back, rather than starting at never', async () => {
 		const store = await withHistory(await windowed());
 		await store.prune();
-		const recorded = await store.readCursor(RETENTION_ENFORCEMENT_KEY);
+		const recorded = await store.readSeamRecord('retentionEnforcement');
 
 		// what a second process does on a durable backend: same setting, same
 		// record, no memory of the run that wrote it.
@@ -140,7 +142,7 @@ describe('the record a prune leaves behind', () => {
 
 	it('is treated as never-pruned when it cannot be read, rather than throwing', async () => {
 		const store = await withHistory(await windowed());
-		await store.writeCursor(RETENTION_ENFORCEMENT_KEY, 'not json');
+		await store.writeSeamRecord('retentionEnforcement', 'not json');
 
 		// Deliberately unlike the snapshot origin, which throws: that marker is a
 		// SAFETY floor whose absence would have a store claim history it never had,

@@ -1,3 +1,7 @@
+---
+status: superseded in part by ADR-0080
+---
+
 # The storage seam splits AT THE INTERFACE, and the claim is taken by CONSTRUCTING a writer
 
 ADR-0075 made every mutating path on a `StateStore` carry a writer token, checked inside the transaction that writes, so that a second writer's mutation lands never. That closed the corruption and left the rule as something a caller still has to REMEMBER: any value typed `StateStore` can mutate, so "a reader does not write" was a convention, and the claim was implicit enough that no caller could see it happen. We decided: **the seam SPLITS into a readable shape and a writable one, the split is AT THE INTERFACE with the concrete backend classes unchanged, and the writable shape is obtained by CONSTRUCTING a writer over a store (`openForWriting`) rather than by leasing one.** This is for state exactly the move ADR-0044 makes for streams, where a follower is handed a read-only stream view (`readOnlyStream`) rather than asked to behave: the one-writer rule becomes structural.

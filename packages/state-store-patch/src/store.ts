@@ -19,7 +19,6 @@ import {
 	pruneRecord,
 	retentionEnforcementOf,
 	retentionFloor,
-	RETENTION_ENFORCEMENT_KEY,
 	type BlockPointer,
 	type EntityDeclaration,
 	type EntityId,
@@ -30,6 +29,7 @@ import {
 	type PruneOptions,
 	type PruneReport,
 	type CursorWrite,
+	type SeamRecordKey,
 	type Retention,
 	type RetentionEnforcement,
 	type StateStoreBackend,
@@ -154,6 +154,11 @@ export class PatchStateStore implements StateStoreBackend {
 	private readonly reversals = new Map<number, Patch[]>();
 	/** The sync cursors, opaque strings under caller-chosen keys. See `cursor.ts`. */
 	private readonly cursors = new Map<string, string>();
+	/**
+	 * The seam's own records, in a map of their OWN so a caller's cursor key can
+	 * never land on one. See `records.ts`.
+	 */
+	private readonly records = new Map<SeamRecordKey, string>();
 	private state: LightState;
 	private tip: number | undefined;
 
@@ -277,6 +282,21 @@ export class PatchStateStore implements StateStoreBackend {
 	/** Forget it. A no-op where none was written. */
 	async clearCursor(key: string): Promise<void> {
 		this.cursors.delete(key);
+	}
+
+	/** The seam's own record under `key`. A separate map from the cursors, deliberately. */
+	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
+		return this.records.get(key);
+	}
+
+	/** Write one of the seam's records. See `records.ts`. */
+	async writeSeamRecord(key: SeamRecordKey, value: string): Promise<void> {
+		this.records.set(key, value);
+	}
+
+	/** Forget one of the seam's records. A no-op where none was written. */
+	async clearSeamRecord(key: SeamRecordKey): Promise<void> {
+		this.records.delete(key);
 	}
 
 	/** One entity as it stands at the tip. */
@@ -416,10 +436,10 @@ export class PatchStateStore implements StateStoreBackend {
 		for (const number of doomed) this.reversals.delete(number);
 
 		// AFTER the deletion, so the record can never claim a pass that did not
-		// happen. It rides the cursor map like every other cursor, which on this
-		// backend means it goes with the process exactly as the state does.
+		// happen. It sits in the seam's own map, which on this backend means it goes
+		// with the process exactly as the state does.
 		const record = pruneRecord(floor);
-		if (record !== undefined) this.cursors.set(RETENTION_ENFORCEMENT_KEY, record);
+		if (record !== undefined) this.records.set('retentionEnforcement', record);
 
 		return {tip, floor, versionsDeleted: doomed.length, complete: doomed.length === unreachable.length};
 	}
@@ -438,12 +458,7 @@ export class PatchStateStore implements StateStoreBackend {
 	 * a store that did not survive cannot come back claiming anything.
 	 */
 	async readRetentionEnforcement(): Promise<RetentionEnforcement> {
-		return retentionEnforcementOf(
-			REVERT_ONLY,
-			this.finalityDepth,
-			this.tip,
-			this.cursors.get(RETENTION_ENFORCEMENT_KEY),
-		);
+		return retentionEnforcementOf(REVERT_ONLY, this.finalityDepth, this.tip, this.records.get('retentionEnforcement'));
 	}
 
 	/**

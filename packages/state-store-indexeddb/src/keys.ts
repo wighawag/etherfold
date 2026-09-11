@@ -14,7 +14,8 @@ import {
  * versions  [entity, ...id, lower]  -> {lower, upper, values} the history, for as-of and for revert
  * blocks    number                  -> {number, hash, timestamp}
  * cursors   key                     -> the opaque string the caller wrote
- * writer    'writer'                -> the token of whoever claimed this database
+ * seam      'writer'                -> the token of whoever claimed this database
+ *           <seam record key>       -> the opaque string the SEAM wrote
  * ```
  *
  * **The entity name is part of the KEY rather than the name of a store**, which
@@ -30,11 +31,8 @@ import {
  * **The schema version is this PACKAGE's, not a processor's**, and the
  * distinction is the whole reason for the layout above. A processor declaring
  * one more entity is still not a migration and still cannot be blocked by a
- * second open tab; what moved the version to 2 is this package growing an object
- * store of its own, twice: once for the sync cursor at the seam, and once for
- * the writer token that makes a second writer write nothing. `upgrade` creates
- * whatever is missing, so an existing database gains the store and keeps every
- * row it had.
+ * second open tab; what moves the version is this package growing an object
+ * store of its own.
  *
  * `values` is the COMPLETE row (id columns and every declared field, unlisted
  * ones NULL), so a version means the same thing here as everywhere else. It is
@@ -59,21 +57,37 @@ export const BLOCKS = 'blocks';
  */
 export const CURSORS = 'cursors';
 /**
- * The writer token: WHO holds this database, as one record inside it.
+ * Everything in this database that is NOT the caller's: the writer token, and
+ * the seam's own records.
  *
- * One store, one key, one opaque string. It is an object store of its own
- * rather than a key in `cursors`, because that keyspace is the CALLER's -- a
- * caller chooses its own cursor keys (`cursor.ts` at the seam) and would
- * eventually choose this one.
+ * It is an object store of its own rather than keys in `cursors`, because that
+ * keyspace is the CALLER's -- a caller chooses its own cursor keys (`cursor.ts`
+ * at the seam) and would eventually choose one of these names, silently
+ * overwriting a record whose loss does not look like a failure. It is ONE store
+ * rather than two because the two kinds of record are the same kind of thing (a
+ * fact about the storage rather than a fact a caller put there), they want the
+ * same durability, and every guarded mutation already opens this store to check
+ * the token, so writing a seam record needs no second object store in the
+ * transaction.
+ *
+ * Out-of-line keys and no value shape, so the token (a string under `writer`)
+ * and the seam's records (strings under the `SeamRecordKey` names) sit side by
+ * side with nothing to declare.
  *
  * Being INSIDE the database is what scopes the claim: the identity it guards is
  * the `databaseName` and nothing else, so two unrelated indexers on one origin
  * never contend and two generations addressed apart both write. See `writer.ts`
  * at the seam and ADR-0075.
  */
-export const WRITER = 'writer';
+export const SEAM = 'seam';
 
-/** The one key in `WRITER`: this database has exactly one holder. */
+/**
+ * The token key in `SEAM`: this database has exactly one holder.
+ *
+ * Distinct from the seam record `writerClaim` beside it, which nothing ever
+ * writes and which exists only to be CLEARED -- that clear is the no-op mutation
+ * a claim is taken by, and this is the value the claim swaps.
+ */
 export const WRITER_KEY = 'writer';
 
 /** Unique: a hash identifies one block, and a second claim on it is a caller bug. */

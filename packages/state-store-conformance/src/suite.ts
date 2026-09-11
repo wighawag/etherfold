@@ -8,6 +8,7 @@ import {readYourWritesCases} from './cases/read-your-writes.js';
 import {reorgRevertCases} from './cases/reorg-revert.js';
 import {retentionEnforcementCases} from './cases/retention-enforcement.js';
 import {retentionPruningCases} from './cases/retention-pruning.js';
+import {seamRecordCases} from './cases/seam-records.js';
 import {singleWriterCases} from './cases/single-writer.js';
 import {snapshotBootstrapCases} from './cases/snapshot-bootstrap.js';
 import {syncCursorCases} from './cases/sync-cursor.js';
@@ -37,7 +38,10 @@ import type {
  * its counter that must go back DOWN, read-your-writes inside a block, the
  * bounded id-prefix listing a one-to-many is derived through, a block applying
  * as one unit (with the sync cursor that describes it, which is the half a
- * caller cannot make atomic from outside), what a prune must never delete (the
+ * caller cannot make atomic from outside), that the seam's OWN three records
+ * live in a keyspace no caller can reach (which is what makes the cursor port
+ * entirely the caller's, so a cursor named `snapshotOrigin` collides with
+ * nothing), what a prune must never delete (the
  * same claim-driven selection: what a store may drop is what it stopped
  * promising to answer), whether the retention a store reports is actually being
  * ENFORCED against its storage (cross-checked against the pass's own report,
@@ -96,6 +100,7 @@ function factoryDrivenCases(
 		...boundedListingCases(factory, capabilities),
 		...blockAtomicityCases(factory),
 		...syncCursorCases(factory),
+		...seamRecordCases(factory, options),
 		...snapshotBootstrapCases(factory, capabilities),
 		...portableDeclarationCases(factory),
 	];

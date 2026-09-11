@@ -53,8 +53,6 @@ export {
 	RevertBeyondSnapshotError,
 	SnapshotFormatError,
 	SnapshotProcessorMismatchError,
-	SNAPSHOT_ORIGIN_KEY,
-	WRITER_CLAIM_KEY,
 } from '@etherfold/state-store';
 
 /**

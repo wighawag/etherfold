@@ -91,6 +91,35 @@ export const CURSOR_KEY = '"key"';
 export const CURSOR_VALUE = '"value"';
 
 /**
+ * The seam's OWN records: the fourth fixed table, and the one no caller can
+ * address.
+ *
+ * Two columns, the same shape as `_cursor` and deliberately a SEPARATE table
+ * rather than reserved keys inside it. `_cursor` is the CALLER's keyspace, so a
+ * host that chose `snapshotOrigin` for its own cursor used to overwrite the
+ * marker that says a bootstrapped store has no history below its snapshot --
+ * after which the store answers as-of reads it has no rows for, and nothing
+ * downstream can tell that answer from a true one (`records.ts` at the seam).
+ * Two tables make the collision unexpressible instead of forbidden.
+ *
+ * It is a sibling of `_writer` rather than more rows in it, because that table
+ * pins exactly one row (`CHECK (id = 0)`) and means one thing: WHO holds this
+ * store. Relaxing that check to make room for keyed records would turn the
+ * table the writer guard's subquery reads into a general keyspace, for no gain
+ * over one more two-column table.
+ *
+ * It is IN THE NAMESPACE with the other three, for ADR-0053's reason: each of
+ * these facts is about ONE generation's state (which snapshot ITS rows came
+ * from, when ITS versions were last pruned), so two generations folding into one
+ * database must not share them.
+ */
+export const SEAM_RECORD_TABLE = '_seam';
+
+/** Its two columns, quoted for the same reason `_cursor`'s are. */
+export const SEAM_RECORD_KEY = '"key"';
+export const SEAM_RECORD_VALUE = '"value"';
+
+/**
  * The writer-token table: the third fixed one, and the smallest.
  *
  * ONE row (`id = 0`, enforced by a CHECK rather than by convention) holding the
@@ -128,6 +157,8 @@ export type TableNames = {
 	readonly blocks: string;
 	/** The sync-cursor table. */
 	readonly cursor: string;
+	/** The seam's own record table. */
+	readonly seamRecords: string;
 	/** The writer-token table. */
 	readonly writer: string;
 	/** One declared entity's table, quoted. */
@@ -152,6 +183,7 @@ export function tableNames(namespace?: string): TableNames {
 		namespace,
 		blocks: qualified(BLOCKS_TABLE),
 		cursor: qualified(CURSOR_TABLE),
+		seamRecords: qualified(SEAM_RECORD_TABLE),
 		writer: qualified(WRITER_TABLE),
 		entity: (name) => quoted(qualified(name)),
 		// the `_` prefix is what keeps a derived index out of the space a
@@ -186,6 +218,10 @@ export function fixedSchemaDDL(names: TableNames): string[] {
 		`CREATE TABLE IF NOT EXISTS ${names.cursor} (
 	${CURSOR_KEY} TEXT PRIMARY KEY,
 	${CURSOR_VALUE} TEXT NOT NULL
+)`,
+		`CREATE TABLE IF NOT EXISTS ${names.seamRecords} (
+	${SEAM_RECORD_KEY} TEXT PRIMARY KEY,
+	${SEAM_RECORD_VALUE} TEXT NOT NULL
 )`,
 		`CREATE TABLE IF NOT EXISTS ${names.writer} (
 	id INTEGER PRIMARY KEY CHECK (id = 0),
@@ -287,6 +323,7 @@ export function dropSchemaStatements(declarations: Iterable<EntityDeclaration>, 
 	sql.push(
 		`DROP TABLE IF EXISTS ${names.blocks}`,
 		`DROP TABLE IF EXISTS ${names.cursor}`,
+		`DROP TABLE IF EXISTS ${names.seamRecords}`,
 		`DROP TABLE IF EXISTS ${names.writer}`,
 	);
 	return sql.map((statement) => ({sql: statement, args: []}));

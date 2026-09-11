@@ -155,7 +155,7 @@ describe('dropping one generation state', () => {
 		const after = await namesIn(db);
 
 		// exactly the successor's: its two entity tables, its `_blocks`, its
-		// `_cursor`, and every index derived from them
+		// `_cursor`, its `_seam`, and every index derived from them
 		expect(before.filter((name) => !after.includes(name)).sort()).toEqual(
 			[
 				'_genB_account_history',
@@ -165,6 +165,7 @@ describe('dropping one generation state', () => {
 				'_genB_blocks',
 				'_genB_blocks_timestamp',
 				'_genB_cursor',
+				'_genB_seam',
 				'_genB_token_history',
 				'_genB_token_lower',
 				'_genB_token_open',
@@ -206,6 +207,7 @@ describe('with NO namespace configured', () => {
 			'_blocks',
 			'_blocks_timestamp',
 			'_cursor',
+			'_seam',
 			'_token_history',
 			'_token_lower',
 			'_token_open',
