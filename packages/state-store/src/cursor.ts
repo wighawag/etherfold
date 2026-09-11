@@ -50,7 +50,19 @@
  * store's rows came from, so it cannot claim history it never received) and
  * `RETENTION_ENFORCEMENT_KEY` (`enforcement.ts` -- the floor the last prune
  * pass ran at, so a store pruned before the process died does not come back
- * saying never). A caller choosing its own key should avoid those two.
+ * saying never), plus `WRITER_CLAIM_KEY` (`store.ts`) for the claim itself.
+ * A caller choosing its own key should avoid those three.
+ *
+ * **The rule is a CONVENTION, and an attempt to enforce it establishes why.**
+ * Refusing these keys on the writable handle looks like the obvious guard and
+ * breaks bootstrap: `openSnapshotAware` composes ABOVE the claim in the real
+ * boot path (`openAndBootstrap` claims, then wraps), so the snapshot layer
+ * writes its own marker THROUGH the same handle a caller holds, and no runtime
+ * boundary there tells the seam's writes from a caller's. Enforcing it needs a
+ * separate internal port for the seam's own facts rather than a check on the
+ * public verb, which is a design rather than a guard. Until then the collision
+ * is silent: an app that stores its position under `snapshotOrigin` overwrites
+ * the marker, and the store then answers historical reads it has no rows for.
  */
 
 /**
