@@ -22,6 +22,24 @@ import type {WireContext} from './types.js';
 export type RetryableError = Error & {readonly retryable: boolean};
 
 /**
+ * Whether waiting could turn this failure into a success.
+ *
+ * The one place that reads the flag, so that "anything without the property is
+ * retried" is decided once rather than in each loop that asks. Structural on
+ * purpose (see `RetryableError`): an error that crossed a package boundary from
+ * a second copy of this module still classifies correctly, and so does one from
+ * a package that declares the flag without importing this type -- which is what
+ * `@etherfold/state-store` does, having no dependencies at all.
+ *
+ * Every driver that retries on a timer owes its errors this question. A loop
+ * that does not ask it turns a permanent refusal into an infinite retry, which
+ * is silent: the work is re-attempted for ever and nothing reports a failure.
+ */
+export function isRetryable(error: unknown): boolean {
+	return (error as RetryableError | undefined)?.retryable !== false;
+}
+
+/**
  * A store that refused a write because it is FULL.
  *
  * The one cache failure whose remedy is DELETION rather than patience: every

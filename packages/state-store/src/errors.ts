@@ -53,6 +53,29 @@ export abstract class BlockUnavailableError extends Error {}
  * address that resolves to no recorded block is the other thing entirely, and
  * stays `NoSuchBlockError`.
  */
+export class StoreWriteRefusedError extends Error {
+	readonly name = 'StoreWriteRefusedError';
+
+	/**
+	 * Waiting cannot turn this into a success, and that is the whole point of the
+	 * flag.
+	 *
+	 * Every refusal wearing this name says the write is wrong ABOUT THE STORE it
+	 * was offered to -- a height already recorded, a hash already recorded, a
+	 * height the tip has passed -- and the store does not move on its own, so the
+	 * identical offer is refused identically for ever. Read structurally
+	 * (`err.retryable === false`); see `StoreWriterChangedError` for why the flag
+	 * is a bare property rather than an imported type.
+	 *
+	 * Deliberately NOT the same thing as `StoreWriterChangedError`, which is also
+	 * non-retryable but means the opposite: that one says the caller LOST A RACE
+	 * and should become a reader, this one says the CALLER IS WRONG and should
+	 * revert before applying, or stop. Two non-retryable refusals with two
+	 * remedies.
+	 */
+	readonly retryable = false;
+}
+
 export class InvalidBlockNumberError extends TypeError {
 	readonly name = 'InvalidBlockNumberError';
 
@@ -144,6 +167,19 @@ export class BlockNotRetainedError extends BlockUnavailableError {
  */
 export class StoreWriterChangedError extends Error {
 	readonly name = 'StoreWriterChangedError';
+
+	/**
+	 * Waiting cannot turn this into a success, so a loop that retries on a timer
+	 * must not retry THIS.
+	 *
+	 * Read structurally (`err.retryable === false`) by hosts, which is why the flag
+	 * is a plain property and this package imports nothing to declare it: an error
+	 * crossing a package boundary still classifies correctly. A claim is never
+	 * re-minted for a writer that lost it, so every later mutation is refused
+	 * identically -- a driver that re-armed a timer here would fetch a chain for
+	 * ever in order to be refused by every write it made.
+	 */
+	readonly retryable = false;
 
 	constructor(
 		/** Which mutating path was refused, e.g. `applyBlock`. */

@@ -1,6 +1,8 @@
 import {
 	assertListingLimit,
 	assertRetained,
+	blockAlreadyRecorded,
+	blockHashAlreadyRecorded,
 	blockNotAboveTip,
 	boundedListing,
 	idValues,
@@ -301,16 +303,11 @@ export class IndexedDBStateStore implements StateStoreBackend {
 
 		const recorded = (await request(blocks.get(block.number))) as BlockRecord | undefined;
 		if (recorded) {
-			throw abort(
-				tx,
-				settled,
-				`block ${block.number} is already recorded: applying the same block twice is a caller bug, ` +
-					`and a reorged height must be reverted before its replacement is applied.`,
-			);
+			throw abort(tx, settled, blockAlreadyRecorded(block.number));
 		}
 		const claimed = await request(blocks.index(HASH_INDEX).getKey(hash));
 		if (claimed !== undefined) {
-			throw abort(tx, settled, `block hash ${hash} is already recorded, at height ${String(claimed)}.`);
+			throw abort(tx, settled, blockHashAlreadyRecorded(hash, claimed as number));
 		}
 		// AFTER the two above, so the ordinary caller bug -- re-applying a block --
 		// keeps the message that names it, and this one answers the case those cannot:

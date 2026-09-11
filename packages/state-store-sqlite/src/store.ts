@@ -371,7 +371,7 @@ export class VersionedStateStore implements StateStoreBackend {
 			...statements,
 		]);
 		const tip = results[0]?.results[0]?.number;
-		if (tip !== undefined && block.number <= tip) throw new Error(blockNotAboveTip(block.number, tip));
+		if (tip !== undefined && block.number <= tip) throw blockNotAboveTip(block.number, tip);
 	}
 
 	/** The opaque string last written under `key`, or `undefined`. See `cursor.ts`. */
@@ -446,7 +446,7 @@ export class VersionedStateStore implements StateStoreBackend {
 		]);
 		const tip = opening[0]?.results[0]?.number;
 		const lowest = updates[0].block.number;
-		if (tip !== undefined && lowest <= tip) throw new Error(blockNotAboveTip(lowest, tip));
+		if (tip !== undefined && lowest <= tip) throw blockNotAboveTip(lowest, tip);
 
 		for (const batch of batches) {
 			await this.sendGuarded('applyBlocks', guard, batch);

@@ -24,6 +24,7 @@ import type {
 import {
 	checkTxInclusion as checkTxInclusionAgainst,
 	installStreamSeed,
+	isRetryable,
 	openIndexer,
 	openMemoryGenerationRegistry,
 	resolveStreamConfig,
@@ -1291,13 +1292,21 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	}
 
 	/**
-	 * Index to the tip, retrying a transient failure on a timer -- and STOPPING on a
-	 * demotion, which is not one.
+	 * Index to the tip, retrying a TRANSIENT failure on a timer -- and stopping on
+	 * everything else.
 	 *
 	 * The distinction is the whole reason `whileWriting` exists here: this loop
 	 * swallows failures and comes back a second later, which is right for a rate
-	 * limit and catastrophic for a refusal that will be repeated for ever. A demoted
-	 * run answers `undefined` and returns; `syncing.demotion` says why.
+	 * limit and catastrophic for a refusal that will be repeated for ever.
+	 *
+	 * There are two kinds of "else" and they leave by different doors. A DEMOTED run
+	 * answers `undefined` and returns; `syncing.demotion` says why. A NON-RETRYABLE
+	 * refusal (`isRetryable`, read structurally off the error) is re-thrown to the
+	 * caller, because it is neither transient nor a lost race: the store is telling
+	 * this writer that the write itself is wrong -- a height the tip has passed, a
+	 * block already recorded -- and a store does not move on its own, so the same
+	 * offer is refused identically for ever. Swallowing it here is what turned a
+	 * permanent refusal into a silent infinite re-fetch.
 	 */
 	async function indexToLatest(): Promise<LastSync<ABI> | undefined> {
 		let lastSync: LastSync<ABI> | undefined;
@@ -1313,6 +1322,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				return advanceOnce();
 			});
 		} catch (err) {
+			if (!isRetryable(err)) {
+				throw err;
+			}
 			return new Promise((resolve) => {
 				setTimeout(async () => {
 					const result = await indexToLatest();
@@ -1335,6 +1347,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				}
 				lastSync = advanced;
 			} catch (err) {
+				if (!isRetryable(err)) {
+					throw err;
+				}
 				await new Promise((resolve) => {
 					setTimeout(resolve, 1000);
 				});
@@ -1493,6 +1508,32 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				indexingTimeout = setTimeout(_auto_index, 1);
 			}
 		} catch (err) {
+			if (!isRetryable(err)) {
+				// NOT RE-ARMED, and this is the one branch that must not be a retry.
+				//
+				// The error says waiting cannot help: the store refused this write because
+				// the write is wrong about the store (a height its tip has passed, a block
+				// already recorded), and a store does not move on its own. Re-arming here
+				// re-fetches the whole range from the node every cycle in order to be
+				// refused identically, for ever, with the cursor pinned where it was --
+				// work that is invisible because each attempt merely fails again.
+				//
+				// It is deliberately NOT a demotion: that means "you lost a race, become a
+				// reader", while this means "the caller is wrong, revert first or stop".
+				// Both stop the loop, and an app must be able to tell them apart, so this
+				// one leaves `syncing.demotion` alone and reports through `syncing.error`.
+				namedLogger.error(
+					`STOPPED auto-indexing: the store refused a write and waiting cannot change that, so the loop is not ` +
+						`re-armed. Fix what is being offered (a reorged height must be REVERTED before its replacement is ` +
+						`applied) and start indexing again.`,
+					err,
+				);
+				setSyncing({
+					autoIndexing: false,
+					error: {message: (err as Error)?.message ?? String(err), id: 'WriteRefused'},
+				});
+				return;
+			}
 			namedLogger.error('ERROR, retry in 1 seconds', err);
 			indexingTimeout = setTimeout(_auto_index, autoIndexingInterval * 1000);
 			return;

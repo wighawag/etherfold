@@ -2,11 +2,11 @@ import type {Abi} from 'abitype';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import {
+	isRetryable,
 	NoFetchProgressError,
 	SuspectedTruncationError,
 	UnexpectedChainError,
 	WireContextMismatchError,
-	type RetryableError,
 } from './errors.js';
 import {LogEventFetcher} from './internal/decoding/LogEventFetcher.js';
 import {getBlockNumber, getChainId} from './internal/engine/ethereum.js';
@@ -185,19 +185,6 @@ export type FetchCycleOutcome =
 			latestBlock: number;
 			corrections: number;
 	  };
-
-/**
- * Whether waiting could help, asked of the ERROR rather than of a list kept here.
- *
- * Structural on purpose (`retryable === false`, not `instanceof`), so an error
- * that crossed a package boundary from a second copy of `@etherfold/core` still
- * classifies correctly. Anything without the property is retried, which is the
- * right default for the errors this package did NOT throw: a node's JSON-RPC
- * error, a dropped socket, a `fetch` rejection.
- */
-function isRetryable(error: unknown): boolean {
-	return (error as RetryableError | undefined)?.retryable !== false;
-}
 
 /**
  * WHERE the suspect result count in force came from, which is what lets an

@@ -3,6 +3,8 @@ import {
 	assertRetained,
 	assertFinalityDepth,
 	BlockNotRetainedError,
+	blockAlreadyRecorded,
+	blockHashAlreadyRecorded,
 	blockNotAboveTip,
 	boundedListing,
 	compareIds,
@@ -222,19 +224,16 @@ export class PatchStateStore implements StateStoreBackend {
 	async applyBlock(block: BlockPointer, mutations: readonly Mutation[] = [], cursor?: CursorWrite): Promise<void> {
 		const hash = normalizeBlockHash(block.hash);
 		if (this.blocks.has(block.number)) {
-			throw new Error(
-				`block ${block.number} is already recorded: applying the same block twice is a caller bug, ` +
-					`and a reorged height must be reverted before its replacement is applied.`,
-			);
+			throw blockAlreadyRecorded(block.number);
 		}
 		if (this.hashes.has(hash)) {
-			throw new Error(`block hash ${hash} is already recorded, at height ${this.hashes.get(hash)}.`);
+			throw blockHashAlreadyRecorded(hash, this.hashes.get(hash));
 		}
 		// AFTER the two above, so the ordinary caller bug -- re-applying a block --
 		// keeps the message that names it, and this one answers the case that message
 		// cannot: a height the tip has passed and nothing ever recorded.
 		if (this.tip !== undefined && block.number <= this.tip) {
-			throw new Error(blockNotAboveTip(block.number, this.tip));
+			throw blockNotAboveTip(block.number, this.tip);
 		}
 
 		const planned = mutations.map((mutation) => {
