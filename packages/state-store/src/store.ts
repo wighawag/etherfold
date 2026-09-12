@@ -1,3 +1,4 @@
+import {StoreClaimAbandonedError} from './errors.js';
 import type {StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import type {RetentionEnforcement} from './enforcement.js';
@@ -367,6 +368,19 @@ export interface WritableStateStore extends StateStoreBackend {
  */
 const claims = new WeakMap<StateStoreBackend, Promise<WritableStateStore>>();
 
+/** How a caller bounds `openForWriting`. See the note there on why there is no default. */
+export type OpenForWritingOptions = {
+	/**
+	 * Stop waiting for the claim when this aborts, and reject with
+	 * `StoreClaimAbandonedError`.
+	 *
+	 * `AbortSignal.timeout(ms)` is the common case. The claim itself is not
+	 * cancelled -- there is nothing to cancel it with -- so this bounds the CALLER,
+	 * not the storage.
+	 */
+	readonly signal?: AbortSignal;
+};
+
 /**
  * CLAIM a store, and get back the handle that may write to it.
  *
@@ -389,9 +403,35 @@ const claims = new WeakMap<StateStoreBackend, Promise<WritableStateStore>>();
  * (`StoreWriterChangedError`), and it is refused from the moment this call
  * returns rather than from the moment this writer gets round to writing.
  *
- * **It does not block and it does not wait.** There is no queue and no lease: a
- * loser is not waiting its turn, it has lost. A writer whose claim is taken
+ * **It does not QUEUE and it does not wait its turn.** There is no lease: a loser
+ * is not waiting behind anybody, it has lost. A writer whose claim is taken
  * learns so on its next mutation and demotes itself to a reader.
+ *
+ * It does, however, await ONE round trip to the storage -- the mutation that
+ * takes the claim -- and a storage that never answers makes this call hang. That
+ * is not hypothetical: on WebKit a database can be left permanently unable to run
+ * any transaction, in which case the clear never settles and an application sits
+ * with nothing to render and nothing to act on
+ * (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+ * Hand a `signal` to bound it:
+ *
+ * ```ts
+ * try {
+ *   const store = await openForWriting(backend, {signal: AbortSignal.timeout(10_000)});
+ * } catch (error) {
+ *   if (error instanceof StoreClaimAbandonedError) {
+ *     // the storage did not answer. Render something; offer a rebuild.
+ *   }
+ * }
+ * ```
+ *
+ * **The bound is the caller's and never this seam's.** No timeout is invented
+ * here and none is defaulted, because there is no number that is right for a
+ * cold mobile browser, a contended database and a server at once, and because
+ * turning "slow" into "failed" on a guess is how a working deployment acquires a
+ * mystery. What abandoning does NOT do is cancel the claim: the mutation was
+ * issued and may still commit, so a later `openForWriting` on the same store
+ * joins the same attempt rather than issuing a second one.
  *
  * ## It is IDEMPOTENT per store instance, and that is load-bearing
  *
@@ -421,19 +461,58 @@ const claims = new WeakMap<StateStoreBackend, Promise<WritableStateStore>>();
  * already says it does -- build a NEW store and open that, which forces the
  * re-read correctness wants anyway.
  */
-export function openForWriting(store: StateStoreBackend): Promise<WritableStateStore> {
+export function openForWriting(
+	store: StateStoreBackend,
+	options: OpenForWritingOptions = {},
+): Promise<WritableStateStore> {
 	const claimed = claims.get(store);
-	if (claimed !== undefined) return claimed;
+	const claiming =
+		claimed ??
+		claim(store).catch((error: unknown) => {
+			// a claim that never landed is not a claim, so the next open tries again.
+			// A claim that landed and was later TAKEN is a different thing and stays
+			// refused: the backend, not this map, is what remembers that.
+			claims.delete(store);
+			throw error;
+		});
+	if (claimed === undefined) claims.set(store, claiming);
+	// The signal is applied PER CALL rather than to the shared attempt, so one
+	// caller giving up never shortens another's wait -- and so a second open of a
+	// store whose first claim is still in flight can bound itself too.
+	return options.signal ? untilAbandoned(claiming, options.signal) : claiming;
+}
 
-	const claiming = claim(store).catch((error: unknown) => {
-		// a claim that never landed is not a claim, so the next open tries again.
-		// A claim that landed and was later TAKEN is a different thing and stays
-		// refused: the backend, not this map, is what remembers that.
-		claims.delete(store);
-		throw error;
+/**
+ * Race the claim against the caller's signal, and leave the claim alone.
+ *
+ * The underlying attempt is NOT cancelled -- IndexedDB has nothing to cancel a
+ * committed-or-not mutation with, and a claim that lands later is a claim. What
+ * this does is stop the CALLER waiting, and swallow the eventual rejection of an
+ * attempt nobody is listening to any more, which would otherwise surface as an
+ * unhandled rejection in every runtime this ships to.
+ */
+function untilAbandoned(claiming: Promise<WritableStateStore>, signal: AbortSignal): Promise<WritableStateStore> {
+	if (signal.aborted) {
+		claiming.catch(() => undefined);
+		return Promise.reject(new StoreClaimAbandonedError(signal.reason));
+	}
+	return new Promise<WritableStateStore>((resolve, reject) => {
+		const abandon = () => {
+			claiming.catch(() => undefined);
+			reject(new StoreClaimAbandonedError(signal.reason));
+		};
+		signal.addEventListener('abort', abandon, {once: true});
+		claiming.then(
+			(handle) => {
+				signal.removeEventListener('abort', abandon);
+				resolve(handle);
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', abandon);
+				reject(error);
+			},
+		);
 	});
-	claims.set(store, claiming);
-	return claiming;
 }
 
 async function claim(store: StateStoreBackend): Promise<WritableStateStore> {

@@ -238,6 +238,54 @@ export class StoreWriterChangedError extends Error {
 	}
 }
 
+/**
+ * Thrown by `openForWriting` when the CALLER stopped waiting for the claim.
+ *
+ * Not a lost race and not a caller bug: the claim was issued and the storage has
+ * not answered. It is the only refusal this seam has that says nothing about who
+ * holds the store, because nobody knows -- the question was abandoned rather
+ * than answered.
+ *
+ * It exists because a claim CAN hang, which is a fact that was learned rather
+ * than designed for: on WebKit, a database can be left permanently unable to run
+ * any transaction, so `clearSeamRecord` never settles and a claim never returns
+ * (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+ * An application that waits for ever has nothing to render and nothing to act
+ * on, which is the outcome ADR-0082 refuses everywhere else.
+ */
+export class StoreClaimAbandonedError extends Error {
+	readonly name = 'StoreClaimAbandonedError';
+
+	/**
+	 * Waiting longer MIGHT work, so unlike the other two refusals here this one is
+	 * retryable.
+	 *
+	 * Read structurally (`err.retryable === true`), like the others. It is true
+	 * because abandoning proves nothing about the storage: a slow open, a
+	 * contended database and a permanently wedged one are indistinguishable from
+	 * the outside, and only the first two are helped by asking again. A caller that
+	 * retries should bound each attempt and give up after a few, rather than retry
+	 * on a timer for ever.
+	 */
+	readonly retryable = true;
+
+	constructor(
+		/** What the caller was told the wait was abandoned for, if it said. */
+		readonly reason?: unknown,
+		message?: string,
+	) {
+		super(
+			message ??
+				`the writer claim was abandoned before the store answered, so this handle may NOT write and nothing ` +
+					`was written. The claim itself was issued and may still land; what is known is only that the storage ` +
+					`had not answered when the caller stopped waiting. A store that never answers is not always ` +
+					`recoverable -- on some engines a database can be left unable to run any transaction, which no reload ` +
+					`clears -- so an application that meets this repeatedly should offer its user a rebuild into a ` +
+					`different database rather than retry for ever.`,
+		);
+	}
+}
+
 /** A value in a message, without `JSON.stringify` throwing on a BigInt or a cycle. */
 function describeValue(value: unknown): string {
 	if (typeof value === 'bigint') return `${value}n`;
