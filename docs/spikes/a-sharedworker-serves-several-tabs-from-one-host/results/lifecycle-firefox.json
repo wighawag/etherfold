@@ -1,12 +1,11 @@
 {
   "project": "firefox",
-  "ranAt": "2026-09-12T06:48:51.984Z",
   "attached": [
     {
       "scope": "SharedWorkerGlobalScope",
       "tabScope": "Window",
       "host": "shared-worker",
-      "instance": "53rzw1",
+      "instance": "host-1",
       "fetched": [
         {
           "from": 100,
@@ -42,7 +41,7 @@
       "scope": "SharedWorkerGlobalScope",
       "tabScope": "Window",
       "host": "shared-worker",
-      "instance": "53rzw1",
+      "instance": "host-1",
       "fetched": [
         {
           "from": 100,
@@ -78,7 +77,7 @@
   "finished": {
     "scope": "SharedWorkerGlobalScope",
     "host": "shared-worker",
-    "instance": "53rzw1",
+    "instance": "host-1",
     "fetched": [
       {
         "from": 100,
@@ -112,7 +111,7 @@
     "scope": "SharedWorkerGlobalScope",
     "tabScope": "Window",
     "host": "shared-worker",
-    "instance": "948syg",
+    "instance": "host-2",
     "fetched": [
       {
         "from": 102,

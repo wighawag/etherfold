@@ -1,6 +1,5 @@
 {
   "project": "firefox",
-  "ranAt": "2026-09-12T06:48:52.444Z",
   "results": {
     "tabScope": "Window",
     "shared": {
@@ -67,15 +66,5 @@
         ]
       }
     }
-  },
-  "timings": [
-    {
-      "label": "shared",
-      "ms": 63
-    },
-    {
-      "label": "dedicated",
-      "ms": 2
-    }
-  ]
+  }
 }

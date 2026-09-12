@@ -1,12 +1,11 @@
 {
   "project": "chromium",
-  "ranAt": "2026-09-12T06:48:46.658Z",
   "tabs": [
     {
       "scope": "SharedWorkerGlobalScope",
       "tabScope": "Window",
       "host": "shared-worker",
-      "instance": "l175iz",
+      "instance": "host-1",
       "fetched": [
         {
           "from": 100,
@@ -47,7 +46,7 @@
       "scope": "SharedWorkerGlobalScope",
       "tabScope": "Window",
       "host": "shared-worker",
-      "instance": "l175iz",
+      "instance": "host-1",
       "fetched": [
         {
           "from": 100,
@@ -88,7 +87,7 @@
   "other": {
     "scope": "SharedWorkerGlobalScope",
     "host": "shared-worker",
-    "instance": "lrggbk",
+    "instance": "host-2",
     "lastToBlock": 105,
     "transfers": 5
   }

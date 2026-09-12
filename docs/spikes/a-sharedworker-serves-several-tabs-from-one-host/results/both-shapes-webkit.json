@@ -1,6 +1,5 @@
 {
   "project": "webkit",
-  "ranAt": "2026-09-12T06:48:56.747Z",
   "results": {
     "tabScope": "Window",
     "shared": {
@@ -67,15 +66,5 @@
         ]
       }
     }
-  },
-  "timings": [
-    {
-      "label": "shared",
-      "ms": 59
-    },
-    {
-      "label": "dedicated",
-      "ms": 2
-    }
-  ]
+  }
 }

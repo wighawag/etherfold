@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {expect, test} from '@playwright/test';
-import {mountHarness} from 'playwright-browser-harness';
+import {mountHarness} from './harness.js';
 import {BRANCH_A_TIP, EXPECTED_A, START_BLOCK, type FetchedRange} from './workload.js';
 
 /**
@@ -60,11 +60,55 @@ function tag(name: string): string {
 	return `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * WHAT A RECORDED RESULT DELIBERATELY DOES NOT CARRY: anything that changes when
+ * the same behaviour happens twice.
+ *
+ * These files are COMMITTED, so every value in them is either evidence or churn.
+ * A wall-clock stamp and the host's random `instance` id are churn: they made an
+ * ordinary `pnpm test:browser` rewrite all nine files, leaving an unrelated dirty
+ * tree that a later `git add -A` would sweep into somebody else's commit.
+ *
+ * The stamp is simply dropped -- git already records when a file changed, and it
+ * records it more honestly than the file can record itself.
+ *
+ * The instance ids are NOT dropped, because they are the whole evidence: two tabs
+ * reporting the SAME one is what "one host serves several tabs" means, and a
+ * third reporting a DIFFERENT one is what says the first pair were not simply the
+ * only host there was. So each distinct id is replaced by a stable label in order
+ * of first appearance (`host-1`, `host-2`, ...). The relation is preserved
+ * exactly; only the entropy is gone, so a re-run of the same behaviour produces a
+ * byte-identical file and a real behavioural change still shows up as a diff.
+ */
+function stabilise(body: unknown): unknown {
+	const labels = new Map<string, string>();
+	const label = (id: string) => {
+		const existing = labels.get(id);
+		if (existing) return existing;
+		const next = `host-${labels.size + 1}`;
+		labels.set(id, next);
+		return next;
+	};
+	const walk = (value: unknown): unknown => {
+		if (Array.isArray(value)) return value.map(walk);
+		if (value && typeof value === 'object') {
+			return Object.fromEntries(
+				Object.entries(value as Record<string, unknown>).map(([key, inner]) => [
+					key,
+					key === 'instance' && typeof inner === 'string' ? label(inner) : walk(inner),
+				]),
+			);
+		}
+		return value;
+	};
+	return walk(body);
+}
+
 function record(name: string, project: string, body: unknown): void {
 	fs.mkdirSync(RESULTS, {recursive: true});
 	fs.writeFileSync(
 		path.join(RESULTS, `${name}-${project}.json`),
-		JSON.stringify({project, ranAt: new Date().toISOString(), ...(body as object)}, null, 2),
+		`${JSON.stringify({project, ...(stabilise(body) as object)}, null, 2)}\n`,
 	);
 }
 
@@ -295,7 +339,11 @@ test('one entry point serves both hosting shapes, and app code cannot tell them 
 	const harness = await mountHarness(page, {cut: CUT, worker: WORKER, coi: false});
 	try {
 		const run = await harness.run({phase: 'once', params: {case: 'shared-both-shapes', tag: tag('both-shapes')}});
-		record('both-shapes', testInfo.project.name, {results: run.results, timings: run.timings});
+		// The TIMINGS are deliberately not recorded. Nothing asserts them, and a
+		// wall-clock duration in a COMMITTED file changes on every run by definition,
+		// so it would reintroduce exactly the churn `stabilise` exists to remove. They
+		// remain in the run's own output for anyone debugging a slow shape.
+		record('both-shapes', testInfo.project.name, {results: run.results});
 
 		expect(run.errors).toEqual([]);
 		const shared = run.results.shared as {host: string; scope: string; seen: Record<string, unknown>};

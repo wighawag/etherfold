@@ -1,6 +1,5 @@
 {
   "project": "chromium",
-  "ranAt": "2026-09-12T06:48:47.448Z",
   "results": {
     "tabScope": "Window",
     "shared": {
@@ -67,15 +66,5 @@
         ]
       }
     }
-  },
-  "timings": [
-    {
-      "label": "shared",
-      "ms": 46.799999952316284
-    },
-    {
-      "label": "dedicated",
-      "ms": 1.7000000476837158
-    }
-  ]
+  }
 }
