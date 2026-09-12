@@ -1,6 +1,6 @@
 {
 	"name": "etherfold",
-	"version": "0.7.0",
+	"version": "1.0.0",
 	"description": "The etherfold command line: `run` follows a chain, folds a processor into a libSQL database and answers HTTP in one process; `build` is the same one shot, exiting at the tip; `fetch` is the chain-facing half, pushing raw logs to a server elsewhere; `index` receives those pushes and owns the database; `serve` answers queries over a database written elsewhere.",
 	"license": "MIT",
 	"repository": {

@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/state-store",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "The backend-agnostic state-store contract: entity declarations, the mutation context a handler writes through, the interface a versioned store implements, and the capabilities it declares.",
 	"publishConfig": {
 		"access": "public"
