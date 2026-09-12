@@ -2,7 +2,7 @@
 
 Index a chain **in the tab**, with no server and no database to provision, and publish the result as observable stores a UI can subscribe to.
 
-It is [`@etherfold/core`](https://github.com/wighawag/etherfold/tree/main/packages/core) plus the three things a browser application needs on top of the engine: a place for the state to live that survives a reload, a loop that keeps indexing, and stores that tell a component when to re-read.
+It is [`@etherfold/core`](https://github.com/wighawag/etherfold/tree/main/packages/core) plus the four things a browser application needs on top of the engine: a place for the state to live that survives a reload, a loop that keeps indexing, a **host** to run that loop somewhere that is not the UI thread, and a typed **port** a tab holds onto it.
 
 ## When you want this package
 
@@ -13,18 +13,95 @@ It is [`@etherfold/core`](https://github.com/wighawag/etherfold/tree/main/packag
 | writing the processor itself | [`@etherfold/processor-entities`](https://github.com/wighawag/etherfold/tree/main/packages/processor-entities) |
 | driving the engine yourself, in a runtime with no adapter | [`@etherfold/core`](https://github.com/wighawag/etherfold/tree/main/packages/core) |
 
-## Minimal usage
+## Where the indexer runs: three hosting shapes
 
-Two lines beyond the processor. The first names WHERE the state lives, which is the only deployment decision here; the second wires the hook. You hand over the two FACTORIES rather than their results: an indexer holds any number of **generations** (a stream plus a fold over it), one of which is canonical and answers every read, and each folds into its own state — so the hook is what calls these, once per generation.
+Indexing is a fold over every log a contract ever emitted — on the real measured workload, 31,332 events across 1,042 blocks, at 45.6 ms per block of store writes on Chromium. So WHERE it runs is the first decision, and it is a deployment choice rather than a rewrite: a **host** owns the container, the store and the loop, a tab holds a typed **port** to it, and the three shapes differ ONLY in how that port is obtained ([ADR-0082](https://github.com/wighawag/etherfold/blob/main/docs/adr/0082-the-indexer-is-hosted-and-a-tab-holds-a-port-to-its-host.md)). **The code you write against the port is identical across all three.**
+
+| shape | how a port is obtained | pick it when |
+| --- | --- | --- |
+| **dedicated worker** (the default) | `dedicatedWorkerHost(() => new Worker(…))` | almost always |
+| SharedWorker | `sharedWorkerHost(() => new SharedWorker(…))` | several tabs of one app should share one fold |
+| main thread | `createIndexerState(…).mainThreadHost()` | tests, a small backfill, or a bundler that cannot emit a worker |
+
+### The default: a dedicated worker
+
+You write two short files. The worker entry imports the processor — a processor is code and closures, so it can never cross a `postMessage` — and the tab holds a port.
+
+```ts
+// indexer.worker.ts — the one file your app writes for this
+import {createBrowserStateStore, hostIndexerInThisWorker} from '@etherfold/browser';
+import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
+import {myProcessor, source, provider} from './my-app.js';
+
+hostIndexerInThisWorker({
+	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024).
+	// `openForWriting` is what makes the HOST the writer of that store, and every tab a
+	// reader: building a store and claiming it are two acts (ADR-0077).
+	createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'})),
+	createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
+	provider, // an EIP-1193 provider is an object with methods, so it is built HERE
+	source: {chainId: '11155111', contracts: [{abi, address: '0x…', startBlock: 3040661}]},
+	config: {stream: {finality: 12}},
+});
+```
+
+```ts
+// the tab
+import {connectToIndexerHost, createPortReadSurface, dedicatedWorkerHost} from '@etherfold/browser';
+import {myProcessor} from './my-app.js';
+
+const indexer = connectToIndexerHost(
+	// the URL must be a literal your bundler can trace, which is what keeps the
+	// processor type-checked and de-duplicated with the rest of your app
+	dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+);
+
+// TYPED reads over the port, generated from the declarations you already wrote,
+// with no query runtime loaded at all
+const reads = createPortReadSurface(indexer, myProcessor.entities);
+render((await reads.counter.getCurrent({name: 'transfers'}))?.value ?? 0);
+
+// status is PUSHED, not polled: the host posts when a batch LANDED or the phase moved
+indexer.onProgress(({phase, blocksBehindTip}) => {
+	banner.textContent = phase === 'at-tip' ? 'live' : `syncing, ${blocksBehindTip} blocks behind`;
+});
+```
+
+The host starts folding as soon as it exists. `startIndexing()` / `stopIndexing()` turn the driver off and on from the tab (a stopped host still answers reads), `reconfigure({source})` folds a new source in a generation beside the live one, and `checkTxInclusion(...)` answers the optimistic-update question. A worker the browser evicts is an expected event with a defined outcome: the port TELLS you (`onHostDeath`), rejects every call in flight with an `IndexerHostDiedError` rather than hanging, starts another host, and the fold resumes from the cursor.
+
+`createProgressReadable(indexer)` is the small reactive wrapper over the pushed signal, for the app that just wants a progress bar.
+
+### A SharedWorker
+
+The same entry point with one word changed (`hostIndexerInThisSharedWorker`), and `sharedWorkerHost(() => new SharedWorker(url, {type: 'module', name: 'my-app-indexer'}))` in the tab. It wins one store connection and no election at all, and pays for it: no devtools panel (it needs `chrome://inspect`), no `terminate()`, and every tab's reads funnel through the one instance instead of parallelising across a worker per tab. **Name it** — the name is half of a SharedWorker's identity, the script URL being the other half, which is what keeps two apps on one origin apart with nothing to configure.
+
+### The main thread
+
+`createIndexerState` IS the main-thread host — not a second way of doing the same thing. It owns the container, opens the store for writing and runs the loop, so `indexer.mainThreadHost()` joins a wire to the host that is already there rather than constructing another one.
+
+**What it costs is the fold on your UI thread**, which is the whole reason a dedicated worker is the default: 45.6 ms per block of store writes is jank in an app that is also trying to render. It is the right shape for tests (an in-process path is needed regardless), for a backfill small enough that nobody notices, and for a build that cannot emit a worker.
+
+```ts
+const indexer = createIndexerState({createState, createProcessor});
+await indexer.init({provider, source, config: {stream: {finality: 12}}});
+await indexer.startAutoIndexing();
+
+// the SAME port surface the two worker shapes offer, over a real MessageChannel:
+// what could not cross to a worker does not cross here either
+const port = connectToIndexerHost(indexer.mainThreadHost(), {watch: false});
+```
+
+Pass `{watch: false}`: a host on this thread cannot die independently of the tab holding the port, so the liveness probe has nothing to find.
+
+## The hook the main-thread host publishes
+
+The main-thread host is also a hook, and an app that runs there can subscribe to it directly instead of holding a port. You hand over the two FACTORIES rather than their results: an indexer holds any number of **generations** (a stream plus a fold over it), one of which is canonical and answers every read, and each folds into its own state — so the hook is what calls these, once per generation.
 
 ```ts
 import {createBrowserStateStore, createIndexerState} from '@etherfold/browser';
 import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 
 const indexer = createIndexerState({
-	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024).
-	// `openForWriting` is what makes this tab the WRITER of that store: building a store
-	// and claiming it are two acts, and only a claimed store can be folded into (ADR-0077).
 	createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'})),
 	createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
 });
@@ -48,6 +125,8 @@ await indexer.startAutoIndexing(); // or call indexMoreAndCatchupIfNeeded() on e
 ```
 
 `indexMore`, `indexToLatest` and `indexMoreAndCatchupIfNeeded` are the manual forms; calling one of them on every `newHeads` message is better than a timer. `.withHooks(react)` turns the three observables into React hooks (`useState`, `useSyncing`, `useStatus`); the stores are otherwise plain `subscribe` + `$state`, so Svelte and a hand-rolled loop both work.
+
+Those three observables are the one thing that does NOT cross a port, deliberately: reproducing a same-thread reactive triple across a boundary is either polling or duplicated state in every tab, so a hosted indexer pushes progress instead and an app builds its own wrapper over the signal.
 
 ## Choosing where the state lives
 
@@ -82,7 +161,7 @@ Both return a `ReconfigureOutcome`: `{stateDiscarded}` for the caller that only 
 
 ## Two more things a browser app tends to need
 
-- **`indexer.checkTxInclusion(...)`** answers whether the state you are about to render already accounts for a transaction. An app laying an OPTIMISTIC update over indexed state needs it: applied on top of state that already contains it, a non-idempotent update is counted twice. Its own receipt cannot answer that, because a reorg can re-include the same transaction in a different block.
+- **`checkTxInclusion(...)`** answers whether the state you are about to render already accounts for a transaction. An app laying an OPTIMISTIC update over indexed state needs it: applied on top of state that already contains it, a non-idempotent update is counted twice. Its own receipt cannot answer that, because a reorg can re-include the same transaction in a different block. It is on the hook and on the port, and the verdict crosses WHOLE — a status AND the basis for it, because `unknown` means keep the optimistic update where an honest `absent` means the fold has looked.
 - **`keepStreamOnIndexedDB(name)`**, passed as `createIndexerState(..., {keepStream})`, caches the raw fetched logs so a state rebuild replays from IndexedDB instead of re-fetching every log. It is an append-only run of segments: a save costs its batch and not the history, and an inconsistent stream is cleared and re-fetched rather than repaired.
 
 ## A second tab takes the store: this one becomes a reader
@@ -94,3 +173,5 @@ It is a state change and not an error: `syncing.demotion` carries `{reason, read
 ## Tests
 
 `pnpm --filter @etherfold/browser test` (vitest, on `fake-indexeddb`) and `pnpm --filter @etherfold/browser test:browser` (playwright, in a real engine).
+
+The three hosting shapes are held to ONE behaviour suite rather than to three test files that agree: `browser/hostingShapes.ts` holds the cases as data, `browser/threeHostingShapes.spec.ts` runs the list against all three in a real browser (which is the only place a `Worker` and a `SharedWorker` exist), and `test/theThreeHostingShapesRunOneImplementation.test.ts` runs the same list against the main-thread shape on every commit.

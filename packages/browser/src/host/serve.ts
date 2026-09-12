@@ -1,7 +1,5 @@
 import type {
 	Abi,
-	GenerationRecord,
-	HeldGeneration,
 	Indexer,
 	IndexingSource,
 	LastSync,
@@ -20,60 +18,37 @@ import {
 	openMemoryGenerationRegistry,
 	sameGeneration,
 } from '@etherfold/core';
-import {
-	declaredRow,
-	mustGet,
-	type Listing,
-	type NormalizedEntity,
-	type StateStore,
-	type WritableStateStore,
-} from '@etherfold/state-store';
+import {type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerState.js';
 import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
-import {assertClonable} from './clone.js';
-import {executionScopeName, listen, type HostAccess} from './endpoint.js';
-import {
-	INDEXER_PORT_PROTOCOL,
-	isPortRequest,
-	type HostGeneration,
-	type HostProgress,
-	type HostReconfigure,
-	type PortCases,
-	type PortPush,
-	type PortRequest,
-	type PortResponse,
-	type PortRow,
-	type SyncPhase,
-} from './envelope.js';
+import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
+import {executionScopeName, type HostAccess} from './endpoint.js';
+import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
 
 const namedLogger = logs('@etherfold/browser');
 
 /**
- * THE HOST: it owns a **container**, DRIVES it, and answers a **port**.
+ * THE WORKER HOSTS' DRIVER: it owns a **container**, DRIVES it, and answers a
+ * **port** through the shared case body.
  *
- * This module is the whole of what runs inside a host, and it knows NOTHING
- * about workers. It is handed a `HostAccess` -- a wire plus the name of the shape
- * that produced it -- and everything else is the same code in every shape, which
- * is the decision ADR-0082 exists to protect ("three hosting shapes ... differ
- * ONLY in how a port is obtained"). `dedicatedWorker.ts` holds the only CODE in
- * this package that names `Worker`, and all that code does is produce one of
- * those accesses.
+ * It knows NOTHING about workers. It is handed a `HostAccess` -- a wire plus the
+ * name of the shape that produced it -- and everything a TAB observes is served
+ * by `cases.ts`, which every shape reaches (ADR-0082: "three hosting shapes ...
+ * differ ONLY in how a port is obtained"). `dedicatedWorker.ts` and
+ * `sharedWorker.ts` hold the only CODE in this package that names a worker
+ * constructor, and all that code does is produce one of those accesses.
  *
  * ## What it is NOT
  *
- * It is not `createIndexerState`, and it does not reach for it. That function is
- * the MAIN-THREAD host and is large: it holds the store bookkeeping, the
- * scheduled prune, the stream-seed install, generation progress, demotion and
- * three reactive stores an app subscribes to. Bringing all of that across in one
- * go would decide six later tasks by accident. So this takes what a CONTAINER
- * needs -- the two generation factories, a provider, a source, a config -- and
- * drives it, and the surfaces arrive one task at a time. The last task in this
- * spec makes `createIndexerState` this shape rather than a second path beside it,
- * which is why the spec it takes is `BrowserGenerationSpec`, the shape that
- * function already takes, rather than a new one.
+ * It is not the MAIN-THREAD host. That one is `createIndexerState`, adapted
+ * (ADR-0082, `mainThread.ts`): a tab that hosts its own indexer already has a
+ * container, an auto-index loop, a scheduled prune, a stream-seed install,
+ * demotion and three reactive stores, and it serves the port from THOSE rather
+ * than opening a second container beside them. What the two share is
+ * `HostBacking` and everything behind it, which is the whole of what crosses.
  */
 
 /**
@@ -151,6 +126,16 @@ export type IndexerHost = {
  * A tab turns it off and on again over the port (`stopIndexing` / `startIndexing`),
  * and stopping the DRIVER never closes the CONTAINER: a stopped host still
  * answers reads from the store its canonical generation folds into.
+ *
+ * ## It is NOT the way to build a main-thread indexer
+ *
+ * It is reached from a WORKER entry point (`hostIndexerInThisWorker`,
+ * `hostIndexerInThisSharedWorker`, both of which refuse to run in a document),
+ * and it is exported so a deployment can write a hosting shape this package does
+ * not ship. Calling it on the UI thread with a wire of your own would open a
+ * SECOND container beside `createIndexerState`, over the same store, and the
+ * first thing anybody would see is a writer being refused (ADR-0075): there is
+ * ONE main-thread path and it is that function, adapted (ADR-0082).
  */
 export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined>(
 	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
@@ -158,6 +143,9 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 ): IndexerHost {
 	const scope = executionScopeName();
 	const tipInterval = spec.tipIntervalInSeconds ?? 4;
+	/** The shared case body, attached below once the backing it serves exists. */
+	let served: {publish(): void; stop(): void} | undefined;
+	const publish = () => served?.publish();
 
 	let container: Indexer<ABI, ProcessResultType> | undefined;
 	let lastSync: LastSync<ABI> | undefined;
@@ -189,17 +177,6 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * cleared at the same moment: when the container is open.
 	 */
 	let phase: SyncPhase = 'waiting';
-	/**
-	 * HOW MANY SUBSCRIPTIONS this endpoint holds, so that nothing is posted to a
-	 * tab that did not ask and a second listener does not silence the first.
-	 *
-	 * A COUNT rather than a flag: a tab's port asks once for its first listener and
-	 * releases once for its last, but a host answers whoever is on its endpoint and
-	 * must not be made incoherent by one that asks twice.
-	 */
-	let subscriptions = 0;
-	/** The last value POSTED, so an unchanged one is not posted again. See `publish`. */
-	let published: HostProgress | undefined;
 
 	/**
 	 * WHICH STORE EACH GENERATION FOLDS INTO, so a read is answered by the
@@ -295,37 +272,6 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		return container?.defaultFromBlock ?? 0;
 	}
 
-	/**
-	 * POST THE PROGRESS, if anybody asked for it and if it MOVED.
-	 *
-	 * Two rules, and both are the push cadence ADR-0082 asks for. It is tied to
-	 * APPLIED WORK because every caller of this is a place the container reported
-	 * an advance or the driver changed phase, and never a timer. And an UNCHANGED
-	 * value is not a change: a host resting at the tip advances every few seconds
-	 * and applies nothing, so posting there would turn the signal into the polling
-	 * it replaced, with the cost merely moved to the other end of the wire.
-	 */
-	function publish(): void {
-		if (disposed || subscriptions === 0) return;
-		const current = progress();
-		if (published && sameProgress(published, current)) return;
-		published = current;
-		const push: PortPush<'progress'> = {
-			protocol: INDEXER_PORT_PROTOCOL,
-			kind: 'push',
-			push: 'progress',
-			value: current,
-		};
-		try {
-			assertClonable(current, `the 'progress' push`);
-			access.endpoint.postMessage(push);
-		} catch (error) {
-			// Nobody is waiting on a push, so there is no call to reject: it is logged
-			// rather than swallowed, so a host that cannot talk is visible in a console.
-			namedLogger.error(`the indexer host could not post its 'progress' push`, error);
-		}
-	}
-
 	/** Move the phase and say so. A move to the phase it is already in posts nothing. */
 	function enter(next: SyncPhase): void {
 		phase = next;
@@ -354,159 +300,6 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		}
 		return state;
 	}
-
-	/**
-	 * ONE READ, projected to the DECLARED columns before it crosses.
-	 *
-	 * Projected HERE, by the same `declaredRow` the same-thread surface uses, which
-	 * is what makes "the rows are identical" one implementation rather than two
-	 * that agree by inspection: the version columns never leave the host, and an
-	 * unlisted declared field crosses as `null` exactly as the store wrote it.
-	 *
-	 * An entity the store was not built with is refused by `mustGet`, which every
-	 * backend already raises through, so the refusal a tab gets is the refusal a
-	 * same-thread caller gets (`UnknownEntityError`, named so it survives the
-	 * crossing as something an app can act on).
-	 */
-	async function served<T>(
-		entityName: string,
-		read: (store: StateStore, entity: NormalizedEntity) => Promise<T>,
-	): Promise<T> {
-		const store = await storeForReads();
-		return read(store, mustGet(store.declarations, entityName));
-	}
-
-	const projected = (entity: NormalizedEntity, raw: PortRow | undefined): PortRow | undefined =>
-		raw === undefined ? undefined : declaredRow(entity, raw);
-
-	const listed = (entity: NormalizedEntity, found: Listing<PortRow>): Listing<PortRow> => ({
-		rows: found.rows.map((raw) => declaredRow(entity, raw)),
-		truncated: found.truncated,
-	});
-
-	/**
-	 * THE CASES, and the switch a later task extends.
-	 *
-	 * Async because most of what is on it is: the store's four reads and every
-	 * control call return promises.
-	 */
-	async function serveCase(request: PortRequest): Promise<unknown> {
-		switch (request.case) {
-			case 'progress':
-				return progress();
-			case 'ping':
-				// ANSWERING IS THE WHOLE ANSWER. A tab probes a host that has gone quiet,
-				// and what it is asking for is evidence that anything is still running here
-				// -- so this reads nothing, computes nothing and waits for nothing. It must
-				// never grow a body: a probe that opened the container would make a host
-				// look dead exactly while it was busiest.
-				return undefined;
-			case 'subscribeToProgress': {
-				subscriptions++;
-				const current = progress();
-				// Recorded as published, so the first PUSH a new subscriber gets is a
-				// CHANGE rather than a repeat of the answer it is about to be handed.
-				published = current;
-				return current;
-			}
-			case 'startIndexing':
-				return startIndexing();
-			case 'stopIndexing':
-				return stopIndexing();
-			case 'reconfigure': {
-				const asked = request.payload as PortCases['reconfigure']['request'];
-				// The ABI is NARROWED here and nowhere else. The envelope is not generic --
-				// the same reason the rows it carries are not -- and a tab and its host come
-				// out of ONE build (see the envelope's note on why there is no protocol
-				// version), so the source a tab sends is a source this host's own ABI types
-				// were compiled against.
-				return reconfigure(asked.source as IndexingSource<ABI>);
-			}
-			case 'generations':
-				return generations();
-			case 'promotion':
-				return promotion();
-			case 'checkTxInclusion': {
-				const asked = request.payload as PortCases['checkTxInclusion']['request'];
-				return checkTxInclusion(asked.queries);
-			}
-			case 'unsubscribeFromProgress':
-				subscriptions = Math.max(0, subscriptions - 1);
-				// What was last posted is forgotten with the last subscriber: the next one
-				// is told where the fold is by its own subscribe, and comparing against a
-				// value nobody on this endpoint ever received would suppress a real change.
-				if (subscriptions === 0) published = undefined;
-				return undefined;
-			case 'declarations':
-				return [...(await storeForReads()).declarations.values()];
-			case 'getCurrent': {
-				const asked = request.payload as PortCases['getCurrent']['request'];
-				return served(asked.entity, async (store, entity) =>
-					projected(entity, await store.getCurrent(entity.name, asked.id)),
-				);
-			}
-			case 'getAsOf': {
-				const asked = request.payload as PortCases['getAsOf']['request'];
-				return served(asked.entity, async (store, entity) =>
-					projected(entity, await store.getAsOf(entity.name, asked.id, asked.at)),
-				);
-			}
-			case 'listCurrent': {
-				const asked = request.payload as PortCases['listCurrent']['request'];
-				return served(asked.entity, async (store, entity) =>
-					listed(entity, await store.listCurrent(entity.name, asked.prefix, asked.limit)),
-				);
-			}
-			case 'listAsOf': {
-				const asked = request.payload as PortCases['listAsOf']['request'];
-				return served(asked.entity, async (store, entity) =>
-					listed(entity, await store.listAsOf(entity.name, asked.prefix, asked.at, asked.limit)),
-				);
-			}
-			default:
-				throw new Error(
-					`this indexer host does not know the case '${String((request as {case: string}).case)}'. A tab and its ` +
-						`host come out of one build, so this means they did not.`,
-				);
-		}
-	}
-
-	function respond(response: PortResponse): void {
-		try {
-			access.endpoint.postMessage(response);
-		} catch (error) {
-			// Nothing is left to answer WITH: the answer itself is what could not be
-			// posted. It is logged rather than swallowed so a host that cannot talk is
-			// visible in a console, and the tab's call is left to the port's own
-			// lifetime handling.
-			namedLogger.error(`the indexer host could not post its '${response.case}' response`, error);
-		}
-	}
-
-	async function answer(request: PortRequest): Promise<void> {
-		const envelope = {protocol: INDEXER_PORT_PROTOCOL, kind: 'response', id: request.id, case: request.case} as const;
-		let value: unknown;
-		try {
-			value = await serveCase(request);
-			// REFUSED HERE, where the value was written, rather than thrown out of
-			// `postMessage` where nothing knows which field it was. The refusal is
-			// still an ANSWER to the tab's call: a caller that asked a question gets a
-			// rejection naming the field, not a promise that never settles.
-			assertClonable(value, `the '${request.case}' response`);
-		} catch (error) {
-			respond({...envelope, ok: false, error: portErrorOf(error)});
-			return;
-		}
-		respond({...envelope, ok: true, value} as PortResponse);
-	}
-
-	const stopListening = listen(access.endpoint, (data) => {
-		// Not ours: a shared scope carries whatever anybody posts to it, and a
-		// message from somebody else is not an unknown case.
-		if (!isPortRequest(data)) return;
-		if (disposed) return;
-		void answer(data);
-	});
 
 	/**
 	 * Retry what waiting can fix, and stop on what it cannot.
@@ -726,7 +519,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		// tab renders has moved either way.
 		publish();
 		return {
-			generation: generationOf(held, opened),
+			generation: hostGenerationOf(held, opened),
 			added: !before.some((record) => sameGeneration(record, held.record)),
 		};
 	}
@@ -742,31 +535,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * promotion, a revert and a drop.
 	 */
 	function generations(): readonly HostGeneration[] {
-		if (!container) return [];
-		const open = container;
-		return open.generations.map((generation) => generationOf(generation, open));
-	}
-
-	function generationOf(
-		generation: HeldGeneration<ABI, ProcessResultType>,
-		open: Indexer<ABI, ProcessResultType>,
-	): HostGeneration {
-		const canonical: GenerationRecord = open.canonical.record;
-		const canonicalCursor = open.generations.find((other) => sameGeneration(other.record, canonical))?.lastSync
-			?.lastToBlock;
-		const lastToBlock = generation.lastSync?.lastToBlock;
-		return {
-			record: generation.record,
-			canonical: sameGeneration(generation.record, canonical),
-			follows: generation.follows,
-			...(lastToBlock === undefined ? {} : {lastToBlock}),
-			// Floored at zero, exactly as the main-thread report floors it: a generation
-			// AHEAD of the canonical one (which `manual` allows) is not behind by a
-			// negative number, it is not behind.
-			...(lastToBlock === undefined || canonicalCursor === undefined
-				? {}
-				: {blocksBehind: Math.max(0, canonicalCursor - lastToBlock)}),
-		};
+		return container ? hostGenerationsOf(container) : [];
 	}
 
 	/**
@@ -813,6 +582,30 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		return (await openContainer()).promotion;
 	}
 
+	/**
+	 * WHAT THIS HOST ANSWERS, as every shape's host answers it.
+	 *
+	 * The nine questions and nothing else: the envelope, the dispatch, the
+	 * projections and the push cadence are `cases.ts`'s and are the same code the
+	 * main-thread host runs (ADR-0082).
+	 */
+	const backing: HostBacking = {
+		progress,
+		startIndexing,
+		stopIndexing,
+		// The ABI is NARROWED here and nowhere else. The envelope is not generic -- the
+		// same reason the rows it carries are not -- and a tab and its host come out of
+		// ONE build (see the envelope's note on why there is no protocol version), so
+		// the source a tab sends is a source this host's own ABI types were compiled
+		// against.
+		reconfigure: (source) => reconfigure(source as IndexingSource<ABI>),
+		generations,
+		promotion,
+		checkTxInclusion,
+		storeForReads,
+	};
+	served = serveHostCases(access, backing);
+
 	// Nothing awaits the first start: a host exists in order to fold, and its
 	// failures are REPORTED through `progress` rather than thrown at an entry point
 	// that has already been handed its host.
@@ -827,10 +620,8 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			stopRequested = true;
 			wakeFromRest?.();
 			indexing = false;
-			subscriptions = 0;
-			published = undefined;
 			refuseFirstState?.(new Error(`this indexer host was disposed, so it holds no store to read from.`));
-			stopListening();
+			served?.stop();
 			if (container) {
 				container.onLastSyncUpdated = undefined;
 				container.onStateUpdated = undefined;
@@ -839,75 +630,6 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			}
 		},
 	};
-}
-
-/**
- * THE FIGURES AN APP RENDERS, derived where the cursor is.
- *
- * The three `createIndexerState` computes for the main-thread case (`ExtendedLastSync`),
- * carried across for the hosted one so that an app moving between the two binds
- * the same names to the same meanings, and computed in ONE place so the two
- * cannot drift.
- *
- * ## The guard, and what it is guarding against
- *
- * Every figure here is a distance to a TIP, and a container that has loaded and
- * not yet fetched publishes `0` for both cursors: it has learnt no tip. So they
- * are absent together below `latestBlock > 0` rather than computed from a number
- * that does not mean what it looks like -- the alternative is an app told it is
- * `0` blocks behind, and a full progress bar, before a single log was asked for.
- *
- * ## What was deliberately left behind
- *
- * `ExtendedLastSync.totalPercentage` (`lastToBlock / latestBlock`) does not
- * cross. It measures the fold against the whole CHAIN rather than against the
- * span it indexes, so a deployment whose contract starts at block 20,000,000
- * reads 99.9% from its first fetch, which is not a thing to put on a progress
- * bar. `syncPercentage` is the one with a denominator an app means.
- */
-function derivedProgress<ABI extends Abi>(
-	lastSync: LastSync<ABI>,
-	foldStartsAt: number,
-): Pick<HostProgress, 'blocksBehindTip' | 'numBlocksProcessedSoFar' | 'syncPercentage'> {
-	const {lastToBlock, latestBlock} = lastSync;
-	if (latestBlock <= 0) return {};
-	const numBlocksProcessedSoFar = Math.max(0, lastToBlock - foldStartsAt);
-	const totalToProcess = Math.max(0, latestBlock - foldStartsAt);
-	return {
-		blocksBehindTip: Math.max(0, latestBlock - lastToBlock),
-		numBlocksProcessedSoFar,
-		// A fold with no span to cross is DONE rather than a division by zero, which
-		// is what the main-thread version performs there.
-		syncPercentage:
-			totalToProcess === 0
-				? 100
-				: Math.min(100, Math.floor((numBlocksProcessedSoFar * 1000000) / totalToProcess) / 10000),
-	};
-}
-
-/**
- * WHETHER TWO REPORTS SAY THE SAME THING, which is how a push that carries no
- * news is suppressed.
- *
- * Field by field rather than by serialising both, because the equality is the
- * one this decides on: `failure` is compared on what a tab acts on (its name and
- * its message) and never on the host's stack, which is a string the same failure
- * can spell differently and which nothing renders.
- */
-function sameProgress(a: HostProgress, b: HostProgress): boolean {
-	return (
-		a.host === b.host &&
-		a.scope === b.scope &&
-		a.indexing === b.indexing &&
-		a.phase === b.phase &&
-		a.lastToBlock === b.lastToBlock &&
-		a.latestBlock === b.latestBlock &&
-		a.blocksBehindTip === b.blocksBehindTip &&
-		a.numBlocksProcessedSoFar === b.numBlocksProcessedSoFar &&
-		a.syncPercentage === b.syncPercentage &&
-		a.failure?.name === b.failure?.name &&
-		a.failure?.message === b.failure?.message
-	);
 }
 
 /**

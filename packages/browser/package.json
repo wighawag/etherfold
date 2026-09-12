@@ -1,7 +1,7 @@
 {
 	"name": "@etherfold/browser",
 	"version": "0.8.0",
-	"description": "Index a chain in the browser tab: the etherfold engine wrapped in observable stores (state, syncing, status), with IndexedDB persistence, auto-indexing and in-place reconfigure.",
+	"description": "Index a chain in the browser: the etherfold engine hosted in a dedicated worker, a SharedWorker or on the main thread, with a typed port for the tab, IndexedDB persistence, auto-indexing and reconfigure without an outage.",
 	"license": "MIT",
 	"repository": {
 		"type": "git",

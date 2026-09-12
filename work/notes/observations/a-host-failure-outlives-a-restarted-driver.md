@@ -1,0 +1,3 @@
+# A `HostProgress.failure` outlives a restarted driver
+
+2026-09-12 — On both host drivers (`serveIndexerHost` in `packages/browser/src/host/serve.ts` and the main-thread host in `src/IndexerState.ts`), a driver that stopped on a non-retryable refusal records `failure` and the `refused` phase, and a later `startIndexing()` moves the phase on without clearing `failure` — so a tab can be handed `phase: 'at-tip'` with a stale failure attached. Noticed while giving the main-thread host the same reporting as the worker one during `createindexerstate-becomes-the-main-thread-host`; left matching rather than fixed on one side only, since diverging the two would be worse than the wart.
