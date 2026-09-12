@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Which signals identify a WebKit engine, in a window and in a worker</title>
+		<style>
+			body {
+				font: 16px/1.5 system-ui, sans-serif;
+				margin: 1rem;
+				max-width: 60rem;
+			}
+			button {
+				font: inherit;
+				padding: 0.6rem 1rem;
+			}
+			pre {
+				background: #f4f4f4;
+				border: 1px solid #ccc;
+				padding: 0.75rem;
+				white-space: pre-wrap;
+				font-size: 13px;
+				user-select: all;
+			}
+			.yes {
+				color: #060;
+				font-weight: 700;
+			}
+			.no {
+				color: #b00;
+				font-weight: 700;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Can this engine be identified as WebKit &mdash; from a worker?</h1>
+
+		<p>
+			Companion to the wedge reproduction. The workaround for that bug would live in code running <strong>inside a
+			dedicated worker</strong>, so the only question that matters is which signals survive there.
+		</p>
+
+		<p>
+			<strong>The case this page exists for:</strong> on iOS, <em>every</em> browser is WebKit, so Chrome for iOS and
+			Firefox for iOS have the bug too while advertising another brand. A detector that only recognises &ldquo;Safari&rdquo;
+			would leave them broken. If you have Chrome or Firefox on this phone, open this page in <strong>each</strong> of them
+			and compare the verdicts.
+		</p>
+
+		<p><button id="copy">Copy everything</button></p>
+		<pre id="out">measuring...</pre>
+
+		<script>
+			const SIGNALS = `
+				const out = {};
+				const has = (key) => { try { return key in self; } catch { return 'threw'; } };
+				out.scope = typeof window === 'undefined' ? 'worker' : 'window';
+				out.userAgent = navigator.userAgent;
+				out.vendor = 'vendor' in navigator ? navigator.vendor : '(not exposed here)';
+				out.platform = 'platform' in navigator ? navigator.platform : '(not exposed here)';
+				out.GestureEvent = has('GestureEvent');
+				out.CSSPrimitiveValue = has('CSSPrimitiveValue');
+				out.webkitConvertPointFromNodeToPage = has('webkitConvertPointFromNodeToPage');
+				out.webkitRequestFileSystem = has('webkitRequestFileSystem');
+				out.userAgentData = navigator.userAgentData ? JSON.stringify(navigator.userAgentData.brands) : '(absent)';
+				out.cssTouchCallout = typeof CSS !== 'undefined' && CSS.supports
+					? CSS.supports('-webkit-touch-callout', 'none') : '(no CSS here)';
+			`;
+
+			/** The candidate rules, so a verdict is a RULE's answer and not a vibe. */
+			function verdicts(signals) {
+				const ua = signals.userAgent || '';
+				return {
+					'vendor === Apple Computer, Inc.': signals.vendor === 'Apple Computer, Inc.',
+					'GestureEvent in self': signals.GestureEvent === true,
+					'AppleWebKit present and Chrome/ absent': /AppleWebKit/.test(ua) && !/Chrome\//.test(ua),
+					'naive: Safari present and Chrome absent': /Safari/.test(ua) && !/Chrome/i.test(ua),
+				};
+			}
+
+			const inWorker = () =>
+				new Promise((resolve) => {
+					const source = `self.onmessage = () => { ${SIGNALS} self.postMessage(out); };`;
+					const worker = new Worker(URL.createObjectURL(new Blob([source], {type: 'text/javascript'})));
+					worker.onmessage = (event) => resolve(event.data);
+					worker.postMessage({});
+				});
+
+			function render(title, signals) {
+				const rules = verdicts(signals);
+				const lines = [`--- ${title} ---`];
+				for (const [key, value] of Object.entries(signals)) lines.push(`  ${key}: ${value}`);
+				lines.push(`  RULES:`);
+				for (const [rule, answer] of Object.entries(rules)) {
+					lines.push(`    ${answer ? 'WEBKIT  ' : 'not     '} ${rule}`);
+				}
+				return lines.join('\n');
+			}
+
+			(async () => {
+				const windowSignals = eval(`(() => { ${SIGNALS} return out; })()`);
+				const workerSignals = await inWorker();
+				document.getElementById('out').textContent = [
+					render('IN THE PAGE', windowSignals),
+					'',
+					render('IN A DEDICATED WORKER (the scope that matters)', workerSignals),
+					'',
+					'If the worker block says "not" for every rule except the userAgent ones,',
+					'then feature detection is unavailable where the workaround would live.',
+				].join('\n');
+			})();
+
+			document.getElementById('copy').onclick = async () => {
+				try {
+					await navigator.clipboard.writeText(document.getElementById('out').textContent);
+					document.getElementById('copy').textContent = 'copied';
+				} catch {
+					document.getElementById('copy').textContent = 'select the box and copy by hand';
+				}
+			};
+		</script>
+	</body>
+</html>

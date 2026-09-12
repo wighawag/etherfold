@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Terminating a worker with two IndexedDB transactions in flight wedges the database permanently</title>
+		<style>
+			body {
+				font: 16px/1.5 system-ui, sans-serif;
+				margin: 1rem;
+				max-width: 60rem;
+			}
+			button {
+				font: inherit;
+				padding: 0.6rem 1rem;
+				margin: 0.2rem 0;
+			}
+			#warning:not(:empty) {
+				background: #fee;
+				border: 2px solid #b00;
+				padding: 0.75rem;
+				margin: 0.75rem 0;
+				font-weight: 700;
+			}
+			#summary:not(:empty) {
+				background: #f4f4f4;
+				border: 1px solid #ccc;
+				padding: 0.75rem;
+				margin: 0.75rem 0;
+				font-family: ui-monospace, monospace;
+				white-space: pre-wrap;
+				font-size: 13px;
+				user-select: all;
+			}
+			#log {
+				white-space: pre-wrap;
+				font-family: ui-monospace, monospace;
+				font-size: 13px;
+				border: 1px solid #ccc;
+				padding: 0.75rem;
+				max-height: 28rem;
+				overflow: auto;
+			}
+			.wedged {
+				color: #b00;
+				font-weight: 700;
+			}
+			.ok {
+				color: #060;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>A terminated worker can wedge one IndexedDB database for ever</h1>
+
+		<p>
+			<strong>Summary.</strong> If a dedicated worker is terminated while it has BOTH a <code>readwrite</code> and a
+			<code>readonly</code> transaction in flight on the same database, that database can be left permanently unable to
+			run any transaction at all. <code>indexedDB.open</code> keeps succeeding, and every transaction taken on the
+			resulting connection then hangs for ever: no <code>complete</code>, no <code>abort</code>, no <code>error</code>.
+			It affects <code>readonly</code> transactions as much as <code>readwrite</code> ones, in the page as well as in any
+			later worker. Other databases in the same origin are unaffected. A page reload does NOT clear it, and a
+			<code>deleteDatabase</code> issued afterwards never completes, so a web application has no recovery available to it.
+		</p>
+
+		<p>
+			<strong>Reproduces on:</strong> WebKit only, and on real hardware, not just a test build.
+		</p>
+		<ul>
+			<li>
+				<strong>iPhone 12, iOS 18.3.2, Safari 18.3.1: 12 wedged in 200</strong> (6%), foreground tab, this page, over plain
+				HTTP on a LAN address.
+			</li>
+			<li>
+				Playwright 1.62.1 WebKit on Linux (build 2359, user agent <code>Version/26.5</code>): 7&ndash;13 in 200 across runs.
+			</li>
+			<li>Playwright Chromium 141: <strong>0 in 200</strong>. Playwright Firefox 145: <strong>0 in 200</strong>.</li>
+		</ul>
+		<p>
+			So it is present both in a shipping iOS release and in a much newer upstream build, on two different ports, which
+			suggests cross-platform code rather than one port's plumbing.
+		</p>
+
+		<p>
+			<strong>It needs two transactions in flight in the DYING context.</strong> One transaction alone never does it,
+			whatever shape it has and wherever the kill lands (0 in 200). Two overlapping <code>readwrite</code> transactions do
+			not do it (0 in 200). An overlapping <code>readonly</code> belonging to a context that SURVIVES the kill (the page,
+			on its own connection) does not do it either (0 in 200). It is specifically a <code>readonly</code> and a
+			<code>readwrite</code> of the terminated worker, overlapping at the moment of <code>terminate()</code>.
+		</p>
+
+		<h2>Steps</h2>
+		<ol>
+			<li>Serve this directory over HTTP (IndexedDB needs a real origin): <code>python3 -m http.server 8000</code>.</li>
+			<li>Open <code>http://localhost:8000/</code> in Safari and press <strong>Run</strong>.</li>
+			<li>
+				Each iteration starts a worker that opens a fresh database with two object stores, runs a loop of one-<code>put</code>
+				<code>readwrite</code> transactions on one store and a loop of <code>get</code> <code>readonly</code> transactions on
+				the other, and is terminated by the page at a random point. The page then opens that database and asks for a single
+				<code>readonly</code> transaction.
+			</li>
+			<li>
+				A <span class="wedged">WEDGED</span> line is a database on which that transaction never settled within 4 s. Expect a
+				few percent. Each wedged line then confirms that an unrelated database is healthy and that a same-page reload does not
+				recover the wedged one.
+			</li>
+		</ol>
+
+		<h2>If you are running this on a phone, read this first</h2>
+		<ul>
+			<li>
+				<strong>Keep this tab in the foreground and the screen awake.</strong> A backgrounded page is SUSPENDED, and IndexedDB
+				after suspension is a different, already-reported problem (WebKit 197050, 202705). The run below detects being hidden
+				and marks its own result as contaminated, so a wedge seen after a backgrounding proves nothing.
+			</li>
+			<li><strong>Use a normal tab, not a private one.</strong></li>
+			<li>
+				<strong>This deliberately leaves unusable databases behind on this origin,</strong> and they cannot be deleted from
+				script (that is the bug). To clean up afterwards: Settings &rarr; Safari &rarr; Advanced &rarr; Website Data, and remove
+				this site.
+			</li>
+		</ul>
+
+		<p>
+			<label>iterations <input id="iterations" type="number" value="200" min="1" max="5000" style="font: inherit; width: 6rem" /></label>
+		</p>
+		<p>
+			<button id="run">Run</button>
+			<button id="stop">Stop</button>
+			<button id="copy">Copy summary</button>
+		</p>
+		<p id="tally"></p>
+		<div id="warning"></div>
+		<div id="summary"></div>
+		<div id="log"></div>
+
+		<script>
+			const PATIENCE = 4000;
+
+			const WORKER_SOURCE = `
+				const post = (message) => self.postMessage(message);
+				const committed = (tx) => new Promise((resolve, reject) => {
+					tx.oncomplete = () => resolve();
+					tx.onerror = () => reject(tx.error);
+					tx.onabort = () => reject(tx.error || new Error('aborted'));
+				});
+
+				/** A readonly transaction always in flight. */
+				function readForEver(db) {
+					const step = () => {
+						const tx = db.transaction('reads', 'readonly');
+						const req = tx.objectStore('reads').get('k');
+						req.onsuccess = () => setTimeout(step, 0);
+						req.onerror = () => setTimeout(step, 0);
+					};
+					step();
+				}
+
+				/** A readwrite transaction, one put in it, over and over. */
+				async function writeForEver(db) {
+					for (let n = 0; ; n++) {
+						const tx = db.transaction('writes', 'readwrite');
+						tx.objectStore('writes').put(n, 'k');
+						try { await committed(tx); } catch (error) { return; }
+						await new Promise((resolve) => setTimeout(resolve, 1));
+					}
+				}
+
+				self.onmessage = (event) => {
+					const open = indexedDB.open(event.data.name, 1);
+					open.onupgradeneeded = () => {
+						open.result.createObjectStore('reads');
+						open.result.createObjectStore('writes');
+					};
+					open.onsuccess = () => {
+						const db = open.result;
+						readForEver(db);
+						post({ready: true});
+						writeForEver(db);
+					};
+				};
+			`;
+
+			const log = document.getElementById('log');
+			const tally = document.getElementById('tally');
+			const warning = document.getElementById('warning');
+			const summary = document.getElementById('summary');
+			let stopped = false;
+
+			// A page that was HIDDEN was suspended, and IndexedDB after suspension is a
+			// different and already-reported problem. A run that was ever hidden is not
+			// evidence for this one, so it says so rather than being quietly counted.
+			let wasHidden = document.visibilityState === 'hidden';
+			document.addEventListener('visibilitychange', () => {
+				if (document.visibilityState !== 'hidden') return;
+				wasHidden = true;
+				warning.textContent =
+					'This page was backgrounded during the run. That suspends it, and IndexedDB after suspension is a ' +
+					'DIFFERENT known problem, so this run is contaminated. Reload and run it again without leaving the tab.';
+			});
+
+			function say(text, className) {
+				const line = document.createElement('div');
+				if (className) line.className = className;
+				line.textContent = text;
+				log.append(line);
+				log.scrollTop = log.scrollHeight;
+			}
+
+			const within = (work) =>
+				Promise.race([work, new Promise((resolve) => setTimeout(() => resolve('WEDGED'), PATIENCE))]);
+
+			const openDatabase = (name, upgrade) =>
+				new Promise((resolve, reject) => {
+					const request = indexedDB.open(name, 1);
+					if (upgrade) request.onupgradeneeded = () => upgrade(request.result);
+					request.onsuccess = () => resolve(request.result);
+					request.onerror = () => reject(request.error);
+					request.onblocked = () => reject(new Error('open blocked'));
+				});
+
+			/** Can this database still run a `readonly` transaction at all? */
+			function canRead(db) {
+				return within(
+					new Promise((resolve) => {
+						const tx = db.transaction('writes', 'readonly');
+						tx.objectStore('writes').get('k').onsuccess = () => resolve('ok');
+						tx.onabort = () => resolve('aborted');
+						tx.onerror = () => resolve('error');
+					}),
+				);
+			}
+
+			async function iteration(index) {
+				const name = `wedge-probe-${Date.now()}-${index}`;
+				const url = URL.createObjectURL(new Blob([WORKER_SOURCE], {type: 'text/javascript'}));
+				const worker = new Worker(url);
+
+				// Let it get going, then kill it at a random point.
+				await new Promise((resolve) => {
+					worker.onmessage = () => resolve();
+					worker.postMessage({name});
+				});
+				await new Promise((resolve) => setTimeout(resolve, 5 + Math.floor(Math.random() * 60)));
+				worker.terminate();
+
+				const db = await within(openDatabase(name));
+				if (db === 'WEDGED') return {name, verdict: 'open-never-settled'};
+				const read = await canRead(db);
+				if (read !== 'WEDGED') {
+					db.close();
+					return {name, verdict: 'ok'};
+				}
+
+				// Wedged. Two confirmations: an unrelated database is healthy, and the
+				// wedged one does not come back.
+				const unrelated = await within(
+					(async () => {
+						const other = await openDatabase(`${name}-unrelated`, (created) => created.createObjectStore('rows'));
+						return new Promise((resolve) => {
+							const tx = other.transaction('rows', 'readwrite');
+							tx.oncomplete = () => {
+								other.close();
+								resolve('ok');
+							};
+							tx.onabort = () => resolve('aborted');
+							tx.objectStore('rows').put('ok', 'ok');
+						});
+					})(),
+				);
+				const deleted = await within(
+					new Promise((resolve) => {
+						db.close();
+						const request = indexedDB.deleteDatabase(name);
+						request.onsuccess = () => resolve('deleted');
+						request.onerror = () => resolve('error');
+						request.onblocked = () => resolve('blocked');
+					}),
+				);
+				const again = await within(openDatabase(name));
+				const stillWedged = again === 'WEDGED' ? 'open-never-settled' : await canRead(again);
+				return {name, verdict: 'WEDGED', unrelated, deleted, stillWedged};
+			}
+
+			document.getElementById('stop').onclick = () => (stopped = true);
+			document.getElementById('copy').onclick = async () => {
+				try {
+					await navigator.clipboard.writeText(summary.textContent);
+					tally.textContent = 'summary copied';
+				} catch {
+					tally.textContent = 'could not copy; select the grey box and copy by hand';
+				}
+			};
+			document.getElementById('run').onclick = async () => {
+				stopped = false;
+				wasHidden = document.visibilityState === 'hidden';
+				warning.textContent = '';
+				summary.textContent = '';
+				log.replaceChildren();
+				let wedged = 0;
+				const started = Date.now();
+				const total = Math.max(1, Number(document.getElementById('iterations').value) || 200);
+				for (let index = 0; index < total && !stopped; index++) {
+					const outcome = await iteration(index);
+					if (outcome.verdict === 'ok') {
+						say(`${index}: ok`, 'ok');
+					} else {
+						wedged++;
+						say(
+							`${index}: ${outcome.verdict} -- every transaction on ${outcome.name} now hangs. ` +
+								`unrelated database: ${outcome.unrelated}; deleteDatabase: ${outcome.deleted}; ` +
+								`re-opened and read again: ${outcome.stillWedged}`,
+							'wedged',
+						);
+					}
+					tally.textContent = `${index + 1} run, ${wedged} wedged`;
+					summary.textContent = [
+						`wedged:      ${wedged} of ${index + 1}`,
+						`contaminated: ${wasHidden ? 'YES -- page was backgrounded, discard this run' : 'no'}`,
+						`seconds:     ${Math.round((Date.now() - started) / 1000)}`,
+						`origin:      ${location.origin}`,
+						`userAgent:   ${navigator.userAgent}`,
+						`platform:    ${navigator.platform} / ${navigator.hardwareConcurrency} cores`,
+					].join('\n');
+				}
+				say(`done: ${wedged} wedged`);
+				say('Reload this page and press Run again: a wedged database from this session is still wedged.');
+				if (wasHidden) say('THIS RUN WAS BACKGROUNDED AND DOES NOT COUNT.', 'wedged');
+			};
+		</script>
+	</body>
+</html>

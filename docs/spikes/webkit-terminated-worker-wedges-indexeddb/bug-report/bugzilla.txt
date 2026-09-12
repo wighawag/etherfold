@@ -1,0 +1,75 @@
+The body to paste into https://bugs.webkit.org/enter_bug.cgi?product=WebKit
+Product: WebKit. Component: Service Workers / Workers is wrong; use "IndexedDB".
+Attach bug-report/index.html to the report (Bugzilla accepts attachments) rather
+than only linking it.
+
+Everything below the line is the report. Nothing above it is.
+
+--------------------------------------------------------------------------------
+
+Summary: Ending a Worker with a readwrite and a readonly IndexedDB transaction in flight leaves that database permanently unable to run any transaction
+
+Overview
+
+If a dedicated worker ends while it has BOTH a readwrite and a readonly transaction in flight on the same IndexedDB database, that database can be left permanently unusable. Afterwards, from every context in the origin:
+
+- indexedDB.open() on it still SUCCEEDS, and the resulting IDBDatabase reports its object stores correctly;
+- every transaction taken on that connection then never settles: no complete, no abort, no error, indefinitely;
+- this affects readonly transactions exactly as much as readwrite ones, on any object store, so it is not a writer queued behind a lock;
+- an unrelated database in the same origin is completely healthy;
+- a page reload does not clear it;
+- opening the origin in a new tab does not clear it;
+- indexedDB.deleteDatabase() on it reports onblocked and never completes, so a web application cannot even reset its own storage.
+
+The effect is a permanent, silent loss of one database for the rest of the browsing session, with no error surfaced to script at any point.
+
+Steps to reproduce
+
+1. Serve the attached index.html over HTTP (IndexedDB needs a real origin):
+   python3 -m http.server 8000
+2. Open http://localhost:8000/ and press Run. Keep the tab in the foreground.
+3. Each iteration: a worker opens a fresh database with two object stores, runs a loop of one-put readwrite transactions on one store and a loop of get readonly transactions on the other, and is terminated by the page at a random point 5-65 ms in. The page then opens that database and asks for one readonly transaction.
+4. A WEDGED line is a database on which that transaction never settled within 4 s. Each wedged line then re-checks: an unrelated database, deleteDatabase, a reload, and a new tab.
+
+Actual results
+
+A few percent of iterations wedge the database permanently.
+
+- iPhone 12, iOS 18.3.2, Safari 18.3.1: 12 wedged in 200 (6%)
+- WebKit build 2359 on Linux via Playwright 1.62.1, user agent Version/26.5 Safari/605.1.15: 7 to 13 in 200 across runs
+
+Expected results
+
+Ending the worker should abort its in-flight transactions and release the database, as it does when only one transaction is in flight. No later transaction on that database should hang.
+
+Other engines
+
+The same page, unchanged:
+
+- Chromium 141 via Playwright: 0 wedged in 200
+- Firefox 145 via Playwright: 0 wedged in 200
+
+What is and is not required (each 200 runs per engine, automated)
+
+This was narrowed by varying one thing at a time. On WebKit:
+
+- one readwrite transaction held open indefinitely, worker terminated mid-transaction: 0/200
+- a stream of multi-store readwrite transactions, no concurrent read, killed anywhere: 0/200
+- one put per readwrite transaction, no concurrent read: 0/200
+- the above plus a second concurrent READWRITE loop on another store: 0/200
+- the above plus a concurrent READONLY loop on another store: 3/200 to 8/200
+- same, but the worker ends via self.close() instead of terminate(): 9/200
+- same, but the concurrent readonly belongs to the PAGE (a context that survives): 0/200
+- a read and a write each awaited to COMMIT, so the worker never has two transactions in flight: 0/1000
+
+So:
+
+- it needs two transactions of the DYING context overlapping when it ends, and one of them being readonly;
+- it does not need many object stores, indexes, long transactions, or any particular point in a transaction's life;
+- it is not specific to Worker.terminate(): self.close() reproduces it at the highest rate measured;
+- an overlapping readonly in a surviving context does not do it.
+
+Notes
+
+- This is distinct from bug 197050 and bug 202705, which concern IndexedDB after the network process or the application is SUSPENDED. No suspension is involved here; the attached page detects being backgrounded and marks such a run contaminated precisely so the two are not confused. Every number above is from a foreground tab.
+- The practical impact: a web application that folds data into IndexedDB inside a worker, and whose store performs reads concurrently with writes (the ordinary pattern, since a read helper returns when its request succeeds and leaves its transaction to auto-commit), can permanently lose its local database if the worker is evicted or restarted at the wrong moment, with no recovery available to it short of picking a different database name and re-building from scratch.
