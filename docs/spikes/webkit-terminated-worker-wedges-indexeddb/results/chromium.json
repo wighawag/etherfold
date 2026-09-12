@@ -1,0 +1,14 @@
+{
+  "engine": "chromium",
+  "afterTheKill": {
+    "connected": "ok",
+    "readwrite": "ok",
+    "readonly": "ok"
+  },
+  "bySecondWorker": "ok",
+  "deleteDatabase": "blocked",
+  "afterReload": {
+    "connected": "ok",
+    "readwrite": "ok"
+  }
+}

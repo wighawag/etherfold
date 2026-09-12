@@ -807,6 +807,7 @@ async function txInclusionCase(params: Params, timings: Timing[]): Promise<Recor
 async function restartsAndResumesCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const database = databaseName(params, 'restarts-and-resumes');
 	const fetched: {life: number; from: number; to: number}[] = [];
+	const probes: string[] = [];
 	const landed: {life: number; block: number}[] = [];
 	let lives = 0;
 	let killed: number | undefined;
@@ -829,6 +830,7 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 					block?: number;
 				};
 				if (said?.fixture !== 'worker') return;
+				if ((said as any).probe) probes.push(`life${life}:${(said as any).probe}`);
 				if (said.fetched) fetched.push({life, ...said.fetched});
 				if (said.wrote === 'landed' && said.block !== undefined) landed.push({life, block: said.block});
 				// THE KILL: while a store write is in flight, and with a call in the air.
@@ -861,7 +863,35 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 	try {
 		const death = await timed('death', timings, () => firstDeath);
 		const rejectedInFlight = inFlight ? await inFlight : 'nothing-was-in-flight';
-		const resumed = await timed('resume', timings, () => untilAtTip(indexer));
+		// THE RESUME, or the WEDGE this case exists to be honest about.
+		//
+		// On WebKit, about one run in eight, the replacement worker opens the database
+		// and then waits FOR EVER on the writer claim. Where it stops is established;
+		// WHY is not -- the obvious mechanism (a terminated worker's transaction still
+		// holding the store) was tested minimally and falsified, so this is deliberately
+		// described by its SYMPTOM rather than by a cause nobody has yet shown
+		// (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+		// So this does NOT throw -- the outcome is REPORTED, and the spec decides what
+		// each engine is allowed to do with it, rather than a real product guarantee
+		// being expressed as an intermittent timeout.
+		const resumed = await timed('resume', timings, () =>
+			untilAtTip(indexer).then(
+				(progress) => ({stalled: false as const, progress}),
+				async () => ({stalled: true as const, progress: await indexer.progress().catch(() => undefined)}),
+			),
+		);
+		if (resumed.stalled) {
+			return {
+				stalled: true,
+				probes,
+				// WHERE it stalled, so a reader does not have to guess: the replacement
+				// worker is alive and answering, its store opened, and the claim never
+				// landed.
+				stalledAt: resumed.progress,
+				deaths: deaths.length,
+				rejectedInFlight,
+			};
+		}
 
 		// Read back the way a tab reads: from the same database, opened for READING,
 		// with the successor's claim untouched.
@@ -874,11 +904,12 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 		);
 
 		return {
+			probes,
 			// WHERE the resumed fold ran, measured in the context that ran it: the
 			// replacement is a worker too.
-			scope: resumed.scope,
+			scope: resumed.progress.scope,
 			tabScope: executionScopeName(),
-			host: resumed.host,
+			host: resumed.progress.host,
 			lives: workers.built.length,
 			killedWritingBlock: killed ?? null,
 			death: {
@@ -895,8 +926,8 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 			landedBeforeDeath: landed.filter((write) => write.life === 0).map((write) => write.block),
 			startBlock: START_BLOCK,
 			tip: BRANCH_A_TIP,
-			lastToBlock: resumed.lastToBlock,
-			latestBlock: resumed.latestBlock,
+			lastToBlock: resumed.progress.lastToBlock,
+			latestBlock: resumed.progress.latestBlock,
 			state,
 			// every surface the tab had before the death, asked again after it
 			afterTheRestart: {
@@ -1443,7 +1474,16 @@ const cut: CodeUnderTest = {
 				}
 			}
 		} catch (error) {
-			errors.push(`${(error as Error)?.stack ?? error}`);
+			// MESSAGE FIRST, then the stack. `error.stack` carries the message on V8 and
+			// NOT on JavaScriptCore, where it is bare frames -- so recording the stack
+			// alone made every WebKit-only failure arrive as a list of function names with
+			// nothing saying what went wrong. That is the engine a cross-engine harness is
+			// least able to reproduce by hand, and therefore the one whose failures most
+			// need to explain themselves.
+			const raised = error as Error | undefined;
+			const message = raised?.message ?? String(error);
+			const stack = raised?.stack ?? '';
+			errors.push(stack.includes(message) ? stack : `${raised?.name ?? 'Error'}: ${message}\n${stack}`);
 		}
 
 		return {results, timings, errors, env: captureEnv()};

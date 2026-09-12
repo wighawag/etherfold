@@ -176,16 +176,33 @@ const gatedProvider = {
 	},
 } as unknown as typeof chain.provider;
 
+// The entry point was reached at all, which separates "the worker never started"
+// from "the worker started and its store never opened".
+report({probe: 'host-construct'});
 hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// The store is opened for WRITING here, in the host. That is the writer/reader
 	// split reaching across the boundary: the tab holds a port, and a port names no
 	// mutating verb.
-	createState: async (context) =>
-		announcingWrites(
-			await openForWriting(
-				await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)}),
-			),
-		),
+	// The store is opened for WRITING here, in the host. That is the writer/reader
+	// split reaching across the boundary: the tab holds a port, and a port names no
+	// mutating verb.
+	//
+	// THE PROBES ARE NOT SCAFFOLDING. Opening a store has three steps that fail
+	// differently, and from outside the worker all three look identical -- a host
+	// that says `waiting` for ever. Reporting each one is what turned an
+	// intermittent WebKit timeout into a located defect: the store OPENS and the
+	// claim never lands. That is as far as the diagnosis goes -- the cause is still
+	// open (see the finding named in `restartsAndResumes.spec.ts`) -- which is
+	// exactly why these stay. The next stall of this shape should be diagnosable in
+	// one run instead of ten, and narrowing the cause needs them.
+	createState: async (context) => {
+		report({probe: 'store-open-start'});
+		const raw = await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)});
+		report({probe: 'store-open-done'});
+		const writable = await openForWriting(raw);
+		report({probe: 'writer-claimed'});
+		return announcingWrites(writable);
+	},
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
 	provider: gatedProvider,
 	source: SOURCE,
