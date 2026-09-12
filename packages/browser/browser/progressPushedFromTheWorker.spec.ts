@@ -83,6 +83,7 @@ test('pushes progress from the worker to its own tab, and stops when the tab let
 
 		// Everything the tab was handed, in full.
 		expect(run.results.portSurface).toEqual([
+			'checkTxInclusion',
 			'close',
 			'generations',
 			'host',

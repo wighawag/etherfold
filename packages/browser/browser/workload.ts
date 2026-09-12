@@ -368,6 +368,27 @@ export const BRANCH_A: readonly RawLog[] = [
 export const BRANCH_A_TIP = 105;
 
 /**
+ * THE TRANSACTION THAT CARRIED A BLOCK'S FIRST LOG, as the fixture generated it.
+ *
+ * Read out of the fixture rather than written down beside it, because the hashes
+ * are a counter's output and a case that quoted one would be asserting against
+ * the order the constants above happen to be declared in.
+ *
+ * It is what a **tx inclusion** case needs and what nothing else in this workload
+ * needed: an app asks about a transaction it SENT, so a test has to be able to
+ * name one this chain actually carried -- and the interesting pair is one INSIDE
+ * the unconfirmed window (`FINALITY` is 3 at a tip of 105, so block 104) and one
+ * that has fallen out of it (block 100).
+ */
+export function txInBlock(blockNumber: number, branch: readonly RawLog[] = BRANCH_A): string {
+	const log = branch.find((candidate) => parseInt(candidate.blockNumber.slice(2), 16) === blockNumber);
+	if (!log) {
+		throw new Error(`this fixture carries no log in block ${blockNumber}, so there is no transaction to ask about.`);
+	}
+	return log.transactionHash;
+}
+
+/**
  * Branch A with one more block on top: no reorg, just the chain moving on.
  *
  * The reconfigure tests need events that arrive AFTER a swap, because "did the

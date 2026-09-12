@@ -43,6 +43,13 @@
  *   needs a second execution context is that the LIFECYCLE crosses: a tab that
  *   holds nothing but a port stops the fold, changes the source, and is answered
  *   from the generation the pointer moved to.
+ * - `tx-inclusion-from-the-tab`: the optimistic-update reconciliation, asked of a
+ *   real worker from a real tab, before and after the fold reaches the
+ *   transaction. It runs here because the verdict is the one answer on this port
+ *   that must not be simplified on the way across -- a status, its basis, and the
+ *   two distinct causes of `unknown` -- and because "answered from current state"
+ *   is only a claim worth making where the state is being folded somewhere else
+ *   while the question is asked.
  * - `reads-across-the-port`: the store's four reads, asked of a surface over a
  *   port to a real worker AND of a surface over a store on this thread, with ONE
  *   case list and the same workload behind both. Reading while the fold is still
@@ -91,6 +98,7 @@ import {
 	SOURCE_FROM_LATER_BLOCK,
 	SOURCE_V2,
 	START_BLOCK,
+	txInBlock,
 	versionCount,
 	writableStore,
 } from './workload.js';
@@ -637,6 +645,117 @@ async function controlsTheIndexerCase(params: Params, timings: Timing[]): Promis
 	}
 }
 
+/**
+ * THE OPTIMISTIC-UPDATE RECONCILIATION, ASKED OF A REAL WORKER FROM A REAL TAB.
+ *
+ * The page holds a port and nothing else: it has no store, no cursor and no
+ * window, so the only thing that could answer this is the context doing the
+ * fold. What comes back has to survive the crossing WHOLE -- a status AND the
+ * basis for it -- because that is what an app renders: `unknown` means keep the
+ * optimistic update, and `absent` means the fold has looked.
+ *
+ * The fold is held at two known points so that "answered from current state"
+ * is a pair of answers rather than a hope. The worker's fixture chain is gated
+ * (`holdChain`, `holdAbove`) and the page releases each gate by posting to the
+ * worker directly -- not over the port, which ignores a message that is not its
+ * own, and which is itself worth crossing once for real.
+ *
+ * The three moments:
+ *
+ * 1. nothing served at all, so the host holds no generation: the honest
+ *    `unknown`/`not-synced`, answered rather than hung;
+ * 2. the fold stopped at block 103, one block below the transaction being
+ *    watched: `absent`/`window-miss` -- and the SAME call, given the block a
+ *    receipt names, concludes `included`/`below-window` about the transaction in
+ *    block 100 that has already fallen out of the sparse window;
+ * 3. the fold at the tip: `included`/`window-hit`, naming the block IN THE
+ *    INDEXER'S VIEW.
+ *
+ * `unknown`/`window-not-covering` -- the second cause of unknown -- needs a chain
+ * whose tip is tens of thousands of blocks above the fold, which is a counted
+ * fixture rather than a second execution context, so it lives in
+ * `test/checkTxInclusionFromTheTab.test.ts` with the rest of the timing claims.
+ */
+async function txInclusionCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'tx-inclusion');
+	const worker = new Worker(
+		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdChain&holdAbove=103`, import.meta.url),
+		{type: 'module'},
+	);
+	/** Block 104's transaction: the one an app would be watching. */
+	const watched = txInBlock(104);
+	/** Block 100's: folded, and below the unconfirmed window at this fixture's tip. */
+	const old = txInBlock(100);
+	const never = '0x00000000000000000000000000000000000000000000000000000000000000bb';
+
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	try {
+		// (1) NOTHING SYNCED: the chain is held, so the host has not opened a
+		// container. The call ANSWERS -- it does not wait for one.
+		const beforeAnySync = await timed('before-any-sync', timings, () =>
+			indexer.checkTxInclusion([{txHash: watched}, {txHash: old}]),
+		);
+		const phaseBeforeAnySync = (await indexer.progress()).phase;
+
+		// (2) HELD BELOW THE TRANSACTION: the fold has 100 to 103 and cannot go on.
+		worker.postMessage({fixture: 'release', gate: 'chain'});
+		await timed('fold-to-the-hold', timings, () => until(indexer, (progress) => progress.lastToBlock === 103));
+		const beforeTheFoldReachesIt = await indexer.checkTxInclusion([
+			{txHash: watched},
+			{txHash: never},
+			// the same call, carrying the block a RECEIPT names for a transaction the
+			// sparse window no longer holds
+			{txHash: old, minedAtBlock: 100},
+		]);
+
+		// (3) AT THE TIP: the transaction has been folded.
+		worker.postMessage({fixture: 'release', gate: 'fetches'});
+		const progress = await timed('fold-to-the-tip', timings, () => untilAtTip(indexer));
+		const afterTheFoldReachesIt = await indexer.checkTxInclusion([{txHash: watched}, {txHash: never}]);
+
+		return {
+			// WHERE the verdict was computed, measured in the context that computed it
+			scope: progress.scope,
+			tabScope: executionScopeName(),
+			host: progress.host,
+			phaseBeforeAnySync,
+			beforeAnySync: {watched: beforeAnySync[watched], old: beforeAnySync[old]},
+			beforeTheFoldReachesIt: {
+				watched: beforeTheFoldReachesIt[watched],
+				never: beforeTheFoldReachesIt[never],
+				oldWithAReceipt: beforeTheFoldReachesIt[old],
+			},
+			// a verdict per hash, from ONE call
+			askedAtOnce: Object.keys(beforeTheFoldReachesIt).length,
+			afterTheFoldReachesIt: {
+				watched: afterTheFoldReachesIt[watched],
+				never: afterTheFoldReachesIt[never],
+			},
+			// everything the tab was handed, in full
+			portSurface: Object.keys(indexer).sort(),
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/** Ask until the host's own report says what a case is waiting for. */
+async function until(
+	indexer: IndexerPort,
+	matches: (progress: HostProgress) => boolean,
+	attempts = 600,
+): Promise<HostProgress> {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const progress = await indexer.progress();
+		if (progress.failure) {
+			throw new Error(`the host stopped: ${progress.failure.name}: ${progress.failure.message}`);
+		}
+		if (matches(progress)) return progress;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	throw new Error(`the host never got there: ${JSON.stringify(await indexer.progress())}`);
+}
+
 /** The counter, read THROUGH THE PORT: whatever the canonical generation says it is. */
 async function transfersAcrossThePort(indexer: IndexerPort): Promise<number | null> {
 	const row = (await indexer.reads.getCurrent('counter', {name: 'transfers'})) as {value?: number} | undefined;
@@ -736,6 +855,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'hosted-in-a-worker':
 						results = await hostedInAWorkerCase(ctx.params, timings);
+						break;
+					case 'tx-inclusion-from-the-tab':
+						results = await txInclusionCase(ctx.params, timings);
 						break;
 					case 'reads-across-the-port':
 						results = await readsAcrossThePortCase(ctx.params, timings);

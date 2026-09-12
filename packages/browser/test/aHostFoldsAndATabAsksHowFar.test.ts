@@ -135,10 +135,12 @@ describe('an indexer hosted behind a port', () => {
 			// other half of this claim (the refusals below do not compile).
 			//
 			// The CONTROL verbs beside them do not weaken it. Starting, stopping and
-			// reconfiguring ask the HOST to fold differently; none of them writes a row,
-			// and the handle that could is the one the host opened for writing and never
-			// let out of its own context.
+			// reconfiguring ask the HOST to fold differently, and `checkTxInclusion` asks
+			// it a question about the window it maintains; none of them writes a row, and
+			// the handle that could is the one the host opened for writing and never let
+			// out of its own context.
 			expect(Object.keys(port).sort()).toEqual([
+				'checkTxInclusion',
 				'close',
 				'generations',
 				'host',

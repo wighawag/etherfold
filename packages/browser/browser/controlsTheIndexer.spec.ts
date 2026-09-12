@@ -79,6 +79,7 @@ test('a tab starts, stops and reconfigures the indexer across the port', async (
 
 		// Everything the tab was handed, in full.
 		expect(run.results.portSurface).toEqual([
+			'checkTxInclusion',
 			'close',
 			'generations',
 			'host',
