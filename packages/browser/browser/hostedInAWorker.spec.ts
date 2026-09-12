@@ -60,6 +60,7 @@ test('folds a real workload in a dedicated worker, and the tab asks how far it g
 		// that could write one: the host holds the writer (ADR-0077, ADR-0082), and
 		// `reads` is the store's four READS proxied (`readsAcrossThePort.spec.ts`).
 		expect(run.results.portSurface).toEqual([
+			'checkTxInclusion',
 			'close',
 			'generations',
 			'host',

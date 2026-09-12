@@ -66,6 +66,57 @@ const fetchWidth = Number(new URL(self.location.href).searchParams.get('fetch') 
 const perGeneration = new URL(self.location.href).searchParams.has('generations');
 const databaseFor = (stream: string) => (perGeneration ? `${databaseName}-${stream}` : databaseName);
 
+/**
+ * A FOLD THE PAGE CAN HOLD STILL, for the cases whose claim is about WHEN an
+ * answer was asked for.
+ *
+ * `checkTxInclusion` is a SNAPSHOT, so "the verdict changed as the fold advanced"
+ * needs the fold to be somewhere KNOWN when the question is asked -- which a
+ * fixture chain that answers instantly does not provide. Two gates, both unset
+ * by default, so every other case runs exactly as it always did:
+ *
+ * - `holdChain` holds EVERYTHING, so the container never opens and the host has
+ *   no cursor at all;
+ * - `holdAbove=N` holds the fetches that would take the fold above block `N`.
+ *
+ * The page releases them by posting to the worker DIRECTLY, which is the one
+ * thing here that is not the port -- and it works precisely because the envelope
+ * says a message that is not ours must be IGNORED rather than answered (a worker
+ * scope receives whatever anybody posts to it). An application has no need for
+ * any of this: its chain is a real node, and a real node takes its time on its
+ * own.
+ */
+const holdChain = new URL(self.location.href).searchParams.has('holdChain');
+const holdAbove = Number(new URL(self.location.href).searchParams.get('holdAbove') ?? '0');
+
+const gates = {chain: openable(holdChain), fetches: openable(holdAbove > 0)};
+
+function openable(held: boolean): {passed: Promise<void>; open: () => void} {
+	if (!held) return {passed: Promise.resolve(), open: () => undefined};
+	let open!: () => void;
+	const passed = new Promise<void>((resolve) => (open = resolve));
+	return {passed, open};
+}
+
+self.addEventListener('message', (event: MessageEvent) => {
+	const message = event.data as {fixture?: string; gate?: 'chain' | 'fetches'} | null;
+	if (message?.fixture !== 'release') return;
+	gates[message.gate ?? 'fetches'].open();
+});
+
+/** The fixture chain behind those gates. Ungated, it is the same provider every other case drives. */
+const chain = fakeChain();
+const gatedProvider = {
+	async request(args: {method: string; params?: unknown}): Promise<unknown> {
+		await gates.chain.passed;
+		if (args.method === 'eth_getLogs' && holdAbove > 0) {
+			const asked = args.params as [{toBlock: string}];
+			if (parseInt(asked[0].toBlock.slice(2), 16) > holdAbove) await gates.fetches.passed;
+		}
+		return (chain.provider as {request(args: unknown): Promise<unknown>}).request(args);
+	},
+} as unknown as typeof chain.provider;
+
 hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// The store is opened for WRITING here, in the host. That is the writer/reader
 	// split reaching across the boundary: the tab holds a port, and a port names no
@@ -73,7 +124,7 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 	createState: async (context) =>
 		openForWriting(await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)})),
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
-	provider: fakeChain().provider,
+	provider: gatedProvider,
 	source: SOURCE,
 	config: {
 		stream: {finality: FINALITY},

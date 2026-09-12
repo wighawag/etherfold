@@ -1,4 +1,4 @@
-import type {Abi, IndexingSource, UsedPromotionConfig} from '@etherfold/core';
+import type {Abi, IndexingSource, TxInclusionQuery, TxInclusionVerdict, UsedPromotionConfig} from '@etherfold/core';
 import {assertClonable} from './clone.js';
 import {listen, type HostAccess} from './endpoint.js';
 import {
@@ -138,6 +138,40 @@ export type IndexerPort = {
 	 * (`CONTEXT.md`, *canonical pointer*).
 	 */
 	promotion(): Promise<UsedPromotionConfig>;
+	/**
+	 * DOES THE STATE THIS APP IS ABOUT TO RENDER ALREADY ACCOUNT FOR THESE
+	 * TRANSACTIONS?
+	 *
+	 * The reconciliation an app needs before it lays an OPTIMISTIC update over
+	 * indexed state: applied on top of a state that already contains it, a
+	 * non-idempotent update (a counter, a balance, an append) is counted twice.
+	 * See `checkTxInclusion` in `@etherfold/core` for what the verdicts mean, why
+	 * the caller's own receipt cannot answer this, and what it cannot tell you.
+	 *
+	 * ```ts
+	 * const verdicts = await indexer.checkTxInclusion(pending.map(({hash, block}) => ({txHash: hash, minedAtBlock: block})));
+	 * for (const {hash} of pending) {
+	 *   if (verdicts[hash].status === 'included') overlay.drop(hash); // the fold has it: stop predicting it
+	 * }
+	 * ```
+	 *
+	 * THE WHOLE PENDING SET IN ONE CALL, because that is how an app holding one
+	 * uses it: one round trip, and one verdict per hash keyed as it was asked for.
+	 *
+	 * The verdict crosses WHOLE -- a STATUS and the BASIS for it -- and reading the
+	 * status alone is the mistake to avoid. `unknown` has two causes (nothing is
+	 * synced yet; the fold is so far behind the tip that its window says nothing
+	 * about the region asked about), and both mean KEEP the optimistic update,
+	 * where an honest `absent` means the fold has looked and not found it.
+	 * `minedAtBlock` is per query and is what a caller holding a RECEIPT passes to
+	 * close the sparse window's two limits, through the `below-window` branch.
+	 *
+	 * A SNAPSHOT and not a subscription: it is answered from where the fold is at
+	 * the moment of the call, so an app watching a transaction ASKS AGAIN -- when
+	 * `onProgress` says the fold moved, which is exactly when the answer can have
+	 * changed.
+	 */
+	checkTxInclusion(queries: readonly TxInclusionQuery[]): Promise<Record<string, TxInclusionVerdict>>;
 	/**
 	 * THE STORE'S FOUR READS, served by the host from the store its canonical
 	 * generation folds into.
@@ -292,6 +326,7 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 		reconfigure: (update) => request('reconfigure', {source: update.source}),
 		generations: () => request('generations', undefined),
 		promotion: () => request('promotion', undefined),
+		checkTxInclusion: (queries) => request('checkTxInclusion', {queries}),
 		reads: {
 			declarations: () => request('declarations', undefined),
 			getCurrent: (entity, id) => request('getCurrent', {entity, id}),

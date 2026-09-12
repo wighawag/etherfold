@@ -55,3 +55,15 @@ RECORD non-obvious in-scope decisions you make while building, in a `## Decision
 ## Requeue 2026-09-12
 
 Previous attempt died on a transient infra timeout before producing any code; no work branch exists. Start fresh.
+
+## Decisions
+
+**`checkTxInclusion` does NOT wait for the host's container, unlike the four reads on the same port.** A read awaits `firstState` because "read me the rows" has no honest answer before a store exists. This question does have one: `unknown`/`not-synced` is a verdict an app renders (keep the optimistic update). Alternative considered: await `openContainer()` for symmetry with the reads — rejected because it turns the cheapest true answer into a call that hangs for as long as a provider takes to answer `eth_chainId`, on a UI thread laying out a pending queue, and because acceptance criterion 6 asks for the honest unknown rather than an error or a wait. This touches the read path's documented waiting rule (they now differ deliberately, and both sites say why) and it is what makes the "no generation live" case deterministic in the tests.
+
+**Finality is read as `container ? container.finalityDepth : 0`, mirroring `createIndexerState` exactly.** The `0` is never observable: with no container there is no cursor either, so the `not-synced` branch answers before finality is consulted. Alternative: refuse when no container — rejected for the same reason as above.
+
+**`checkTxInclusion` is on `IndexerPort` only, not on `IndexerHost`.** The host handle carries lifecycle verbs (`startIndexing`, `stopIndexing`) "so an entry point that wants to decide for itself has the verb its tab has"; a worker entry point has no use for the inclusion question, and `createIndexerState` is the main-thread surface for it. Touches the final task of this spec (`createIndexerState` becoming this host): if that task wants one surface for both, it adds the verb there rather than removing a duplicate.
+
+**`CONTEXT.md`'s *tx inclusion* entry was extended, not forked.** It named `createIndexerState(...).checkTxInclusion` as *the* browser surface; there are now two at different layers, so the parenthetical lists both and the entry gains the port's rules (crosses whole, snapshot not subscription, follows the canonical pointer, does not wait). No new term was coined: this is the existing concept reaching an existing boundary. The final task still owns the `createIndexerState`-as-main-thread-host wording.
+
+**Fixture-only gates in `indexer.worker.ts`, released over a non-port message.** Needed because the fake chain answers instantly, so "before the fold reached it" is otherwise a race in a real worker. Alternative considered: a port case to hold the fold — rejected outright as production surface invented for a test. The side channel is confined to `browser/` scaffolding and is off unless the URL asks for it, so every pre-existing case runs exactly as before.

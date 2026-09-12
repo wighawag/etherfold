@@ -18,7 +18,14 @@
  * posts to it, and a message that is not ours must be IGNORED rather than
  * answered with an error about an unknown case.
  */
-import type {Abi, GenerationRecord, IndexingSource, UsedPromotionConfig} from '@etherfold/core';
+import type {
+	Abi,
+	GenerationRecord,
+	IndexingSource,
+	TxInclusionQuery,
+	TxInclusionVerdict,
+	UsedPromotionConfig,
+} from '@etherfold/core';
 import type {EntityId, EntityIdPrefix, Listing, NormalizedEntity} from '@etherfold/state-store';
 import type {PortError} from './errors.js';
 
@@ -406,6 +413,42 @@ export type PortCases = {
 	 * running under (`CONTEXT.md`, *canonical pointer*).
 	 */
 	readonly promotion: {readonly request: undefined; readonly response: UsedPromotionConfig};
+	/**
+	 * DOES THE INDEXED STATE ALREADY ACCOUNT FOR THESE TRANSACTIONS? One verdict
+	 * per hash, from the window the host's canonical generation maintains.
+	 *
+	 * A LIST in, a record out, because an app with a pending queue asks about the
+	 * QUEUE: a call per transaction would be a round trip per transaction for a
+	 * question every one of them answers off the same window, built once per call
+	 * (`indexWindow`).
+	 *
+	 * ## The verdict crosses WHOLE, and must never become a boolean
+	 *
+	 * `TxInclusionVerdict` is `@etherfold/core`'s own type, carried unchanged: a
+	 * STATUS and the BASIS for it. Narrowing it at this boundary would destroy the
+	 * distinction the type exists for -- `unknown` has two causes (`not-synced`,
+	 * `window-not-covering`) and an app renders those differently from an honest
+	 * `absent`, because dropping an optimistic update on "I cannot tell" is the
+	 * double-count this whole surface exists to prevent.
+	 *
+	 * `minedAtBlock` crosses PER QUERY and is not decoration: the window is SPARSE,
+	 * so `absent` means only "not in the window", and a caller holding a RECEIPT
+	 * closes that through the `below-window` branch. A tab is exactly where a
+	 * caller has a receipt.
+	 *
+	 * ## A SNAPSHOT, and deliberately not a subscription
+	 *
+	 * It is answered against the state at the moment of the call, so an app
+	 * watching a transaction ASKS AGAIN rather than being handed something live.
+	 * The window moves as the fold advances and as reorgs are concluded, and a
+	 * verdict pushed at a tab would be a second progress signal with the same
+	 * cadence as the one already on this port -- `progress` is what tells an app
+	 * that asking again is worth it.
+	 */
+	readonly checkTxInclusion: {
+		readonly request: {readonly queries: readonly TxInclusionQuery[]};
+		readonly response: Record<string, TxInclusionVerdict>;
+	};
 	/**
 	 * START PUSHING progress to this tab, and answer where the fold is NOW.
 	 *

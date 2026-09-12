@@ -9,9 +9,17 @@ import type {
 	ProvidedIndexerConfig,
 	EventProcessor,
 	GenerationContext,
+	TxInclusionQuery,
+	TxInclusionVerdict,
 	UsedPromotionConfig,
 } from '@etherfold/core';
-import {isRetryable, openIndexer, openMemoryGenerationRegistry, sameGeneration} from '@etherfold/core';
+import {
+	checkTxInclusion as checkTxInclusionAgainst,
+	isRetryable,
+	openIndexer,
+	openMemoryGenerationRegistry,
+	sameGeneration,
+} from '@etherfold/core';
 import {
 	declaredRow,
 	mustGet,
@@ -411,6 +419,10 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 				return generations();
 			case 'promotion':
 				return promotion();
+			case 'checkTxInclusion': {
+				const asked = request.payload as PortCases['checkTxInclusion']['request'];
+				return checkTxInclusion(asked.queries);
+			}
 			case 'unsubscribeFromProgress':
 				subscriptions = Math.max(0, subscriptions - 1);
 				// What was last posted is forgotten with the last subscriber: the next one
@@ -748,6 +760,37 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 				? {}
 				: {blocksBehind: Math.max(0, canonicalCursor - lastToBlock)}),
 		};
+	}
+
+	/**
+	 * DOES THE STATE THIS HOST IS FOLDING INTO ALREADY ACCOUNT FOR THESE
+	 * TRANSACTIONS?
+	 *
+	 * The same two arguments `createIndexerState` answers this from, read HERE so
+	 * that a tab never has to keep a second copy of either: the cursor this host is
+	 * currently reporting, and the finality depth its container actually runs with
+	 * (`resolveStreamConfig` fills that one in, so it is not derivable from the
+	 * config an app passed). The rule itself is `@etherfold/core`'s and is neither
+	 * re-implemented nor adjusted on the way across.
+	 *
+	 * ## It does not WAIT for the container, and that is the answer rather than a
+	 * shortcut
+	 *
+	 * A read waits for the first store, because "read me the rows" has no honest
+	 * answer until there is a store. This question DOES have one: a host that has
+	 * not synced anything says `unknown`/`not-synced`, which is a verdict an app
+	 * renders (keep the optimistic update; nothing here can tell you otherwise).
+	 * Waiting would turn the cheapest true answer into a call that hangs for as long
+	 * as a provider takes to respond, and the caller is a UI thread laying out a
+	 * pending queue.
+	 *
+	 * The same reasoning is what makes this honest across a PROMOTION: the cursor is
+	 * dropped when the pointer moves (`onPromoted`), so what is answered from is
+	 * the window the generation that ANSWERS READS maintains, or nothing at all --
+	 * never a window nobody is maintaining any more.
+	 */
+	function checkTxInclusion(queries: readonly TxInclusionQuery[]): Record<string, TxInclusionVerdict> {
+		return checkTxInclusionAgainst(lastSync, queries, container ? container.finalityDepth : 0);
 	}
 
 	/**
