@@ -809,7 +809,11 @@ describe('the two refusal families are told apart', () => {
 });
 
 describe('what only this side can check', () => {
-	it('refuses to fetch from a provider serving another chain', async () => {
+	// Named for what it REFUSES rather than for when: since ADR-0081 deleted the
+	// before-fetch call, the range is fetched and then thrown away, so "refuses to
+	// fetch" would describe a round trip that still happens. What matters, and what
+	// is asserted, is that nothing reaches the receiver.
+	it('refuses a provider serving another chain, and pushes nothing', async () => {
 		const chain = makeChain({latestBlock: 110, chainId: '137'});
 		const receiver = fakeReceiver({expectedFromBlock: START_BLOCK, context: CONTEXT});
 
