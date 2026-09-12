@@ -866,10 +866,11 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 		// THE RESUME, or the WEDGE this case exists to be honest about.
 		//
 		// On WebKit, about one run in eight, the replacement worker opens the database
-		// and then waits FOR EVER on the writer claim. Where it stops is established;
-		// WHY is not -- the obvious mechanism (a terminated worker's transaction still
-		// holding the store) was tested minimally and falsified, so this is deliberately
-		// described by its SYMPTOM rather than by a cause nobody has yet shown
+		// and then waits FOR EVER on the writer claim, because terminating a worker with
+		// a `readwrite` and a `readonly` transaction overlapping wedges the whole
+		// database: `open` keeps working and every transaction after it hangs, for every
+		// context and across a reload. That is a WebKit defect and no claim can land on a
+		// database in that state
 		// (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
 		// So this does NOT throw -- the outcome is REPORTED, and the spec decides what
 		// each engine is allowed to do with it, rather than a real product guarantee

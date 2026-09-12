@@ -191,10 +191,10 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// differently, and from outside the worker all three look identical -- a host
 	// that says `waiting` for ever. Reporting each one is what turned an
 	// intermittent WebKit timeout into a located defect: the store OPENS and the
-	// claim never lands. That is as far as the diagnosis goes -- the cause is still
-	// open (see the finding named in `restartsAndResumes.spec.ts`) -- which is
-	// exactly why these stay. The next stall of this shape should be diagnosable in
-	// one run instead of ten, and narrowing the cause needs them.
+	// claim never lands, which is what pointed at a wedged DATABASE rather than a
+	// dead worker and led to the WebKit bug behind it (see the finding named in
+	// `restartsAndResumes.spec.ts`). They stay because the next stall of this shape
+	// should be diagnosable in one run instead of ten.
 	createState: async (context) => {
 		report({probe: 'store-open-start'});
 		const raw = await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)});

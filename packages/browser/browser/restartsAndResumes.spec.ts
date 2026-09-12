@@ -69,13 +69,16 @@ test('a terminated worker restarts and resumes from the cursor', async ({page}, 
 		// THE ONE OUTCOME WEBKIT CAN PRODUCE THAT THE OTHER TWO CANNOT
 		// ---------------------------------------------------------------------------
 		// This case kills the worker DELIBERATELY while a store write is in flight,
-		// which is the moment a `readwrite` transaction is open. Chromium and Firefox
+		// which is the moment a `readwrite` transaction is open -- and, because every
+		// read on the IndexedDB backend returns before its transaction commits, the
+		// moment a `readonly` one is still open underneath it. Chromium and Firefox
 		// resume normally -- 0 failures in 12 runs each. On WebKit, about one run in
-		// eight, the replacement opens the database and then waits FOR EVER on the
-		// writer claim; that permanence was measured out to 100 seconds rather than
-		// assumed from a timeout. WHY it waits is NOT established: the obvious
-		// explanation, a terminated worker's transaction still holding the store, was
-		// tested minimally and falsified, so nothing here asserts a cause.
+		// eight, terminating a worker with those two transactions overlapping wedges
+		// the DATABASE, permanently: `open` still succeeds and every transaction after
+		// it hangs, `readonly` as much as `readwrite`, in the tab as much as in the
+		// replacement worker, and a reload does not clear it. It is a WebKit defect,
+		// reproduced with no etherfold in it (0/200 chromium, 0/200 firefox), and
+		// there is nothing this package can do to make the claim land.
 		//
 		// So the case does not assert something the platform cannot do. What it
 		// asserts on every engine is the guarantee that IS universal: EITHER the fold
@@ -97,7 +100,8 @@ test('a terminated worker restarts and resumes from the cursor', async ({page}, 
 			// not have.
 			expect(stalledAt?.phase).toBe('waiting');
 			// It got as far as OPENING the store and no further, which is what says the
-			// claim is the thing that blocked.
+			// claim is the thing that blocked -- `open` is the one IndexedDB call the
+			// wedge still answers.
 			expect(run.results.probes).toContain('life1:store-open-done');
 			expect(run.results.probes).not.toContain('life1:writer-claimed');
 			// The death itself was still reported and the in-flight call still refused,
@@ -106,7 +110,9 @@ test('a terminated worker restarts and resumes from the cursor', async ({page}, 
 			expect(run.results.rejectedInFlight).toBe('IndexerHostDiedError');
 			testInfo.annotations.push({
 				type: 'known-webkit-limitation',
-				description: "the terminated worker's IndexedDB transaction still holds the store, so the claim cannot land",
+				description:
+					'terminating a worker with a readwrite and a readonly transaction overlapping wedges the database ' +
+					'permanently on WebKit, so no transaction the replacement takes can ever complete',
 			});
 			return;
 		}
