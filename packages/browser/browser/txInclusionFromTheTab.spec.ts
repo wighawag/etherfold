@@ -1,5 +1,5 @@
 import {expect, test} from '@playwright/test';
-import {mountHarness} from 'playwright-browser-harness';
+import {mountHarness} from './harness.js';
 
 /**
  * `checkTxInclusion` ASKED FROM A TAB AND ANSWERED BY A REAL WORKER.

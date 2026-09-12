@@ -1,5 +1,5 @@
 import {expect, test, type Page} from '@playwright/test';
-import {mountHarness} from 'playwright-browser-harness';
+import {mountHarness} from './harness.js';
 import {EXPECTED_A, EXPECTED_A_LATER, EXPECTED_B, START_BLOCK} from './workload.js';
 
 /**
