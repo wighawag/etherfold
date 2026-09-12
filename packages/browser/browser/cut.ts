@@ -55,6 +55,14 @@
  *   case list and the same workload behind both. Reading while the fold is still
  *   running is part of it, because that is what makes an app usable during a
  *   first sync rather than after it.
+ * - `shared-attach` / `shared-finish` / `shared-both-shapes` / `shared-other-app`
+ *   / `shared-unsupported`: the SHAREDWORKER hosting shape. They run here because
+ *   the claim is about SEVERAL TABS attached to ONE host: a SharedWorker is
+ *   identified by its script URL plus its name, so "one host" is a fact about two
+ *   documents in one browser and cannot be arranged between two objects. The
+ *   attach/finish pair is one case split in two runs because the spec closes a
+ *   page in between, and the port has to survive that: it is kept in module state
+ *   (see `sharedlyAttached`).
  * - `restarts-and-resumes`: a real dedicated worker TERMINATED mid-fold, while it
  *   is writing a block, and the port that puts another one in its place. It runs
  *   here and nowhere else for the reason the hosting case does -- a browser is the
@@ -78,6 +86,7 @@ import {
 	createProgressReadable,
 	dedicatedWorkerHost,
 	executionScopeName,
+	sharedWorkerHost,
 	type HostDeath,
 	type HostProgress,
 	type IndexerPort,
@@ -897,6 +906,306 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 	}
 }
 
+/**
+ * WHAT THIS FIXTURE'S WORKER SAID, straight at the page and never over the port.
+ *
+ * `instance` is the value the whole shared claim rests on: two tabs reporting the
+ * same one are attached to ONE host, and a different one after every tab went
+ * away is a host the browser started afresh.
+ */
+type WorkerSaid = {fixture?: string; instance?: string; fetched?: {from: number; to: number}[]};
+
+/**
+ * WHERE A HELD FOLD STOPS: the block the shared fixture's gate holds it at.
+ *
+ * The fixture is fetched four blocks at a time from block 100, so the first
+ * advance lands here and the next one is what the gate holds -- which is what
+ * gives the lifecycle case a MIDDLE of a fold for a tab to be closed in, rather
+ * than a race against five blocks that finish between two polls.
+ */
+const HELD_AT = 103;
+
+/**
+ * THE SHARED WORKERS A PORT CONNECTS TO, newest last.
+ *
+ * The same shape as `hostedWorkers` above and for the same reasons: the app owns
+ * the line that constructs the worker (its URL has to be a literal a bundler can
+ * trace, and its NAME is half of a SharedWorker's identity), the PORT owns when
+ * that line is called, and the handles are kept because these fixtures reach past
+ * the port to post a gate release straight at the host. An application needs
+ * none of that.
+ *
+ * What it CANNOT do, and deliberately, is kill one: a `SharedWorker` has no
+ * `terminate()`, because the instance belongs to every tab attached to it.
+ */
+function hostedSharedWorkers(
+	url: URL,
+	name: string,
+	onBuilt: (worker: SharedWorker) => void = () => undefined,
+): {create: () => SharedWorker; latest: () => SharedWorker; built: SharedWorker[]} {
+	const built: SharedWorker[] = [];
+	const create = () => {
+		const worker = new SharedWorker(url, {type: 'module', name});
+		onBuilt(worker);
+		built.push(worker);
+		return worker;
+	};
+	return {create, latest: () => built[built.length - 1], built};
+}
+
+/**
+ * THIS TAB'S ATTACHMENT TO THE SHARED HOST, kept between runs.
+ *
+ * The lifecycle case is two runs of one tab with a PAGE CLOSING in between
+ * (`shared-attach`, then `shared-finish` after the other tab has gone), and what
+ * it is asserting is that the host survived that -- so the port has to be the
+ * same port. Module state survives between `run` calls because they are two
+ * `page.evaluate` calls into one loaded page, and a reload would clear it, which
+ * is correct: a reloaded tab is a new client that has attached to nothing.
+ */
+let sharedlyAttached:
+	| {
+			indexer: IndexerPort;
+			workers: ReturnType<typeof hostedSharedWorkers>;
+			said: WorkerSaid[];
+			pushes: HostProgress[];
+	  }
+	| undefined;
+
+/** The URL a shared host is loaded from: the same bundle every other case loads. */
+function sharedWorkerUrl(database: string, query: Record<string, string | number> = {}): URL {
+	const extra = Object.entries(query)
+		.map(([key, value]) => `&${key}=${encodeURIComponent(String(value))}`)
+		.join('');
+	return new URL(`./worker.js?db=${encodeURIComponent(database)}${extra}`, import.meta.url);
+}
+
+/** The last thing the host said about itself, and what it had fetched by then. */
+function lastSaid(said: WorkerSaid[]): {instance: string | null; fetched: {from: number; to: number}[]} {
+	const mine = said.filter((message) => message.fixture === 'shared');
+	const last = mine[mine.length - 1];
+	return {instance: last?.instance ?? null, fetched: last?.fetched ?? []};
+}
+
+/**
+ * ONE TAB ATTACHING TO THE SHARED HOST, and everything it can see from there.
+ *
+ * The page constructs a `SharedWorker` and holds a port, exactly as the dedicated
+ * case constructs a `Worker` and holds one. `name` is passed in because it is
+ * half of the host's identity: two tabs given the same name and the same URL are
+ * two tabs of ONE app, and that is the case this task exists for.
+ *
+ * It waits for a VALUE and never a duration: the tip, or -- where the spec asked
+ * for the fold to be held -- the block the gate holds it at, so that a tab can be
+ * closed in the middle of a fold rather than after one.
+ */
+async function sharedAttachCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'shared-worker');
+	const held = params.hold === true;
+	const url = sharedWorkerUrl(database, {fetch: 4, ...(held ? {holdAbove: HELD_AT} : {})});
+	const said: WorkerSaid[] = [];
+	const workers = hostedSharedWorkers(url, (params.name as string) ?? 'etherfold-indexer', (worker) =>
+		worker.port.addEventListener('message', (event) => said.push(event.data as WorkerSaid)),
+	);
+
+	const indexer = connectToIndexerHost(sharedWorkerHost(workers.create));
+	const pushes: HostProgress[] = [];
+	indexer.onProgress((progress) => pushes.push(progress));
+	sharedlyAttached = {indexer, workers, said, pushes};
+
+	const progress = held
+		? await timed('fold-to-the-hold', timings, () => until(indexer, (value) => value.lastToBlock === HELD_AT))
+		: await timed('fold-in-a-shared-worker', timings, () => untilAtTip(indexer));
+	const {instance, fetched} = lastSaid(said);
+
+	return {
+		// WHERE the answer was computed, measured in the answering context
+		scope: progress.scope,
+		tabScope: executionScopeName(),
+		host: progress.host,
+		// WHICH host: the fixture's own evidence that two tabs reached one of them
+		instance,
+		fetched,
+		indexing: progress.indexing,
+		phase: progress.phase,
+		lastToBlock: progress.lastToBlock,
+		latestBlock: progress.latestBlock,
+		// what this tab was PUSHED, unprompted, from a context that is not the UI thread
+		phases: pushes.map((push) => push.phase).filter((phase, index, all) => phase !== all[index - 1]),
+		transfers: await transfersAcrossThePort(indexer),
+		portSurface: Object.keys(indexer).sort(),
+	};
+}
+
+/**
+ * THE TAB THAT STAYED, carrying the fold to the tip after the other one went
+ * away.
+ *
+ * The gate is released from HERE, which is the point: the tab that closed is gone,
+ * and the host it was talking to is still there to be told something and still
+ * folding for whoever is left.
+ */
+async function sharedFinishCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const attached = sharedlyAttached;
+	if (!attached) throw new Error(`this tab is not attached to a shared host, so there is nothing to finish`);
+	const database = databaseName(params, 'shared-worker');
+
+	attached.workers.latest().port.postMessage({fixture: 'release', gate: 'fetches'});
+	const progress = await timed('fold-to-the-tip', timings, () => untilAtTip(attached.indexer));
+	const {instance, fetched} = lastSaid(attached.said);
+
+	const state = await timed('read-back', timings, async () =>
+		readState(
+			new EntityStateView(
+				openForReading(
+					await createBrowserStateStore(processor.entities, {
+						databaseName: `${database}-${(params.name as string) ?? 'etherfold-indexer'}`,
+					}),
+				),
+			),
+		),
+	);
+
+	return {
+		scope: progress.scope,
+		host: progress.host,
+		// the SAME host as before the other tab closed, or this claim is not the claim
+		instance,
+		fetched,
+		indexing: progress.indexing,
+		lastToBlock: progress.lastToBlock,
+		latestBlock: progress.latestBlock,
+		phases: attached.pushes.map((push) => push.phase).filter((phase, index, all) => phase !== all[index - 1]),
+		transfers: await transfersAcrossThePort(attached.indexer),
+		state,
+	};
+}
+
+/**
+ * ONE ENTRY POINT, BOTH SHAPES, AND ONE PIECE OF APP CODE RUN AGAINST EACH.
+ *
+ * `whatAnAppSees` is written once and run twice, which is the criterion stated as
+ * code: an app that moves from a dedicated worker to a shared one changes the
+ * ARGUMENT it passes to `connectToIndexerHost` and nothing else. Both hosts are
+ * built from the SAME bundle (`indexer.bothShapes.worker.ts`, loaded once as a
+ * `Worker` and once as a `SharedWorker`), so what runs inside them is not merely
+ * equivalent -- it is the same file.
+ *
+ * Each folds into a database of its own, because two hosts over one store are two
+ * writers and the storage guard is not what is being tested here (ADR-0075).
+ */
+async function sharedBothShapesCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const shared = connectToIndexerHost(
+		sharedWorkerHost(
+			() =>
+				new SharedWorker(sharedWorkerUrl(databaseName(params, 'both-shapes-shared')), {
+					type: 'module',
+					name: 'both-shapes',
+				}),
+		),
+	);
+	const dedicated = connectToIndexerHost(
+		dedicatedWorkerHost(
+			() => new Worker(sharedWorkerUrl(databaseName(params, 'both-shapes-dedicated')), {type: 'module'}),
+		),
+	);
+
+	/** The app's own code, which does not know which shape it is talking to. */
+	const whatAnAppSees = async (indexer: IndexerPort) => {
+		const progress = await untilAtTip(indexer);
+		return {
+			host: progress.host,
+			scope: progress.scope,
+			seen: {
+				indexing: progress.indexing,
+				phase: progress.phase,
+				lastToBlock: progress.lastToBlock,
+				latestBlock: progress.latestBlock,
+				blocksBehindTip: progress.blocksBehindTip,
+				syncPercentage: progress.syncPercentage,
+				transfers: await transfersAcrossThePort(indexer),
+				generations: (await indexer.generations()).length,
+				promotion: (await indexer.promotion()).policy,
+				inclusion: (await indexer.checkTxInclusion([{txHash: txInBlock(104)}]))[txInBlock(104)].status,
+				stopped: (await indexer.stopIndexing()).indexing,
+				started: (await indexer.startIndexing()).indexing,
+				surface: Object.keys(indexer).sort(),
+			},
+		};
+	};
+
+	try {
+		return {
+			tabScope: executionScopeName(),
+			shared: await timed('shared', timings, () => whatAnAppSees(shared)),
+			dedicated: await timed('dedicated', timings, () => whatAnAppSees(dedicated)),
+		};
+	} finally {
+		shared.close();
+		dedicated.close();
+	}
+}
+
+/**
+ * A SECOND APP ON ONE ORIGIN, WITH NOTHING CONFIGURED TO KEEP THEM APART.
+ *
+ * A SharedWorker is identified by its SCRIPT URL plus its NAME, so a second name
+ * is a second host -- the same scoping the writer guard arrives at from the
+ * storage side (ADR-0075). It is a PROPERTY to verify rather than a mechanism to
+ * build: nothing in this package implements it, and this case is here because
+ * checking it is free.
+ *
+ * The two hosts fold into different databases, because the fixture entry derives
+ * its database from `self.name`; so this also shows the consequence that matters,
+ * which is that two apps sharing a bundle do not contend for one store.
+ */
+async function sharedOtherAppCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'shared-worker');
+	const said: WorkerSaid[] = [];
+	const workers = hostedSharedWorkers(
+		// THE SAME SCRIPT URL as the two tabs above, down to the query string.
+		sharedWorkerUrl(database, {fetch: 4}),
+		(params.name as string) ?? 'another-app',
+		(worker) => worker.port.addEventListener('message', (event) => said.push(event.data as WorkerSaid)),
+	);
+	const indexer = connectToIndexerHost(sharedWorkerHost(workers.create));
+	try {
+		const progress = await timed('fold-in-another-host', timings, () => untilAtTip(indexer));
+		return {
+			scope: progress.scope,
+			host: progress.host,
+			instance: lastSaid(said).instance,
+			lastToBlock: progress.lastToBlock,
+			transfers: await transfersAcrossThePort(indexer),
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/**
+ * A RUNTIME WITHOUT SHAREDWORKER IS TOLD, rather than failing obscurely.
+ *
+ * Every engine this harness runs has one, so the absence is staged: the
+ * constructor is taken off this page's global for the length of the call, which
+ * is what an app on an engine without it sees. What is asserted is the SENTENCE,
+ * because the sentence is the feature -- and that nothing falls back on its own,
+ * since the shape decides how many writers an app has.
+ */
+async function sharedUnsupportedCase(): Promise<Record<string, unknown>> {
+	const scope = globalThis as {SharedWorker?: unknown};
+	const constructor = scope.SharedWorker;
+	delete scope.SharedWorker;
+	try {
+		sharedWorkerHost(() => undefined as never);
+		return {refused: false, message: null};
+	} catch (error) {
+		return {refused: true, message: (error as Error).message};
+	} finally {
+		scope.SharedWorker = constructor;
+	}
+}
+
 /** Ask until the host's own report says what a case is waiting for. */
 async function until(
 	indexer: IndexerPort,
@@ -1045,6 +1354,21 @@ const cut: CodeUnderTest = {
 						break;
 					case 'restarts-and-resumes':
 						results = await restartsAndResumesCase(ctx.params, timings);
+						break;
+					case 'shared-attach':
+						results = await sharedAttachCase(ctx.params, timings);
+						break;
+					case 'shared-finish':
+						results = await sharedFinishCase(ctx.params, timings);
+						break;
+					case 'shared-both-shapes':
+						results = await sharedBothShapesCase(ctx.params, timings);
+						break;
+					case 'shared-other-app':
+						results = await sharedOtherAppCase(ctx.params, timings);
+						break;
+					case 'shared-unsupported':
+						results = await sharedUnsupportedCase();
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);
