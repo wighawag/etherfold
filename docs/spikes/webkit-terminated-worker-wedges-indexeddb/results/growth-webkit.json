@@ -1,0 +1,95 @@
+{
+  "engine": "webkit",
+  "iterations": 200,
+  "variants": {
+    "one-store-hold": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "product-fold": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "product-fold-jitter": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "product-fold-plus-readonly": {
+      "wedged": 4,
+      "of": 200,
+      "runs": {
+        "write-ok": 196,
+        "WEDGED-readonly(unrelated=ok,afterReload=WEDGED,inANewTab=WEDGED)": 4
+      }
+    },
+    "product-fold-plus-readonly-jitter": {
+      "wedged": 2,
+      "of": 200,
+      "runs": {
+        "write-ok": 198,
+        "WEDGED-readonly(unrelated=ok,afterReload=WEDGED,inANewTab=WEDGED)": 2
+      }
+    },
+    "two-stores-puts-plus-readonly": {
+      "wedged": 1,
+      "of": 200,
+      "runs": {
+        "write-ok": 199,
+        "WEDGED-readonly(unrelated=ok,afterReload=WEDGED,inANewTab=WEDGED)": 1
+      }
+    },
+    "two-stores-puts-plus-readonly-jitter": {
+      "wedged": 8,
+      "of": 200,
+      "runs": {
+        "write-ok": 192,
+        "WEDGED-readonly(unrelated=ok,afterReload=WEDGED,inANewTab=WEDGED)": 8
+      }
+    },
+    "two-stores-puts-plus-readwrite": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "two-stores-puts-alone": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "worker-writes-tab-reads-jitter": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "sequential-no-overlap-jitter": {
+      "wedged": 0,
+      "of": 200,
+      "runs": {
+        "write-ok": 200
+      }
+    },
+    "two-stores-puts-plus-readonly-self-close": {
+      "wedged": 9,
+      "of": 200,
+      "runs": {
+        "write-ok": 191,
+        "WEDGED-readonly(unrelated=ok,afterReload=WEDGED,inANewTab=WEDGED)": 9
+      }
+    }
+  }
+}
