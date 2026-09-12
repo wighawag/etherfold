@@ -1,0 +1,3 @@
+# A `test:browser` run dirties committed spike results
+
+2026-09-12 — Running `pnpm --filter @etherfold/browser test:browser` rewrites nine committed files under `docs/spikes/a-sharedworker-serves-several-tabs-from-one-host/results/*.json` (only `ranAt` and the fixture's random `instance` ids change), so any full browser run leaves an unrelated dirty working tree that a later `git add -A` would sweep into an unrelated commit. Seen while running the browser suite for `createindexerstate-becomes-the-main-thread-host`; reverted with `git checkout`. The writer is `browser/sharedWorkerServesSeveralTabs.spec.ts`.

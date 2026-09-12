@@ -63,6 +63,14 @@
  *   attach/finish pair is one case split in two runs because the spec closes a
  *   page in between, and the port has to survive that: it is kept in module state
  *   (see `sharedlyAttached`).
+ * - `hosting-shapes`: ONE behaviour suite (`hostingShapes.ts`) run against all
+ *   THREE hosting shapes in one page -- a dedicated worker, a SharedWorker and
+ *   `createIndexerState` on this thread. It runs here because it is the only
+ *   place all three exist: the two worker shapes need a real browser, and the
+ *   node run (`test/theThreeHostingShapesRunOneImplementation.test.ts`) drives
+ *   the same list against the main-thread one on every commit. What it asserts
+ *   is ADR-0082's opening claim -- one implementation, three hosting shapes --
+ *   and it asserts it by there being one list rather than three files that agree.
  * - `restarts-and-resumes`: a real dedicated worker TERMINATED mid-fold, while it
  *   is writing a block, and the port that puts another one in its place. It runs
  *   here and nowhere else for the reason the hosting case does -- a browser is the
@@ -91,6 +99,7 @@ import {
 	type HostProgress,
 	type IndexerPort,
 } from '../src/index.js';
+import {hostingShapeCases, openOnTheMainThread, runHostingShapeCases} from './hostingShapes.js';
 import {foldOnThisThread, readEntities, readWritableStore, runReadSurfaceCases} from './readWorkload.js';
 import {
 	BRANCH_A_LATER,
@@ -907,6 +916,62 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 }
 
 /**
+ * ONE BEHAVIOUR SUITE, THREE HOSTING SHAPES, IN ONE PAGE.
+ *
+ * The claim ADR-0082 opens with, checked the only way it can be checked without
+ * being checked weakly: `hostingShapes.ts` holds ONE list of cases and it is run
+ * three times here, against a dedicated worker, a SharedWorker and
+ * `createIndexerState` on this very thread. Three test files that happened to
+ * agree would prove nothing, because they drift one edit at a time and each goes
+ * on passing.
+ *
+ * The two worker shapes load the SAME bundle (`indexer.bothShapes.worker.ts`,
+ * which picks its entry helper from the scope it finds itself in), and the third
+ * loads no bundle at all: the host on this thread is the hook, so the shape is
+ * `indexer.mainThreadHost()` and there is nothing to construct.
+ *
+ * Each folds into a database of its own, because three hosts over one store are
+ * three writers and the storage guard is not what is being tested here
+ * (ADR-0075). What differs between the three, and all that may differ, is
+ * `scope`: WHERE the answering code ran, measured rather than declared.
+ */
+async function hostingShapesCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const base = databaseName(params, 'hosting-shapes');
+	const bundle = (database: string) => new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url);
+
+	const dedicated = connectToIndexerHost(
+		dedicatedWorkerHost(() => new Worker(bundle(`${base}-dedicated`), {type: 'module'})),
+	);
+	const shared = connectToIndexerHost(
+		sharedWorkerHost(
+			() => new SharedWorker(bundle(`${base}-shared`), {type: 'module', name: 'etherfold-hosting-shapes'}),
+		),
+	);
+	const mainThread = await openOnTheMainThread(`${base}-main`);
+
+	/** The app's own code, which does not know which shape it is talking to. */
+	const against = async (port: IndexerPort) => {
+		const run = await runHostingShapeCases(port);
+		const progress = await port.progress();
+		return {host: progress.host, scope: progress.scope, passed: run.passed, failures: run.failures};
+	};
+
+	try {
+		return {
+			tabScope: executionScopeName(),
+			cases: hostingShapeCases.length,
+			dedicated: await timed('dedicated-worker', timings, () => against(dedicated)),
+			shared: await timed('shared-worker', timings, () => against(shared)),
+			mainThread: await timed('main-thread', timings, () => against(mainThread.port)),
+		};
+	} finally {
+		dedicated.close();
+		shared.close();
+		mainThread.close();
+	}
+}
+
+/**
  * WHAT THIS FIXTURE'S WORKER SAID, straight at the page and never over the port.
  *
  * `instance` is the value the whole shared claim rests on: two tabs reporting the
@@ -1351,6 +1416,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'controls-the-indexer':
 						results = await controlsTheIndexerCase(ctx.params, timings);
+						break;
+					case 'hosting-shapes':
+						results = await hostingShapesCase(ctx.params, timings);
 						break;
 					case 'restarts-and-resumes':
 						results = await restartsAndResumesCase(ctx.params, timings);

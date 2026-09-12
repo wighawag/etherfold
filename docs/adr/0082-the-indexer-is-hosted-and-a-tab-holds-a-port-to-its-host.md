@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # The indexer is HOSTED, and a tab holds a port to its host
 
 The browser indexer runs on the main thread: `createIndexerState` holds the store, drives the **container**, and exposes reactive stores an app subscribes to. Indexing is a fold over every log a contract ever emitted (31,332 events across 1,042 blocks on the measured workload, at 45.6 ms per block of store writes on Chromium), so on the main thread it is jank in an app that is also trying to render.

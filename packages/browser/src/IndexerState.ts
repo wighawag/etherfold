@@ -30,8 +30,13 @@ import {
 	resolveStreamConfig,
 	sameGeneration,
 } from '@etherfold/core';
-import {pruneBudget, type WritableStateStore} from '@etherfold/state-store';
+import {pruneBudget, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
+import {derivedProgress, hostGenerationOf, hostGenerationsOf, type HostBacking} from './host/cases.js';
+import {executionScopeName, type HostAccess} from './host/endpoint.js';
+import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './host/envelope.js';
+import {portErrorOf, type PortError} from './host/errors.js';
+import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
@@ -485,7 +490,7 @@ type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfi
 		) => Promise<void>;
 
 /**
- * The browser indexing hook.
+ * THE BROWSER INDEXING HOOK, AND THE MAIN-THREAD **indexer host** (ADR-0082).
  *
  * ```ts
  * // the state (and its cursor) live in a store the app chose, and a GENERATION
@@ -495,6 +500,29 @@ type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfi
  *   createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
  * });
  * ```
+ *
+ * ## It is a HOST, and `mainThreadHost()` is the port to it
+ *
+ * A **host** owns a **container** and drives it; three **hosting shapes** exist
+ * in a browser and they differ ONLY in how a port is obtained. This function is
+ * the MAIN-THREAD one -- it owns the container, opens the store for WRITING and
+ * runs the loop -- so an app that wants the port surface rather than the
+ * reactive triple joins a wire to it and never constructs a second indexer:
+ *
+ * ```ts
+ * const port = connectToIndexerHost(indexer.mainThreadHost(), {watch: false});
+ * ```
+ *
+ * What that buys is that the code an app writes AGAINST the port is identical
+ * across the three shapes, so moving the fold into a worker later is a change to
+ * one line of wiring. What it COSTS here is the whole reason a dedicated worker
+ * is the default: the fold runs on the UI thread, so a tab that hosts its own
+ * indexer janks while it renders.
+ *
+ * There is deliberately no second main-thread constructor beside this one
+ * (ADR-0082). `serveIndexerHost` is the WORKER hosts' driver, reached through
+ * `hostIndexerInThisWorker` / `hostIndexerInThisSharedWorker` from inside a
+ * worker entry point; what runs on this thread is this function.
  *
  * ## Where the state is persisted, and by whom
  *
@@ -629,6 +657,62 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 	/** The container this hook drives, once `init` has opened it. */
 	let indexer: Indexer<ABI, ProcessResultType> | undefined;
+	/**
+	 * WHICH OF THE FIVE COARSE THINGS THE FOLD IS DOING, as a **port** reports it.
+	 *
+	 * Kept beside `status.state` rather than derived from it, because the two answer
+	 * different questions and one of them would be WRONG if translated. `StatusState`
+	 * carries this thread's finer vocabulary (`FetchingEventStream`,
+	 * `ProcessingEventStream`) and reaches `IndexingLatest` through
+	 * `catchupThreshold`, which is a presentation smoothing knob -- twenty blocks from
+	 * the tip is "latest" for a UI that would otherwise flicker. `SyncPhase.at-tip` is
+	 * the DRIVER's own rest condition (`lastToBlock >= latestBlock` on an ADVANCE) and
+	 * nothing else, which is what every hosting shape means by it. Deriving one from
+	 * the other would make a port say "live" over a fold that is still fetching.
+	 */
+	let hostPhase: SyncPhase = 'waiting';
+	/** WHY the loop stopped, where it stopped on something waiting cannot fix. */
+	let hostFailure: PortError | undefined;
+	/** Every wire a `mainThreadHost()` handed out and has not been let go of. */
+	const wires = new Set<MainThreadHosting>();
+	/** The processor configuration `init` was given, so a generation added later is built with it. */
+	let processorConfigUsed: ProcessorConfig | undefined;
+	/** The auto-index cycle in flight, so a STOP can resolve once it has LANDED. */
+	let cycling: Promise<void> | undefined;
+
+	/**
+	 * A READ ACROSS THE PORT MAY ARRIVE BEFORE THE FIRST STORE EXISTS, and waits
+	 * rather than being refused.
+	 *
+	 * The same rule the worker hosts follow, for the same reason: waiting is the
+	 * honest answer to "read me the rows" while the store is moments away, and what
+	 * must never happen is waiting FOREVER -- so a `dispose()` before any `init`
+	 * rejects it and a later `init` gives it a fresh one.
+	 */
+	let announceFirstState!: () => void;
+	let refuseFirstState!: (error: unknown) => void;
+	let firstState!: Promise<void>;
+	function expectFirstState(): void {
+		firstState = new Promise<void>((resolve, reject) => {
+			announceFirstState = resolve;
+			refuseFirstState = reject;
+		});
+		// Nobody may ever read, and a promise that rejects with no handler is a warning
+		// in every runtime this ships to.
+		firstState.catch(() => undefined);
+	}
+	expectFirstState();
+
+	/** Tell every attached wire where the fold is, if it MOVED. See `ServedCases.publish`. */
+	function publishToPort(): void {
+		for (const wire of wires) wire.publish();
+	}
+
+	/** Move the port's phase and say so. A move to the phase it is already in posts nothing. */
+	function enterHostPhase(next: SyncPhase): void {
+		hostPhase = next;
+		publishToPort();
+	}
 	// `ReturnType<typeof setTimeout>` rather than `number`: this module is browser
 	// code, but its own test tooling puts node's typings in scope, and the handle is
 	// only ever passed back to `clearTimeout`, which takes either.
@@ -888,6 +972,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		if (indexer) {
 			throw new Error(`already initialised`);
 		}
+		processorConfigUsed = processorConfig;
 		const config = {...{}, keepStream: options?.keepStream, ...(indexerSetup.config || {})};
 		const source = indexerSetup.source;
 
@@ -959,6 +1044,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// keeps what it is handed keeps something that follows the canonical pointer.
 		setState(indexer.state);
 		setSyncing({waitingForProvider: false});
+		// The container is open, so the generation it was given has been built and its
+		// state recorded: a read across the port that was waiting can be answered. The
+		// chain answered too, so this host is no longer WAITING on a provider -- the same
+		// moment `waitingForProvider` is cleared, which is the rule every shape follows.
+		announceFirstState();
+		enterHostPhase('loading');
 		// One generation and it is canonical, so this reports nothing -- but it reports
 		// nothing from the CONTAINER, rather than leaving the initial value standing
 		// for a container that may have been opened over a durable registry.
@@ -987,6 +1078,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		lastSyncObject.totalPercentage = Math.floor((lastToBlock * 1000000) / latestBlock) / 10000;
 
 		setSyncing({lastSync: lastSyncObject});
+		// THE PUSH CADENCE, and the whole of it: the cursor moved, so a tab holding a
+		// port is told. Tied to APPLIED WORK and never to a timer.
+		publishToPort();
 	}
 
 	// Clears the browser-layer syncing state that gates `setupIndexing` (its early-return on
@@ -1014,6 +1108,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		indexer.onLoad = async (loadingState) => {
 			if (loadingState === 'Loading') {
 				setStatus({state: 'Loading'});
+				enterHostPhase('loading');
 			} else if (loadingState === 'FetchingEventStream') {
 				setSyncing({fetchingLogs: true});
 				setStatus({state: 'FetchingEventStream'});
@@ -1024,6 +1119,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				setSyncing({processingFetchedLogs: false});
 				setSyncing({catchingUp: true});
 				setStatus({state: 'CatchingUp'});
+				// Loaded, and BEHIND BY AN UNKNOWN AMOUNT: no advance has answered yet, so
+				// the cursor's own numbers may still be the `0` of `0` a container publishes
+				// before it has fetched. Only an advance can say `at-tip`.
+				enterHostPhase('catching-up');
 			}
 			await wait(0.001); // allow propagation if the whole proces is synchronous
 		};
@@ -1076,6 +1175,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			setLastSync(lastSync);
 			setCatchup(lastSync);
 		}
+		// ONE rule for "at the tip", and it is literally the expression the driver rests
+		// on rather than `catchupThreshold` beside it: a port saying `at-tip` while this
+		// loop went on fetching would be two answers to one question, and an app would be
+		// told "live" over an incomplete fold.
+		enterHostPhase(lastSync.lastToBlock >= lastSync.latestBlock ? 'at-tip' : 'catching-up');
 		// Unconditionally, unlike the cursor above: this is read from the container as
 		// it stands NOW, so a pointer that moved during the cycle is already accounted
 		// for rather than something to skip.
@@ -1383,6 +1487,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			setSyncing({
 				autoIndexing: false,
 			});
+			publishToPort();
 			return true;
 		} else {
 			return false;
@@ -1435,6 +1540,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 		// 3. drop the indexer reference and reset browser-layer state so a later init() starts clean.
 		indexer = undefined;
+		// The port's view goes back to where it started, and a read that was waiting for
+		// a store this container will now never build is REJECTED rather than left
+		// hanging. A wire is NOT closed here: a port belongs to whoever obtained it, and
+		// a later `init` builds a container this same wire goes on answering from.
+		refuseFirstState(
+			new Error(`this indexer was disposed, so it holds no store to read from. Call init(...) to build one again.`),
+		);
+		expectFirstState();
+		hostFailure = undefined;
+		processorConfigUsed = undefined;
+		hostPhase = 'waiting';
 		// A DEMOTION does not survive this, and that is the only way back: a later
 		// `init` calls the factories again, and a writer becomes one again by CLAIMING
 		// again (ADR-0077). A `createState` that hands back the store this one LOST is
@@ -1463,6 +1579,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			streamSeed: undefined,
 		});
 		setStatus({state: 'Idle'});
+		publishToPort();
 	}
 
 	/**
@@ -1488,8 +1605,24 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		return checkTxInclusionAgainst($syncing.lastSync, queries, indexer ? indexer.finalityDepth : 0);
 	}
 
-	async function _auto_index() {
+	/**
+	 * ONE TURN OF THE AUTO-INDEX LOOP, held so a STOP can wait for it to LAND.
+	 *
+	 * The promise is what makes `IndexerPort.stopIndexing` honest on this shape: a
+	 * caller that has been answered knows no further chain request will be made and
+	 * that the cursor is where a completed cycle would have left it. `stopAutoIndexing`
+	 * keeps its own synchronous shape -- it clears a timer, which is what an app that
+	 * drives the loop by hand asks for -- so this is beside it rather than inside it.
+	 */
+	function _auto_index(): void {
+		cycling = _auto_index_cycle().finally(() => {
+			cycling = undefined;
+		});
+	}
+
+	async function _auto_index_cycle() {
 		setSyncing({autoIndexing: true});
+		publishToPort();
 		try {
 			const lastSync = await indexMoreAndCatchupIfNeeded();
 			if (!lastSync) {
@@ -1497,6 +1630,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// `demote` has already stopped it, dropped the cursor and said so. Re-arming
 				// would fetch a chain every four seconds in order to be refused by every
 				// write it made.
+				return;
+			}
+			// STOPPED WHILE THIS CYCLE WAS IN FLIGHT, so it is not re-armed.
+			//
+			// `stopAutoIndexing` clears the timer that would have started the NEXT cycle,
+			// which is the whole of a stop when the loop is resting -- but a stop that
+			// arrives mid-cycle has no timer to clear, and re-arming here would restart the
+			// loop a caller had just switched off. That was invisible while nothing waited
+			// on a stop; `IndexerPort.stopIndexing` promises that no chain request is made
+			// after it answers, and this is what makes the promise true on this shape.
+			if (!$syncing.autoIndexing) {
 				return;
 			}
 			if (lastSync.latestBlock - lastSync.lastToBlock < 1) {
@@ -1532,6 +1676,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					autoIndexing: false,
 					error: {message: (err as Error)?.message ?? String(err), id: 'WriteRefused'},
 				});
+				// A host that merely stopped reporting is indistinguishable from a slow one
+				// (ADR-0082), so a tab holding a port is told WHY rather than left to infer it
+				// from a number that stopped moving.
+				hostFailure = portErrorOf(err);
+				enterHostPhase('refused');
+				return;
+			}
+			// Not re-armed either where a stop landed while the failing cycle was in
+			// flight: a transient failure is worth retrying, and a caller that switched
+			// indexing off is not asking for one.
+			if (!$syncing.autoIndexing) {
 				return;
 			}
 			namedLogger.error('ERROR, retry in 1 seconds', err);
@@ -1539,6 +1694,129 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			return;
 		}
 	}
+
+	// -------------------------------------------------------------------------
+	// THE MAIN-THREAD HOST (ADR-0082): the same nine questions every shape answers.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * WHERE THE FOLD HAS GOT TO, in the vocabulary the port carries.
+	 *
+	 * A TRANSLATION of what this hook already holds and never a second source of
+	 * truth: the cursor is `syncing.lastSync`, the derived figures come from the same
+	 * `derivedProgress` a worker host uses (so an app moving between shapes binds the
+	 * same names to the same meanings), and `scope` is MEASURED rather than declared,
+	 * which is what lets a test assert that the UI thread IS doing the fold here.
+	 */
+	function hostProgress(): HostProgress {
+		const lastSync = $syncing.lastSync;
+		return {
+			host: 'main-thread',
+			scope: executionScopeName(),
+			// The DRIVER, which on this shape is the auto-index loop. An app driving
+			// `indexMore()` by hand is not "indexing" in the sense a port means: nothing is
+			// advancing the fold on its own.
+			indexing: $syncing.autoIndexing,
+			phase: hostPhase,
+			...(lastSync ? {lastToBlock: lastSync.lastToBlock, latestBlock: lastSync.latestBlock} : {}),
+			...(lastSync ? derivedProgress(lastSync, indexer?.defaultFromBlock ?? 0) : {}),
+			...(hostFailure ? {failure: hostFailure} : {}),
+		};
+	}
+
+	/**
+	 * THE STORE A READ IS ANSWERED FROM: the one the CANONICAL generation folds
+	 * into.
+	 *
+	 * Resolved per read rather than captured once, because the pointer moves: a
+	 * promotion makes another generation the one that answers, and a read served from
+	 * the retired one would be answering from a fold nobody is advancing. The
+	 * `StateStore` narrowing is what the port is handed -- this hook holds the
+	 * writable handle and nothing that crosses can reach the mutating half.
+	 */
+	async function storeForReads(): Promise<StateStore> {
+		await firstState;
+		const canonical = indexer?.canonical.record;
+		const state = canonical && statesByGeneration.get(generationKey(canonical));
+		if (!state) {
+			throw new Error(
+				`this host holds no state for the generation that answers reads, so there is nothing to read from. A ` +
+					`generation's store is built by the factory this indexer was given, and the canonical generation's was not.`,
+			);
+		}
+		return state;
+	}
+
+	/**
+	 * WHAT THIS HOST ANSWERS, as every hosting shape answers it.
+	 *
+	 * The nine questions of `HostBacking` and nothing else. Everything a tab can
+	 * OBSERVE -- the envelope, the case dispatch, the row projection, the refusals and
+	 * the push cadence -- is `host/cases.ts`'s and is the same code the worker hosts
+	 * run, which is what makes "one implementation, three hosting shapes" a fact about
+	 * one module rather than three files that agree (ADR-0082).
+	 */
+	const hostBacking: HostBacking = {
+		progress: hostProgress,
+		async startIndexing(): Promise<HostProgress> {
+			// The container is what a driver drives, and a tab may ask for one while `init`
+			// is still opening it. Awaiting is the same answer a read gets: it is moments
+			// away, and an indexer that never opens one rejects with what stopped it rather
+			// than leaving the call hanging.
+			await firstState;
+			await startAutoIndexing(autoIndexingInterval);
+			return hostProgress();
+		},
+		async stopIndexing(): Promise<HostProgress> {
+			stopAutoIndexing();
+			// AWAITED rather than signalled, which is the whole of the promise this call
+			// makes: when it answers, no chain request is in flight and none will be made,
+			// and the cursor is where a completed cycle would have left it.
+			const running = cycling;
+			if (running) await running;
+			return hostProgress();
+		},
+		async reconfigure(source): Promise<HostReconfigure> {
+			await firstState;
+			// SERIALISED with this hook's own reconfiguring verbs, and not merely with other
+			// port calls: building a generation beside the live one and swapping the
+			// canonical one's processor are two ways of asking for the same thing, and
+			// interleaving them would run one against the other's half-applied state.
+			return serializeReconfigure(async () => {
+				if (!indexer) {
+					throw new Error(`no indexer setup, call init`);
+				}
+				const open = indexer;
+				const before = open.generations.map((generation) => generation.record);
+				const held = await open.add({
+					// The ABI is NARROWED here and nowhere else, exactly as the worker hosts
+					// narrow it: the envelope is not generic, and a tab and its host come out of
+					// ONE build.
+					source: source as IndexingSource<ABI>,
+					...generationSpecFor(spec.createState, spec.createProcessor, processorConfigUsed),
+				});
+				// A promotion may already have happened (`immediate`), and the generation list
+				// an app renders has moved either way.
+				reportGenerationProgress();
+				publishToPort();
+				return {
+					generation: hostGenerationOf(held, open),
+					added: !before.some((record) => sameGeneration(record, held.record)),
+				};
+			});
+		},
+		generations(): readonly HostGeneration[] {
+			return indexer ? hostGenerationsOf(indexer) : [];
+		},
+		async promotion(): Promise<UsedPromotionConfig> {
+			await firstState;
+			// Nothing is defaulted at this boundary: there is one default everywhere and it
+			// lives with the type it belongs to (`CONTEXT.md`, *canonical pointer*).
+			return indexer!.promotion;
+		},
+		checkTxInclusion,
+		storeForReads,
+	};
 
 	return {
 		syncing: {
@@ -1560,6 +1838,49 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			},
 		},
 		checkTxInclusion,
+		/**
+		 * OBTAIN A PORT TO THE INDEXER RUNNING ON THIS THREAD: the MAIN-THREAD
+		 * **hosting shape** (ADR-0082).
+		 *
+		 * ```ts
+		 * const indexer = createIndexerState({createState, createProcessor});
+		 * await indexer.init({provider, source});
+		 * const port = connectToIndexerHost(indexer.mainThreadHost(), {watch: false});
+		 * ```
+		 *
+		 * The third of the three shapes, and the only one that constructs nothing: the
+		 * two worker shapes obtain a port by BUILDING a host (`dedicatedWorkerHost`,
+		 * `sharedWorkerHost`, each handed the line that constructs a worker), while the
+		 * host on this thread is THIS OBJECT and already exists. That asymmetry is the
+		 * decision, not an accident: a top-level `mainThreadHost(spec)` would be a second
+		 * way to build a main-thread indexer with no rule for choosing between them.
+		 *
+		 * What crosses is what crosses to a worker, because the wire is a real
+		 * `MessageChannel`: the same envelope, the same structured-clone refusals, the
+		 * same four reads projected by the same code. What an app writes AGAINST the port
+		 * is therefore identical across the three shapes, which is what makes moving the
+		 * fold off the UI thread later a change to one line of wiring.
+		 *
+		 * ## Three things worth knowing before reaching for it
+		 *
+		 * **The fold is on the UI thread.** That is the cost, and it is why the guide
+		 * leads with a dedicated worker.
+		 *
+		 * **Pass `{watch: false}`.** A host on this thread cannot die independently of the
+		 * tab holding the port, so the liveness probe has nothing to find; the access
+		 * carries no `reopen` either, so a port that somehow concluded a death would
+		 * honestly report `restarting: false`.
+		 *
+		 * **It may be called more than once**, and each call is its own wire with its own
+		 * subscription -- the same thing a SharedWorker does for several tabs. Letting a
+		 * port go (`close()`) releases only that wire; the indexer goes on folding,
+		 * because it belongs to the app and not to the port. `dispose()` is what stops it.
+		 */
+		mainThreadHost(): HostAccess {
+			const wire = hostOnThisThread(hostBacking, (released) => wires.delete(released));
+			wires.add(wire);
+			return wire.access;
+		},
 		init: init as InitFunction<ABI, ProcessorConfig>,
 		/**
 		 * RECONFIGURE WITHOUT AN OUTAGE: build a generation BESIDE the live one.

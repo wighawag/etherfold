@@ -9,6 +9,15 @@ import type {HostAccess, MessageEndpoint} from '../../src/index.js';
  * `main-thread` shape, honestly, rather than pretending to be a worker it is
  * not. The real worker runs under Playwright (`browser/*.spec.ts`), which is
  * where "the UI thread is not doing the work" becomes a fact about two contexts.
+ *
+ * ## What this is NOT, now that the third shape has shipped
+ *
+ * It is the WORKER hosts' driver (`serveIndexerHost`) reached over a local wire,
+ * labelled by the context it happens to run in. It is not the main-thread
+ * HOSTING SHAPE, which is `createIndexerState(...).mainThreadHost()` -- one host,
+ * the app's own, with no second container beside it (ADR-0082). That shape is
+ * driven by `test/theThreeHostingShapesRunOneImplementation.test.ts`, which runs
+ * the shared behaviour suite against it.
  */
 export function wire(): {host: HostAccess; tab: HostAccess; tabEndpoint: MessageEndpoint; close: () => void} {
 	const channel = new MessageChannel();
