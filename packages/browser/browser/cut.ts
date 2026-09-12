@@ -815,7 +815,13 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 	let inFlight: Promise<string> | undefined;
 
 	const workers = hostedWorkers(
-		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdAbove=103&report`, import.meta.url),
+		// `claimWithin` is short here because this is the case that can meet a wedged
+		// database, and what is being asserted is that the tab is TOLD rather than left
+		// waiting. A healthy claim on every engine lands in single-digit milliseconds.
+		new URL(
+			`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdAbove=103&report&claimWithin=5`,
+			import.meta.url,
+		),
 		(worker) => {
 			const life = lives++;
 			// The SUCCESSOR is let go at once. The first host is held below the tip so
@@ -866,12 +872,14 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 		// THE RESUME, or the WEDGE this case exists to be honest about.
 		//
 		// On WebKit, about one run in eight, the replacement worker opens the database
-		// and then waits FOR EVER on the writer claim, because terminating a worker with
-		// a `readwrite` and a `readonly` transaction overlapping wedges the whole
-		// database: `open` keeps working and every transaction after it hangs, for every
-		// context and across a reload. That is a WebKit defect and no claim can land on a
-		// database in that state
+		// and the claim can never land, because terminating a worker with a `readwrite`
+		// and a `readonly` transaction overlapping wedges the whole database: `open`
+		// keeps working and every transaction after it hangs, for every context and
+		// across a reload. That is a WebKit defect and no claim can land on a database
+		// in that state
 		// (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+		// What the host does about it is NOT wait for ever: the claim is bounded, the
+		// refusal travels out of `createState`, and the tab reads it as a failure.
 		// So this does NOT throw -- the outcome is REPORTED, and the spec decides what
 		// each engine is allowed to do with it, rather than a real product guarantee
 		// being expressed as an intermittent timeout.

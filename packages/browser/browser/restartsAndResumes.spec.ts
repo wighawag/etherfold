@@ -91,14 +91,19 @@ test('a terminated worker restarts and resumes from the cursor', async ({page}, 
 		// `work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`.
 		if (run.results.stalled) {
 			expect(testInfo.project.name).toBe('webkit');
-			const stalledAt = run.results.stalledAt as {host?: string; scope?: string; phase?: string} | undefined;
+			const stalledAt = run.results.stalledAt as
+				| {host?: string; scope?: string; phase?: string; failure?: {name?: string}}
+				| undefined;
 			// The replacement is ALIVE and answering across the port: this is a wedged
 			// store, not a dead or missing host, and the difference is the whole point.
 			expect(stalledAt?.host).toBe('dedicated-worker');
 			expect(stalledAt?.scope).toBe('DedicatedWorkerGlobalScope');
-			// ...and it says it has not begun, rather than claiming a cursor it does
-			// not have.
-			expect(stalledAt?.phase).toBe('waiting');
+			// ...and it does not sit in `waiting` for ever. The claim is BOUNDED, so a
+			// store that will never answer becomes a refusal the tab can read and render,
+			// rather than a silence indistinguishable from a slow fold (ADR-0082). This is
+			// the half the product controls; the wedge itself it cannot.
+			expect(stalledAt?.phase).toBe('refused');
+			expect(stalledAt?.failure?.name).toBe('StoreClaimAbandonedError');
 			// It got as far as OPENING the store and no further, which is what says the
 			// claim is the thing that blocked -- `open` is the one IndexedDB call the
 			// wedge still answers.

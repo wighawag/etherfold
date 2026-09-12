@@ -109,6 +109,16 @@ const holdAbove = Number(new URL(self.location.href).searchParams.get('holdAbove
  * rather than answered. Unset by default, so every other case's wire is exactly
  * what it always was.
  */
+/**
+ * HOW LONG THIS FIXTURE WAITS FOR THE WRITER CLAIM, in seconds.
+ *
+ * An application states its own; it is a query parameter here because one case
+ * deliberately wedges a database and needs the refusal to arrive inside a test's
+ * patience rather than a user's. Ten seconds by default, which is far longer than
+ * any healthy claim on any engine and far shorter than for ever.
+ */
+const claimWithinSeconds = Number(new URL(self.location.href).searchParams.get('claimWithin') ?? '10');
+
 const reports = new URL(self.location.href).searchParams.has('report');
 const report = (message: Record<string, unknown>) => {
 	if (reports) self.postMessage({fixture: 'worker', ...message});
@@ -199,7 +209,14 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 		report({probe: 'store-open-start'});
 		const raw = await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)});
 		report({probe: 'store-open-done'});
-		const writable = await openForWriting(raw);
+		// THE CLAIM IS BOUNDED, because a claim can hang: a WebKit database that was
+		// wedged by a worker terminated mid-write never answers, and an unbounded wait
+		// here is an app in `waiting` for ever with nothing to render (see the finding
+		// named in `restartsAndResumes.spec.ts`). The refusal travels out of
+		// `createState`, which the host turns into `phase: 'refused'` with a `failure`
+		// the tab can read across the port. An application picks its own bound; this
+		// one is short because a fixture's fold is a fixture's fold.
+		const writable = await openForWriting(raw, {signal: AbortSignal.timeout(claimWithinSeconds * 1000)});
 		report({probe: 'writer-claimed'});
 		return announcingWrites(writable);
 	},
