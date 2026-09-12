@@ -82,6 +82,61 @@ export type IndexedDBStateStoreOptions = RetentionOptions & {
 	 */
 	readonly retention?: RetentionSetting;
 	/**
+	 * Refuse to have two transactions open on this database at once.
+	 *
+	 * **A workaround for someone else's defect, OFF by default, and never decided
+	 * here.** This backend does not sniff an engine and will not: the defect is
+	 * WebKit's, and a WebKit engine cannot be identified from inside a worker at all
+	 * (`navigator.vendor` is `[Exposed=Window]`; `GestureEvent` and friends are DOM
+	 * objects a `DedicatedWorkerGlobalScope` does not have). The caller decides. See
+	 * `work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`.
+	 *
+	 * ## What it changes
+	 *
+	 * Normally a read returns as soon as its REQUEST succeeds and leaves its
+	 * `readonly` transaction to auto-commit behind it, which is what every
+	 * IndexedDB wrapper does and is perfectly legal. Two consequences: a read's
+	 * transaction is briefly still open under whatever the caller does next, and
+	 * two callers can have transactions in flight at once.
+	 *
+	 * With this set, every read awaits its transaction's COMMIT before returning,
+	 * and every operation queues behind the previous one, so this store never has
+	 * more than one transaction open.
+	 *
+	 * ## Why anyone would want that
+	 *
+	 * On WebKit -- measured on an iPhone 12 running Safari 18.3.1, and on a recent
+	 * upstream build -- ending a worker that has a `readwrite` AND a `readonly`
+	 * transaction in flight wedges the whole database PERMANENTLY: `open` keeps
+	 * succeeding and every transaction after it hangs for ever, in every context,
+	 * across a reload and a new tab, with `deleteDatabase` blocked. A worker that
+	 * never holds two transactions at once did not reproduce it in 1,000 runs.
+	 *
+	 * ## What it costs, measured
+	 *
+	 * A transaction-commit round trip is the same order of magnitude as a small read
+	 * itself, so a single-request read costs a THIRD to nearly DOUBLE what it did
+	 * (`packages/browser/spikes/commitWaitCost.spec.ts`, 8 paired repeats):
+	 * `getCurrent` x1.37 chromium / x1.84 firefox / x1.37 webkit, `getAsOf` x1.48 /
+	 * x1.88 / x1.33, and a fold under concurrent read load x1.11 / x1.21 / x1.11. A
+	 * `listCurrent` barely moves (x1.03 to x1.16) because its many requests share
+	 * one transaction, which is the shape of the whole cost: it is charged per
+	 * TRANSACTION, so it taxes patterns made of many small reads.
+	 *
+	 * It buys nothing at all on Chromium or Firefox, which do not have the defect.
+	 * That asymmetry is why this is not simply on for everybody.
+	 *
+	 * ## How a caller decides
+	 *
+	 * In the TAB, where detection works and where the app already constructs its
+	 * worker. `navigator.vendor === 'Apple Computer, Inc.'` and `'GestureEvent' in
+	 * window` both identify WebKit there, and both were checked on an iPhone against
+	 * Safari, Chrome for iOS and Firefox for iOS -- all three are WebKit and all
+	 * three are caught, which a test for "Safari" would not manage reliably. Pass the
+	 * answer down to the worker and set this from it.
+	 */
+	readonly oneTransactionAtATime?: boolean;
+	/**
 	 * The IndexedDB implementation to open the database through. Defaults to the
 	 * global one.
 	 *
@@ -142,6 +197,8 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	private readonly finalityDepth: number | undefined;
 	private readonly factory: IDBFactory | undefined;
 	private connection: Promise<IDBDatabase> | undefined;
+	/** See `oneTransactionAtATime`. */
+	private readonly oneAtATime: boolean;
 	/**
 	 * This writer's claim on the database, minted by its first mutation and never
 	 * re-minted: a writer that lost the store stays refused, because silently
@@ -170,6 +227,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		this.finalityDepth = options.finalityDepth;
 		this.databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME;
 		this.factory = options.indexedDB;
+		this.oneAtATime = options.oneTransactionAtATime ?? false;
 	}
 
 	get declarations(): ReadonlyMap<string, NormalizedEntity> {
@@ -345,11 +403,27 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		await settled;
 	}
 
+	/**
+	 * A READ's transaction, awaited to COMMIT -- but only when
+	 * `oneTransactionAtATime` is set.
+	 *
+	 * The promise has to be MADE at the same moment as the transaction, because
+	 * attaching `oncomplete` after the first request has resolved can miss the
+	 * event entirely and wait for ever. It is deliberately not made at all when the
+	 * option is off: an unobserved rejection would surface as an unhandled one.
+	 */
+	private commitIfSerialising(tx: IDBTransaction): Promise<void> | undefined {
+		return this.oneAtATime ? committed(tx) : undefined;
+	}
+
 	/** The opaque string last written under `key`, or `undefined`. See `cursor.ts`. */
 	async readCursor(key: string): Promise<string | undefined> {
 		const db = await this.database();
-		const store = db.transaction(CURSORS, 'readonly').objectStore(CURSORS);
-		return (await request(store.get(key))) as string | undefined;
+		const tx = db.transaction(CURSORS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const value = (await request(tx.objectStore(CURSORS).get(key))) as string | undefined;
+		await settled;
+		return value;
 	}
 
 	/**
@@ -388,8 +462,11 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 */
 	async readSeamRecord(key: SeamRecordKey): Promise<string | undefined> {
 		const db = await this.database();
-		const store = db.transaction(SEAM, 'readonly').objectStore(SEAM);
-		return (await request(store.get(key))) as string | undefined;
+		const tx = db.transaction(SEAM, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const value = (await request(tx.objectStore(SEAM).get(key))) as string | undefined;
+		await settled;
+		return value;
 	}
 
 	/** Write one of the seam's records, guarded like every other mutation. */
@@ -419,8 +496,10 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	async getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined> {
 		const declaration = mustGet(this.entities, entity);
 		const db = await this.database();
-		const store = db.transaction(CURRENT, 'readonly').objectStore(CURRENT);
-		const record = (await request(store.get(rowKey(declaration, id)))) as CurrentRecord | undefined;
+		const tx = db.transaction(CURRENT, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const record = (await request(tx.objectStore(CURRENT).get(rowKey(declaration, id)))) as CurrentRecord | undefined;
+		await settled;
 		return record && ({...record.values, _lower: record.lower, _upper: null} as T);
 	}
 
@@ -441,8 +520,10 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const declaration = mustGet(this.entities, entity);
 		await assertRetained(this.capabilities, at, () => this.tipBlockNumber());
 		const db = await this.database();
-		const store = db.transaction(VERSIONS, 'readonly').objectStore(VERSIONS);
-		const cursor = await request(store.openCursor(asOfRange(rowKey(declaration, id), at), 'prev'));
+		const tx = db.transaction(VERSIONS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const cursor = await request(tx.objectStore(VERSIONS).openCursor(asOfRange(rowKey(declaration, id), at), 'prev'));
+		await settled;
 		if (!cursor) return undefined;
 		const version = cursor.value as VersionRecord;
 		if (version.upper !== null && version.upper <= at) return undefined;
@@ -469,15 +550,17 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		assertListingLimit(declaration, limit);
 
 		const db = await this.database();
-		const store = db.transaction(CURRENT, 'readonly').objectStore(CURRENT);
+		const tx = db.transaction(CURRENT, 'readonly');
+		const settled = this.commitIfSerialising(tx);
 		const rows: T[] = [];
 		// one MORE than the limit, which is how `truncated` is a fact rather than a
 		// guess a caller has to make from `rows.length`.
-		await walk(store.openCursor(range), (cursor) => {
+		await walk(tx.objectStore(CURRENT).openCursor(range), (cursor) => {
 			const record = cursor.value as CurrentRecord;
 			rows.push({...record.values, _lower: record.lower, _upper: null} as T);
 			return rows.length > limit ? 'stop' : 'continue';
 		});
+		await settled;
 		return boundedListing(rows, limit);
 	}
 
@@ -502,9 +585,10 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		await assertRetained(this.capabilities, at, () => this.tipBlockNumber());
 
 		const db = await this.database();
-		const store = db.transaction(VERSIONS, 'readonly').objectStore(VERSIONS);
+		const tx = db.transaction(VERSIONS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
 		const rows: T[] = [];
-		await walk(store.openCursor(range), (cursor) => {
+		await walk(tx.objectStore(VERSIONS).openCursor(range), (cursor) => {
 			const version = cursor.value as VersionRecord;
 			if (version.lower <= at && (version.upper === null || at < version.upper)) {
 				rows.push({...version.values, _lower: version.lower, _upper: version.upper} as T);
@@ -512,6 +596,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 			}
 			return 'continue';
 		});
+		await settled;
 		return boundedListing(rows, limit);
 	}
 
@@ -672,8 +757,11 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 */
 	async getBlock(number: number): Promise<BlockRecord | undefined> {
 		const db = await this.database();
-		const store = db.transaction(BLOCKS, 'readonly').objectStore(BLOCKS);
-		return (await request(store.get(number))) as BlockRecord | undefined;
+		const tx = db.transaction(BLOCKS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const record = (await request(tx.objectStore(BLOCKS).get(number))) as BlockRecord | undefined;
+		await settled;
+		return record;
 	}
 
 	// -- internals -----------------------------------------------------------
@@ -690,16 +778,20 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 */
 	private async tipBlockNumber(): Promise<number | undefined> {
 		const db = await this.database();
-		const store = db.transaction(BLOCKS, 'readonly').objectStore(BLOCKS);
-		const cursor = await request(store.openCursor(null, 'prev'));
+		const tx = db.transaction(BLOCKS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const cursor = await request(tx.objectStore(BLOCKS).openCursor(null, 'prev'));
+		await settled;
 		return cursor ? (cursor.key as number) : undefined;
 	}
 
 	/** Whether any version is still unreachable at `floor`: one bounded probe. */
 	private async hasPrunableVersions(floor: number): Promise<boolean> {
 		const db = await this.database();
-		const store = db.transaction(VERSIONS, 'readonly').objectStore(VERSIONS);
-		const cursor = await request(store.index(UPPER_INDEX).openCursor(IDBKeyRange.upperBound(floor)));
+		const tx = db.transaction(VERSIONS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const cursor = await request(tx.objectStore(VERSIONS).index(UPPER_INDEX).openCursor(IDBKeyRange.upperBound(floor)));
+		await settled;
 		return cursor !== null;
 	}
 

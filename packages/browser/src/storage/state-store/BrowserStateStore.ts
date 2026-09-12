@@ -192,6 +192,36 @@ export type BrowserStateStoreConfig =
 			 * therefore its prune floor.
 			 */
 			finalityDepth?: number;
+			/**
+			 * Never hold two IndexedDB transactions open at once. **Off by default, and
+			 * a workaround for a WebKit defect rather than a correctness setting.**
+			 *
+			 * On WebKit -- measured on an iPhone 12 running Safari 18.3.1, and on a
+			 * recent upstream build -- a worker that ends while it has BOTH a
+			 * `readwrite` and a `readonly` transaction in flight can wedge the whole
+			 * database PERMANENTLY: `indexedDB.open` keeps succeeding and every
+			 * transaction after it hangs for ever, in the tab as much as in a
+			 * replacement worker, across a reload and a new tab, with `deleteDatabase`
+			 * blocked. Since a browser may evict a worker at any time (ADR-0082), an
+			 * app that folds in a worker can lose its local index with no recovery but
+			 * a different database name. A worker that never holds two transactions at
+			 * once did not reproduce it in 1,000 runs.
+			 *
+			 * **It is not free, and it buys nothing on Chromium or Firefox.** A
+			 * single-request read costs a third to nearly double what it did on every
+			 * engine, because the commit round trip is the same size as the read; a
+			 * listing barely moves, because its requests share one transaction. The
+			 * numbers are in
+			 * `work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`.
+			 *
+			 * **Nothing decides this for you**, deliberately: inside a worker a WebKit
+			 * engine cannot be identified at all. Decide it in the TAB, where
+			 * `navigator.vendor === 'Apple Computer, Inc.'` and `'GestureEvent' in
+			 * window` both identify WebKit (checked on an iPhone against Safari, Chrome
+			 * for iOS and Firefox for iOS -- all three are WebKit, all three are
+			 * caught), and pass the answer to the worker that builds the store.
+			 */
+			oneTransactionAtATime?: boolean;
 	  }
 	| {
 			/**
@@ -226,6 +256,7 @@ export async function createBrowserStateStore(
 					databaseName: config.databaseName,
 					retention: config.retention,
 					finalityDepth: config.finalityDepth,
+					oneTransactionAtATime: config.oneTransactionAtATime,
 				});
 	await store.migrate();
 	return store;

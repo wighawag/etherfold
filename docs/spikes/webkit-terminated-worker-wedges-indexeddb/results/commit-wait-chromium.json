@@ -1,0 +1,242 @@
+{
+  "engine": "chromium",
+  "repeats": 8,
+  "workload": {
+    "rows": 4000,
+    "blocks": 200,
+    "reads": 4000,
+    "listings": 400
+  },
+  "usPerPointRead": {
+    "asShipped": 108.95,
+    "serialised": 143.7,
+    "ratio": 1.32,
+    "pairedRatio": 1.37,
+    "pairedRange": [
+      1.29,
+      1.51
+    ]
+  },
+  "usPerListing": {
+    "asShipped": 2418.4,
+    "serialised": 2515.25,
+    "ratio": 1.04,
+    "pairedRatio": 1.07,
+    "pairedRange": [
+      0.92,
+      1.19
+    ]
+  },
+  "usPerCursorRead": {
+    "asShipped": 78.6,
+    "serialised": 115.85,
+    "ratio": 1.47,
+    "pairedRatio": 1.49,
+    "pairedRange": [
+      1.02,
+      1.62
+    ]
+  },
+  "usPerAsOfRead": {
+    "asShipped": 126.6,
+    "serialised": 184.25,
+    "ratio": 1.46,
+    "pairedRatio": 1.48,
+    "pairedRange": [
+      1.17,
+      1.67
+    ]
+  },
+  "concurrentMsPerBlock": {
+    "asShipped": 3.3,
+    "serialised": 3.72,
+    "ratio": 1.13,
+    "pairedRatio": 1.11,
+    "pairedRange": [
+      0.71,
+      1.73
+    ]
+  },
+  "concurrentUsPerRead": {
+    "asShipped": 3276.15,
+    "serialised": 3696.05,
+    "ratio": 1.13,
+    "pairedRatio": 1.11,
+    "pairedRange": [
+      0.71,
+      1.73
+    ]
+  },
+  "concurrentReadsServed": {
+    "asShipped": 151,
+    "serialised": 151,
+    "ratio": 1,
+    "pairedRatio": 1,
+    "pairedRange": [
+      1,
+      1
+    ]
+  },
+  "raw": [
+    {
+      "asShipped": {
+        "usPerPointRead": 98.7,
+        "usPerListing": 2511.7,
+        "usPerCursorRead": 71.4,
+        "usPerAsOfRead": 117.3,
+        "concurrentMsPerBlock": 0.908,
+        "concurrentUsPerRead": 902,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 141.6,
+        "usPerListing": 2896.7,
+        "usPerCursorRead": 107.3,
+        "usPerAsOfRead": 185.5,
+        "concurrentMsPerBlock": 1.166,
+        "concurrentUsPerRead": 1158.3,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 93,
+        "usPerListing": 2479,
+        "usPerCursorRead": 82.3,
+        "usPerAsOfRead": 118.2,
+        "concurrentMsPerBlock": 2.497,
+        "concurrentUsPerRead": 2480.1,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 134.9,
+        "usPerListing": 2960.2,
+        "usPerCursorRead": 105,
+        "usPerAsOfRead": 176.5,
+        "concurrentMsPerBlock": 1.771,
+        "concurrentUsPerRead": 1759.6,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 95.4,
+        "usPerListing": 2419.8,
+        "usPerCursorRead": 72.8,
+        "usPerAsOfRead": 131,
+        "concurrentMsPerBlock": 2.777,
+        "concurrentUsPerRead": 2758.3,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 143.6,
+        "usPerListing": 2224.5,
+        "usPerCursorRead": 118.2,
+        "usPerAsOfRead": 199.1,
+        "concurrentMsPerBlock": 3.481,
+        "concurrentUsPerRead": 3458.3,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 109.8,
+        "usPerListing": 2292.8,
+        "usPerCursorRead": 81.1,
+        "usPerAsOfRead": 137.9,
+        "concurrentMsPerBlock": 3.728,
+        "concurrentUsPerRead": 3703.3,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 141.3,
+        "usPerListing": 2331.8,
+        "usPerCursorRead": 113.1,
+        "usPerAsOfRead": 161.6,
+        "concurrentMsPerBlock": 3.555,
+        "concurrentUsPerRead": 3531.8,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 116.5,
+        "usPerListing": 2417,
+        "usPerCursorRead": 76.5,
+        "usPerAsOfRead": 125.3,
+        "concurrentMsPerBlock": 4.132,
+        "concurrentUsPerRead": 4104.6,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 157.8,
+        "usPerListing": 2397.7,
+        "usPerCursorRead": 120.6,
+        "usPerAsOfRead": 168.5,
+        "concurrentMsPerBlock": 4.748,
+        "concurrentUsPerRead": 4716.6,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 114.3,
+        "usPerListing": 2325.7,
+        "usPerCursorRead": 76.3,
+        "usPerAsOfRead": 125,
+        "concurrentMsPerBlock": 2.898,
+        "concurrentUsPerRead": 2878.8,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 158.9,
+        "usPerListing": 2632.8,
+        "usPerCursorRead": 113.5,
+        "usPerAsOfRead": 184.2,
+        "concurrentMsPerBlock": 5.012,
+        "concurrentUsPerRead": 4978.8,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 108.1,
+        "usPerListing": 2288.5,
+        "usPerCursorRead": 115.4,
+        "usPerAsOfRead": 127.9,
+        "concurrentMsPerBlock": 3.698,
+        "concurrentUsPerRead": 3673.5,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 143.8,
+        "usPerListing": 2634.3,
+        "usPerCursorRead": 118.2,
+        "usPerAsOfRead": 184.3,
+        "concurrentMsPerBlock": 3.971,
+        "concurrentUsPerRead": 3945,
+        "concurrentReadsServed": 151
+      }
+    },
+    {
+      "asShipped": {
+        "usPerPointRead": 109.8,
+        "usPerListing": 2449.2,
+        "usPerCursorRead": 80.7,
+        "usPerAsOfRead": 131.5,
+        "concurrentMsPerBlock": 3.766,
+        "concurrentUsPerRead": 3741.1,
+        "concurrentReadsServed": 151
+      },
+      "serialised": {
+        "usPerPointRead": 147.3,
+        "usPerListing": 2256.5,
+        "usPerCursorRead": 120,
+        "usPerAsOfRead": 220.1,
+        "concurrentMsPerBlock": 3.886,
+        "concurrentUsPerRead": 3860.3,
+        "concurrentReadsServed": 151
+      }
+    }
+  ]
+}

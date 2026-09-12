@@ -77,3 +77,20 @@ await describeStateStoreConformance(
 		}),
 	{twoWriters},
 );
+
+/**
+ * The SAME contract with `oneTransactionAtATime` set, because a workaround that
+ * changes when a read returns has to answer every question identically.
+ *
+ * It is the option's only correctness gate: the WebKit defect it exists for
+ * cannot be reproduced under `fake-indexeddb` (it is an engine bug, not a
+ * semantic one), so what is checkable here is that awaiting a read's COMMIT
+ * before returning it changes no answer. If the option is ever dropped, this
+ * block goes with it.
+ */
+await describeStateStoreConformance(
+	'IndexedDBStateStore, refusing two transactions at once',
+	(declarations) =>
+		new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName(), oneTransactionAtATime: true}),
+	{twoWriters},
+);
