@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/processor-entities",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "The backend-agnostic processor authoring API: declare entities, write on<EventName> handlers against a MutationContext, and run them against any @etherfold/state-store backend.",
 	"publishConfig": {
 		"access": "public"

@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/platform-nodejs",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Node host adapter for @etherfold/server: supplies a libSQL-backed RemoteSQL and the process environment, and serves the app over HTTP.",
 	"publishConfig": {
 		"access": "public"

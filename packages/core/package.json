@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/core",
-	"version": "0.7.0",
+	"version": "1.0.0",
 	"description": "The etherfold engine: fetch a contract's logs over EIP-1193, derive what a reorg did to them, and drive an EventProcessor over the result. Stores nothing itself.",
 	"license": "MIT",
 	"repository": {
