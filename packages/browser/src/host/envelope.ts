@@ -347,6 +347,21 @@ export type PortCases = {
 	/** How far the fold has got. Takes nothing. */
 	readonly progress: {readonly request: undefined; readonly response: HostProgress};
 	/**
+	 * ARE YOU STILL THERE? The one case whose ANSWER is its entire content.
+	 *
+	 * It carries nothing and answers nothing, because the only fact being asked for
+	 * is that something answered at all. A port PROBES with it when its host has
+	 * been silent (`IndexerPortOptions.watch`), and a probe that goes unanswered is
+	 * how a tab learns the host died -- which is the only way it CAN learn, since no
+	 * browser fires an event when it evicts a dedicated worker.
+	 *
+	 * Deliberately not `progress`, which would answer this too. What is polled here
+	 * is LIVENESS and never STATUS: status is PUSHED (ADR-0082), and a port that
+	 * asked for a cursor on a timer would be the polling that decision exists to
+	 * replace, with the cost merely moved to the other end of the wire.
+	 */
+	readonly ping: {readonly request: undefined; readonly response: undefined};
+	/**
 	 * START THE DRIVER, and answer where the fold is now.
 	 *
 	 * Starting a host that is already indexing is an ANSWER and not a refusal:

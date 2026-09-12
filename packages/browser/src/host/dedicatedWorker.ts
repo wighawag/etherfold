@@ -24,31 +24,46 @@ import {serveIndexerHost, type HostedIndexerSpec, type IndexerHost} from './serv
 /**
  * A HOST IN A DEDICATED WORKER, as the tab reaches it.
  *
- * The app constructs the `Worker` itself, and that is deliberate: the URL has to
- * be a literal its bundler can see, so that the worker entry -- and the processor
- * that entry imports -- is BUILT, type-checked and de-duplicated with the rest of
- * the app. `new Worker(new URL('./indexer.worker.ts', import.meta.url), {type:
- * 'module'})` is the form every current bundler understands, and a URL this
- * package built for the caller would be a string no bundler traces.
+ * The app writes the line that constructs the `Worker`, and that is deliberate:
+ * the URL has to be a literal its bundler can see, so that the worker entry --
+ * and the processor that entry imports -- is BUILT, type-checked and
+ * de-duplicated with the rest of the app. `new Worker(new
+ * URL('./indexer.worker.ts', import.meta.url), {type: 'module'})` is the form
+ * every current bundler understands, and a URL this package built for the caller
+ * would be a string no bundler traces.
  *
  * ```ts
  * const indexer = connectToIndexerHost(
- *   dedicatedWorkerHost(new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+ *   dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
  * );
  * ```
  *
- * `close()` TERMINATES it, because a dedicated worker belongs to the tab that
- * constructed it and nothing else can be holding it.
+ * ## It takes a FACTORY, and not a worker
+ *
+ * Browsers evict workers, so a port has to be able to start another one
+ * (ADR-0082) -- and obtaining a port is the whole of what a hosting shape is, so
+ * obtaining one AGAIN belongs here rather than anywhere else. Handed an instance,
+ * this could report a death and reject the calls and then do nothing, with no
+ * signal anywhere that the restart half was missing; handed the five words that
+ * BUILD one, every port can restart. The line an app writes is the same line,
+ * with an arrow in front of it.
+ *
+ * `close()` TERMINATES the worker, because a dedicated worker belongs to the tab
+ * that constructed it and nothing else can be holding it. That is also what makes
+ * the restart safe: the port kills before it opens a successor, so a host merely
+ * SUSPECTED of being dead costs a restart rather than a second writer.
  */
-export function dedicatedWorkerHost(worker: Worker): HostAccess {
-	return {
+export function dedicatedWorkerHost(create: () => Worker): HostAccess {
+	const access = (worker: Worker): HostAccess => ({
 		host: 'dedicated-worker',
 		// A `Worker` IS a message endpoint; the cast is the DOM's overloaded
 		// `addEventListener` meeting a one-signature structural type, not a
 		// difference in behaviour.
 		endpoint: worker as unknown as MessageEndpoint,
 		close: () => worker.terminate(),
-	};
+		reopen: () => access(create()),
+	});
+	return access(create());
 }
 
 /**

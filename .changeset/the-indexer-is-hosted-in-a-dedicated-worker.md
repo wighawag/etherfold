@@ -27,7 +27,7 @@ hostIndexerInThisWorker({
 
 ```ts
 const indexer = connectToIndexerHost(
-	dedicatedWorkerHost(new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+	dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
 );
 const {lastToBlock, latestBlock} = await indexer.progress();
 ```

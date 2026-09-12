@@ -21,7 +21,7 @@
  * and its bundler builds the same thing from the same source.
  */
 import {EntityEventProcessor, type EntityStateView} from '@etherfold/processor-entities';
-import {openForWriting} from '@etherfold/state-store';
+import {openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {createBrowserStateStore, hostIndexerInThisWorker} from '../src/index.js';
 import {FINALITY, fakeChain, processor, SOURCE, type TestABI} from './workload.js';
 
@@ -89,6 +89,56 @@ const databaseFor = (stream: string) => (perGeneration ? `${databaseName}-${stre
 const holdChain = new URL(self.location.href).searchParams.has('holdChain');
 const holdAbove = Number(new URL(self.location.href).searchParams.get('holdAbove') ?? '0');
 
+/**
+ * SAY WHAT THIS WORKER FETCHED AND WHAT IT WROTE, straight at the page.
+ *
+ * What it is for is the only question a RESTART raises that the resulting state
+ * cannot answer: a host that re-ran the load lands on exactly the same rows as
+ * one that resumed, so "did it re-index from the start block" is a question about
+ * the RANGES it asked the node for. A worker's own memory dies with it, so the
+ * ranges have to leave the worker as they happen -- and a message already
+ * delivered survives the `terminate()` that follows it.
+ *
+ * The WRITE announcements are what let a page kill a host DURING a store write,
+ * which is the case where "the cursor is written in the same transaction as the
+ * block it describes" (ADR-0027) earns its keep. Terminating between cycles would
+ * never exercise it.
+ *
+ * Posted DIRECTLY rather than over the port, like the gate releases above, and it
+ * works for the same reason: a message that is not the port's own is IGNORED
+ * rather than answered. Unset by default, so every other case's wire is exactly
+ * what it always was.
+ */
+const reports = new URL(self.location.href).searchParams.has('report');
+const report = (message: Record<string, unknown>) => {
+	if (reports) self.postMessage({fixture: 'worker', ...message});
+};
+
+/**
+ * The store, saying when it is about to write a block and when that write landed.
+ *
+ * A PROXY rather than a subclass, because what is being wrapped is the handle
+ * `openForWriting` hands back and the point is to change nothing about it: every
+ * other method is the store's own, bound to the store itself so that a backend's
+ * private fields still work.
+ */
+function announcingWrites(store: WritableStateStore): WritableStateStore {
+	return new Proxy(store, {
+		get(target, property) {
+			const value = Reflect.get(target, property) as unknown;
+			if (typeof value !== 'function') return value;
+			if (property !== 'applyBlock') return value.bind(target);
+			return async (...args: unknown[]) => {
+				const block = args[0] as {number: number};
+				report({wrote: 'starting', block: block?.number});
+				const applied = await (value as (...rest: unknown[]) => Promise<unknown>).apply(target, args);
+				report({wrote: 'landed', block: block?.number});
+				return applied;
+			};
+		},
+	});
+}
+
 const gates = {chain: openable(holdChain), fetches: openable(holdAbove > 0)};
 
 function openable(held: boolean): {passed: Promise<void>; open: () => void} {
@@ -113,6 +163,15 @@ const gatedProvider = {
 			const asked = args.params as [{toBlock: string}];
 			if (parseInt(asked[0].toBlock.slice(2), 16) > holdAbove) await gates.fetches.passed;
 		}
+		if (args.method === 'eth_getLogs') {
+			const asked = args.params as [{fromBlock: string; toBlock: string}];
+			report({
+				fetched: {
+					from: parseInt(asked[0].fromBlock.slice(2), 16),
+					to: parseInt(asked[0].toBlock.slice(2), 16),
+				},
+			});
+		}
 		return (chain.provider as {request(args: unknown): Promise<unknown>}).request(args);
 	},
 } as unknown as typeof chain.provider;
@@ -122,7 +181,11 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// split reaching across the boundary: the tab holds a port, and a port names no
 	// mutating verb.
 	createState: async (context) =>
-		openForWriting(await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)})),
+		announcingWrites(
+			await openForWriting(
+				await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)}),
+			),
+		),
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
 	provider: gatedProvider,
 	source: SOURCE,

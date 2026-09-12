@@ -55,6 +55,12 @@
  *   case list and the same workload behind both. Reading while the fold is still
  *   running is part of it, because that is what makes an app usable during a
  *   first sync rather than after it.
+ * - `restarts-and-resumes`: a real dedicated worker TERMINATED mid-fold, while it
+ *   is writing a block, and the port that puts another one in its place. It runs
+ *   here and nowhere else for the reason the hosting case does -- a browser is the
+ *   only place a `Worker.terminate()` means anything -- and what it asserts on is
+ *   the RANGES the replacement asked the node for, because a host that re-indexed
+ *   from the start block lands on exactly the same rows as one that resumed.
  * - `write` / `read` phases: reload continuity across a REAL page reload, which
  *   is the thing no node test can show. The `read` phase runs in a page that has
  *   never seen the `write` phase's objects; the only thing that crossed is
@@ -72,6 +78,7 @@ import {
 	createProgressReadable,
 	dedicatedWorkerHost,
 	executionScopeName,
+	type HostDeath,
 	type HostProgress,
 	type IndexerPort,
 } from '../src/index.js';
@@ -107,6 +114,32 @@ type Params = Record<string, unknown>;
 
 function databaseName(params: Params, suffix: string): string {
 	return `${(params.tag as string) ?? 'etherfold-browser-indexing'}-${suffix}`;
+}
+
+/**
+ * THE WORKERS A PORT BUILDS FOR A CASE, newest last.
+ *
+ * The app owns the line that constructs a `Worker` -- the URL has to be a literal
+ * its bundler can trace (ADR-0082), and the harness builds `indexer.worker.ts` to
+ * `worker.js` beside this bundle -- and the PORT owns when it is called, because a
+ * host that died is replaced by another of the same shape.
+ *
+ * The handles are kept because these fixtures reach past the port for the two
+ * things it has no verb for, and should not have: posting a gate release straight
+ * at the worker, and KILLING one. An application needs neither.
+ */
+function hostedWorkers(
+	url: URL,
+	onBuilt: (worker: Worker) => void = () => undefined,
+): {create: () => Worker; latest: () => Worker; built: Worker[]} {
+	const built: Worker[] = [];
+	const create = () => {
+		const worker = new Worker(url, {type: 'module'});
+		onBuilt(worker);
+		built.push(worker);
+		return worker;
+	};
+	return {create, latest: () => built[built.length - 1], built};
 }
 
 /** The captured stream, through the hook, on the default backend. */
@@ -364,13 +397,8 @@ async function hotContractCase(params: Params, timings: Timing[]): Promise<Recor
  */
 async function hostedInAWorkerCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const database = databaseName(params, 'hosted-in-a-worker');
-	// The form every current bundler understands, and the reason the APP owns this
-	// line: the URL has to be a literal its bundler can trace (ADR-0082). The
-	// harness builds `indexer.worker.ts` to `worker.js` beside this bundle.
-	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url), {
-		type: 'module',
-	});
-	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	const workers = hostedWorkers(new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url));
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(workers.create));
 	try {
 		const progress = await timed('fold-in-a-worker', timings, () => untilAtTip(indexer));
 		const state = await timed('read-back', timings, async () =>
@@ -414,10 +442,8 @@ async function hostedInAWorkerCase(params: Params, timings: Timing[]): Promise<R
  */
 async function readsAcrossThePortCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const database = databaseName(params, 'reads-across-the-port');
-	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url), {
-		type: 'module',
-	});
-	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	const workers = hostedWorkers(new URL(`./worker.js?db=${encodeURIComponent(database)}`, import.meta.url));
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(workers.create));
 	try {
 		// A read issued while the worker is still opening its store and folding: it
 		// WAITS for the store rather than being refused, and answers with whatever
@@ -482,16 +508,16 @@ async function readsAcrossThePortCase(params: Params, timings: Timing[]): Promis
  */
 async function progressPushedCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const database = databaseName(params, 'progress-pushed');
-	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4`, import.meta.url), {
-		type: 'module',
-	});
 
 	// EVERY message the worker posts at this tab, ours or not, so "it stopped
 	// pushing" is a fact about the wire.
 	const posted: {kind?: string}[] = [];
-	worker.addEventListener('message', (event) => posted.push(event.data as {kind?: string}));
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4`, import.meta.url),
+		(worker) => worker.addEventListener('message', (event) => posted.push(event.data as {kind?: string})),
+	);
 
-	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(workers.create));
 	try {
 		// The helper an app binds to a progress display, built BEFORE anything has
 		// been pushed: what it holds until the host answers is nothing at all.
@@ -588,10 +614,10 @@ async function progressPushedCase(params: Params, timings: Timing[]): Promise<Re
  */
 async function controlsTheIndexerCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const database = databaseName(params, 'controls-the-indexer');
-	const worker = new Worker(new URL(`./worker.js?db=${encodeURIComponent(database)}&generations=1`, import.meta.url), {
-		type: 'module',
-	});
-	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(database)}&generations=1`, import.meta.url),
+	);
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(workers.create));
 	try {
 		const folded = await timed('fold-in-a-worker', timings, () => untilAtTip(indexer));
 		const before = await transfersAcrossThePort(indexer);
@@ -678,9 +704,8 @@ async function controlsTheIndexerCase(params: Params, timings: Timing[]): Promis
  */
 async function txInclusionCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const database = databaseName(params, 'tx-inclusion');
-	const worker = new Worker(
+	const workers = hostedWorkers(
 		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdChain&holdAbove=103`, import.meta.url),
-		{type: 'module'},
 	);
 	/** Block 104's transaction: the one an app would be watching. */
 	const watched = txInBlock(104);
@@ -688,7 +713,7 @@ async function txInclusionCase(params: Params, timings: Timing[]): Promise<Recor
 	const old = txInBlock(100);
 	const never = '0x00000000000000000000000000000000000000000000000000000000000000bb';
 
-	const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(workers.create));
 	try {
 		// (1) NOTHING SYNCED: the chain is held, so the host has not opened a
 		// container. The call ANSWERS -- it does not wait for one.
@@ -698,7 +723,7 @@ async function txInclusionCase(params: Params, timings: Timing[]): Promise<Recor
 		const phaseBeforeAnySync = (await indexer.progress()).phase;
 
 		// (2) HELD BELOW THE TRANSACTION: the fold has 100 to 103 and cannot go on.
-		worker.postMessage({fixture: 'release', gate: 'chain'});
+		workers.latest().postMessage({fixture: 'release', gate: 'chain'});
 		await timed('fold-to-the-hold', timings, () => until(indexer, (progress) => progress.lastToBlock === 103));
 		const beforeTheFoldReachesIt = await indexer.checkTxInclusion([
 			{txHash: watched},
@@ -709,7 +734,7 @@ async function txInclusionCase(params: Params, timings: Timing[]): Promise<Recor
 		]);
 
 		// (3) AT THE TIP: the transaction has been folded.
-		worker.postMessage({fixture: 'release', gate: 'fetches'});
+		workers.latest().postMessage({fixture: 'release', gate: 'fetches'});
 		const progress = await timed('fold-to-the-tip', timings, () => untilAtTip(indexer));
 		const afterTheFoldReachesIt = await indexer.checkTxInclusion([{txHash: watched}, {txHash: never}]);
 
@@ -732,6 +757,139 @@ async function txInclusionCase(params: Params, timings: Timing[]): Promise<Recor
 				never: afterTheFoldReachesIt[never],
 			},
 			// everything the tab was handed, in full
+			portSurface: Object.keys(indexer).sort(),
+		};
+	} finally {
+		indexer.close();
+	}
+}
+
+/**
+ * THE WORKER TERMINATED MID-FOLD, AND THE TAB THAT PUT IT BACK.
+ *
+ * The kill is a real `Worker.terminate()` on a real dedicated worker, fired from
+ * the page the moment the worker says it is STARTING A STORE WRITE -- which is
+ * the case that matters and the one no test terminating between cycles produces:
+ * a host that dies with a block half-applied is exactly where "the cursor is
+ * written in the same transaction as the block it describes" (ADR-0027) earns its
+ * keep, because the alternative is a cursor that has moved past data that never
+ * landed.
+ *
+ * The first worker is also HELD below the tip (`holdAbove`), so there is a middle
+ * of a fold to die in rather than a race against a five-block fixture that
+ * finishes between two polls. Its successor is released the moment the port
+ * builds it.
+ *
+ * What is carried out of the page is what was FETCHED, per worker life, and it is
+ * the whole point: a restart that re-runs the load lands on exactly the same rows
+ * as one that resumed, so the end state cannot tell them apart and the ranges
+ * asked of the node can. The worker reports each range as it happens, because a
+ * worker's own memory dies with it and a message already delivered does not.
+ */
+async function restartsAndResumesCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = databaseName(params, 'restarts-and-resumes');
+	const fetched: {life: number; from: number; to: number}[] = [];
+	const landed: {life: number; block: number}[] = [];
+	let lives = 0;
+	let killed: number | undefined;
+	/** A call in flight AT THE MOMENT OF DEATH, and what it was answered with. */
+	let inFlight: Promise<string> | undefined;
+
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdAbove=103&report`, import.meta.url),
+		(worker) => {
+			const life = lives++;
+			// The SUCCESSOR is let go at once. The first host is held below the tip so
+			// that it can be killed mid-fold; the one that replaces it has to be able to
+			// finish, and what is being asked of it is where it resumes FROM.
+			if (life > 0) worker.postMessage({fixture: 'release', gate: 'fetches'});
+			worker.addEventListener('message', (event) => {
+				const said = event.data as {
+					fixture?: string;
+					fetched?: {from: number; to: number};
+					wrote?: 'starting' | 'landed';
+					block?: number;
+				};
+				if (said?.fixture !== 'worker') return;
+				if (said.fetched) fetched.push({life, ...said.fetched});
+				if (said.wrote === 'landed' && said.block !== undefined) landed.push({life, block: said.block});
+				// THE KILL: while a store write is in flight, and with a call in the air.
+				if (life === 0 && killed === undefined && said.wrote === 'starting' && (said.block ?? 0) >= 102) {
+					killed = said.block;
+					inFlight = indexer.progress().then(
+						() => 'answered',
+						(error) => (error as Error).name,
+					);
+					worker.terminate();
+				}
+			});
+		},
+	);
+
+	const indexer = connectToIndexerHost(dedicatedWorkerHost(workers.create), {
+		// A browser default of five seconds would make this case wait for a duration
+		// rather than for a value. An application leaves both alone.
+		watch: {everyInSeconds: 0.25},
+		restart: {backoffInSeconds: 0.05},
+	});
+	const deaths: HostDeath[] = [];
+	let sawDeath!: (death: HostDeath) => void;
+	const firstDeath = new Promise<HostDeath>((resolve) => (sawDeath = resolve));
+	indexer.onHostDeath((death) => {
+		deaths.push(death);
+		sawDeath(death);
+	});
+
+	try {
+		const death = await timed('death', timings, () => firstDeath);
+		const rejectedInFlight = inFlight ? await inFlight : 'nothing-was-in-flight';
+		const resumed = await timed('resume', timings, () => untilAtTip(indexer));
+
+		// Read back the way a tab reads: from the same database, opened for READING,
+		// with the successor's claim untouched.
+		const state = await timed('read-back', timings, async () =>
+			readState(
+				new EntityStateView(
+					openForReading(await createBrowserStateStore(processor.entities, {databaseName: database})),
+				),
+			),
+		);
+
+		return {
+			// WHERE the resumed fold ran, measured in the context that ran it: the
+			// replacement is a worker too.
+			scope: resumed.scope,
+			tabScope: executionScopeName(),
+			host: resumed.host,
+			lives: workers.built.length,
+			killedWritingBlock: killed ?? null,
+			death: {
+				cause: death.cause,
+				attempt: death.attempt,
+				restarting: death.restarting,
+				rejected: death.rejected,
+			},
+			deaths: deaths.length,
+			rejectedInFlight,
+			// what the node was asked for, per worker life
+			fetchedBeforeDeath: fetched.filter((range) => range.life === 0).map(({from, to}) => ({from, to})),
+			fetchedAfterRestart: fetched.filter((range) => range.life > 0).map(({from, to}) => ({from, to})),
+			landedBeforeDeath: landed.filter((write) => write.life === 0).map((write) => write.block),
+			startBlock: START_BLOCK,
+			tip: BRANCH_A_TIP,
+			lastToBlock: resumed.lastToBlock,
+			latestBlock: resumed.latestBlock,
+			state,
+			// every surface the tab had before the death, asked again after it
+			afterTheRestart: {
+				transfers: await transfersAcrossThePort(indexer),
+				generations: (await indexer.generations()).length,
+				promotion: (await indexer.promotion()).policy,
+				inclusion: (await indexer.checkTxInclusion([{txHash: txInBlock(104)}]))[txInBlock(104)].status,
+				reconfigureAdded: (await indexer.reconfigure({source: SOURCE})).added,
+				stopped: (await indexer.stopIndexing()).indexing,
+				started: (await indexer.startIndexing()).indexing,
+			},
 			portSurface: Object.keys(indexer).sort(),
 		};
 	} finally {
@@ -807,18 +965,35 @@ async function untilPromoted(
  * `BRANCH_A_TIP`.
  */
 async function untilAtTip(indexer: IndexerPort, attempts = 600): Promise<HostProgress> {
-	let progress = await indexer.progress();
+	let progress = await asking(indexer);
 	for (let attempt = 0; attempt < attempts; attempt++) {
-		if (progress.failure) {
+		if (progress?.failure) {
 			throw new Error(`the host stopped: ${progress.failure.name}: ${progress.failure.message}`);
 		}
-		if (progress.latestBlock === BRANCH_A_TIP && progress.lastToBlock === progress.latestBlock) {
+		if (progress && progress.latestBlock === BRANCH_A_TIP && progress.lastToBlock === progress.latestBlock) {
 			return progress;
 		}
 		await new Promise((resolve) => setTimeout(resolve, 25));
-		progress = await indexer.progress();
+		progress = await asking(indexer);
 	}
 	throw new Error(`the fold did not reach the tip: ${JSON.stringify(progress)}`);
+}
+
+/**
+ * How far the fold has got, or NOTHING while the port holds no host.
+ *
+ * A call made between a death and the restart that answers it is refused rather
+ * than held (ADR-0082), which is the behaviour a waiting loop has to expect and
+ * not a failure: the host is moments away, exactly as it is while one is still
+ * opening. Any other refusal is still a refusal and is raised.
+ */
+async function asking(indexer: IndexerPort): Promise<HostProgress | undefined> {
+	try {
+		return await indexer.progress();
+	} catch (error) {
+		if ((error as Error)?.name === 'IndexerHostDiedError') return undefined;
+		throw error;
+	}
 }
 
 const cut: CodeUnderTest = {
@@ -867,6 +1042,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'controls-the-indexer':
 						results = await controlsTheIndexerCase(ctx.params, timings);
+						break;
+					case 'restarts-and-resumes':
+						results = await restartsAndResumesCase(ctx.params, timings);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

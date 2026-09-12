@@ -64,6 +64,7 @@ test('folds a real workload in a dedicated worker, and the tab asks how far it g
 			'close',
 			'generations',
 			'host',
+			'onHostDeath',
 			'onProgress',
 			'progress',
 			'promotion',
