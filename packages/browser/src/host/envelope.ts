@@ -81,9 +81,13 @@ export type SyncPhase =
 	 */
 	| 'catching-up'
 	/**
-	 * Level with the tip, as an ADVANCE reported it. It is the driver's own rest
-	 * condition (`lastToBlock >= latestBlock` on an advance) and not a second
-	 * definition beside it.
+	 * Level with the tip, as an ADVANCE reported it, and a claim about the WHOLE
+	 * CONTAINER: every generation it holds is level with its own tip, not merely the
+	 * one that answers reads. A host rebuilding a successor beside a level canonical
+	 * generation is `catching-up`, because it is.
+	 *
+	 * It is the driver's own rest condition and not a second definition beside it --
+	 * one function decides both, in `host/pacing.ts`, for all three hosting shapes.
 	 */
 	| 'at-tip'
 	/**

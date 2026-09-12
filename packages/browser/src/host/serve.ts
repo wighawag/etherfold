@@ -25,6 +25,7 @@ import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerSt
 import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
 import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
 import {executionScopeName, type HostAccess} from './endpoint.js';
+import {cursorsOf, pacingAfterCycle} from './pacing.js';
 import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
 
@@ -388,19 +389,20 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			enter('catching-up');
 
 			while (!disposed && !stopRequested) {
+				const before = cursorsOf(opened);
 				const advanced = await withRetries(() => opened.indexMore());
 				if (!advanced) return;
 				lastSync = advanced;
-				// ONE rule for "at the tip", and it is literally the same expression the
-				// driver rests on rather than a threshold beside it: a phase saying
-				// `at-tip` while this loop went on fetching would be two answers to one
-				// question, and an app would be told "live" over an incomplete fold.
-				const atTip = advanced.lastToBlock >= advanced.latestBlock;
-				enter(atTip ? 'at-tip' : 'catching-up');
-				if (atTip) {
-					// At the tip: rest, exactly as the main-thread loop does. An advance
-					// straight away would be a `eth_blockNumber` per turn of the event loop
-					// against a provider a browser user is rate-limited on.
+				// The phase and the rest are ONE decision, taken in `pacing.ts` so that this
+				// driver and the main-thread one cannot answer it differently. What is left
+				// here is the part that is genuinely this driver's: a rest it can be WOKEN
+				// from, which is how a reconfigure starts its successor at once instead of
+				// paying out the remainder of an interval.
+				const {phase, rest: shouldRest} = pacingAfterCycle(opened, before);
+				enter(phase);
+				if (shouldRest) {
+					// An advance straight away would be an `eth_blockNumber` per turn of the
+					// event loop against a provider a browser user is rate-limited on.
 					await rest(tipInterval);
 				}
 			}
@@ -444,6 +446,12 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		}
 		if (driving) return progress();
 		stopRequested = false;
+		// A NEW ATTEMPT CLEARS THE OLD REFUSAL. `failure` describes the drive that
+		// STOPPED, so carrying it into the next one hands a tab `phase: 'at-tip'` with a
+		// stale failure attached, and an app renders an error over a fold that is running.
+		// The phase moves on when the driver does; this has to move with it, because the
+		// two are read together and only one of them was being reset.
+		failure = undefined;
 		indexing = true;
 		publish();
 		driving = drive();
@@ -515,6 +523,14 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		const opened = await openContainer();
 		const before = opened.generations.map((generation) => generation.record);
 		const held = await opened.add({source, ...generationSpecOf(spec, recordState)});
+		// WAKE A RESTING DRIVER. The generation just added has a whole history to fetch,
+		// and the driver is resting precisely BECAUSE everything was level a moment ago.
+		// Without this it would sit out the remainder of the tip interval before giving
+		// the successor its first advance, which on the default four seconds is a rest
+		// the app pays for work it has just asked for. The driver re-reads the generation
+		// set on its next turn (`indexMore` iterates a copy), so there is nothing to
+		// serialise against here.
+		wakeFromRest?.();
 		// A promotion may already have happened (`immediate`), and the generation list a
 		// tab renders has moved either way.
 		publish();

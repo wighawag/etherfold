@@ -37,6 +37,7 @@ import {executionScopeName, type HostAccess} from './host/endpoint.js';
 import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './host/envelope.js';
 import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
+import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
@@ -48,7 +49,25 @@ const namedLogger = logs('@etherfold/browser');
 
 export type ExtendedLastSync<ABI extends Abi> = LastSync<ABI> & {
 	numBlocksProcessedSoFar: number;
+	/**
+	 * How far the fold has got across the span THIS indexer covers, 0 to 100.
+	 *
+	 * Derived by `derivedProgress`, the same function the port publishes from, so
+	 * this hook and a tab holding a port cannot disagree about how far the fold
+	 * has got. Where the port leaves the figure ABSENT -- before the first fetch a
+	 * container publishes a cursor of `0` of `0`, so it has learnt no tip -- this
+	 * field is typed non-optional and reads `0`: "nothing known yet", never a full
+	 * bar and never `NaN`.
+	 */
 	syncPercentage: number;
+	/**
+	 * How far the fold has got across the WHOLE CHAIN, 0 to 100.
+	 *
+	 * Rarely what an application wants, and deliberately not carried across the
+	 * port for that reason: a deployment whose contract starts at block 20,000,000
+	 * reads 99.9% from its first fetch. `syncPercentage` is the one with a
+	 * denominator an app means. `0` before a tip has been learnt.
+	 */
 	totalPercentage: number;
 };
 
@@ -666,7 +685,8 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * `ProcessingEventStream`) and reaches `IndexingLatest` through
 	 * `catchupThreshold`, which is a presentation smoothing knob -- twenty blocks from
 	 * the tip is "latest" for a UI that would otherwise flicker. `SyncPhase.at-tip` is
-	 * the DRIVER's own rest condition (`lastToBlock >= latestBlock` on an ADVANCE) and
+	 * the DRIVER's own condition -- every generation the container holds is level with
+	 * its tip, as `host/pacing.ts` decides it for all three hosting shapes -- and
 	 * nothing else, which is what every hosting shape means by it. Deriving one from
 	 * the other would make a port say "live" over a fold that is still fetching.
 	 */
@@ -1069,13 +1089,25 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		const lastToBlock = lastSync.lastToBlock;
 		lastLastToBlock = lastToBlock;
 
-		const totalToProcess = latestBlock - startingBlock;
-		const numBlocksProcessedSoFar = Math.max(0, lastToBlock - startingBlock);
+		// ONE derivation, shared with the port (`derivedProgress`), rather than a second
+		// copy of the arithmetic beside it. The copy that used to live here divided by a
+		// tip the container had not learnt yet: before the first fetch the cursor is `0`
+		// of `0`, so `lastToBlock / latestBlock` was `NaN` and the span was NEGATIVE
+		// (`latestBlock - startingBlock`, with `startingBlock` the source's start block).
+		// An app binding a progress bar rendered that.
+		//
+		// Where the port reports a figure as ABSENT below a learnt tip, these fields are
+		// typed non-optional, so they read `0` -- "nothing known yet". `0` rather than
+		// `100` is the load-bearing half: with no tip, an empty span is indistinguishable
+		// from a finished one, and telling an app it is DONE before a single log is asked
+		// for is the worse of the two lies.
+		const derived = derivedProgress(lastSync, startingBlock);
 
 		const lastSyncObject = formatLastSync(lastSync);
-		lastSyncObject.numBlocksProcessedSoFar = numBlocksProcessedSoFar;
-		lastSyncObject.syncPercentage = Math.floor((numBlocksProcessedSoFar * 1000000) / totalToProcess) / 10000;
-		lastSyncObject.totalPercentage = Math.floor((lastToBlock * 1000000) / latestBlock) / 10000;
+		lastSyncObject.numBlocksProcessedSoFar = derived.numBlocksProcessedSoFar ?? 0;
+		lastSyncObject.syncPercentage = derived.syncPercentage ?? 0;
+		lastSyncObject.totalPercentage =
+			latestBlock > 0 ? Math.min(100, Math.floor((lastToBlock * 1000000) / latestBlock) / 10000) : 0;
 
 		setSyncing({lastSync: lastSyncObject});
 		// THE PUSH CADENCE, and the whole of it: the cursor moved, so a tab holding a
@@ -1175,11 +1207,14 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			setLastSync(lastSync);
 			setCatchup(lastSync);
 		}
-		// ONE rule for "at the tip", and it is literally the expression the driver rests
-		// on rather than `catchupThreshold` beside it: a port saying `at-tip` while this
-		// loop went on fetching would be two answers to one question, and an app would be
-		// told "live" over an incomplete fold.
-		enterHostPhase(lastSync.lastToBlock >= lastSync.latestBlock ? 'at-tip' : 'catching-up');
+		// ONE rule for "at the tip", and it is the rule the DRIVER rests on rather than
+		// `catchupThreshold` beside it: a port saying `at-tip` while a loop went on
+		// fetching would be two answers to one question, and an app would be told "live"
+		// over an incomplete fold. It lives in `host/pacing.ts` so that this host and the
+		// worker host cannot answer it differently -- and it is asked of every generation
+		// the container holds, so a successor still rebuilding says `catching-up` even
+		// while the generation answering reads is level.
+		enterHostPhase(phaseAfterCycle(indexer));
 		// Unconditionally, unlike the cursor above: this is read from the container as
 		// it stands NOW, so a pointer that moved during the cycle is already accounted
 		// for rather than something to skip.
@@ -1374,6 +1409,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			return undefined;
 		}
 
+		// THE CANONICAL CURSOR, deliberately, and NOT the container-wide rule in
+		// `host/pacing.ts`. The two ask different questions and only look alike: pacing
+		// asks "is there work to do" (over every generation, so a successor rebuilding
+		// is work), while this asks "is the state a caller READS current" -- which is
+		// the canonical generation and nothing else. Widening it would make a caller
+		// awaiting this wait out a successor's entire rebuild for a state it can
+		// already read.
 		if (lastSync.lastToBlock !== lastSync.latestBlock) {
 			return indexToLatest();
 		}
@@ -1443,6 +1485,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			return undefined;
 		}
 
+		// Canonical-scoped for the reason given in `indexMoreAndCatchupIfNeeded`: this
+		// verb's promise is "the state you read is current", so it is finished when the
+		// generation answering reads is level. Each `advanceOnce` still advances EVERY
+		// generation, so a successor catches up alongside; it is simply not what this
+		// loop waits for.
 		while (lastSync.lastToBlock !== lastSync.latestBlock) {
 			try {
 				const advanced = await whileWriting(() => advanceOnce());
@@ -1472,11 +1519,31 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			return false;
 		}
 		if (!$syncing.autoIndexing) {
+			// A NEW ATTEMPT CLEARS THE OLD REFUSAL, exactly as the worker host's
+			// `startIndexing` does (`host/serve.ts`): `hostFailure` describes the loop that
+			// STOPPED, and it was only ever cleared on dispose, so a restarted loop reported
+			// a moving phase with a stale failure still attached to it.
+			hostFailure = undefined;
 			_auto_index();
 			return true;
 		} else {
 			return false;
 		}
+	}
+
+	/**
+	 * BRING THE NEXT CYCLE FORWARD, for a loop that is resting between cycles.
+	 *
+	 * Only ever shortens a wait: it does nothing when the loop is not running, and
+	 * nothing when a cycle is already in flight (that cycle re-arms on its own when
+	 * it lands, and it will see whatever was just added). So it cannot make two
+	 * cycles overlap.
+	 */
+	function kickAutoIndexing(): void {
+		if (!$syncing.autoIndexing) return;
+		if (indexingTimeout === undefined) return;
+		clearTimeout(indexingTimeout);
+		indexingTimeout = setTimeout(_auto_index, 1);
 	}
 
 	function stopAutoIndexing(): boolean {
@@ -1624,6 +1691,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		setSyncing({autoIndexing: true});
 		publishToPort();
 		try {
+			const cursorsBefore = cursorsOf(indexer);
 			const lastSync = await indexMoreAndCatchupIfNeeded();
 			if (!lastSync) {
 				// DEMOTED. The loop is not re-armed: this tab reads from here on, and
@@ -1643,12 +1711,16 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			if (!$syncing.autoIndexing) {
 				return;
 			}
-			if (lastSync.latestBlock - lastSync.lastToBlock < 1) {
-				// the latestblock fetched is smaller or equal than the last synced blocked
-				// let's wait
+			// THE REST DECISION, taken in `host/pacing.ts` so that this loop and the worker
+			// host's cannot disagree about it. What stays here is the part that is
+			// genuinely this driver's: the rest is a re-armed TIMER rather than an awaited
+			// promise, which is why `kickAutoIndexing` exists to bring it forward.
+			if (pacingAfterCycle(indexer, cursorsBefore).rest) {
+				// everything this container holds is level (or nothing moved): let's wait
 				indexingTimeout = setTimeout(_auto_index, autoIndexingInterval * 1000);
 			} else {
-				// here the latestBlock is ahead, let's sync quickly again
+				// something is still short of its tip and the last cycle advanced it, so
+				// let's sync quickly again
 				indexingTimeout = setTimeout(_auto_index, 1);
 			}
 		} catch (err) {
@@ -1926,6 +1998,14 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// (Under `immediate` the successor is canonical already, so this reports the
 				// generation it superseded instead -- which is the same fact, the other way up.)
 				reportGenerationProgress();
+				// WAKE A RESTING LOOP. The generation just added has a whole history to fold,
+				// and the loop is resting precisely BECAUSE everything was level a moment ago.
+				// Without this it sits out the remainder of the interval before giving the
+				// successor its first cycle -- a rest the app pays for work it has just asked
+				// for. The worker host does the same thing through `wakeFromRest`
+				// (`src/host/serve.ts`); here the rest IS the timer, so re-arming it now is
+				// the whole of it.
+				kickAutoIndexing();
 				return held;
 			});
 		},

@@ -39,10 +39,11 @@
  *   a main-thread indexer.
  */
 export * from './clone.js';
-// `cases.ts` and `mainThread.ts` are deliberately NOT re-exported: they are the
-// shared body and the third shape's plumbing, and the entry points to both are
-// already public (`hostIndexerInThisWorker`, `createIndexerState().mainThreadHost()`).
-// A second exported way to serve a container is exactly what ADR-0082 closes.
+// `cases.ts`, `pacing.ts` and `mainThread.ts` are deliberately NOT re-exported:
+// they are the shared boundary, the shared drive cadence and the third shape's
+// plumbing, and the entry points to all of them are already public
+// (`hostIndexerInThisWorker`, `createIndexerState().mainThreadHost()`). A second
+// exported way to serve or to pace a container is exactly what ADR-0082 closes.
 export * from './dedicatedWorker.js';
 export * from './endpoint.js';
 export * from './envelope.js';

@@ -48,14 +48,22 @@ const namedLogger = logs('@etherfold/browser');
  * derived progress figures, the subscribe/unsubscribe bookkeeping and the rule
  * that an unchanged report is not posted.
  *
- * Not shared: the DRIVER. `serve.ts` opens a container and advances it in a loop
- * of its own; `createIndexerState` -- which IS the main-thread host (ADR-0082) --
- * has driven its container through an auto-index loop with four verbs since long
- * before this port existed. Both satisfy `HostBacking` below and neither is
- * expressed in terms of the other, so what "one implementation" means precisely
- * is: one implementation of the BOUNDARY, over two drivers. See the module note
- * in `mainThread.ts` for why the second one was kept rather than folded into the
+ * Not shared: the DRIVER's SCHEDULING. `serve.ts` opens a container and advances
+ * it in a loop of its own, resting on a promise it can be woken from;
+ * `createIndexerState` -- which IS the main-thread host (ADR-0082) -- has driven
+ * its container through an auto-index loop with four verbs since long before this
+ * port existed, and rests by re-arming a timer. Both satisfy `HostBacking` below
+ * and neither is expressed in terms of the other. See the module note in
+ * `mainThread.ts` for why the second one was kept rather than folded into the
  * first.
+ *
+ * What the two drivers do NOT each decide for themselves is the drive CADENCE --
+ * which phase a cycle ended in and whether to rest before the next one. That is
+ * `pacing.ts`, and it is shared for the reason this module is: it was written out
+ * twice, which is two chances to be wrong, and both were taken (each rested on
+ * the CANONICAL cursor alone, so a successor caught up one range per interval).
+ * So "one implementation" means precisely: one implementation of the BOUNDARY and
+ * one of the CADENCE, over two schedulers.
  */
 
 /**
