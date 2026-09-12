@@ -51,3 +51,7 @@ Done means: an app in a tab can ask about a pending transaction, gets the same v
 FIRST, check this task against current reality (it is a launch snapshot and may have DRIFTED): does it still match the code, the relevant ADRs, and the tasks it depends on? If a dependency landed differently than this task assumes, or an ADR superseded an assumption here, do NOT build on the stale premise — route the task to needs-attention with the discrepancy as the reason.
 
 RECORD non-obvious in-scope decisions you make while building, in a `## Decisions` block at the end of your FINAL REPORT. Do not write the done record, the commit message or the PR body yourself, and do not open an observation note for a decision you made.
+
+## Requeue 2026-09-12
+
+Previous attempt died on a transient infra timeout before producing any code; no work branch exists. Start fresh.
