@@ -43,6 +43,7 @@ import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
 import {
 	GenesisBlockNotServedError,
 	GenesisCheckUnavailableError,
+	FetchRangeBelowFinalityError,
 	GenesisHashMismatchError,
 	InvalidBatchError,
 	isOutOfSpace,
@@ -497,6 +498,16 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// ordinary reconfigure into a full re-index. See `streamConfigHashOf`.
 		this.streamConfigHash = streamConfigHashOf(this.config.stream);
 		this.finality = this.config.stream.finality;
+
+		// A RANGE CEILING THAT CANNOT CLEAR THE UNCONFIRMED WINDOW is refused here,
+		// where both numbers are in hand for the first time. Left to run, it is the
+		// quietest defect this engine has: every cycle rewinds by `finality` and then
+		// asks for a range that ends at or below the cursor, so nothing is ever applied
+		// and nothing ever complains. `reinit` rather than the constructor alone,
+		// because a RECONFIGURE comes through here too and can introduce the same pair.
+		if (config?.fetch?.maxBlocksPerFetch !== undefined && config.fetch.maxBlocksPerFetch <= this.finality) {
+			throw new FetchRangeBelowFinalityError(config.fetch.maxBlocksPerFetch, this.finality);
+		}
 
 		// The half of the stream's IDENTITY that does not travel with each call. A
 		// keeper is handed a `source` on every operation and never the config, so a

@@ -372,6 +372,50 @@ export class TimestamplessLogError extends Error {
  * and an untyped throw defaults to "transient" -- so a node answering nonsense
  * would be asked four more times, on a delay, before anybody was told.
  */
+/**
+ * A fetch width that can never reach the tip, so the cursor would never move.
+ *
+ * Every cycle rewinds by the unconfirmed window before it fetches
+ * (`getFromBlock`: `min(lastToBlock + 1, latestBlock - finality)`), so a range
+ * CEILING at or below `stream.finality` re-asks for blocks that are already
+ * folded and stops short of the ones that are not. With `finality: 3` and
+ * `maxBlocksPerFetch: 2`, a cursor at 103 asks for 102..103, applies nothing
+ * new, and asks for 102..103 again, for ever.
+ *
+ * ## Why this is a refusal rather than a clamp
+ *
+ * Both numbers are deliberate statements about a deployment -- how deep a reorg
+ * it will tolerate, and how wide a range its node will serve -- so silently
+ * raising one to satisfy the other would overrule an operator on exactly the
+ * axis they were being explicit about. It is refused at CONSTRUCTION, where
+ * both values are in hand, because the alternative is a process that starts
+ * cleanly, reports `catching-up` truthfully, and never indexes a block: a fold
+ * that makes no progress and says nothing is the worst shape a defect can take,
+ * and it was measured at 50+ identical `eth_getLogs` ranges in three seconds.
+ *
+ * Only the CEILING is checked. `numBlocksToFetchAtStart` may legitimately sit
+ * below the finality depth, because the fetcher adapts it upwards towards
+ * `maxBlocksPerFetch`; the ceiling is the one it can never grow past.
+ */
+export class FetchRangeBelowFinalityError extends TypeError {
+	readonly name = 'FetchRangeBelowFinalityError';
+
+	constructor(
+		/** The configured `fetch.maxBlocksPerFetch`. */
+		readonly maxBlocksPerFetch: number,
+		/** The resolved `stream.finality` it has to clear. */
+		readonly finality: number,
+	) {
+		super(
+			`fetch.maxBlocksPerFetch (${maxBlocksPerFetch}) must be GREATER than stream.finality (${finality}), and it ` +
+				`is not. Every cycle rewinds by the unconfirmed window before it fetches, so a range this narrow re-asks ` +
+				`for blocks that are already folded and never reaches the ones that are not: the cursor would stand ` +
+				`still for ever while the indexer went on reporting that it was catching up. Raise maxBlocksPerFetch ` +
+				`above ${finality}, or lower stream.finality below ${maxBlocksPerFetch}.`,
+		);
+	}
+}
+
 export class NoFetchProgressError extends Error {
 	readonly name = 'NoFetchProgressError';
 	readonly retryable = false;
