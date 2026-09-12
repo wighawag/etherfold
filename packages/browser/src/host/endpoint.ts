@@ -42,10 +42,26 @@ export type HostAccess = {
 	readonly endpoint: MessageEndpoint;
 	/**
 	 * Let the host go, where the holder of this access is what keeps it alive: a
-	 * tab that constructed a dedicated worker terminates it. Absent where there is
-	 * nothing to release (the host's own end of its own scope).
+	 * tab that constructed a dedicated worker owns that worker. Absent where there
+	 * is nothing to release (the host's own end of its own scope).
+	 *
+	 * **`quiesced` says whether the host was known to be IDLE when this was
+	 * called**, and a shape that can kill its host must not kill it otherwise.
+	 * Killing a host mid-write is not the harmless act it was taken for: on WebKit,
+	 * ending a worker that has a `readwrite` and a `readonly` transaction in flight
+	 * can leave its IndexedDB database permanently unable to run any transaction,
+	 * which no reload and no new tab recovers
+	 * (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+	 * So the port establishes quiet FIRST where it can, and says so here.
 	 */
-	readonly close?: () => void;
+	readonly close?: (state: {
+		/**
+		 * `true` only when the host answered a `stopIndexing`, which is a promise
+		 * that the cycle in flight LANDED and no other will start. `false` means the
+		 * host did not answer -- it is being let go rather than shut down.
+		 */
+		quiesced: boolean;
+	}) => void;
 	/**
 	 * OBTAIN A PORT AGAIN, to a NEW host of this same shape, after this one died.
 	 *

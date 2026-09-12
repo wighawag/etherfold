@@ -545,8 +545,9 @@ describe('the shared shape refuses what it cannot be', () => {
 
 			// A SharedWorker cannot be terminated by a client and must not be: it is
 			// serving every other tab. So `close` releases THIS tab's port, and the
-			// access has no verb that could do more.
-			access.close?.();
+			// access has no verb that could do more -- which is also why `quiesced` is
+			// nothing to this shape: there is no kill for it to gate.
+			access.close?.({quiesced: false});
 			// ...and obtaining a port AGAIN is asking the app's own factory again,
 			// which for this shape reaches the host that is already running where one
 			// is (the URL and the name are what identify it).

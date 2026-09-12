@@ -317,6 +317,58 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 
 	const deathListeners = new Set<(death: HostDeath) => void>();
 
+	/**
+	 * ASK THE HOST TO STOP, and say whether it answered.
+	 *
+	 * `stopIndexing` is the only quiet this port can establish: when it answers, the
+	 * cycle in flight has LANDED and no other will start (`serve.ts`), so the store
+	 * has no write of the fold's in flight. That is the precondition a shape needs
+	 * before it may kill its host, and the difference between a clean shutdown and a
+	 * database wedged for ever.
+	 *
+	 * It does NOT go through `request()`, because by the time this runs the port is
+	 * closed and every caller's promise has already been refused; this is the port's
+	 * own bookkeeping and no app is waiting for it. It is bounded, because a host
+	 * that does not answer must not keep a page's teardown pending -- an unanswered
+	 * stop is simply `false`, which means the host is let go rather than killed.
+	 */
+	function quiesce(access: HostAccess): Promise<boolean> {
+		if (!access.close) return Promise.resolve(false);
+		return new Promise<boolean>((resolve) => {
+			const id = nextId++;
+			let done = false;
+			const finish = (quiesced: boolean) => {
+				if (done) return;
+				done = true;
+				clearTimeout(timer);
+				stopWaiting();
+				resolve(quiesced);
+			};
+			// The watch interval, which is already this port's answer to "how long is a
+			// host allowed to say nothing", or a plain second where watching is off.
+			// Deliberately not a new tunable: the same silence means the same thing here
+			// as it does to the probe.
+			const withinMs = (lifetime.watch?.everyInSeconds ?? 1) * 1000;
+			const timer = setTimeout(() => finish(false), withinMs);
+			const stopWaiting = listen(access.endpoint, (data: unknown) => {
+				if (isPortResponse(data) && data.id === id) finish(data.ok);
+			});
+			try {
+				access.endpoint.postMessage({
+					protocol: INDEXER_PORT_PROTOCOL,
+					kind: 'request',
+					id,
+					case: 'stopIndexing',
+					payload: undefined,
+				} satisfies PortRequest<'stopIndexing'>);
+			} catch {
+				// An endpoint that cannot be posted to is already gone, which is the same
+				// answer as one that does not reply.
+				finish(false);
+			}
+		});
+	}
+
 	function receive(data: unknown): void {
 		if (isPortPush(data)) {
 			// HEARD, and only from a message that is OURS: a shared scope carries whatever
@@ -395,16 +447,29 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 	}
 
 	/**
-	 * THE HOST IS GONE. Kill the corpse, reject the calls, tell the app, start
+	 * THE HOST IS GONE. Let the corpse go, reject the calls, tell the app, start
 	 * another one -- IN THAT ORDER.
 	 *
-	 * The order is the safety property. What is released first is the access to the
-	 * host that is not answering, so a host merely SUSPECTED of being dead is
-	 * terminated rather than left running beside its successor: at no point are two
-	 * hosts writing to one store. The writer claim is underneath that as a second
-	 * guarantee rather than the mechanism -- it neither blocks nor expires, so a
-	 * writer killed mid-block leaves a store the next claim takes over, and a corpse
-	 * that somehow lived is REFUSED at its next mutation (ADR-0075).
+	 * **It used to KILL the corpse here, and that was the wrong instinct.** The
+	 * argument was that releasing the unresponsive host first means two hosts never
+	 * write to one store. But that safety never came from the kill: it comes from
+	 * the writer claim (ADR-0075), which neither blocks nor expires, so a writer
+	 * killed mid-block leaves a store the next claim simply takes over and a corpse
+	 * that somehow lived is REFUSED at its next mutation. The kill was belt on top
+	 * of braces.
+	 *
+	 * And it was a belt with a hole in it. A death is concluded from SILENCE -- a
+	 * host that did not answer a probe -- so the host being killed is overwhelmingly
+	 * likely to be one that was BUSY rather than one that was gone, and killing a
+	 * busy host is how a database gets permanently wedged on WebKit
+	 * (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+	 * The port was manufacturing the very failure mode it exists to survive.
+	 *
+	 * So a suspected corpse is ABANDONED: `close` is told it is not quiesced, and a
+	 * shape that would otherwise kill declines to. What that costs is an idle thread
+	 * until the page goes away, since a dedicated worker cannot outlive its
+	 * document. What it buys is that a wrong guess about a slow host is no longer
+	 * able to destroy the user's local index.
 	 */
 	function died(): void {
 		const attempt = ++deaths;
@@ -420,7 +485,9 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 		stopListening();
 		released = true;
 		try {
-			corpse.close?.();
+			// NOT quiesced, and that is the whole point: this host answered nothing, so
+			// nothing is known about what it had in flight.
+			corpse.close?.({quiesced: false});
 		} catch (error) {
 			// Letting go of something that has already gone is not a failure worth raising
 			// at an app, and the restart below must happen either way.
@@ -593,6 +660,21 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			listCurrent: (entity, prefix, limit) => request('listCurrent', {entity, prefix, limit}),
 			listAsOf: (entity, prefix, at, limit) => request('listAsOf', {entity, prefix, at, limit}),
 		},
+		/**
+		 * THE TAB IS DONE WITH THIS INDEXER.
+		 *
+		 * Returns at once, and finishes letting go in the background, because the
+		 * host is asked to STOP before it is released. An app calling this on unmount
+		 * is the commonest way a worker is ended mid-fold, and ending a worker
+		 * mid-fold is what can wedge its IndexedDB database for ever on WebKit. A
+		 * `stopIndexing` that answers is a promise that the cycle in flight landed and
+		 * no other will start (see `serve.ts`), which is exactly the quiet a shape
+		 * needs before it may kill anything.
+		 *
+		 * Everything the APP can observe still happens synchronously: no further
+		 * events, and every call in flight rejected now rather than when the host gets
+		 * round to answering.
+		 */
 		close() {
 			if (closed) return;
 			closed = true;
@@ -605,13 +687,24 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			clearTimeout(watchTimer);
 			clearTimeout(restartTimer);
 			clearTimeout(settleTimer);
-			stopListening();
 			const closing = new Error(`the indexer port was closed while this call was in flight.`);
 			for (const [id, waiting] of pending) {
 				pending.delete(id);
 				waiting.reject(closing);
 			}
-			if (!released) held.close?.();
+			if (released) {
+				stopListening();
+				return;
+			}
+			const letting = held;
+			void quiesce(letting).then((quiesced) => {
+				stopListening();
+				try {
+					letting.close?.({quiesced});
+				} catch (error) {
+					namedLogger.error(`the indexer port could not release the host it was closing`, error);
+				}
+			});
 		},
 	};
 }

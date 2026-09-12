@@ -50,10 +50,28 @@ import {serveIndexerHost, type HostedIndexerSpec, type IndexerHost} from './serv
  * BUILD one, every port can restart. The line an app writes is the same line,
  * with an arrow in front of it.
  *
- * `close()` TERMINATES the worker, because a dedicated worker belongs to the tab
- * that constructed it and nothing else can be holding it. That is also what makes
- * the restart safe: the port kills before it opens a successor, so a host merely
- * SUSPECTED of being dead costs a restart rather than a second writer.
+ * ## `close()` terminates only a host that is KNOWN TO BE QUIET
+ *
+ * This used to terminate unconditionally, and the reasoning was that a dedicated
+ * worker belongs to the tab that made it, so killing it is free and killing
+ * before a restart is what stops a second writer.
+ *
+ * The second half was never load-bearing -- ADR-0075's writer token is what stops
+ * a second writer, and it stops one that survived a failed kill too -- and the
+ * first half is measurably false. Ending a worker that has a `readwrite` and a
+ * `readonly` transaction in flight can leave its IndexedDB database PERMANENTLY
+ * unable to run any transaction on WebKit, recovered by no reload and no new tab,
+ * with `deleteDatabase` blocked
+ * (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+ * A host killed for being unresponsive is, by construction, a host that was busy.
+ *
+ * So a kill now needs a reason to believe the host is idle, and the port
+ * establishes that by asking it to stop before letting go. When it cannot -- a
+ * host that answers nothing is exactly the case -- the worker is ABANDONED rather
+ * than killed. That leaks a thread, and the leak is bounded by a fact worth
+ * stating: a dedicated worker cannot outlive the document that created it, so the
+ * cost is one idle worker until the page goes away, against a local database the
+ * user cannot get back.
  */
 export function dedicatedWorkerHost(create: () => Worker): HostAccess {
 	const access = (worker: Worker): HostAccess => ({
@@ -62,7 +80,10 @@ export function dedicatedWorkerHost(create: () => Worker): HostAccess {
 		// `addEventListener` meeting a one-signature structural type, not a
 		// difference in behaviour.
 		endpoint: worker as unknown as MessageEndpoint,
-		close: () => worker.terminate(),
+		// Only a host that answered `stopIndexing` is killed; see the note above.
+		close: ({quiesced}) => {
+			if (quiesced) worker.terminate();
+		},
 		reopen: () => access(create()),
 	});
 	return access(create());
