@@ -394,6 +394,13 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		switch (request.case) {
 			case 'progress':
 				return progress();
+			case 'ping':
+				// ANSWERING IS THE WHOLE ANSWER. A tab probes a host that has gone quiet,
+				// and what it is asking for is evidence that anything is still running here
+				// -- so this reads nothing, computes nothing and waits for nothing. It must
+				// never grow a body: a probe that opened the container would make a host
+				// look dead exactly while it was busiest.
+				return undefined;
 			case 'subscribeToProgress': {
 				subscriptions++;
 				const current = progress();

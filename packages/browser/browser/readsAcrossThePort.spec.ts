@@ -63,6 +63,7 @@ test('reads the store across a port to a real worker, and matches a same-thread 
 			'close',
 			'generations',
 			'host',
+			'onHostDeath',
 			'onProgress',
 			'progress',
 			'promotion',

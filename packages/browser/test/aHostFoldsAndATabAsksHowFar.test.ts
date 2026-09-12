@@ -144,6 +144,7 @@ describe('an indexer hosted behind a port', () => {
 				'close',
 				'generations',
 				'host',
+				'onHostDeath',
 				'onProgress',
 				'progress',
 				'promotion',

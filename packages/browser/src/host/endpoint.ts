@@ -46,6 +46,24 @@ export type HostAccess = {
 	 * nothing to release (the host's own end of its own scope).
 	 */
 	readonly close?: () => void;
+	/**
+	 * OBTAIN A PORT AGAIN, to a NEW host of this same shape, after this one died.
+	 *
+	 * A restart is the shape's business and nothing else's, for the reason the rest
+	 * of this type exists: obtaining a port is the WHOLE of what a hosting shape is,
+	 * and starting a host again is obtaining one again. So the port drives the
+	 * lifetime (watch, reject, restart, resume -- ADR-0082) while knowing no more
+	 * about workers here than it does anywhere else.
+	 *
+	 * The result is a FULL access, its own `close` and its own `reopen` included, so
+	 * a second death is handled exactly as the first was.
+	 *
+	 * Absent where a shape cannot be re-obtained -- the host's own end of its own
+	 * scope, or a wire somebody else owns. A port whose access has none REPORTS the
+	 * death and rejects the calls, and says `restarting: false` rather than
+	 * pretending it could have done something.
+	 */
+	readonly reopen?: () => HostAccess;
 };
 
 /** Attach a message listener, starting the endpoint where that is needed. Returns the detach. */

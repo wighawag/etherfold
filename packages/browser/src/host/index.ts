@@ -16,6 +16,10 @@
  *   `IndexerPort.onProgress` and never a second source of truth.
  * - `envelope.ts` is what crosses: one request/response with correlation, the
  *   surfaces multiplexed on it as CASES.
+ * - `restart.ts` is what happens when the host stops existing: a death an app is
+ *   TOLD about, a typed refusal for the calls that were in flight, and the policy
+ *   the port restarts under. The port drives it; the shape's `reopen` is the one
+ *   thing it needs from a hosting shape to do so.
  * - `dedicatedWorker.ts` is a shape, and holds the only CODE in this package that
  *   names `Worker`.
  */
@@ -27,4 +31,5 @@ export * from './errors.js';
 export * from './port.js';
 export * from './progress.js';
 export * from './reads.js';
+export * from './restart.js';
 export * from './serve.js';

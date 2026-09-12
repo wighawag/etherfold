@@ -83,6 +83,7 @@ test('a tab starts, stops and reconfigures the indexer across the port', async (
 			'close',
 			'generations',
 			'host',
+			'onHostDeath',
 			'onProgress',
 			'progress',
 			'promotion',

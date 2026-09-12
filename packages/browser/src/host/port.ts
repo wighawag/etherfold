@@ -1,4 +1,5 @@
 import type {Abi, IndexingSource, TxInclusionQuery, TxInclusionVerdict, UsedPromotionConfig} from '@etherfold/core';
+import {logs} from 'named-logs';
 import {assertClonable} from './clone.js';
 import {listen, type HostAccess} from './endpoint.js';
 import {
@@ -16,6 +17,15 @@ import {
 } from './envelope.js';
 import {errorFromPort} from './errors.js';
 import type {PortStateReads} from './reads.js';
+import {
+	backoffFor,
+	IndexerHostDiedError,
+	resolvePortOptions,
+	type HostDeath,
+	type IndexerPortOptions,
+} from './restart.js';
+
+const namedLogger = logs('@etherfold/browser');
 
 /**
  * THE PORT: the typed boundary a tab holds onto a host that is not its own
@@ -75,6 +85,31 @@ export type IndexerPort = {
 	 * unsubscribed tab stops receiving pushes rather than merely ignoring them.
 	 */
 	onProgress(listener: (progress: HostProgress) => void): () => void;
+	/**
+	 * BE TOLD THAT THE HOST DIED. Returns the detach.
+	 *
+	 * Browsers evict workers, so this is an expected event with a defined outcome
+	 * rather than a failure nobody handled (ADR-0082): the app is TOLD, every call in
+	 * flight rejects with an `IndexerHostDiedError`, the port starts another host, and
+	 * the fold resumes from the cursor the store already holds (ADR-0027). Nothing is
+	 * lost but the questions that were in the air.
+	 *
+	 * ```ts
+	 * indexer.onHostDeath(({attempt, restarting}) => {
+	 *   banner.textContent = restarting ? 'the indexer restarted' : `the indexer keeps failing (${attempt} times)`;
+	 * });
+	 * ```
+	 *
+	 * AN EVENT rather than something to infer, because silence is the worst
+	 * available outcome: a stalled app and a slow app look identical from outside,
+	 * and that is where "is it broken?" reports come from. Nothing polls for it --
+	 * the port watches the host (`IndexerPortOptions.watch`) and tells whoever asked.
+	 *
+	 * It is NOT `HostProgress.failure`, and the difference decides what an app should
+	 * do: a failure is a host that is alive and whose DRIVER stopped on something
+	 * waiting cannot fix, so it still answers reads. This is the host being gone.
+	 */
+	onHostDeath(listener: (death: HostDeath) => void): () => void;
 	/**
 	 * START INDEXING, and answer where the fold is now.
 	 *
@@ -207,15 +242,60 @@ export type IndexerPort = {
  * const {lastToBlock, latestBlock} = await indexer.progress();
  * ```
  *
- * It knows nothing about workers. The argument is the ONE thing a hosting shape
- * differs in, which is why choosing a shape is a different call rather than a
- * flag threaded through this one.
+ * It knows nothing about workers. The first argument is the ONE thing a hosting
+ * shape differs in, which is why choosing a shape is a different call rather than
+ * a flag threaded through this one.
+ *
+ * ## It also owns the host's LIFETIME
+ *
+ * A host can stop existing -- browsers evict workers -- and the four things that
+ * then happen are this function's (ADR-0082): the app is TOLD (`onHostDeath`),
+ * every call in flight REJECTS with an `IndexerHostDiedError`, another host is
+ * STARTED through the shape's own `reopen`, and the fold RESUMES from the cursor
+ * without anything here telling it where to start (ADR-0027). The second argument
+ * is what a tab may say about that; the defaults are in `resolvePortOptions` and
+ * are meant to be left alone.
  */
-export function connectToIndexerHost(access: HostAccess): IndexerPort {
-	type Pending = {resolve: (value: never) => void; reject: (error: unknown) => void};
+export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOptions): IndexerPort {
+	const lifetime = resolvePortOptions(options);
+	/** What was asked, and WHICH CASE it was asked on, so a refusal can name it. */
+	type Pending = {resolve: (value: never) => void; reject: (error: unknown) => void; case: PortCaseName};
 	const pending = new Map<number, Pending>();
 	let nextId = 1;
 	let closed = false;
+
+	/**
+	 * THE ACCESS CURRENTLY HELD, which is not the one this port was built with once
+	 * a host has died: a restart REPLACES it with what the shape's `reopen`
+	 * answered.
+	 */
+	let held = access;
+	/** Whether the corpse has already been let go, so `close` does not release it twice. */
+	let released = false;
+	/** NOTHING IS ANSWERING: the host died, and a restart is either pending or not coming. */
+	let dead = false;
+	/** The last death, which is what a call made while `dead` is rejected with. */
+	let lastDeath: HostDeath | undefined;
+	/** How many deaths IN A ROW. Forgotten once a host has been alive long enough to have settled. */
+	let deaths = 0;
+	/** When this port last heard anything OF ITS OWN from the host. The whole of what a watch reads. */
+	let heardAt = Date.now();
+	let probing = false;
+	let watchTimer: ReturnType<typeof setTimeout> | undefined;
+	let restartTimer: ReturnType<typeof setTimeout> | undefined;
+	let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+	/**
+	 * A timer that must not hold a runtime open on its own.
+	 *
+	 * `unref` is node's and is absent in a browser, which is the runtime this is
+	 * actually for -- but a port is built in node tests too, and a liveness watch that
+	 * kept the process alive would turn a finished test into a hang.
+	 */
+	function unattended(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
+		(timer as unknown as {unref?: () => void}).unref?.();
+		return timer;
+	}
 
 	/**
 	 * WHO IS LISTENING, and the LAST THING THE HOST SAID.
@@ -235,14 +315,21 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 		for (const listener of listeners) listener(progress);
 	}
 
-	const stopListening = listen(access.endpoint, (data) => {
+	const deathListeners = new Set<(death: HostDeath) => void>();
+
+	function receive(data: unknown): void {
 		if (isPortPush(data)) {
+			// HEARD, and only from a message that is OURS: a shared scope carries whatever
+			// anybody posts to it, and somebody else's traffic is not evidence that this
+			// host is alive.
+			heardAt = Date.now();
 			// Narrowed by NAME, which is what makes a second push a `case` here rather
 			// than a cast.
 			if (data.push === 'progress') announce(data.value);
 			return;
 		}
 		if (!isPortResponse(data)) return;
+		heardAt = Date.now();
 		const waiting = pending.get(data.id);
 		// An answer to a call nobody is waiting for: a response that arrived after
 		// its caller gave up. Dropped rather than raised -- there is no caller to
@@ -254,7 +341,164 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 		} else {
 			waiting.reject(errorFromPort(data.error));
 		}
-	});
+	}
+
+	let stopListening = listen(held.endpoint, receive);
+
+	/**
+	 * WATCH THE HOST, which is the only way a tab can learn it died.
+	 *
+	 * No browser fires an event when it evicts a dedicated worker, and
+	 * `Worker.terminate()` is silent by construction, so what is left is silence and
+	 * a question. The rule is one line: if the host has said NOTHING for an interval,
+	 * PROBE it, and if the probe is not answered within another, it is gone. A host
+	 * that is folding, answering or pushing is visibly alive and is never asked.
+	 *
+	 * What is watched is LIVENESS and never STATUS. Asking for `progress` on a timer
+	 * would answer this question too and would be exactly the polling ADR-0082
+	 * replaced with a push, with the cost moved to the other end of the wire.
+	 */
+	function watch(): void {
+		if (!lifetime.watch || closed || dead) return;
+		const everyMs = lifetime.watch.everyInSeconds * 1000;
+		watchTimer = unattended(
+			setTimeout(() => {
+				watchTimer = undefined;
+				if (closed || dead) return;
+				if (Date.now() - heardAt < everyMs) {
+					watch();
+					return;
+				}
+				void probe(everyMs).then(watch);
+			}, everyMs),
+		);
+	}
+
+	/** Ask the one question whose ANSWER is its whole content, and conclude a death if none comes. */
+	async function probe(withinMs: number): Promise<void> {
+		if (probing || closed || dead) return;
+		probing = true;
+		let waited: ReturnType<typeof setTimeout> | undefined;
+		const answered = request('ping', undefined).then(
+			() => true,
+			() => false,
+		);
+		const alive = await Promise.race([
+			answered,
+			new Promise<boolean>((resolve) => {
+				waited = unattended(setTimeout(() => resolve(false), withinMs));
+			}),
+		]);
+		clearTimeout(waited);
+		probing = false;
+		if (!alive && !closed && !dead) died();
+	}
+
+	/**
+	 * THE HOST IS GONE. Kill the corpse, reject the calls, tell the app, start
+	 * another one -- IN THAT ORDER.
+	 *
+	 * The order is the safety property. What is released first is the access to the
+	 * host that is not answering, so a host merely SUSPECTED of being dead is
+	 * terminated rather than left running beside its successor: at no point are two
+	 * hosts writing to one store. The writer claim is underneath that as a second
+	 * guarantee rather than the mechanism -- it neither blocks nor expires, so a
+	 * writer killed mid-block leaves a store the next claim takes over, and a corpse
+	 * that somehow lived is REFUSED at its next mutation (ADR-0075).
+	 */
+	function died(): void {
+		const attempt = ++deaths;
+		const restarting = Boolean(held.reopen) && attempt <= lifetime.restart.attempts;
+		const restartInSeconds = restarting ? backoffFor(attempt, lifetime.restart) : undefined;
+		dead = true;
+		clearTimeout(watchTimer);
+		clearTimeout(settleTimer);
+		watchTimer = undefined;
+		settleTimer = undefined;
+
+		const corpse = held;
+		stopListening();
+		released = true;
+		try {
+			corpse.close?.();
+		} catch (error) {
+			// Letting go of something that has already gone is not a failure worth raising
+			// at an app, and the restart below must happen either way.
+			namedLogger.error(`the indexer port could not release the host it is replacing`, error);
+		}
+
+		const death: HostDeath = {
+			cause: 'unresponsive',
+			attempt,
+			restarting,
+			...(restartInSeconds === undefined ? {} : {restartInSeconds}),
+			// The APP's calls. A probe is this port's own bookkeeping, and counting it
+			// would report a rejection to an app that never made a call.
+			rejected: [...pending.values()].filter((waiting) => waiting.case !== 'ping').length,
+		};
+		lastDeath = death;
+		// The last report described a host that no longer exists, so it is DROPPED
+		// rather than handed to the next listener that attaches -- the same choice the
+		// host makes when a promotion retires the generation its cursor belonged to.
+		latest = undefined;
+		for (const [id, waiting] of pending) {
+			pending.delete(id);
+			waiting.reject(new IndexerHostDiedError(death, waiting.case));
+		}
+		for (const listener of [...deathListeners]) listener(death);
+
+		if (restarting) {
+			restartTimer = unattended(setTimeout(() => restart(corpse), (restartInSeconds ?? 0) * 1000));
+		} else {
+			namedLogger.error(
+				`the indexer host died ${attempt} time(s) in a row and is not being restarted; this port holds nothing.`,
+			);
+		}
+	}
+
+	/**
+	 * OBTAIN A PORT AGAIN, to a host that is new and knows nothing.
+	 *
+	 * There is nothing to hand it: where the fold got to is in the store, written in
+	 * the same transaction as the block it describes (ADR-0027), so a host that
+	 * starts reads the cursor and carries on. A port that told one where to resume
+	 * from would be a second opinion about a question only the store can answer.
+	 *
+	 * What IS restored is this tab's own subscription, because that belongs to the
+	 * tab rather than to the host that happened to be serving it: an app that had to
+	 * re-attach after every restart would be holding exactly the lifecycle this is
+	 * hiding.
+	 */
+	function restart(previous: HostAccess): void {
+		restartTimer = undefined;
+		if (closed) return;
+		try {
+			held = previous.reopen!();
+		} catch (error) {
+			namedLogger.error(`the indexer port could not start another host, so this one holds nothing`, error);
+			const abandoned: HostDeath = {cause: 'unresponsive', attempt: deaths, restarting: false, rejected: 0};
+			lastDeath = abandoned;
+			for (const listener of [...deathListeners]) listener(abandoned);
+			return;
+		}
+		stopListening = listen(held.endpoint, receive);
+		released = false;
+		dead = false;
+		heardAt = Date.now();
+		// ALIVE LONG ENOUGH IS FORGIVEN: the budget bounds a crash LOOP, not the number
+		// of evictions a tab open all day may survive.
+		settleTimer = unattended(
+			setTimeout(() => {
+				deaths = 0;
+			}, lifetime.restart.settledAfterInSeconds * 1000),
+		);
+		watch();
+		if (listeners.size > 0) {
+			// The answer IS the new host's current progress, so a subscriber is told where
+			// things stand now rather than waiting for the resumed fold to move.
+			request('subscribeToProgress', undefined).then(announce, () => undefined);
+		}
+	}
 
 	function request<Case extends PortCaseName>(
 		name: Case,
@@ -264,6 +508,13 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 			return Promise.reject(
 				new Error(`this indexer port is closed, so the '${name}' call was not sent. Connect to the host again.`),
 			);
+		}
+		if (dead && lastDeath) {
+			// REFUSED NOW, and by the same type the calls in flight got. A call made while
+			// a restart is under way has no host to reach, and holding it until one exists
+			// would be the silent retry ADR-0082 refuses: a caller that wants to ask again
+			// is told it can, and is not left waiting to find out.
+			return Promise.reject(new IndexerHostDiedError(lastDeath, name));
 		}
 		const id = nextId++;
 		const message: PortRequest<Case> = {
@@ -279,9 +530,9 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 			// method that answers a promise everywhere else must not throw past an
 			// `await ... .catch(...)` on the one input it refuses.
 			assertClonable(payload, `the '${name}' request`);
-			pending.set(id, {resolve: resolve as (value: never) => void, reject});
+			pending.set(id, {resolve: resolve as (value: never) => void, reject, case: name});
 			try {
-				access.endpoint.postMessage(message);
+				held.endpoint.postMessage(message);
 			} catch (error) {
 				pending.delete(id);
 				reject(error);
@@ -289,9 +540,17 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 		});
 	}
 
+	watch();
+
 	return {
 		host: access.host,
 		progress: () => request('progress', undefined),
+		onHostDeath(listener) {
+			deathListeners.add(listener);
+			return () => {
+				deathListeners.delete(listener);
+			};
+		},
 		onProgress(listener) {
 			const first = listeners.size === 0;
 			listeners.add(listener);
@@ -338,14 +597,21 @@ export function connectToIndexerHost(access: HostAccess): IndexerPort {
 			if (closed) return;
 			closed = true;
 			listeners.clear();
+			deathListeners.clear();
 			latest = undefined;
+			// A CLOSE IS NOT A DEATH: the tab asked for this one, so there is nobody to
+			// tell and nothing to restart -- a port that started a host here would build
+			// one for an app that has gone.
+			clearTimeout(watchTimer);
+			clearTimeout(restartTimer);
+			clearTimeout(settleTimer);
 			stopListening();
 			const closing = new Error(`the indexer port was closed while this call was in flight.`);
 			for (const [id, waiting] of pending) {
 				pending.delete(id);
 				waiting.reject(closing);
 			}
-			access.close?.();
+			if (!released) held.close?.();
 		},
 	};
 }
