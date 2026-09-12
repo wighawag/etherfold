@@ -1,0 +1,81 @@
+{
+  "project": "chromium",
+  "ranAt": "2026-09-12T06:48:47.448Z",
+  "results": {
+    "tabScope": "Window",
+    "shared": {
+      "host": "shared-worker",
+      "scope": "SharedWorkerGlobalScope",
+      "seen": {
+        "indexing": true,
+        "phase": "at-tip",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100,
+        "transfers": 5,
+        "generations": 1,
+        "promotion": "on-catch-up",
+        "inclusion": "included",
+        "stopped": false,
+        "started": true,
+        "surface": [
+          "checkTxInclusion",
+          "close",
+          "generations",
+          "host",
+          "onHostDeath",
+          "onProgress",
+          "progress",
+          "promotion",
+          "reads",
+          "reconfigure",
+          "startIndexing",
+          "stopIndexing"
+        ]
+      }
+    },
+    "dedicated": {
+      "host": "dedicated-worker",
+      "scope": "DedicatedWorkerGlobalScope",
+      "seen": {
+        "indexing": true,
+        "phase": "at-tip",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100,
+        "transfers": 5,
+        "generations": 1,
+        "promotion": "on-catch-up",
+        "inclusion": "included",
+        "stopped": false,
+        "started": true,
+        "surface": [
+          "checkTxInclusion",
+          "close",
+          "generations",
+          "host",
+          "onHostDeath",
+          "onProgress",
+          "progress",
+          "promotion",
+          "reads",
+          "reconfigure",
+          "startIndexing",
+          "stopIndexing"
+        ]
+      }
+    }
+  },
+  "timings": [
+    {
+      "label": "shared",
+      "ms": 46.799999952316284
+    },
+    {
+      "label": "dedicated",
+      "ms": 1.7000000476837158
+    }
+  ]
+}

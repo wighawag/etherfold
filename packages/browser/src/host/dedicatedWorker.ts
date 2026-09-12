@@ -19,6 +19,8 @@ import {serveIndexerHost, type HostedIndexerSpec, type IndexerHost} from './serv
  * It works everywhere, it debugs properly (a SharedWorker needs `chrome://inspect`
  * and has no devtools panel), and one worker per tab is not waste: each serves
  * its own tab's reads, so reads PARALLELISE instead of funnelling through one.
+ * `sharedWorker.ts` is the opt-in sibling, and nothing about it changed what an
+ * app gets when it says nothing.
  */
 
 /**
@@ -117,6 +119,19 @@ function thisDedicatedWorker(): HostAccess {
 				`A worker entry point is loaded with \`new Worker(new URL('./indexer.worker.ts', import.meta.url), ` +
 				`{type: 'module'})\`; importing it from the tab runs the indexer on the UI thread, which is what hosting ` +
 				`it in a worker is for.`,
+		);
+	}
+	if ('onconnect' in scope) {
+		// A SHARED worker's scope, which has no `postMessage` of its own, so the
+		// refusal below would be true and would not say the useful thing. The two
+		// helpers are one line apart in an app's entry point and a mix-up is silent:
+		// a shared scope's `connect` event never fires in a dedicated worker either,
+		// so what an app observes is a host that never answers.
+		throw new Error(
+			`hostIndexerInThisWorker() was called in ${executionScopeName()}, which is a SHARED worker: it is handed a ` +
+				`port per client through a \`connect\` event and has no \`postMessage\` of its own. Call ` +
+				`hostIndexerInThisSharedWorker() there -- it takes the same spec, and what runs inside the host is the same ` +
+				`code in both shapes.`,
 		);
 	}
 	if (typeof scope.postMessage !== 'function' || typeof scope.addEventListener !== 'function') {

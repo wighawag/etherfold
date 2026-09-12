@@ -20,8 +20,13 @@
  *   TOLD about, a typed refusal for the calls that were in flight, and the policy
  *   the port restarts under. The port drives it; the shape's `reopen` is the one
  *   thing it needs from a hosting shape to do so.
- * - `dedicatedWorker.ts` is a shape, and holds the only CODE in this package that
- *   names `Worker`.
+ * - `dedicatedWorker.ts` and `sharedWorker.ts` are the two SHAPES, and hold the
+ *   only CODE in this package that names a worker constructor. They are
+ *   siblings rather than a branch inside anything else, and the second one is
+ *   what says the seam was real: what runs inside the host is the same code in
+ *   both, so a SharedWorker differs from a dedicated worker in exactly one
+ *   thing -- a wire per CLIENT instead of one wire -- which `sharedWorker.ts`
+ *   presents to the host as the one endpoint every shape gives it.
  */
 export * from './clone.js';
 export * from './dedicatedWorker.js';
@@ -33,3 +38,4 @@ export * from './progress.js';
 export * from './reads.js';
 export * from './restart.js';
 export * from './serve.js';
+export * from './sharedWorker.js';
