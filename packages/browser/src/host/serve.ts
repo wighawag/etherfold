@@ -25,6 +25,7 @@ import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerSt
 import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
 import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
 import {executionScopeName, type HostAccess} from './endpoint.js';
+import {withClaimPatience} from '../utils/claim.js';
 import {cursorsOf, pacingAfterCycle} from './pacing.js';
 import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
@@ -80,6 +81,16 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 	 * to four, which is `createIndexerState`'s auto-index interval.
 	 */
 	tipIntervalInSeconds?: number;
+	/**
+	 * How long this host waits for a generation's WRITER CLAIM, in seconds.
+	 * Defaults to `DEFAULT_CLAIM_WITHIN_SECONDS` (ten).
+	 *
+	 * Handed to `createState` as a signal to forward to `openForWriting`. A claim
+	 * that never lands is the difference between a host that REFUSES -- which this
+	 * one reports as `phase: 'refused'` with a `failure` the tab reads over the
+	 * port -- and one that says `waiting` for ever. See `utils/claim.ts`.
+	 */
+	claimWithinSeconds?: number;
 };
 
 /** What the entry point that obtained the port gets back. */
@@ -662,7 +673,8 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 	recordState: (id: {stream: string; processor: string}, state: WritableStateStore) => void,
 ) {
 	return {
-		createState: (context: GenerationContext) => spec.createState(context),
+		createState: (context: GenerationContext) =>
+			withClaimPatience(spec.claimWithinSeconds, (patience) => spec.createState(context, patience)),
 		createProcessor: async (state: unknown, context: GenerationContext) => {
 			const built = await spec.createProcessor(state as WritableStateStore, context);
 			if (built.configure && spec.processorConfig) {

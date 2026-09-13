@@ -42,6 +42,16 @@ Three properties are load-bearing and each is pinned by a test:
 - **"A refusal is not a recovery."** Stands, and is worse than it first looked: a reload does not clear the wedge, a new tab does not clear it, and `deleteDatabase` never completes. The only escape inside a browsing session is a DIFFERENT DATABASE NAME, which is a full re-index and a decision about the user's time that a seam cannot take on an application's behalf. The error message says so rather than implying a retry will do.
 - **"It may belong one layer up."** Both, as it turned out, and not as alternatives. The mechanism belongs at the seam because that is where the truth is; the POLICY belongs in the host, and the host already had the surface for it. A rejection out of `createState` was already turned into `phase: 'refused'` with a `failure` that crosses the port (`serve.ts`), so once the claim could reject, the whole path to the tab existed. `browser/restartsAndResumes.spec.ts` asserts it end to end on a genuinely wedged WebKit database: `phase: 'refused'`, `failure.name === 'StoreClaimAbandonedError'`, in six seconds rather than never.
 
+## And then the host was given the number, too
+
+The first cut left the bound entirely to the application, and that was not enough: **the seven documented examples all showed the unbounded form**, so an app written from our own docs still hung. A mechanism nobody reaches is not a fix.
+
+The obvious repair -- have the host wrap `createState` in a timeout -- is a trap, and worth writing down because it looks right. The host cannot see the claim; it sees the application's factory, and a factory may legitimately take minutes. Installing a published snapshot over a mobile connection is the documented example, and it happens inside `createState`. A default timeout there would refuse healthy deployments on every engine, which is a worse bug than the one being fixed.
+
+So the host owns the NUMBER and the factory owns the SCOPE. `createState(context, {signal})` hands down a signal cut to `claimWithinSeconds` (ten by default), and the application forwards it to `openForWriting` and to nothing else. The host inventing this number is not a new kind of decision, because it already owns the watch interval, the restart backoff and the tip interval; what it must not do is decide what the number applies to.
+
+That makes forwarding a **convention, not a guarantee**, and that is the honest limit: a factory that drops the signal waits for ever exactly as before. It is the price of the factory being the app's code. The one-argument shape still type-checks and still works, and a test pins that deliberately rather than leaving it to be discovered.
+
 ## What is still not decided
 
-Whether `@etherfold/browser` should bound the claim ITSELF by default, rather than leaving every application to remember. The fixture worker passes a bound; a shipped app that forgets one is back where this started. The argument against is the same one that kept the timeout out of the seam -- the host would have to invent a number -- and the argument for is that a host already owns every other cadence in the system (watch interval, restart backoff, tip interval), so this would not be its first.
+Nothing here. The remaining question belongs to the finding rather than to this note: whether to file the WebKit bug, which is a task and not a design.

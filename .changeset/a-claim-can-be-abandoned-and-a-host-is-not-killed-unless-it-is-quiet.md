@@ -39,3 +39,20 @@ The port used to kill on both release paths. The justification was that a dedica
 Abandoning leaks a thread, and the leak is bounded by a fact worth stating: a dedicated worker cannot outlive the document that created it. One idle worker until the page goes away, against a local index the user cannot get back. A SharedWorker is unaffected -- it has no kill to gate, since it is serving other tabs.
 
 `close` gaining a required argument is the only breaking edge, and only for code that implements `HostAccess` by hand; the three shapes this package ships handle it.
+
+## The host hands its patience to `createState`
+
+The signal above only helps a caller who passes one, and every documented example showed the unbounded form, so an application written from these docs still hung. A mechanism nobody reaches is not a fix.
+
+`createState` now receives a second argument: `createState(context, {signal})`, a signal cut to the host's `claimWithinSeconds` (ten by default, on `createIndexerState`'s options and on the hosted spec). Forward it to `openForWriting` and a claim that will never land becomes `phase: 'refused'` with a `failure` the tab reads over the port, instead of `waiting` for ever.
+
+```ts
+createState: async (context, {signal}) =>
+	openForWriting(await createBrowserStateStore(myProcessor.entities), {signal}),
+```
+
+**The host owns the number; the factory owns the scope.** A host inventing this number is not a new kind of decision -- it already owns the watch interval, the restart backoff and the tip interval -- but it must not decide what the number applies to. Wrapping `createState` in a timeout would have been the obvious move and is a trap: a factory may legitimately take minutes, since installing a published snapshot over a mobile connection happens inside it, and a default timeout there would refuse healthy deployments on every engine.
+
+So forwarding is a **convention rather than a guarantee**, and that is the honest limit of what a host can do: a factory that drops the signal waits exactly as long as it used to. The one-argument shape still type-checks and still works, and a test pins that on purpose. Ten seconds is a thousand times a healthy claim, which is a single `readwrite` transaction over one key.
+
+Every example in the README and in the type documentation now forwards the signal.

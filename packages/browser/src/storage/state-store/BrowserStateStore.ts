@@ -13,10 +13,11 @@ import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
  * // the default: versioned rows in IndexedDB (ADR-0024). The CLAIM is what turns
  * // a store into one a generation may fold into (ADR-0077), and it is taken here
  * // because this factory is the one place that knows this tab means to INDEX.
- * const createState = async () => openForWriting(await createBrowserStateStore(processor.entities));
+ * const createState = async (context, {signal}) =>
+ *   openForWriting(await createBrowserStateStore(processor.entities), {signal});
  *
  * // the same app on the light store instead: nothing else changes
- * const createState = async () =>
+ * const createState = async (context, {signal}) =>
  *   openForWriting(
  *     await createBrowserStateStore(processor.entities, {
  *       backend: (entities) => new PatchStateStore(entities, {retention: 'revert-only', finalityDepth: 64}),

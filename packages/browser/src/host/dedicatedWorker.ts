@@ -101,7 +101,8 @@ export function dedicatedWorkerHost(create: () => Worker): HostAccess {
  * import {processor, source, provider} from './my-app.js';
  *
  * hostIndexerInThisWorker({
- *   createState: async () => openForWriting(await createBrowserStateStore(processor.entities)),
+ *   createState: async (context, {signal}) =>
+ *     openForWriting(await createBrowserStateStore(processor.entities), {signal}),
  *   createProcessor: (store) => new EntityEventProcessor(store, processor),
  *   provider,
  *   source,

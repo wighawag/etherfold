@@ -37,7 +37,10 @@ hostIndexerInThisWorker({
 	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024).
 	// `openForWriting` is what makes the HOST the writer of that store, and every tab a
 	// reader: building a store and claiming it are two acts (ADR-0077).
-	createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'})),
+	// `signal` bounds the writer claim: a storage that never answers becomes a
+	// refusal the app can render, rather than a wait with no end.
+	createState: async (context, {signal}) =>
+		openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'}), {signal}),
 	createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
 	provider, // an EIP-1193 provider is an object with methods, so it is built HERE
 	source: {chainId: '11155111', contracts: [{abi, address: '0x…', startBlock: 3040661}]},
@@ -102,7 +105,10 @@ import {createBrowserStateStore, createIndexerState} from '@etherfold/browser';
 import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 
 const indexer = createIndexerState({
-	createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'})),
+	// `signal` bounds the writer claim: a storage that never answers becomes a
+	// refusal the app can render, rather than a wait with no end.
+	createState: async (context, {signal}) =>
+		openForWriting(await createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'}), {signal}),
 	createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
 });
 

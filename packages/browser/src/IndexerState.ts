@@ -39,6 +39,7 @@ import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
 import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
+import {withClaimPatience, type ClaimPatience} from './utils/claim.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
@@ -390,7 +391,10 @@ export type EntityEventProcessorLike<ABI extends Abi, ProcessResultType, Process
  *
  * ```ts
  * const indexer = createIndexerState({
- *   createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities)),
+ *   // the signal bounds the CLAIM, so a storage that never answers is a refusal
+ *   // an app can render rather than a wait with no end (see `createState`)
+ *   createState: async (context, {signal}) =>
+ *     openForWriting(await createBrowserStateStore(myProcessor.entities), {signal}),
  *   createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
  * });
  * ```
@@ -423,8 +427,36 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	 * The claim is per STORE INSTANCE and `openForWriting` is idempotent over one, so
 	 * the shipped `createState: () => store` shape (one instance for every generation)
 	 * takes ONE claim and every generation writes through it.
+	 *
+	 * ## FORWARD THE SIGNAL TO `openForWriting`
+	 *
+	 * ```ts
+	 * createState: async (context, {signal}) =>
+	 *   openForWriting(await createBrowserStateStore(processor.entities), {signal}),
+	 * ```
+	 *
+	 * Taking a claim is one round trip to the storage, and a storage that never
+	 * answers makes it hang for ever -- which is not hypothetical: on WebKit a
+	 * database can be left permanently unable to run any transaction, and an
+	 * unbounded claim there is an application stuck in `waiting` with nothing to
+	 * render (`work/notes/findings/webkit-does-not-abort-a-terminated-workers-indexeddb-transaction.md`).
+	 * The signal is this indexer's patience for the CLAIM and nothing else.
+	 *
+	 * **Give it to the CLAIM, not to everything this factory does.** It is sized for
+	 * a single transaction (`claimWithinSeconds`, ten by default), so wrapping a
+	 * snapshot download or a long migration in it would refuse a healthy deployment
+	 * on a slow connection. Those have their own timeouts to state.
+	 *
+	 * Forwarding is a convention and not a guarantee, because a factory is the
+	 * application's code: the signal is handed over, and an implementation that
+	 * ignores it goes back to waiting for ever. That is the price of the factory
+	 * being the app's, and it is why this is documented at every call site rather
+	 * than enforced at one.
 	 */
-	createState: (context: GenerationContext) => WritableStateStore | Promise<WritableStateStore>;
+	createState: (
+		context: GenerationContext,
+		patience: ClaimPatience,
+	) => WritableStateStore | Promise<WritableStateStore>;
 	/** The fold, over that state. The FACTORY, not its result: its version hash NAMES the generation. */
 	createProcessor: (
 		state: WritableStateStore,
@@ -515,7 +547,10 @@ type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfi
  * // the state (and its cursor) live in a store the app chose, and a GENERATION
  * // builds its own: the hook is handed the factories, not their results
  * const indexer = createIndexerState({
- *   createState: async () => openForWriting(await createBrowserStateStore(myProcessor.entities)),
+ *   // the signal bounds the CLAIM, so a storage that never answers is a refusal
+ *   // an app can render rather than a wait with no end (see `createState`)
+ *   createState: async (context, {signal}) =>
+ *     openForWriting(await createBrowserStateStore(myProcessor.entities), {signal}),
  *   createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
  * });
  * ```
@@ -619,6 +654,22 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * unbounded in what it holds is strictly worse than either honest position.
 		 */
 		pruneBudget?: number;
+		/**
+		 * How long this indexer waits for a generation's WRITER CLAIM, in seconds.
+		 * Defaults to `DEFAULT_CLAIM_WITHIN_SECONDS` (ten).
+		 *
+		 * It is handed to `createState` as a signal to forward to `openForWriting`,
+		 * and it exists because a claim CAN hang: a store whose storage never answers
+		 * leaves an application in `waiting` for ever with nothing to render
+		 * (`utils/claim.ts` says why, and which engine made it necessary). Ten seconds
+		 * is a thousand times a healthy claim.
+		 *
+		 * Raise it for a storage that is genuinely slow to take a claim. It does NOT
+		 * bound the rest of `createState` -- a snapshot install is not measured by it
+		 * -- and it cannot be enforced, because the factory is the application's: a
+		 * `createState` that ignores the signal waits exactly as long as it used to.
+		 */
+		claimWithinSeconds?: number;
 		// Optional factory used to construct the underlying IndexerGeneration. Receives the same
 		// arguments (already request-tracked/logged provider, configured processor, source, config)
 		// that would otherwise be passed to `new IndexerGeneration(...)`. Useful for injecting a
@@ -818,13 +869,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * (`stateOf`), which is what lets the container answer from a generation that
 	 * has folded nothing yet, and which is what a just-promoted generation IS.
 	 */
+	/** See the option, and `utils/claim.ts` for why a host owns this number at all. */
+	const claimWithinSeconds = options?.claimWithinSeconds;
+
 	function generationSpecFor(
 		createState: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createState'],
 		createProcessor: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createProcessor'],
 		processorConfig?: ProcessorConfig,
 	) {
 		return {
-			createState: (context: GenerationContext) => createState(context),
+			createState: (context: GenerationContext) =>
+				withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience)),
 			createProcessor: async (state: unknown, context: GenerationContext) => {
 				const built = await createProcessor(state as WritableStateStore, context);
 				if (built.configure && processorConfig) {
