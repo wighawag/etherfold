@@ -40,8 +40,27 @@ export type SignalStream = {
 /** Whatever answers a request: a Hono app under test, or anything else that does. */
 type Requestable = {request: (path: string, init?: RequestInit) => Response | Promise<Response>};
 
+/** What a caller can ask for BEYOND the recording. */
+export type SignalStreamOptions = {
+	/**
+	 * Called with each frame AS IT ARRIVES, rather than left to be found in
+	 * `events` afterwards.
+	 *
+	 * It is what turns this reader into an ADAPTER: the conformance suite hands a
+	 * transport a plain `StateMovedHandler` and this is where a frame off the wire
+	 * becomes a call to it, so the handler an app writes for a worker's port is the
+	 * handler that runs here. The cases that assert on the recording use `events`
+	 * as they always did.
+	 */
+	readonly onEvent?: (event: SignalEvent) => void;
+};
+
 /** Open the state-moved stream of one named indexer, and start reading it. */
-export async function openSignalStream(app: Requestable, path: string): Promise<SignalStream> {
+export async function openSignalStream(
+	app: Requestable,
+	path: string,
+	options: SignalStreamOptions = {},
+): Promise<SignalStream> {
 	const response = await app.request(path);
 	const events: SignalEvent[] = [];
 	const raw: {event: string; data: string}[] = [];
@@ -78,7 +97,9 @@ export async function openSignalStream(app: Requestable, path: string): Promise<
 					const parsed = parseFrame(frame);
 					if (parsed) {
 						raw.push({event: parsed.event, data: parsed.raw});
-						events.push({event: parsed.event, data: parsed.data});
+						const arrived = {event: parsed.event, data: parsed.data};
+						events.push(arrived);
+						options.onEvent?.(arrived);
 					}
 					boundary = buffer.indexOf('\n\n');
 				}

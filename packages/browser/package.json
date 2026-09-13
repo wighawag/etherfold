@@ -26,6 +26,7 @@
 	},
 	"devDependencies": {
 		"@etherfold/processor-entities": "workspace:*",
+		"@etherfold/state-moved-conformance": "workspace:*",
 		"@etherfold/state-store-patch": "workspace:*",
 		"@playwright/test": "^1.62.1",
 		"as-soon": "^0.1.5",
