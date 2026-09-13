@@ -1,5 +1,5 @@
 ---
-status: accepted, not yet implemented
+status: accepted; the CHAIN-FACING producer is built (`StateMoved` / `StateMovedPublisher` / `Indexer.onStateMoved`, and the relay up from `@etherfold/processor-entities`). The receiving container, the three transports, and the token's two rotations (a retraction, a promotion) are not yet.
 ---
 
 # A reader is TOLD the state moved, by a SIGNAL carrying a coherence token

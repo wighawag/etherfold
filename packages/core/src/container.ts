@@ -17,10 +17,13 @@ import {
 	type PromotionConfig,
 	type UsedPromotionConfig,
 } from './generation/promotion.js';
+import {generationDigestOf} from './generation/identity.js';
 import {streamDigestOf} from './stream/identity.js';
 import {readOnlyStream} from './stream/readOnly.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
+import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import type {
+	AppliedBlock,
 	EventProcessor,
 	IndexingSource,
 	LastSync,
@@ -524,6 +527,19 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	public onPromoted: ((promoted: GenerationRecord, superseded: GenerationRecord | undefined) => void) | undefined;
 
+	/**
+	 * THE SIGNAL, and the token it carries: what this container tells the sides
+	 * that are READING (ADR-0083).
+	 *
+	 * Held rather than reimplemented, because the receiving container publishes the
+	 * SAME signal and one notification model is the claim being made. Everything
+	 * about subscribing, containing a throwing handler and rotating the token is
+	 * `StateMovedPublisher`'s; what is here is the half only a container knows --
+	 * WHICH generation applied the block and whether it is the one that answers
+	 * reads.
+	 */
+	protected readonly stateMoved = new StateMovedPublisher();
+
 	protected readonly registry: GenerationRegistry;
 	protected provider: EIP1193ProviderWithoutEvents;
 	protected source: IndexingSource<ABI>;
@@ -743,9 +759,36 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				this.notifyState();
 			}
 		};
+		// The SIGNAL's upward half, attached to EVERY generation and filtered at the
+		// publication, exactly like the cursor callback above: which generation is
+		// canonical moves, and a relay attached only to the canonical one would have to
+		// be re-attached at every promotion.
+		this.relayAppliedBlocks(entry, processor);
 
 		await this.applyPolicyTo(entry);
 		return this.heldOf(entry);
+	}
+
+	/**
+	 * BE TOLD THE STATE MOVED, block by block. Returns the detach.
+	 *
+	 * One notification per block the CANONICAL fold applies, naming that block, the
+	 * generation that answered, the entity names that block touched and a coherence
+	 * token to compare (`StateMoved`). It is a SIGNAL and not a delivery of data: it
+	 * says what moved so a reader re-reads through the surface it already has --
+	 * `state` here, a port in a tab, a feed or a query surface across a network.
+	 *
+	 * ```ts
+	 * const detach = indexer.onStateMoved(({block, entities, coherence}) => {
+	 *   if (coherence !== held) {held = coherence; return invalidateEverything();}
+	 *   for (const entity of entities) invalidate(entity);
+	 * });
+	 * ```
+	 *
+	 * Best-effort, with nothing held per subscriber: see `StateMovedPublisher`.
+	 */
+	onStateMoved(handler: StateMovedHandler): StateMovedDetach {
+		return this.stateMoved.subscribe(handler);
 	}
 
 	/** Every generation this container holds, in the order it built them. */
@@ -1000,12 +1043,24 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	): Promise<ReconfigureOutcome> {
 		const entry = this.requireCurrent();
 		const publishedBefore = entry.publications;
+		// BEFORE the verb, because the verb REBUILDS: a swap is followed by a `load`
+		// that replays the cached stream through the NEW fold, and a relay attached
+		// afterwards would go quiet for exactly those blocks. Attaching to a processor
+		// the swap then declines costs nothing -- a processor this container does not
+		// hold folds nothing and therefore reports nothing -- and it is detached below.
+		this.relayAppliedBlocks(entry, newProcessor);
 		const outcome = await entry.generation.updateProcessor(newProcessor, options);
 		if (outcome.stateDiscarded) {
 			// Recorded BEFORE the discard is published, and unconditionally: the state to
 			// publish is the NEW fold's read handle, which is a handle onto a different
 			// store whenever the declarations changed.
+			this.stopRelayingAppliedBlocks(entry.processor, newProcessor);
 			entry.processor = newProcessor;
+		} else {
+			// The swap was declined (same version hash, not forced), so this generation
+			// goes on folding with the processor it already had and the newcomer is not
+			// this container's.
+			this.stopRelayingAppliedBlocks(newProcessor, entry.processor);
 		}
 		this.publishDiscard(entry, outcome, publishedBefore);
 		return outcome;
@@ -1344,6 +1399,68 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		this.current = entry;
 		entry.everCanonical = true;
 		this.notifyState();
+	}
+
+	/**
+	 * RELAY: hand this generation's fold the reporter it names its applied blocks
+	 * to.
+	 *
+	 * The entity set is produced where the mutations are, one package down, and
+	 * this container assembles the signal from it plus what only a container holds
+	 * (ADR-0083). A fold that implements nothing here reports nothing and therefore
+	 * publishes nothing, which is the honest coarse answer rather than a fabricated
+	 * set: core cannot know which blocks such a fold applied, let alone what they
+	 * touched.
+	 */
+	protected relayAppliedBlocks(
+		entry: HeldEntry<ABI, ProcessResultType>,
+		processor: EventProcessor<ABI, ProcessResultType>,
+	): void {
+		processor.setAppliedBlockReporter?.((applied) => this.publishStateMoved(entry, applied));
+	}
+
+	/** Detach a fold this container no longer drives, unless it is the one it kept. */
+	protected stopRelayingAppliedBlocks(
+		processor: EventProcessor<ABI, ProcessResultType>,
+		keeping: EventProcessor<ABI, ProcessResultType>,
+	): void {
+		if (processor === keeping) {
+			return;
+		}
+		processor.setAppliedBlockReporter?.(undefined);
+	}
+
+	/**
+	 * ASSEMBLE and PUBLISH one applied block, and ONLY for the CANONICAL fold.
+	 *
+	 * A non-canonical generation re-folds a whole stored stream to catch up, so
+	 * publishing per block there would fire thousands of notifications naming past
+	 * blocks while nothing a reader can see has moved. The filter is the one the
+	 * per-generation callbacks in `add` already apply -- `entry === this.current` --
+	 * rather than a second rule that can disagree with it.
+	 *
+	 * It fires AS THE BLOCK LANDS, which is inside the `process()` call that
+	 * applied it and therefore BEFORE the `onStateUpdated` that follows the batch.
+	 * That order is deliberate and it is safe in the direction that matters: the
+	 * block is already durable when the fold reports it (a block and its cursor are
+	 * ONE atomic unit behind the storage seam, ADR-0027), so a reader that re-reads
+	 * the instant it is told sees that block's effects. The alternative -- holding
+	 * the reports back until the batch's state notification -- would buffer, which
+	 * is the one thing the producer must not do, and would collapse a batch's
+	 * blocks into one moment for no reader's benefit.
+	 */
+	protected publishStateMoved(entry: HeldEntry<ABI, ProcessResultType>, applied: AppliedBlock): void {
+		if (entry !== this.current) {
+			return;
+		}
+		this.stateMoved.publish({
+			block: applied.block,
+			entities: applied.entities,
+			// Rendered as everything that REPORTS which generation answered already renders
+			// it (`generationDigestOf`): ONE opaque value, compared and never parsed, so
+			// what a generation is composed of stays changeable.
+			generation: generationDigestOf(entry.record),
+		});
 	}
 
 	protected notifyState(): void {
