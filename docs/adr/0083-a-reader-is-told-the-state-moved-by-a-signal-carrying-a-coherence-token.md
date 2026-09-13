@@ -1,5 +1,5 @@
 ---
-status: accepted; the CHAIN-FACING producer is built (`StateMoved` / `StateMovedPublisher` / `Indexer.onStateMoved`, and the relay up from `@etherfold/processor-entities`), including the RETRACTION case and the token rotation that goes with it (`StateMoved` is a union tagged `kind`; a retraction names a `forkPoint`), and BOTH of the token's rotations: a promotion (any move of the canonical pointer) rotates it in `Indexer.movePointerTo`. The receiving container and the three transports are not yet.
+status: accepted; the CHAIN-FACING producer is built (`StateMoved` / `StateMovedPublisher` / `Indexer.onStateMoved`, and the relay up from `@etherfold/processor-entities`), including the RETRACTION case and the token rotation that goes with it (`StateMoved` is a union tagged `kind`; a retraction names a `forkPoint`), and BOTH of the token's rotations: a promotion (any move of the canonical pointer) rotates it in `Indexer.movePointerTo`. The FIRST transport is built too: a host pushes the signal to the tab holding a port to it, on all three browser hosting shapes (`IndexerPort.onStateMoved`, ADR-0082's envelope, one more push beside `progress` rather than a channel of its own). The receiving container, the cross-tab `BroadcastChannel` and the remote transport are not yet.
 ---
 
 # A reader is TOLD the state moved, by a SIGNAL carrying a coherence token

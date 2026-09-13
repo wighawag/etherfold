@@ -454,6 +454,7 @@ describe('a SharedWorker serving several tabs from one host', () => {
 				'host',
 				'onHostDeath',
 				'onProgress',
+				'onStateMoved',
 				'progress',
 				'promotion',
 				'reads',

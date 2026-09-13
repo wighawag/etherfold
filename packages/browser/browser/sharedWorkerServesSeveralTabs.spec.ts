@@ -120,6 +120,7 @@ const PORT_SURFACE = [
 	'host',
 	'onHostDeath',
 	'onProgress',
+	'onStateMoved',
 	'progress',
 	'promotion',
 	'reads',

@@ -5,6 +5,9 @@ import type {
 	Indexer,
 	IndexingSource,
 	LastSync,
+	StateMoved,
+	StateMovedDetach,
+	StateMovedHandler,
 	TxInclusionQuery,
 	TxInclusionVerdict,
 	UsedPromotionConfig,
@@ -89,6 +92,22 @@ export type HostBacking = {
 	/** Does the state this host is folding into already account for these transactions? */
 	checkTxInclusion(queries: readonly TxInclusionQuery[]): Record<string, TxInclusionVerdict>;
 	/**
+	 * BE TOLD THE STATE MOVED, as the container this host drives publishes it
+	 * (ADR-0083). Returns the detach.
+	 *
+	 * A SUBSCRIPTION rather than a value to read, because there is no value: the
+	 * signal is what a fold DID and not where it got to. What a host supplies here
+	 * is its container's own notifications, forwarded unchanged -- a host that
+	 * composed a payload of its own would be the second producer ADR-0083 exists to
+	 * prevent.
+	 *
+	 * It is answerable BEFORE the container is open, because a tab may subscribe
+	 * while the host is still opening one: what it returns is a detach either way,
+	 * and what the subscriber hears is everything the fold publishes from its first
+	 * block on.
+	 */
+	onStateMoved(handler: StateMovedHandler): StateMovedDetach;
+	/**
 	 * The store a read is answered from: the one the CANONICAL generation folds
 	 * into.
 	 *
@@ -139,6 +158,26 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 	let subscriptions = 0;
 	/** The last value POSTED, so an unchanged one is not posted again. */
 	let published: HostProgress | undefined;
+	/**
+	 * The same count for the **state-moved signal**, kept APART from the one above.
+	 *
+	 * Two pushes, two subscriptions, and a tab that asked for one is not posted the
+	 * other: they answer different questions at different cadences, so an app
+	 * rendering a progress bar and an app invalidating a cache subscribe to exactly
+	 * what each of them needs (ADR-0082 keeps progress its own thing; ADR-0083 adds
+	 * this one beside it).
+	 */
+	let movedSubscriptions = 0;
+	/**
+	 * THIS HOST'S OWN SUBSCRIPTION to what its container publishes, held only while
+	 * a tab wants it.
+	 *
+	 * Taken on the FIRST subscribe and released with the LAST, so a host nobody is
+	 * watching is not holding a handler on the fold either -- which is the same rule
+	 * one level down, and what keeps "nothing is posted until a tab asks" true of
+	 * the whole chain rather than of this end of it.
+	 */
+	let detachFromFold: StateMovedDetach | undefined;
 
 	function publish(): void {
 		if (stopped || subscriptions === 0) return;
@@ -159,6 +198,45 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 			// rather than swallowed, so a host that cannot talk is visible in a console.
 			namedLogger.error(`the indexer host could not post its 'progress' push`, error);
 		}
+	}
+
+	/**
+	 * POST ONE NOTIFICATION, EXACTLY AS THE FOLD PUBLISHED IT.
+	 *
+	 * Nothing is composed, filtered, coalesced or compared with the last one, and
+	 * each of those absences is the decision: the value that crosses is the value
+	 * `@etherfold/core` produced, so an app that later reads the same signal off a
+	 * `BroadcastChannel` or a server stream writes one handler (ADR-0083). In
+	 * particular there is no "unchanged" suppression as there is for progress: two
+	 * blocks that touched the same entities are two things that happened, and a
+	 * reader that was told once about two blocks cannot tell which of them it holds.
+	 */
+	function postStateMoved(moved: StateMoved): void {
+		if (stopped || movedSubscriptions === 0) return;
+		const push: PortPush<'stateMoved'> = {
+			protocol: INDEXER_PORT_PROTOCOL,
+			kind: 'push',
+			push: 'stateMoved',
+			value: moved,
+		};
+		try {
+			// The signal is plain data by construction, so this refuses nothing a fold
+			// produces today. It is here because the rule is the BOUNDARY's and not this
+			// push's: a value that could not cross must be refused NAMING ITS FIELD rather
+			// than thrown out of `postMessage` naming an object -- and if the signal ever did
+			// carry something unclonable, that is a finding about the PRODUCER and not
+			// something for this end to serialise around.
+			assertClonable(moved, `the 'stateMoved' push`);
+			access.endpoint.postMessage(push);
+		} catch (error) {
+			namedLogger.error(`the indexer host could not post its 'stateMoved' push`, error);
+		}
+	}
+
+	/** Let go of the fold, whenever the last tab on this endpoint stopped listening. */
+	function releaseFold(): void {
+		detachFromFold?.();
+		detachFromFold = undefined;
 	}
 
 	/**
@@ -229,6 +307,20 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 				// is told where the fold is by its own subscribe, and comparing against a
 				// value nobody on this endpoint ever received would suppress a real change.
 				if (subscriptions === 0) published = undefined;
+				return undefined;
+			case 'subscribeToStateMoved':
+				movedSubscriptions++;
+				// Taken on the FIRST subscriber and never twice, so several tabs of a shared
+				// host are one handler on the fold rather than one each.
+				detachFromFold ??= backing.onStateMoved(postStateMoved);
+				// ANSWERS NOTHING, deliberately: the signal is an EVENT, so there is no
+				// current value to hand a tab that attached late, and inventing one would
+				// report a block as having just moved when it moved some time ago. See the
+				// case's own note on the envelope.
+				return undefined;
+			case 'unsubscribeFromStateMoved':
+				movedSubscriptions = Math.max(0, movedSubscriptions - 1);
+				if (movedSubscriptions === 0) releaseFold();
 				return undefined;
 			case 'declarations':
 				return [...(await backing.storeForReads()).declarations.values()];
@@ -307,6 +399,8 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 			stopped = true;
 			subscriptions = 0;
 			published = undefined;
+			movedSubscriptions = 0;
+			releaseFold();
 			stopListening();
 		},
 	};

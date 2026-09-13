@@ -1,6 +1,13 @@
 import type {Abi} from '@etherfold/core';
 import {logs} from 'named-logs';
-import {isPortPush, isPortRequest, isPortResponse} from './envelope.js';
+import {
+	isPortPush,
+	isPortRequest,
+	isPortResponse,
+	pushSubscribedBy,
+	pushUnsubscribedBy,
+	type PortPushName,
+} from './envelope.js';
 import {executionScopeName, listen, type HostAccess, type MessageEndpoint} from './endpoint.js';
 import {serveIndexerHost, type HostedIndexerSpec, type IndexerHost} from './serve.js';
 
@@ -234,12 +241,19 @@ type EveryClient = {
  * and posted to one client on its way out. Nothing else in the package sees
  * either number.
  *
- * **A PUSH GOES TO THE CLIENTS THAT SUBSCRIBED.** The host counts subscriptions
- * and posts nothing until at least one tab has asked; that count is the sum over
- * the attached clients, so the filter that says WHICH of them asked belongs here.
- * The two case names are the only protocol knowledge in this file, and the
- * alternative -- broadcasting and letting an unsubscribed tab ignore what arrives
- * -- would bill every tab for the one that is rendering a progress bar.
+ * **A PUSH GOES TO THE CLIENTS THAT SUBSCRIBED TO IT.** The host counts
+ * subscriptions and posts nothing until at least one tab has asked; that count is
+ * the sum over the attached clients, so the filter that says WHICH of them asked
+ * belongs here. The alternative -- broadcasting and letting an unsubscribed tab
+ * ignore what arrives -- would bill every tab for the one that is rendering a
+ * progress bar.
+ *
+ * PER PUSH and not per client, because there are several: a tab watching progress
+ * must not be posted the **state-moved signal** it never asked for, and vice
+ * versa. WHICH case turns which push on is read from `PORT_PUSH_SUBSCRIPTIONS` on
+ * the envelope rather than written out here, so this file carries no list of case
+ * names to keep in step -- which is what a push added later would otherwise
+ * silently fall off.
  *
  * **A MESSAGE THAT IS NOT OURS IS NOT FORWARDED.** A client's port carries
  * whatever that tab posts to it, which in this repository includes a test
@@ -260,8 +274,8 @@ type EveryClient = {
 function oneEndpointOverEveryClient(): EveryClient {
 	type Client = {
 		readonly endpoint: MessageEndpoint;
-		/** Whether THIS tab asked for pushes. The host counts them; this says which. */
-		subscribed: boolean;
+		/** WHICH pushes THIS tab asked for. The host counts them; this says which tab wanted which. */
+		readonly subscribed: Set<PortPushName>;
 	};
 	const clients = new Set<Client>();
 	/** WHO ASKED, under the id this endpoint gave the host, and what THEY called it. */
@@ -295,7 +309,7 @@ function oneEndpointOverEveryClient(): EveryClient {
 				}
 				if (isPortPush(message)) {
 					for (const client of [...clients]) {
-						if (client.subscribed) post(client, message);
+						if (client.subscribed.has(message.push)) post(client, message);
 					}
 					return;
 				}
@@ -312,12 +326,14 @@ function oneEndpointOverEveryClient(): EveryClient {
 			},
 		},
 		attach(endpoint) {
-			const client: Client = {endpoint, subscribed: false};
+			const client: Client = {endpoint, subscribed: new Set<PortPushName>()};
 			clients.add(client);
 			listen(endpoint, (data) => {
 				if (!isPortRequest(data)) return;
-				if (data.case === 'subscribeToProgress') client.subscribed = true;
-				if (data.case === 'unsubscribeFromProgress') client.subscribed = false;
+				const subscribing = pushSubscribedBy(data.case);
+				if (subscribing) client.subscribed.add(subscribing);
+				const unsubscribing = pushUnsubscribedBy(data.case);
+				if (unsubscribing) client.subscribed.delete(unsubscribing);
 				const id = nextId++;
 				asked.set(id, {client, id: data.id});
 				const renumbered = {...data, id};

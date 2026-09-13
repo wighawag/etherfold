@@ -22,6 +22,7 @@ import type {
 	Abi,
 	GenerationRecord,
 	IndexingSource,
+	StateMoved,
 	TxInclusionQuery,
 	TxInclusionVerdict,
 	UsedPromotionConfig,
@@ -491,6 +492,34 @@ export type PortCases = {
 	 */
 	readonly unsubscribeFromProgress: {readonly request: undefined; readonly response: undefined};
 	/**
+	 * START PUSHING THE **state-moved signal** to this tab, and answer NOTHING.
+	 *
+	 * The pair beside `subscribeToProgress`, and the one place the two differ is
+	 * the RESPONSE, which is empty here on purpose. Progress is a STATE -- "where
+	 * is the fold now" has an answer at every instant, so a subscriber is handed it
+	 * and is correct immediately. The signal is an EVENT: what it says is that a
+	 * block was applied AT A MOMENT, and replaying the last one at a tab that
+	 * attached afterwards would tell it something moved when nothing did, under a
+	 * token it has never held (ADR-0083: best-effort, at-most-once, and the
+	 * producer holds NOTHING per client).
+	 *
+	 * So a tab that attaches part way through a fold is told nothing until the
+	 * fold NEXT moves, and what it does in the meantime is READ -- through the four
+	 * reads it already holds, which answer from where the fold is now. That is the
+	 * same residual ADR-0083 records for every transport: a reader on a quiet chain
+	 * learns nothing until a block moves, and buffering per client to close it is
+	 * the one thing the signal must not do.
+	 */
+	readonly subscribeToStateMoved: {readonly request: undefined; readonly response: undefined};
+	/**
+	 * STOP PUSHING the signal to this tab.
+	 *
+	 * The host stops POSTING, exactly as `unsubscribeFromProgress` does, and with
+	 * the same consequence one level down: the host lets go of its own subscription
+	 * to the container's signal when the last tab lets go of this one.
+	 */
+	readonly unsubscribeFromStateMoved: {readonly request: undefined; readonly response: undefined};
+	/**
 	 * WHAT THE HOST'S STORE WAS BUILT WITH, so a tab's surface can be checked
 	 * against it.
 	 *
@@ -558,10 +587,68 @@ export type PortPushes = {
 	 * silent rather than emitting a heartbeat an app would have to ignore.
 	 */
 	readonly progress: HostProgress;
+	/**
+	 * THE STATE MOVED: the **state-moved signal** ADR-0083 decides, carried across
+	 * this port UNCHANGED.
+	 *
+	 * `@etherfold/core`'s own `StateMoved` and deliberately not a browser-flavoured
+	 * variant of it: the same notion crosses a `MessagePort`, a `BroadcastChannel`
+	 * and a server's stream, so an app that later points at a remote indexer writes
+	 * ONE handler. The transports are adapters over the shape; the shape is not the
+	 * transport's to widen or to narrow, and it is plain data, so it crosses a
+	 * structured clone as itself.
+	 *
+	 * ONE per block the CANONICAL fold applied, plus one per retraction, and
+	 * nothing else -- so a host resting at the tip is silent, because nothing moved.
+	 * It is deliberately NOT merged with `progress`: both are "the host telling the
+	 * tab something", and they answer different questions at different cadences.
+	 * Progress is how far the fold has got (a state, re-reported when the phase or
+	 * the cursor moved, including at a load or a refusal, where no block was
+	 * applied); this says WHAT MOVED so a reader can invalidate narrowly, and a
+	 * reader's whole rule is the token comparison ADR-0083 states.
+	 */
+	readonly stateMoved: StateMoved;
 };
 
 export type PortPushName = keyof PortPushes & string;
 export type PortPushValue<Name extends PortPushName> = PortPushes[Name];
+
+/**
+ * WHICH PAIR OF CASES TURNS EACH PUSH ON AND OFF, declared ONCE beside the push
+ * map itself.
+ *
+ * A push is SUBSCRIBED TO and never broadcast, so every one of them has a
+ * subscribe/unsubscribe pair of cases (named for what they subscribe to, on the
+ * same ground the four reads are four cases). This states that pairing as DATA
+ * because a second place has to know it: a SharedWorker is handed a wire per
+ * client, so the filter that decides WHICH clients a push goes to lives in that
+ * shape (`sharedWorker.ts`) and would otherwise be a hand-written list of case
+ * names drifting one push behind this map.
+ *
+ * A later push adds a key to `PortPushes`, its own pair of cases, and one line
+ * here -- and the `satisfies` below is what makes forgetting the line a compile
+ * error rather than a tab that subscribes and is never posted to.
+ */
+export const PORT_PUSH_SUBSCRIPTIONS = {
+	progress: {subscribe: 'subscribeToProgress', unsubscribe: 'unsubscribeFromProgress'},
+	stateMoved: {subscribe: 'subscribeToStateMoved', unsubscribe: 'unsubscribeFromStateMoved'},
+} as const satisfies {
+	readonly [Name in PortPushName]: {readonly subscribe: PortCaseName; readonly unsubscribe: PortCaseName};
+};
+
+/** The push this case SUBSCRIBES to, or `undefined` where it subscribes to nothing. */
+export function pushSubscribedBy(name: string): PortPushName | undefined {
+	return (Object.keys(PORT_PUSH_SUBSCRIPTIONS) as PortPushName[]).find(
+		(push) => PORT_PUSH_SUBSCRIPTIONS[push].subscribe === name,
+	);
+}
+
+/** The push this case UNSUBSCRIBES from, or `undefined` where it unsubscribes from nothing. */
+export function pushUnsubscribedBy(name: string): PortPushName | undefined {
+	return (Object.keys(PORT_PUSH_SUBSCRIPTIONS) as PortPushName[]).find(
+		(push) => PORT_PUSH_SUBSCRIPTIONS[push].unsubscribe === name,
+	);
+}
 
 /**
  * A host saying something unprompted.

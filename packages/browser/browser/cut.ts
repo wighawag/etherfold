@@ -99,7 +99,13 @@ import {
 	type HostProgress,
 	type IndexerPort,
 } from '../src/index.js';
-import {hostingShapeCases, openOnTheMainThread, runHostingShapeCases} from './hostingShapes.js';
+import {
+	hostingShapeCases,
+	openOnTheMainThread,
+	runHostingShapeCases,
+	watchStateMoved,
+	type StateMovedWatch,
+} from './hostingShapes.js';
 import {foldOnThisThread, readEntities, readWritableStore, runReadSurfaceCases} from './readWorkload.js';
 import {
 	BRANCH_A_LATER,
@@ -1116,16 +1122,22 @@ async function hostingShapesCase(params: Params, timings: Timing[]): Promise<Rec
 	const dedicated = connectToIndexerHost(
 		dedicatedWorkerHost(() => new Worker(bundle(`${base}-dedicated`), {type: 'module'})),
 	);
+	// SUBSCRIBED THE MOMENT THE PORT EXISTS, which is what an app does and is the
+	// only moment from which the fold's own notifications can be seen at all: the
+	// worker has not booted yet, so nothing has been applied. The cases assert on
+	// what this recorded; see `hostingShapes.ts` on why it is the second argument.
+	const dedicatedTold = watchStateMoved(dedicated);
 	const shared = connectToIndexerHost(
 		sharedWorkerHost(
 			() => new SharedWorker(bundle(`${base}-shared`), {type: 'module', name: 'etherfold-hosting-shapes'}),
 		),
 	);
+	const sharedTold = watchStateMoved(shared);
 	const mainThread = await openOnTheMainThread(`${base}-main`);
 
 	/** The app's own code, which does not know which shape it is talking to. */
-	const against = async (port: IndexerPort) => {
-		const run = await runHostingShapeCases(port);
+	const against = async (port: IndexerPort, told: StateMovedWatch) => {
+		const run = await runHostingShapeCases(port, told);
 		const progress = await port.progress();
 		return {host: progress.host, scope: progress.scope, passed: run.passed, failures: run.failures};
 	};
@@ -1134,11 +1146,13 @@ async function hostingShapesCase(params: Params, timings: Timing[]): Promise<Rec
 		return {
 			tabScope: executionScopeName(),
 			cases: hostingShapeCases.length,
-			dedicated: await timed('dedicated-worker', timings, () => against(dedicated)),
-			shared: await timed('shared-worker', timings, () => against(shared)),
-			mainThread: await timed('main-thread', timings, () => against(mainThread.port)),
+			dedicated: await timed('dedicated-worker', timings, () => against(dedicated, dedicatedTold)),
+			shared: await timed('shared-worker', timings, () => against(shared, sharedTold)),
+			mainThread: await timed('main-thread', timings, () => against(mainThread.port, mainThread.told)),
 		};
 	} finally {
+		dedicatedTold.close();
+		sharedTold.close();
 		dedicated.close();
 		shared.close();
 		mainThread.close();

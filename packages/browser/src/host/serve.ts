@@ -7,6 +7,8 @@ import type {
 	ProvidedIndexerConfig,
 	EventProcessor,
 	GenerationContext,
+	StateMovedDetach,
+	StateMovedHandler,
 	TxInclusionQuery,
 	TxInclusionVerdict,
 	UsedPromotionConfig,
@@ -203,6 +205,24 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * to prevent.
 	 */
 	const statesByGeneration = new Map<string, WritableStateStore>();
+	/**
+	 * WHO IS LISTENING FOR THE **state-moved signal**, held HERE rather than on the
+	 * container.
+	 *
+	 * A tab may subscribe before this host has opened a container -- it returns as
+	 * soon as it is LISTENING, and opening is under way by then -- so there is a
+	 * moment with a subscriber and nothing to subscribe TO. This set is what spans
+	 * it: the container's own notifications are forwarded into it as soon as it is
+	 * open, which is before it has folded anything, so a tab that subscribed first
+	 * hears the fold's very first block.
+	 *
+	 * It is a FORWARDER and never a second producer: nothing is buffered, nothing is
+	 * replayed, nothing is composed, and what a handler is called with is the value
+	 * `@etherfold/core` published, by reference (ADR-0083).
+	 */
+	const stateMovedHandlers = new Set<StateMovedHandler>();
+	/** This host's ONE subscription to its container's signal, while a container exists. */
+	let detachFromContainer: StateMovedDetach | undefined;
 	const generationKey = (id: {stream: string; processor: string}) => `${id.stream}/${id.processor}`;
 	/**
 	 * The FIRST state built for a generation wins, exactly as the container resolves
@@ -370,6 +390,13 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 				lastSync = updated;
 				publish();
 			};
+			// ONE subscription to the fold, taken as the container opens and fanned out to
+			// whoever is listening on this host's port. Taken here rather than per tab
+			// because a container is what a host HAS: a shared host serving several tabs
+			// holds one handler on its fold and not one per client.
+			detachFromContainer = opened.onStateMoved((moved) => {
+				for (const handler of [...stateMovedHandlers]) handler(moved);
+			});
 			opened.onPromoted = () => {
 				// THE POINTER MOVED, so the cursor this host was reporting belongs to a
 				// generation that no longer answers anything. Dropped rather than kept, for
@@ -630,6 +657,12 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		promotion,
 		checkTxInclusion,
 		storeForReads,
+		onStateMoved(handler) {
+			stateMovedHandlers.add(handler);
+			return () => {
+				stateMovedHandlers.delete(handler);
+			};
+		},
 	};
 	served = serveHostCases(access, backing);
 
@@ -649,6 +682,9 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			indexing = false;
 			refuseFirstState?.(new Error(`this indexer host was disposed, so it holds no store to read from.`));
 			served?.stop();
+			stateMovedHandlers.clear();
+			detachFromContainer?.();
+			detachFromContainer = undefined;
 			if (container) {
 				container.onLastSyncUpdated = undefined;
 				container.onStateUpdated = undefined;
