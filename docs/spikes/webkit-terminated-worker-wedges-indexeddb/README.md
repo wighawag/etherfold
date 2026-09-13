@@ -72,6 +72,19 @@ The page refuses to be used carelessly on a phone: it detects being backgrounded
 
 `bug-report/bugzilla.txt` is the report body, ready to paste.
 
-Nothing has been filed yet. 197050 and 202705 are adjacent but different: they are about IndexedDB after the network process or the app is SUSPENDED, not after a worker is terminated.
+Nothing has been filed yet. `bug-report/bugzilla.txt` carries the report body and the form fields, both checked against the live Bugzilla rather than guessed -- the component is **Website Storage**, since WebKit has no `IndexedDB` component.
+
+**It is not a duplicate, and four bugs have to be cited so that it does not look like one.** Searched via Bugzilla's REST API on 2026-09-12 (298 bugs in Website Storage, plus a full-text sweep for `Worker.terminate` across every component):
+
+| bug | what it is | why this is not it |
+| --- | --- | --- |
+| **288682** FIXED 2025-03 | a terminated worker's half-done transaction gets COMMITTED | same trigger family, opposite failure: that one writes too much, this one strands the database |
+| **315804** FIXED 2026-06 | a `readwrite` never fires anything after a web-push subscribe in a PWA | same symptom, third-party trigger, and it recovered after ~30 minutes; this never recovers |
+| **324058** NEW, filed 2026-09-12 | transactions never start after a cross-site back navigation under a service worker | same symptom, another trigger, suspected there to be a regression from 322386 |
+| **251203** NEW, open since 2023 | IndexedDB in web workers "occasionally" freezes, WebKit-only, no trigger found | same symptom class with no reproduction: this may be the one it needs, so it gets a comment pointing at the new bug |
+
+197050 and 202705 remain adjacent but different: they are about IndexedDB after the network process or the app is SUSPENDED, not after a worker ends.
+
+That three distinct triggers now produce "`open()` succeeds and then no transaction ever runs" is itself worth reporting: it points at one cause in transaction scheduling or connection teardown rather than three faults.
 
 WebKit's tracker is **Bugzilla, not GitHub** -- the WebKit/WebKit ReadMe says so itself -- and webkit.org adds that "Safari is not WebKit", so a Safari-specific report goes to Apple's Feedback Assistant instead. Since this reproduces on an old shipping iOS engine AND a recent upstream build, on two ports, it is an engine bug and Bugzilla is the right place; a Feedback Assistant report cross-referencing the Bugzilla id is the optional second copy.

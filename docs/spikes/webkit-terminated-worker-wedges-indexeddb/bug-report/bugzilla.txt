@@ -1,9 +1,38 @@
-The body to paste into https://bugs.webkit.org/enter_bug.cgi?product=WebKit
-Product: WebKit. Component: Service Workers / Workers is wrong; use "IndexedDB".
-Attach bug-report/index.html to the report (Bugzilla accepts attachments) rather
-than only linking it.
+HOW TO FILE THIS
+================
 
-Everything below the line is the report. Nothing above it is.
+File at https://bugs.webkit.org/enter_bug.cgi?product=WebKit
+(WebKit's tracker is Bugzilla, not GitHub. The WebKit/WebKit ReadMe says so.
+ Safari-specific reports go to Apple's Feedback Assistant instead, and
+ webkit.org is explicit that "Safari is not WebKit" -- this one is an engine
+ bug reproducing on two ports, so Bugzilla is the right place.)
+
+Form fields, all checked against the live Bugzilla rather than guessed:
+
+  Product:    WebKit
+  Component:  Website Storage        <- NOT "IndexedDB"; there is no such
+                                        component. Website Storage is
+                                        "Bugs related to storage APIs,
+                                        including IndexedDB and localStorage".
+  Version:    Safari 18              <- the oldest affected thing we actually
+                                        tested (iOS 18.3.2). The valid values
+                                        are: Other, Safari 15/16/17/18/26,
+                                        Safari Technology Preview,
+                                        WebKit Local Build, WebKit Nightly Build.
+  Platform:   All          OS: All   <- reproduced on iOS and on Linux/WebKitGTK
+  Severity:   Normal is fine; this is data loss, so Major is defensible.
+
+ATTACH index.html to the bug (Bugzilla takes attachments). Do not only link it:
+a report whose reproduction is a URL ages badly.
+
+BEFORE SUBMITTING, check nothing new has landed: the four related bugs below
+were read on 2026-09-12, and one of them was filed that same day.
+
+AFTER SUBMITTING, add a short comment on bug 251203 pointing at the new bug
+number: that report has been open since 2023 describing this symptom in web
+workers with no identified trigger, and this may be the reproduction it needs.
+
+Everything below the line is the report body.
 
 --------------------------------------------------------------------------------
 
@@ -21,7 +50,7 @@ If a dedicated worker ends while it has BOTH a readwrite and a readonly transact
 - opening the origin in a new tab does not clear it;
 - indexedDB.deleteDatabase() on it reports onblocked and never completes, so a web application cannot even reset its own storage.
 
-The effect is a permanent, silent loss of one database for the rest of the browsing session, with no error surfaced to script at any point.
+The effect is a permanent, silent loss of one database for the rest of the browsing session, with no error surfaced to script at any point. The only recovery available to an application is to abandon the database name and rebuild into a new one.
 
 Steps to reproduce
 
@@ -36,7 +65,7 @@ Actual results
 A few percent of iterations wedge the database permanently.
 
 - iPhone 12, iOS 18.3.2, Safari 18.3.1: 12 wedged in 200 (6%)
-- WebKit build 2359 on Linux via Playwright 1.62.1, user agent Version/26.5 Safari/605.1.15: 7 to 13 in 200 across runs
+- WebKit r2359 on Linux via Playwright 1.62.1, user agent Version/26.5 Safari/605.1.15: 7 to 13 in 200 across runs
 
 Expected results
 
@@ -44,14 +73,11 @@ Ending the worker should abort its in-flight transactions and release the databa
 
 Other engines
 
-The same page, unchanged:
+The same page, unchanged: Chromium 141 via Playwright, 0 wedged in 200. Firefox 145 via Playwright, 0 wedged in 200.
 
-- Chromium 141 via Playwright: 0 wedged in 200
-- Firefox 145 via Playwright: 0 wedged in 200
+What is and is not required
 
-What is and is not required (each 200 runs per engine, automated)
-
-This was narrowed by varying one thing at a time. On WebKit:
+Narrowed by varying one thing at a time, 200 runs per variant per engine, automated. On WebKit:
 
 - one readwrite transaction held open indefinitely, worker terminated mid-transaction: 0/200
 - a stream of multi-store readwrite transactions, no concurrent read, killed anywhere: 0/200
@@ -59,17 +85,27 @@ This was narrowed by varying one thing at a time. On WebKit:
 - the above plus a second concurrent READWRITE loop on another store: 0/200
 - the above plus a concurrent READONLY loop on another store: 3/200 to 8/200
 - same, but the worker ends via self.close() instead of terminate(): 9/200
-- same, but the concurrent readonly belongs to the PAGE (a context that survives): 0/200
+- same, but the concurrent readonly belongs to the PAGE, a context that survives: 0/200
 - a read and a write each awaited to COMMIT, so the worker never has two transactions in flight: 0/1000
 
 So:
 
 - it needs two transactions of the DYING context overlapping when it ends, and one of them being readonly;
 - it does not need many object stores, indexes, long transactions, or any particular point in a transaction's life;
-- it is not specific to Worker.terminate(): self.close() reproduces it at the highest rate measured;
+- it is not specific to Worker.terminate(): self.close() reproduces it at the highest rate measured, so it is the worker ENDING rather than how it was ended;
 - an overlapping readonly in a surviving context does not do it.
+
+Related bugs, and why this is not one of them
+
+- Bug 288682, "IndexedDB in Worker commits when thread is terminated" (RESOLVED FIXED, 292795@main, March 2025). Same trigger family, opposite failure: that one COMMITS a half-finished transaction on worker termination, this one strands the database so nothing can run at all. The analysis there -- that WebKit does not perform microtasks during worker termination and so concludes no further requests are coming -- is in the same machinery this report is about, which may or may not be a coincidence.
+- Bug 315804, "A readwrite IDBTransaction never fires oncomplete, onerror, or onabort after the user subscribes to web push in an installed PWA" (RESOLVED FIXED, 315609@main, June 2026). Nearly identical symptom, different trigger, and it recovered on its own after about 30 minutes; this does not recover at all, and reproduces on a build newer than that fix as well as on one much older.
+- Bug 324058, "IndexedDB transactions never start after cross-site back navigation when a service worker controls the page" (NEW, filed 2026-09-12). Same symptom again -- open() succeeds, the first transaction never runs -- with a third unrelated trigger, suspected there to be a regression from bug 322386.
+- Bug 251203, "IndexedDB requests occasionally fail with no error, freezing browser" (NEW, open since 2023). Describes this symptom in web workers, WebKit-only, with no trigger identified. This report may be the missing reproduction for it; a comment there points here.
+
+That three distinct triggers now produce "open() succeeds and then no transaction ever runs" suggests a common cause in transaction scheduling or connection teardown rather than three separate faults.
 
 Notes
 
-- This is distinct from bug 197050 and bug 202705, which concern IndexedDB after the network process or the application is SUSPENDED. No suspension is involved here; the attached page detects being backgrounded and marks such a run contaminated precisely so the two are not confused. Every number above is from a foreground tab.
-- The practical impact: a web application that folds data into IndexedDB inside a worker, and whose store performs reads concurrently with writes (the ordinary pattern, since a read helper returns when its request succeeds and leaves its transaction to auto-commit), can permanently lose its local database if the worker is evicted or restarted at the wrong moment, with no recovery available to it short of picking a different database name and re-building from scratch.
+- This is distinct from bug 197050 and bug 202705, which concern IndexedDB after the network process or the application is SUSPENDED. No suspension is involved here. The attached page detects being backgrounded and marks such a run contaminated precisely so the two are not confused; every number above is from a foreground tab.
+- Impact. A web application that folds data into IndexedDB inside a worker, and whose store performs reads concurrently with writes -- the ordinary pattern, since a read helper returns when its request succeeds and leaves its transaction to auto-commit -- can permanently lose its local database whenever the worker is evicted or restarted at the wrong moment. Nothing in the page can detect it in advance, recover it, or delete it.
+- Workaround, for anyone who finds this before it is fixed: never let the worker hold two transactions at once, by awaiting each transaction's oncomplete before starting the next rather than awaiting only its request. That measured 0 in 1000 runs. It is not free -- it costs a commit round trip on every read, which measured x1.37 on a single-request read -- and it buys nothing on the two engines that do not have the defect.

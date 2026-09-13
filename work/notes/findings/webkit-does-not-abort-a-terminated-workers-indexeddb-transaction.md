@@ -74,7 +74,18 @@ ADR-0082's restart-and-resume exists because a browser may evict a worker. If an
 
 ## Upstream
 
-**Nothing comparable is on file.** 197050 and 202705 are about IndexedDB after the network process or the app is SUSPENDED, not after a worker is terminated. A report is now worth filing and has what it needs: a self-contained page with no framework and no etherfold in it, `docs/spikes/webkit-terminated-worker-wedges-indexeddb/bug-report/index.html`, which reproduces at 12-13 in 200 in Safari's engine and 0 in 200 on the other two, and which prints the full signature (unrelated database healthy, `deleteDatabase` blocked, still wedged after a reload).
+**Not a duplicate, but it has four close relatives and a report that ignored them would look unsearched.** Checked through Bugzilla's REST API on 2026-09-12, over all 298 bugs in the `Website Storage` component plus a full-text sweep for `Worker.terminate` across every component:
+
+- **288682** (FIXED, 292795@main, 2025-03) -- *IndexedDB in Worker commits when thread is terminated*. The same trigger family and the OPPOSITE failure: a terminated worker's half-finished transaction was being committed rather than aborted. Apple's analysis there is that WebKit does not perform microtasks during worker termination and so concludes no further requests are coming, which is the same machinery this sits in.
+- **315804** (FIXED, 315609@main, 2026-06) -- a `readwrite` transaction that never fires `oncomplete`, `onerror` or `onabort` after a web-push subscribe in an installed PWA. Nearly identical symptom, unrelated trigger, and it recovered by itself after about 30 minutes; this one never recovers, and reproduces both on a build newer than that fix and on iOS much older than it.
+- **324058** (NEW, filed 2026-09-12, the same day) -- transactions never start after a cross-site back navigation when a service worker controls the page, suspected there to be a regression from 322386. A third trigger for the same symptom.
+- **251203** (NEW, open since 2023) -- *IndexedDB requests occasionally fail with no error, freezing browser*, reported in web workers, WebKit-only, with no trigger ever identified. This finding may be the reproduction that report has been missing, so the plan is to file separately and then comment there.
+
+Three distinct triggers now produce "`open()` succeeds and then no transaction ever runs", which is itself an argument that the cause is one thing in transaction scheduling or connection teardown rather than three faults.
+
+197050 and 202705 remain adjacent but different: they are about IndexedDB after the network process or the app is SUSPENDED, not after a worker ends.
+
+**The component is `Website Storage`.** There is no `IndexedDB` component, which an earlier draft of the report asserted. A report is now worth filing and has what it needs: a self-contained page with no framework and no etherfold in it, `docs/spikes/webkit-terminated-worker-wedges-indexeddb/bug-report/index.html`, which reproduces at 12-13 in 200 in Safari's engine and 0 in 200 on the other two, and which prints the full signature (unrelated database healthy, `deleteDatabase` blocked, still wedged after a reload).
 
 ## What was done
 
