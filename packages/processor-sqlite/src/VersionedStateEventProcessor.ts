@@ -14,7 +14,7 @@ import {
 	assertProcessorVersion,
 	processorCodeFingerprint,
 	type Abi,
-	type AppliedBlockReporter,
+	type FoldReporter,
 	type EventProcessor,
 	type IndexingSource,
 	type LastSync,
@@ -120,18 +120,17 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 	 */
 	private folding: Promise<EntityEventProcessor<ABI, ProcessorConfig>> | undefined;
 	/**
-	 * The applied-block reporter, HELD HERE until there is an inner fold to give it
-	 * to.
+	 * The fold reporter, HELD HERE until there is an inner fold to give it to.
 	 *
 	 * A wrapper that forgot to forward this would take the wrapped fold's reporting
 	 * down with it silently, and every SQL deployment would report an empty entity
-	 * set on every block while looking perfectly healthy -- which is the cost the
-	 * seam accepts by making the method optional (`EventProcessor`). It cannot be
-	 * forwarded at the moment it is set, because the inner fold is built on FIRST
-	 * USE (see `folding`), so it is kept and re-applied in `folded()` exactly as the
-	 * config is.
+	 * set on every block -- and no retraction at all when the chain reorged -- while
+	 * looking perfectly healthy, which is the cost the seam accepts by making the
+	 * method optional (`EventProcessor`). It cannot be forwarded at the moment it is
+	 * set, because the inner fold is built on FIRST USE (see `folding`), so it is
+	 * kept and re-applied in `folded()` exactly as the config is.
 	 */
-	private appliedBlockReporter: AppliedBlockReporter | undefined;
+	private foldReporter: FoldReporter | undefined;
 
 	constructor(
 		db: RemoteSQL,
@@ -173,7 +172,7 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 		// Unconditionally, including `undefined`: setting the slot to what this wrapper
 		// currently holds is what makes an attach BEFORE the first use and a detach
 		// AFTER it mean the same thing to the fold.
-		fold.setAppliedBlockReporter(this.appliedBlockReporter);
+		fold.setFoldReporter(this.foldReporter);
 		return fold;
 	}
 
@@ -212,11 +211,11 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 
 	/**
 	 * FORWARDED to the inner fold, which is where the mutations are. See
-	 * `EntityEventProcessor.setAppliedBlockReporter` and `appliedBlockReporter`
-	 * above for why it is held rather than passed straight through.
+	 * `EntityEventProcessor.setFoldReporter` and `foldReporter` above for why it is
+	 * held rather than passed straight through.
 	 */
-	setAppliedBlockReporter(reporter: AppliedBlockReporter | undefined): void {
-		this.appliedBlockReporter = reporter;
+	setFoldReporter(reporter: FoldReporter | undefined): void {
+		this.foldReporter = reporter;
 	}
 
 	/**

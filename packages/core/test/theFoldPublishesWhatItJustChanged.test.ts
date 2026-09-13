@@ -1,12 +1,12 @@
 import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
-import {openIndexer, type AnyGenerationSpec, type Indexer} from '../src/container.js';
-import {generationDigestOf} from '../src/generation/identity.js';
+import {openIndexer} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {StateMovedPublisher, type StateMoved} from '../src/stateMoved.js';
-import type {AppliedBlockReporter, EventProcessor, LastSync, LogEvent} from '../src/types.js';
-import {BRANCH_A, fakeChain, FINALITY, makeLog, memoryStream, SOURCE} from './utils/streamCacheWorld.js';
+import type {EventProcessor, LastSync} from '../src/types.js';
+import {BRANCH_A, fakeChain, FINALITY, makeLog, SOURCE} from './utils/streamCacheWorld.js';
+import {appendsIn, driveToTip, openWorld, reportingFold} from './utils/stateMovedWorld.js';
 
 // ---------------------------------------------------------------------------
 // THE FOLD PUBLISHES WHAT IT JUST CHANGED
@@ -24,117 +24,11 @@ import {BRANCH_A, fakeChain, FINALITY, makeLog, memoryStream, SOURCE} from './ut
 // `@etherfold/conformance-workload-stratagems`'s
 // `theFoldPublishesWhatItJustChanged.test.ts`. The folds here report names of
 // their own, because what a container does with the set is relay it.
+//
+// The world, the fold and the drive live in `utils/stateMovedWorld.ts`, beside
+// the RETRACTION cases that ask the same questions of the same container
+// (`aRetractionNamesTheForkPoint.test.ts`).
 // ---------------------------------------------------------------------------
-
-/** The distinct blocks a delivered stream would APPLY, in order: removed entries retract. */
-function appliedBlocksOf(eventStream: readonly LogEvent<Abi>[]): number[] {
-	const blocks: number[] = [];
-	for (const event of eventStream) {
-		if (event.removed) continue;
-		if (blocks[blocks.length - 1] !== event.blockNumber) blocks.push(event.blockNumber);
-	}
-	return blocks;
-}
-
-/**
- * A fold that REPORTS what it applied, which is what the entity path does one
- * package down.
- *
- * It reports from inside `process()`, per block, after "applying" it -- the same
- * place and the same order `applyEventStream` reports from, so the container is
- * driven exactly as the shipped fold drives it.
- */
-function reportingFold(name: string, entitiesOf: (block: number) => string[] = () => ['thing']) {
-	const applied: number[] = [];
-	let reporter: AppliedBlockReporter | undefined;
-	const state: string[] = [];
-	const processor: EventProcessor<Abi, string[]> = {
-		getVersionHash: () => `proc-${name}`,
-		getCodeFingerprint: () => undefined,
-		load: async () => undefined,
-		process: async (eventStream: LogEvent<Abi>[]) => {
-			for (const block of appliedBlocksOf(eventStream)) {
-				applied.push(block);
-				state.push(`${name}:${block}`);
-				reporter?.({block, entities: entitiesOf(block)});
-			}
-			return state;
-		},
-		reset: async () => {},
-		clear: async () => {},
-		setAppliedBlockReporter: (next) => {
-			reporter = next;
-		},
-	};
-	return {
-		processor,
-		applied,
-		/** Whether anything is listening to this fold, which is what a detach removes. */
-		get attached() {
-			return reporter !== undefined;
-		},
-	};
-}
-
-function specFor(fold: ReturnType<typeof reportingFold>): AnyGenerationSpec<Abi, string[]> {
-	return {
-		createState: () => ({}),
-		createProcessor: () => fold.processor,
-		stateOf: () => [],
-	};
-}
-
-async function openWorld(
-	folds: ReturnType<typeof reportingFold>[],
-	options: {keepStream?: boolean; logs?: ReturnType<typeof makeLog>[]} = {},
-) {
-	const chain = fakeChain(options.logs ?? BRANCH_A, 105);
-	const stream = memoryStream();
-	const registry = await openMemoryGenerationRegistry({maxGenerations: 4, maxStreams: 2});
-	const indexer = await openIndexer<Abi, string[]>({
-		registry,
-		provider: chain.provider,
-		source: SOURCE,
-		// MANUAL, so which generation is canonical is decided by these tests and not
-		// by a successor catching up half way through one.
-		promotion: {policy: 'manual'},
-		config: {
-			stream: {finality: FINALITY},
-			...(options.keepStream ? {keepStream: stream.keeper} : {}),
-			streamWriteRetry: {delaySeconds: 0},
-		},
-		generations: folds.map(specFor),
-		createGeneration: (provider, processor, source, config) => {
-			const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config);
-			(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = chain.fetcher;
-			return generation;
-		},
-	});
-	const moved: StateMoved[] = [];
-	const detach = indexer.onStateMoved((notification) => moved.push(notification));
-	return {
-		indexer,
-		chain,
-		stream,
-		moved,
-		detach,
-		add: (fold: ReturnType<typeof reportingFold>) => indexer.add(specFor(fold)),
-		digestOf: (name: string) =>
-			generationDigestOf({
-				stream: indexer.generations.find((held) => held.record.processor === `proc-${name}`)?.record.stream as string,
-				processor: `proc-${name}`,
-			}),
-	};
-}
-
-async function driveToTip(indexer: Indexer<Abi, string[]>, maxRounds = 20): Promise<void> {
-	let rounds = 0;
-	let lastSync = await indexer.indexMore();
-	while (lastSync.lastToBlock < lastSync.latestBlock) {
-		if (rounds++ >= maxRounds) throw new Error(`did not reach the tip in ${maxRounds} rounds`);
-		lastSync = await indexer.indexMore();
-	}
-}
 
 describe('the fold publishes what it just changed', () => {
 	it('publishes ONE notification per applied block, naming the block, the generation and the entities', async () => {
@@ -143,10 +37,11 @@ describe('the fold publishes what it just changed', () => {
 		await world.indexer.load();
 		await driveToTip(world.indexer);
 
+		const appends = appendsIn(world.moved);
 		expect(fold.applied.length).toBeGreaterThan(0);
-		expect(world.moved.map((notification) => notification.block)).toEqual(fold.applied);
-		expect(world.moved.every((notification) => notification.generation === world.digestOf('A'))).toBe(true);
-		expect(world.moved.find((notification) => notification.block === 102)?.entities).toEqual(['cell', 'player']);
+		expect(appends.map((notification) => notification.block)).toEqual(fold.applied);
+		expect(appends.every((notification) => notification.generation === world.digestOf('A'))).toBe(true);
+		expect(appends.find((notification) => notification.block === 102)?.entities).toEqual(['cell', 'player']);
 	});
 
 	it('carries ONE unchanged token while nothing invalidates', async () => {
@@ -188,7 +83,7 @@ describe('the fold publishes what it just changed', () => {
 		await driveToTip(world.indexer);
 
 		expect(world.moved.length).toBe(fold.applied.length);
-		expect(world.moved.every((notification) => notification.entities.length === 0)).toBe(true);
+		expect(appendsIn(world.moved).every((notification) => notification.entities.length === 0)).toBe(true);
 	});
 
 	it('publishes NOTHING for a non-canonical generation re-folding a stored stream', async () => {
@@ -232,9 +127,10 @@ describe('the fold publishes what it just changed', () => {
 		world.chain.serve([...BRANCH_A, makeLog(106, '0xa106')], 107);
 		await driveToTip(world.indexer);
 
+		const appends = appendsIn(world.moved);
 		expect(world.moved.length).toBeGreaterThan(published);
-		expect(world.moved[world.moved.length - 1].generation).toBe(world.digestOf('A'));
-		expect(world.moved[world.moved.length - 1].block).toBe(106);
+		expect(appends[appends.length - 1].generation).toBe(world.digestOf('A'));
+		expect(appends[appends.length - 1].block).toBe(106);
 	});
 
 	it('SUBSCRIBES and UNSUBSCRIBES symmetrically, and holds nothing else per subscriber', async () => {
@@ -276,7 +172,7 @@ describe('the fold publishes what it just changed', () => {
 		world.indexer.onStateMoved(() => {
 			throw new Error('a subscriber blew up');
 		});
-		world.indexer.onStateMoved((notification) => seen.push(notification.block));
+		world.indexer.onStateMoved((notification) => seen.push(appendsIn([notification])[0].block));
 
 		await world.indexer.load();
 		await driveToTip(world.indexer);
