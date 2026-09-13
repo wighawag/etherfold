@@ -17,6 +17,17 @@ export {demoteToReader, type DemotableWriter, type Demotion, type DemotionReason
  */
 export * from './host/index.js';
 
+/**
+ * THE SAME SIGNAL, BETWEEN TABS: the **state-moved signal** over a
+ * `BroadcastChannel`, scoped to the store it is about (ADR-0083), so a window
+ * that is not doing the indexing is not a stale window.
+ *
+ * An ADAPTER over the notion the port already carries, and not a second one:
+ * `indexer.onStateMoved(tabs.publish)` in a tab that holds a host, and
+ * `tabs.onStateMoved(...)` in every tab.
+ */
+export * from './stateMovedAcrossTabs.js';
+
 export {simple_hash} from '@etherfold/core';
 /**
  * Re-exported because this package's own public signatures NAME it: `createState`

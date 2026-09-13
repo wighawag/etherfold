@@ -63,6 +63,19 @@
  *   attach/finish pair is one case split in two runs because the spec closes a
  *   page in between, and the port has to survive that: it is kept in module state
  *   (see `sharedlyAttached`).
+ * - `cross-tab-reader-listen` / `cross-tab-nextdoor-fold` / `cross-tab-reader-quiet`
+ *   / `cross-tab-writer-start` / `cross-tab-reader-late` / `cross-tab-writer-finish`
+ *   / `cross-tab-reader-report`: the **state-moved signal** crossing between TABS
+ *   over a `BroadcastChannel` (ADR-0083). They run here because the claim cannot
+ *   be arranged between two objects: it is one tab folding and ANOTHER tab, with
+ *   its OWN host and no port to the first, re-reading because it was told. The
+ *   shared-worker cases are deliberately not where this lives -- those tabs hold
+ *   ports to ONE host and are pushed to anyway, so a channel test there would pass
+ *   while demonstrating nothing. They are seven runs across three pages because
+ *   the sequence is the assertion (listen, then a fold NEXT DOOR that must not be
+ *   heard, then a fold this tab's channel carries, with a listener attaching half
+ *   way through it), and module state is what carries a tab's channels between its
+ *   own runs -- the same split `shared-attach` / `shared-finish` already makes.
  * - `hosting-shapes`: ONE behaviour suite (`hostingShapes.ts`) run against all
  *   THREE hosting shapes in one page -- a dedicated worker, a SharedWorker and
  *   `createIndexerState` on this thread. It runs here because it is the only
@@ -84,6 +97,7 @@
  */
 import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-browser-harness/contract';
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
+import type {StateMoved} from '@etherfold/core';
 import {EntityStateView} from '@etherfold/processor-entities';
 import {MemoryStateStore, createReadSurface, openForReading, type StateStoreBackend} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
@@ -94,10 +108,12 @@ import {
 	createProgressReadable,
 	dedicatedWorkerHost,
 	executionScopeName,
+	openStateMovedAcrossTabs,
 	sharedWorkerHost,
 	type HostDeath,
 	type HostProgress,
 	type IndexerPort,
+	type StateMovedAcrossTabs,
 } from '../src/index.js';
 import {
 	hostingShapeCases,
@@ -1459,6 +1475,371 @@ async function sharedUnsupportedCase(): Promise<Record<string, unknown>> {
 	}
 }
 
+/* ---------------------------------------------------------------------------
+ * A READER TAB LEARNING FROM THE INDEXING TAB.
+ *
+ * Three pages, three hosts, two databases, and one `BroadcastChannel` per tab
+ * per store. The thing that cannot be arranged between two objects is the whole
+ * of it: the tab that re-reads holds NO port to the host that folded, so the
+ * only way it can know is the channel.
+ * ------------------------------------------------------------------------- */
+
+/** The two stores this case uses: the one both tabs are about, and the app next door. */
+function crossTabDatabases(params: Params): {here: string; nextDoor: string} {
+	return {here: databaseName(params, 'cross-tab'), nextDoor: databaseName(params, 'cross-tab-next-door')};
+}
+
+/** One thing a tab was told, flattened to what a committed result can carry. */
+type ToldOf = {kind: string; block: number; coherence: string; entities: string[]; generation: string};
+
+const toldOf = (moved: StateMoved): ToldOf => ({
+	kind: moved.kind,
+	block: moved.kind === 'applied' ? moved.block : moved.forkPoint,
+	coherence: moved.coherence,
+	entities: moved.kind === 'applied' ? [...moved.entities] : [],
+	generation: moved.generation,
+});
+
+/**
+ * WHAT THIS TAB WAS TOLD BY THE OTHERS, and what it read BECAUSE it was told.
+ *
+ * The re-read is inside the listener and NOWHERE ELSE, which is the claim stated
+ * as code: there is no interval in this tab, so a row it renders that is up to
+ * date is a row a notification fetched. The reads are chained rather than raced,
+ * so what the last one holds is what the last notification asked for.
+ */
+function whatThisTabWasTold(tabs: StateMovedAcrossTabs, reread?: () => Promise<unknown>) {
+	const heard: StateMoved[] = [];
+	const reads: {block: number; state: unknown}[] = [];
+	const waiting: {matches: (moved: StateMoved) => boolean; resolve: () => void}[] = [];
+	let queue: Promise<unknown> = Promise.resolve();
+	const stop = tabs.onStateMoved((moved) => {
+		heard.push(moved);
+		if (reread) {
+			queue = queue.then(async () => reads.push({block: toldOf(moved).block, state: await reread()}));
+		}
+		for (const waiter of [...waiting]) {
+			if (waiter.matches(moved)) {
+				waiting.splice(waiting.indexOf(waiter), 1);
+				waiter.resolve();
+			}
+		}
+	});
+	return {
+		heard,
+		reads,
+		stop,
+		told: () => heard.map(toldOf),
+		/** Settle the re-reads this tab has already been asked for. */
+		settled: () => queue,
+		/**
+		 * Wait for a NOTIFICATION and never for a duration. The bound is a failure
+		 * bound: a tab that was never told has to fail saying so rather than hang.
+		 */
+		until(matches: (moved: StateMoved) => boolean, withinMs = 30_000): Promise<void> {
+			if (heard.some(matches)) return Promise.resolve();
+			return new Promise<void>((resolve, reject) => {
+				const patience = setTimeout(
+					() => reject(new Error(`this tab was never told: ${JSON.stringify(heard.map(toldOf))}`)),
+					withinMs,
+				);
+				waiting.push({
+					matches,
+					resolve: () => {
+						clearTimeout(patience);
+						resolve();
+					},
+				});
+			});
+		},
+	};
+}
+
+/**
+ * THE READER TAB, kept between its own runs.
+ *
+ * Its own host, the two channels it listens on (this store's, and the app next
+ * door's), the reader handle it re-reads through, and the listener that attached
+ * LATE. Module state for the reason the shared-worker attach/finish pair uses it:
+ * the spec drives the other tabs in between, and a reader that re-subscribed each
+ * run would be a tab that missed exactly what is being asserted.
+ */
+let readerTab:
+	| {
+			port: IndexerPort;
+			published: StateMoved[];
+			here: StateMovedAcrossTabs;
+			nextDoor: StateMovedAcrossTabs;
+			early: ReturnType<typeof whatThisTabWasTold>;
+			fromNextDoor: ReturnType<typeof whatThisTabWasTold>;
+			late?: ReturnType<typeof whatThisTabWasTold>;
+			read: () => Promise<unknown>;
+	  }
+	| undefined;
+
+function theReaderTab() {
+	if (!readerTab) throw new Error(`this tab is not listening to the other tabs, so there is nothing to report`);
+	return readerTab;
+}
+
+/**
+ * THE READER TAB OPENS ITS EARS -- and its own host, which is the shape this case
+ * exists to be about.
+ *
+ * This tab holds a dedicated worker of its OWN over the SAME database as the tab
+ * that will do the indexing, so it is not a tab being pushed to by the host that
+ * folds (that is the shared-worker case, one layer up and a different claim). Its
+ * host is held at its very first fetch, so which tab indexes is decided by this
+ * fixture rather than by a race: this one claims the store first and then folds
+ * nothing, the writer's host claims it next and folds everything. What the writer
+ * token already guarantees about two hosts over one store is not rebuilt here
+ * (ADR-0075); it is what this case stands on.
+ *
+ * It listens on TWO channels: this store's, and the one belonging to the app next
+ * door. The second is what makes the negative half non-vacuous -- "heard nothing"
+ * is only worth asserting where something was demonstrably being said.
+ *
+ * It also PUBLISHES what its own host tells it, because that is what every tab
+ * does until an election exists: every indexing tab publishes, every tab listens.
+ * This one's fold applies nothing, so what it publishes is nothing.
+ */
+async function crossTabReaderListenCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const databases = crossTabDatabases(params);
+	const workers = hostedWorkers(
+		// HELD AT THE FIRST FETCH: this host opens its container, claims the store and
+		// then folds nothing, so the tab that indexes is the other one.
+		new URL(`./worker.js?db=${encodeURIComponent(databases.here)}&fetch=4&holdAbove=99`, import.meta.url),
+	);
+	const port = connectToIndexerHost(dedicatedWorkerHost(workers.create));
+
+	const here = openStateMovedAcrossTabs({databaseName: databases.here});
+	const nextDoor = openStateMovedAcrossTabs({databaseName: databases.nextDoor});
+	// The reader handle an app holds: the same database, opened for READING, with
+	// the writer's claim untouched.
+	const view = new EntityStateView(
+		openForReading(await createBrowserStateStore(processor.entities, {databaseName: databases.here})),
+	);
+	const read = () => readState(view);
+	const early = whatThisTabWasTold(here, read);
+	const fromNextDoor = whatThisTabWasTold(nextDoor);
+	const published: StateMoved[] = [];
+	port.onStateMoved((moved) => {
+		published.push(moved);
+		here.publish(moved);
+	});
+	readerTab = {port, published, here, nextDoor, early, fromNextDoor, read};
+
+	// ITS HOST IS REALLY RUNNING: loaded, holding the store, and about to ask for a
+	// range it will never be given. Waited for so that the writer's host claims the
+	// store AFTER this one rather than racing it.
+	const progress = await timed('reader-host-loaded', timings, () =>
+		until(port, (value) => value.phase === 'catching-up'),
+	);
+
+	return {
+		tabScope: executionScopeName(),
+		// WHERE this tab's own host runs, and that it is its own
+		scope: progress.scope,
+		host: progress.host,
+		phase: progress.phase,
+		// the channel names, composed from the STORAGE and nothing else
+		channel: here.channelName,
+		nextDoorChannel: nextDoor.channelName,
+		// what this tab has been told so far, which is nothing: no fold has published
+		told: early.told(),
+		stateBeforeAnyNotification: await read(),
+	};
+}
+
+/**
+ * THE APP NEXT DOOR: another tab, another host, another store, on this origin.
+ *
+ * It folds the same fixture to the tip and publishes exactly as the indexing tab
+ * does. Nothing keeps it away from the reader tab except the SCOPE of the
+ * channel, which is the storage identity it folds into -- the same rule the
+ * writer token settles by living inside the store it guards.
+ */
+async function crossTabNextDoorCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const databases = crossTabDatabases(params);
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(databases.nextDoor)}&fetch=4`, import.meta.url),
+	);
+	const port = connectToIndexerHost(dedicatedWorkerHost(workers.create));
+	const tabs = openStateMovedAcrossTabs({databaseName: databases.nextDoor});
+	const published: StateMoved[] = [];
+	const forwarding = port.onStateMoved((moved) => {
+		published.push(moved);
+		tabs.publish(moved);
+	});
+	try {
+		const progress = await timed('fold-next-door', timings, () => untilAtTip(port));
+		return {
+			scope: progress.scope,
+			host: progress.host,
+			channel: tabs.channelName,
+			lastToBlock: progress.lastToBlock,
+			transfers: await transfersAcrossThePort(port),
+			published: published.map(toldOf),
+		};
+	} finally {
+		forwarding();
+		tabs.close();
+		port.close();
+	}
+}
+
+/**
+ * THE READER TAB, AFTER THE APP NEXT DOOR FOLDED A WHOLE CHAIN.
+ *
+ * It waits until the next door channel has carried that fold's last block, which
+ * is what makes the silence on ITS OWN channel a fact rather than a race, and
+ * then reports both.
+ */
+async function crossTabReaderQuietCase(): Promise<Record<string, unknown>> {
+	const tab = theReaderTab();
+	await tab.fromNextDoor.until((moved) => moved.kind === 'applied' && moved.block === 104);
+	return {
+		// heard NEXT DOOR: a whole fold, so the channel works and the tab is listening
+		nextDoor: tab.fromNextDoor.told(),
+		// heard about THIS store: nothing, because nothing has folded into it
+		told: tab.early.told(),
+		read: tab.early.reads.length,
+	};
+}
+
+/**
+ * THE INDEXING TAB, HELD HALF WAY.
+ *
+ * Its own dedicated worker over the SAME database the reader tab is reading, and
+ * it takes the store from the reader tab's host by claiming it second (ADR-0075).
+ * The fold is gated at block 103 so that a reader can attach in the MIDDLE of it
+ * and miss what came before, which is the case "converges on the next
+ * notification" is about.
+ */
+async function crossTabWriterStartCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const databases = crossTabDatabases(params);
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(databases.here)}&fetch=4&holdAbove=103`, import.meta.url),
+	);
+	const port = connectToIndexerHost(dedicatedWorkerHost(workers.create));
+	const tabs = openStateMovedAcrossTabs({databaseName: databases.here});
+	const published: StateMoved[] = [];
+	// THE WHOLE OF THE WIRING an app writes in the tab that holds a host: what it is
+	// told, the other tabs are told.
+	port.onStateMoved((moved) => {
+		published.push(moved);
+		tabs.publish(moved);
+	});
+	writingTab = {port, tabs, workers, published};
+
+	const progress = await timed('fold-to-the-hold', timings, () => until(port, (value) => value.lastToBlock === 103));
+	return {
+		tabScope: executionScopeName(),
+		scope: progress.scope,
+		host: progress.host,
+		channel: tabs.channelName,
+		phase: progress.phase,
+		lastToBlock: progress.lastToBlock,
+		published: published.map(toldOf),
+	};
+}
+
+/**
+ * A LISTENER THAT ARRIVES HALF WAY THROUGH, which is the tab that missed
+ * something.
+ *
+ * Nothing is replayed to it -- the producer holds nothing per receiving tab
+ * (ADR-0083) -- so what it holds at this moment is the evidence, and what repairs
+ * it is the next notification.
+ */
+async function crossTabReaderLateCase(): Promise<Record<string, unknown>> {
+	const tab = theReaderTab();
+	const late = whatThisTabWasTold(tab.here, tab.read);
+	readerTab = {...tab, late};
+	await tab.early.settled();
+	return {
+		// what the tab listening THROUGHOUT has been told, and read because of it
+		told: tab.early.told(),
+		reads: tab.early.reads,
+		// ...and what the listener that just attached holds: nothing at all
+		lateTold: late.told(),
+	};
+}
+
+/** THE INDEXING TAB FINISHES: the gate is released and the fold reaches the tip. */
+async function crossTabWriterFinishCase(_params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const tab = writingTab;
+	if (!tab) throw new Error(`this tab holds no host, so there is no fold to finish`);
+	tab.workers.latest().postMessage({fixture: 'release', gate: 'fetches'});
+	const progress = await timed('fold-to-the-tip', timings, () => untilAtTip(tab.port));
+	return {
+		scope: progress.scope,
+		host: progress.host,
+		lastToBlock: progress.lastToBlock,
+		latestBlock: progress.latestBlock,
+		// what the tab that DID the indexing renders, read through its own port
+		transfers: await transfersAcrossThePort(tab.port),
+		// every notification this tab forwarded, in order
+		published: tab.published.map(toldOf),
+	};
+}
+
+/**
+ * THE READER TAB REPORTS: what it was told, what it read because of it, and what
+ * it never heard.
+ *
+ * It waits for the LATE listener to be told about block 104 -- the notification
+ * it did not miss -- and the state it reads then is the whole of the writer's
+ * fold, including the blocks nobody told it about.
+ */
+async function crossTabReaderReportCase(): Promise<Record<string, unknown>> {
+	const tab = theReaderTab();
+	const late = tab.late;
+	if (!late) throw new Error(`no listener attached late, so there is nothing to converge`);
+	try {
+		await late.until((moved) => moved.kind === 'applied' && moved.block === 104);
+		await Promise.all([tab.early.settled(), late.settled()]);
+		return {
+			tabScope: executionScopeName(),
+			channel: tab.here.channelName,
+			// EVERYTHING this tab was told about this store, and nothing about the one
+			// next door
+			told: tab.early.told(),
+			reads: tab.early.reads,
+			// the listener that attached half way through: what it missed, what it was
+			// told, and what it read when it was
+			lateTold: late.told(),
+			lateReads: late.reads,
+			// what the app next door said, on its own channel, throughout
+			nextDoor: tab.fromNextDoor.told(),
+			// this tab published nothing: its own host folded nothing
+			published: tab.published.map(toldOf),
+			// what it renders now, read through the handle it has held all along
+			state: await tab.read(),
+			// how far its OWN host got, which is nowhere
+			ownHostLastToBlock: (await tab.port.progress()).lastToBlock ?? null,
+		};
+	} finally {
+		late.stop();
+		tab.early.stop();
+		tab.fromNextDoor.stop();
+		tab.here.close();
+		tab.nextDoor.close();
+		tab.port.close();
+		readerTab = undefined;
+	}
+}
+
+/** THE INDEXING TAB's host and channel, kept between its two runs. See `readerTab`. */
+let writingTab:
+	| {
+			port: IndexerPort;
+			tabs: StateMovedAcrossTabs;
+			workers: ReturnType<typeof hostedWorkers>;
+			published: StateMoved[];
+	  }
+	| undefined;
+
 /** Ask until the host's own report says what a case is waiting for. */
 async function until(
 	indexer: IndexerPort,
@@ -1613,6 +1994,27 @@ const cut: CodeUnderTest = {
 						break;
 					case 'block-atomicity':
 						results = await blockAtomicityCase(ctx.params, timings);
+						break;
+					case 'cross-tab-reader-listen':
+						results = await crossTabReaderListenCase(ctx.params, timings);
+						break;
+					case 'cross-tab-nextdoor-fold':
+						results = await crossTabNextDoorCase(ctx.params, timings);
+						break;
+					case 'cross-tab-reader-quiet':
+						results = await crossTabReaderQuietCase();
+						break;
+					case 'cross-tab-writer-start':
+						results = await crossTabWriterStartCase(ctx.params, timings);
+						break;
+					case 'cross-tab-reader-late':
+						results = await crossTabReaderLateCase();
+						break;
+					case 'cross-tab-writer-finish':
+						results = await crossTabWriterFinishCase(ctx.params, timings);
+						break;
+					case 'cross-tab-reader-report':
+						results = await crossTabReaderReportCase();
 						break;
 					case 'shared-attach':
 						results = await sharedAttachCase(ctx.params, timings);
