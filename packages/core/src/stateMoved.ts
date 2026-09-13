@@ -260,8 +260,9 @@ export class StateMovedPublisher {
 	 * that a retraction which forgot to rotate is unexpressible), and a PROMOTION
 	 * rotates it because a different fold now answers, which from a cache's point of
 	 * view is indistinguishable from "everything you hold may be wrong". One
-	 * comparison and one code path rather than two. The promotion caller is its own
-	 * task; what is here is the rotation it calls.
+	 * comparison and one code path rather than two -- and the promotion PUBLISHES
+	 * nothing, because a pointer move has no block to name: it calls this, and the
+	 * next notification carries the new token (`Indexer.movePointerTo`).
 	 *
 	 * It rotates whether or not anybody is listening, because the token is a fact
 	 * about THIS PRODUCER's history and not about a delivery: a reader that attaches
