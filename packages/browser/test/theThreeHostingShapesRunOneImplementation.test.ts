@@ -60,7 +60,7 @@ describe('the three hosting shapes run one implementation', () => {
 	it('passes the whole shared behaviour suite on the MAIN-THREAD shape', async () => {
 		const shape = await openOnTheMainThread(freshName());
 		try {
-			const run = await runHostingShapeCases(shape.port);
+			const run = await runHostingShapeCases(shape.port, shape.told);
 			// Reported as the behaviours that broke rather than as one opaque red suite,
 			// which is the whole reason the cases are data.
 			expect(run.failures).toEqual([]);

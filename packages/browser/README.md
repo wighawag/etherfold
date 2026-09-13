@@ -68,11 +68,25 @@ render((await reads.counter.getCurrent({name: 'transfers'}))?.value ?? 0);
 indexer.onProgress(({phase, blocksBehindTip}) => {
 	banner.textContent = phase === 'at-tip' ? 'live' : `syncing, ${blocksBehindTip} blocks behind`;
 });
+
+// and so is the STATE MOVING, which is what tells this tab to re-read: one
+// notification per block the fold applied, one per reorg, and silence at the tip
+// because nothing moved. The whole reader rule is these two lines (ADR-0083).
+let held: string | undefined;
+indexer.onStateMoved((moved) => {
+	if (moved.coherence !== held) {
+		held = moved.coherence; // a reorg or a promotion: everything you hold may be stale
+		return refetchEverything();
+	}
+	if (moved.kind === 'applied') for (const entity of moved.entities) refetch(entity);
+});
 ```
 
 The host starts folding as soon as it exists. `startIndexing()` / `stopIndexing()` turn the driver off and on from the tab (a stopped host still answers reads), `reconfigure({source})` folds a new source in a generation beside the live one, and `checkTxInclusion(...)` answers the optimistic-update question. A worker the browser evicts is an expected event with a defined outcome: the port TELLS you (`onHostDeath`), rejects every call in flight with an `IndexerHostDiedError` rather than hanging, starts another host, and the fold resumes from the cursor.
 
-`createProgressReadable(indexer)` is the small reactive wrapper over the pushed signal, for the app that just wants a progress bar.
+`createProgressReadable(indexer)` is the small reactive wrapper over the pushed progress, for the app that just wants a progress bar.
+
+`onStateMoved` is deliberately a plain callback and nothing more: it is what every client library's invalidation API already is (`invalidateQueries`, `refetchQueries`, `reexecuteOperation`), and the value it hands you is the one `@etherfold/core` published, unchanged — so the same handler works when the notification later arrives from another tab or from a server. A tab that attaches part way through is told nothing until the fold next moves, because a notification is a thing that HAPPENED rather than a value to render: read through the surface you already hold instead.
 
 ### A SharedWorker
 

@@ -1,4 +1,11 @@
-import type {Abi, IndexingSource, TxInclusionQuery, TxInclusionVerdict, UsedPromotionConfig} from '@etherfold/core';
+import type {
+	Abi,
+	IndexingSource,
+	StateMoved,
+	TxInclusionQuery,
+	TxInclusionVerdict,
+	UsedPromotionConfig,
+} from '@etherfold/core';
 import {logs} from 'named-logs';
 import {assertClonable} from './clone.js';
 import {listen, type HostAccess} from './endpoint.js';
@@ -31,9 +38,11 @@ const namedLogger = logs('@etherfold/browser');
  * THE PORT: the typed boundary a tab holds onto a host that is not its own
  * thread.
  *
- * Every verb here is a CASE on the envelope, except `onProgress`, which is the
- * one thing that travels the other way: a PUSH the host sends unprompted
- * (ADR-0082). What is not here is as much the point as what is: a tab holds no
+ * Every verb here is a CASE on the envelope, except `onProgress` and
+ * `onStateMoved`, which are the two things that travel the other way: PUSHES the
+ * host sends unprompted (ADR-0082 for the first, ADR-0083 for the second, which
+ * answers a different question at a different cadence and is deliberately not
+ * merged into it). What is not here is as much the point as what is: a tab holds no
  * store, no container and no processor, so there is nothing on this type that
  * could mutate the state the host is folding into. The writer/reader split
  * (ADR-0077, ADR-0079) reaches across the boundary as a fact of the TYPE rather
@@ -85,6 +94,44 @@ export type IndexerPort = {
 	 * unsubscribed tab stops receiving pushes rather than merely ignoring them.
 	 */
 	onProgress(listener: (progress: HostProgress) => void): () => void;
+	/**
+	 * BE TOLD THE STATE MOVED, so this tab RE-READS at the right moment instead of
+	 * polling on an interval it invented. Returns the detach.
+	 *
+	 * The **state-moved signal** ADR-0083 decides, delivered across the port
+	 * unchanged: one notification per block the host's canonical fold APPLIED, and
+	 * one per RETRACTION, carrying what a reader needs to decide what to throw away.
+	 * The same value crosses every transport -- this port, a `BroadcastChannel` from
+	 * an indexing tab, a server's stream -- so an app that later points at a remote
+	 * indexer keeps this handler.
+	 *
+	 * A reader's whole rule is two lines:
+	 *
+	 * ```ts
+	 * let held: string | undefined;
+	 * const stop = indexer.onStateMoved((moved) => {
+	 *   if (moved.coherence !== held) {held = moved.coherence; return queryClient.invalidateQueries();}
+	 *   if (moved.kind === 'applied') for (const entity of moved.entities) queryClient.invalidateQueries({queryKey: [entity]});
+	 * });
+	 * ```
+	 *
+	 * It is NOT `onProgress`, and the difference is which question each answers: how
+	 * far the fold has got is a STATE a progress bar renders, and this is WHAT MOVED
+	 * so a cache can invalidate narrowly. A host resting at the tip pushes neither,
+	 * because nothing moved.
+	 *
+	 * ## A tab that attaches part way through is told NOTHING until the next block
+	 *
+	 * Unlike `onProgress`, whose listener is called with where the fold is as soon
+	 * as the host answers, this one is silent until the fold moves again: a
+	 * notification is an EVENT about a moment, so there is nothing current to be
+	 * handed, and replaying the last one would say a block just landed when it
+	 * landed some time ago. What a freshly attached tab does instead is READ, which
+	 * is what it was going to do with the notification anyway. Delivery is
+	 * best-effort and the producer holds nothing per client (ADR-0083), so a missed
+	 * notification is repaired by the next one plus the coherence token.
+	 */
+	onStateMoved(listener: (moved: StateMoved) => void): () => void;
 	/**
 	 * BE TOLD THAT THE HOST DIED. Returns the detach.
 	 *
@@ -315,6 +362,25 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 		for (const listener of listeners) listener(progress);
 	}
 
+	/**
+	 * WHO IS LISTENING for the **state-moved signal**, and deliberately NO "last
+	 * thing the host said" beside it.
+	 *
+	 * The absence is the decision. Progress keeps its last value because a listener
+	 * added while a subscription is open has missed the answer that opened it and
+	 * would otherwise render nothing until the fold next moved. A notification is
+	 * not a value to render: it is a thing that HAPPENED, and handing a late
+	 * listener the previous one would have it invalidate for a block it may already
+	 * have read (ADR-0083).
+	 */
+	const movedListeners = new Set<(moved: StateMoved) => void>();
+
+	function tellOfTheMove(moved: StateMoved): void {
+		// By REFERENCE, exactly as it arrived: the value that crossed is the value core
+		// produced, and nothing at this end composes another.
+		for (const listener of [...movedListeners]) listener(moved);
+	}
+
 	const deathListeners = new Set<(death: HostDeath) => void>();
 
 	/**
@@ -378,6 +444,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			// Narrowed by NAME, which is what makes a second push a `case` here rather
 			// than a cast.
 			if (data.push === 'progress') announce(data.value);
+			else if (data.push === 'stateMoved') tellOfTheMove(data.value);
 			return;
 		}
 		if (!isPortResponse(data)) return;
@@ -565,6 +632,14 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			// things stand now rather than waiting for the resumed fold to move.
 			request('subscribeToProgress', undefined).then(announce, () => undefined);
 		}
+		if (movedListeners.size > 0) {
+			// RESTORED for the same reason: the subscription belongs to the TAB and not to
+			// the host that happened to be serving it. What the new host publishes is what
+			// its resumed fold applies from the cursor on -- and nothing about the blocks the
+			// dead one had already applied, which is the same best-effort limit a missed
+			// notification has.
+			void request('subscribeToStateMoved', undefined).catch(() => undefined);
+		}
 	}
 
 	function request<Case extends PortCaseName>(
@@ -647,6 +722,26 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 				void request('unsubscribeFromProgress', undefined).catch(() => undefined);
 			};
 		},
+		onStateMoved(listener) {
+			const first = movedListeners.size === 0;
+			movedListeners.add(listener);
+			if (first) {
+				// Nothing is done with the ANSWER, because there is none: what this asks for
+				// is that the host start posting. A second listener asks for nothing at all,
+				// and is told nothing until the fold next moves -- see the type's own note.
+				void request('subscribeToStateMoved', undefined).catch(() => {
+					// A port closed, or a host that died, before the host answered. The caller's
+					// own `close` is what rejected it, and there is no call here to report it to.
+				});
+			}
+			return () => {
+				if (!movedListeners.delete(listener)) return;
+				if (movedListeners.size > 0 || closed) return;
+				// The HOST stops posting, rather than this end stopping listening: a tab that
+				// went on receiving what it unsubscribed from would still be paying for it.
+				void request('unsubscribeFromStateMoved', undefined).catch(() => undefined);
+			};
+		},
 		startIndexing: () => request('startIndexing', undefined),
 		stopIndexing: () => request('stopIndexing', undefined),
 		reconfigure: (update) => request('reconfigure', {source: update.source}),
@@ -679,6 +774,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			if (closed) return;
 			closed = true;
 			listeners.clear();
+			movedListeners.clear();
 			deathListeners.clear();
 			latest = undefined;
 			// A CLOSE IS NOT A DEATH: the tab asked for this one, so there is nobody to

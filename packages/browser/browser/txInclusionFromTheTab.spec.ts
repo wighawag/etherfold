@@ -81,6 +81,7 @@ test('a tab asks about its pending transactions and a worker answers the verdict
 			'host',
 			'onHostDeath',
 			'onProgress',
+			'onStateMoved',
 			'progress',
 			'promotion',
 			'reads',

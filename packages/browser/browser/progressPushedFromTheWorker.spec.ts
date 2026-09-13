@@ -89,6 +89,7 @@ test('pushes progress from the worker to its own tab, and stops when the tab let
 			'host',
 			'onHostDeath',
 			'onProgress',
+			'onStateMoved',
 			'progress',
 			'promotion',
 			'reads',

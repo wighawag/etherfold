@@ -16,6 +16,8 @@ import type {
 	UsedPromotionConfig,
 	ProvidedStreamConfig,
 	ProvidedIndexerConfig,
+	StateMovedDetach,
+	StateMovedHandler,
 	StreamSeedInstallOutcome,
 	StreamSeedLocation,
 	TxInclusionQuery,
@@ -746,6 +748,22 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	let hostFailure: PortError | undefined;
 	/** Every wire a `mainThreadHost()` handed out and has not been let go of. */
 	const wires = new Set<MainThreadHosting>();
+	/**
+	 * WHO IS LISTENING FOR THE **state-moved signal**, held HERE rather than on the
+	 * container.
+	 *
+	 * The same forwarder the worker hosts keep (`host/serve.ts`), and it spans the
+	 * same gap from the other side: a port to this thread can be obtained BEFORE
+	 * `init` has opened a container, and the container is REPLACED by a later
+	 * `init` after a `dispose`. A subscriber holds this set, which outlives both, so
+	 * a tab is not obliged to re-attach around a lifecycle it cannot see.
+	 *
+	 * It is a FORWARDER and never a second producer: what a handler is called with
+	 * is the value `@etherfold/core` published, by reference (ADR-0083).
+	 */
+	const stateMovedHandlers = new Set<StateMovedHandler>();
+	/** This hook's ONE subscription to its container's signal, while a container exists. */
+	let detachFromContainer: StateMovedDetach | undefined;
 	/** The processor configuration `init` was given, so a generation added later is built with it. */
 	let processorConfigUsed: ProcessorConfig | undefined;
 	/** The auto-index cycle in flight, so a STOP can resolve once it has LANDED. */
@@ -1115,6 +1133,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			createGeneration: options?.createIndexer,
 		});
 		indexer.onPromoted = onPromoted;
+		// ONE subscription to the fold, taken as the container is built so that a tab
+		// which subscribed before `init` hears this fold's very first block. Fanned out
+		// to whoever is listening, because several wires may hold this one host.
+		detachFromContainer = indexer.onStateMoved((moved) => {
+			for (const handler of [...stateMovedHandlers]) handler(moved);
+		});
 		// Published straight away, and it is the INDIRECT handle: a subscriber that
 		// keeps what it is handed keeps something that follows the canonical pointer.
 		setState(indexer.state);
@@ -1659,6 +1683,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			indexer.onStateUpdated = undefined;
 			indexer.onPromoted = undefined;
 		}
+		// The subscription to the CONTAINER goes with the container; the tabs' own
+		// handlers do NOT, because a port outlives a `dispose` and a later `init` opens
+		// a container this same wire goes on answering from.
+		detachFromContainer?.();
+		detachFromContainer = undefined;
 
 		// 3. drop the indexer reference and reset browser-layer state so a later init() starts clean.
 		indexer = undefined;
@@ -1943,6 +1972,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		},
 		checkTxInclusion,
 		storeForReads,
+		onStateMoved(handler) {
+			stateMovedHandlers.add(handler);
+			return () => {
+				stateMovedHandlers.delete(handler);
+			};
+		},
 	};
 
 	return {

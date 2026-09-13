@@ -1,3 +1,4 @@
+import {generationDigestOf, type StateApplied, type StateMoved} from '@etherfold/core';
 import {EntityEventProcessor, type EntityStateView} from '@etherfold/processor-entities';
 import {openForWriting} from '@etherfold/state-store';
 import {
@@ -53,12 +54,22 @@ import {
  *
  * ## What the cases may and may not assume
  *
- * They are handed a PORT and nothing else, which is the criterion stated as
- * code: an app's code against the port is unchanged across the three shapes, so
- * anything a case needs that a port cannot answer would be a behaviour that is
- * not actually shared. Setting a shape up differs (a worker entry point, a
- * `SharedWorker` name, `init` on this thread) and that is expected -- constructing
- * a host is the one thing a shape IS.
+ * They are handed a PORT and WHAT THAT PORT HAS BEEN TOLD since it was opened,
+ * and nothing else -- which is the criterion stated as code: an app's code
+ * against the port is unchanged across the three shapes, so anything a case needs
+ * that a port cannot answer would be a behaviour that is not actually shared.
+ * Setting a shape up differs (a worker entry point, a `SharedWorker` name, `init`
+ * on this thread) and that is expected -- constructing a host is the one thing a
+ * shape IS.
+ *
+ * The second argument exists because of WHEN one of these behaviours happens.
+ * The **state-moved signal** fires as the fold APPLIES a block, and by the time a
+ * case runs the fold has reached this fixture's tip -- there is nothing left to
+ * apply, and a case holding only a port could never see one. So each shape's
+ * setup does what an app does, which is subscribe the moment it has a port
+ * (`watchStateMoved`), and the cases assert on the SEQUENCE that recording holds.
+ * It is still the port's own signal and still nothing a shape could fake: what is
+ * recorded is exactly what `IndexerPort.onStateMoved` delivered.
  *
  * They run in ORDER against one port, and they leave it as they found it:
  * indexing, at the tip. Nothing here reconfigures, because a second generation
@@ -70,8 +81,38 @@ import {
 export type HostingShapeCase = {
 	readonly group: string;
 	readonly name: string;
-	run(port: IndexerPort): Promise<void>;
+	run(port: IndexerPort, told: StateMovedWatch): Promise<void>;
 };
+
+/**
+ * WHAT A PORT HAS BEEN TOLD since it was opened: every **state-moved signal** it
+ * received, oldest first.
+ *
+ * A recording and nothing more -- no filtering, no waiting, no assertions -- so
+ * what a case reads is what the host posted and in the order it posted it.
+ */
+export type StateMovedWatch = {
+	/** Every notification, oldest first. */
+	readonly received: readonly StateMoved[];
+	/** Stop recording, releasing the setup's own subscription. */
+	close(): void;
+};
+
+/**
+ * FOLLOW A PORT'S SIGNAL FROM THE MOMENT IT IS OPENED, which is the one moment
+ * that cannot be reached from inside a case.
+ *
+ * Called by every shape's setup immediately after the port exists and BEFORE the
+ * fold can have applied anything -- which for the worker shapes is before the
+ * worker has even booted, and on the main thread is before `init`. That ordering
+ * is what makes the assertions about the sequence deterministic rather than a
+ * race against how fast a fold ran.
+ */
+export function watchStateMoved(port: IndexerPort): StateMovedWatch {
+	const received: StateMoved[] = [];
+	const stop = port.onStateMoved((moved) => received.push(moved));
+	return {received, close: stop};
+}
 
 /** A case that did not hold, with what it said. */
 export type HostingShapeFailure = {readonly group: string; readonly name: string; readonly error: string};
@@ -205,7 +246,7 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
 	},
 	{
 		group: 'the port surface',
-		name: 'hands the tab the same twelve verbs, and nothing that could write',
+		name: 'hands the tab the same thirteen verbs, and nothing that could write',
 		async run(port) {
 			same('the port surface', Object.keys(port).sort(), [
 				'checkTxInclusion',
@@ -214,6 +255,7 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
 				'host',
 				'onHostDeath',
 				'onProgress',
+				'onStateMoved',
 				'progress',
 				'promotion',
 				'reads',
@@ -364,6 +406,82 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
 			same('and the cursor it carried', first.lastToBlock, BRANCH_A_TIP);
 		},
 	},
+	{
+		group: 'the state moved',
+		name: 'told this tab the fold advanced, once per block it applied, with the value core published',
+		async run(port, told) {
+			// Everything this fixture carries has been applied by now (the first case
+			// waited for the tip), and every notification it produced was posted before
+			// the answer that said so -- messages on one wire arrive in order, so nothing
+			// here waits on a clock.
+			await untilAtTip(port);
+			const applied = told.received.filter((moved): moved is StateApplied => moved.kind === 'applied');
+
+			// ONE PER APPLIED BLOCK, in the order the fold applied them: the three blocks
+			// this fixture carries logs in, and not the quiet blocks between them.
+			same(
+				'the blocks this tab was told about',
+				applied.map((moved) => moved.block),
+				[100, 102, 104],
+			);
+			same('nothing was retracted on this branch', told.received.length, applied.length);
+
+			// THE VALUE IS CORE'S OWN, on every shape: the four fields ADR-0083 names and
+			// nothing beside them, with the entity NAMES each block's mutations touched.
+			for (const moved of applied) {
+				same(`what block ${moved.block} carried`, Object.keys(moved).sort(), [
+					'block',
+					'coherence',
+					'entities',
+					'generation',
+					'kind',
+				]);
+				same(`the entities block ${moved.block} touched`, [...moved.entities].sort(), ['counter', 'token']);
+			}
+
+			// ONE TOKEN THROUGHOUT, because nothing was retracted and the pointer did not
+			// move: a reader comparing it invalidates NARROWLY, using `entities`.
+			same('one coherence token for the whole fold', new Set(applied.map((moved) => moved.coherence)).size, 1);
+			// The GENERATION named is the one ANSWERING READS, rendered as everything that
+			// reports which generation answered renders it -- so this is core's own value
+			// rather than a string this boundary composed, and it is the fact a reader
+			// compares so that a refetch after a promotion is not read as the same lineage.
+			const canonical = (await port.generations()).find((one) => one.canonical);
+			if (!canonical) throw new Error(`this host reports no generation answering reads`);
+			same(
+				'the generation every notification named',
+				[...new Set(applied.map((moved) => moved.generation))],
+				[generationDigestOf(canonical.record)],
+			);
+		},
+	},
+	{
+		group: 'the state moved',
+		name: 'says nothing at the tip, and tells a tab that attaches there nothing until the fold moves',
+		async run(port, told) {
+			await untilAtTip(port);
+			const toldSoFar = told.received.length;
+
+			// A tab attaching at a fold that has finished: it is told NOTHING, because a
+			// notification is a thing that HAPPENED and there is no current one to hand it
+			// (unlike `onProgress`, whose subscribe ANSWERS with where the fold is). What
+			// this tab does instead is read, which is what it would have done anyway.
+			const late: StateMoved[] = [];
+			const stop = port.onStateMoved((moved) => late.push(moved));
+			// The driver goes on advancing throughout -- it rests at the tip and asks the
+			// node again -- and applies nothing, which is the claim: the cadence is APPLIED
+			// WORK and never a timer. The wait BOUNDS the silence rather than measuring
+			// anything, and the round trips either side of it are what prove the host was
+			// answering the whole time.
+			await port.progress();
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			await port.progress();
+			stop();
+
+			same('what a tab attaching at the tip was told', late, []);
+			same('what the tab that was here from the start was told meanwhile', told.received.length, toldSoFar);
+		},
+	},
 ];
 
 /**
@@ -374,12 +492,12 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
  * caller that is not a test runner (a browser page) needs the whole verdict
  * carried back in one value, and "which cases failed" is the interesting part.
  */
-export async function runHostingShapeCases(port: IndexerPort): Promise<HostingShapeRun> {
+export async function runHostingShapeCases(port: IndexerPort, told: StateMovedWatch): Promise<HostingShapeRun> {
 	const failures: HostingShapeFailure[] = [];
 	let passed = 0;
 	for (const one of hostingShapeCases) {
 		try {
-			await one.run(port);
+			await one.run(port, told);
 			passed++;
 		} catch (error) {
 			failures.push({group: one.group, name: one.name, error: `${(error as Error)?.message ?? error}`});
@@ -400,18 +518,27 @@ export async function runHostingShapeCases(port: IndexerPort): Promise<HostingSh
  * The interval is the fixture's and not an application's: nothing here has a
  * reason to rest four seconds at a tip that never moves.
  */
-export async function openOnTheMainThread(databaseName: string): Promise<{port: IndexerPort; close(): void}> {
+export async function openOnTheMainThread(
+	databaseName: string,
+): Promise<{port: IndexerPort; told: StateMovedWatch; close(): void}> {
 	const chain = fakeChain();
 	const indexer = createIndexerState<TestABI, EntityStateView>({
 		createState: async () => openForWriting(await createBrowserStateStore(processor.entities, {databaseName})),
 		createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
 	});
+	// The port is joined and WATCHED before anything folds, which is the ordering
+	// the two worker shapes get for nothing (a worker has not booted when its tab
+	// subscribes). Here it means `init` comes after: a subscriber must be attached
+	// before the first block is applied, or there is nothing for it to have missed.
+	const port = connectToIndexerHost(indexer.mainThreadHost(), {watch: false});
+	const told = watchStateMoved(port);
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 	await indexer.startAutoIndexing(0.05);
-	const port = connectToIndexerHost(indexer.mainThreadHost(), {watch: false});
 	return {
 		port,
+		told,
 		close() {
+			told.close();
 			port.close();
 			indexer.dispose();
 		},
