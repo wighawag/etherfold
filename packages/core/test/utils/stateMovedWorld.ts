@@ -2,6 +2,7 @@ import type {Abi} from 'abitype';
 import {openIndexer, type AnyGenerationSpec, type Indexer} from '../../src/container.js';
 import {generationDigestOf} from '../../src/generation/identity.js';
 import {openMemoryGenerationRegistry} from '../../src/generation/memory.js';
+import type {PromotionPolicy} from '../../src/generation/promotion.js';
 import {IndexerGeneration} from '../../src/indexer.js';
 import type {StateApplied, StateMoved} from '../../src/stateMoved.js';
 import type {EventProcessor, FoldReporter, LogEvent} from '../../src/types.js';
@@ -103,6 +104,17 @@ export function reportingFold(name: string, entitiesOf: (block: number, hash: st
 		retractedTo,
 		/** What a reader re-reading THIS entity would get right now. */
 		read: (entity: string) => rows.filter((held) => held.entity === entity).map((held) => held.row),
+		/**
+		 * EVERYTHING this fold holds, in the order it folded it: what `state` answers
+		 * with while THIS generation is the canonical one.
+		 *
+		 * It is what makes "which generation answered" assertable at all when two of
+		 * them are folding the same stream, since a read reports no identity of its
+		 * own -- the same reason `promotion.test.ts`'s folds MARK what they produce.
+		 */
+		get rows(): string[] {
+			return rows.map((held) => held.row);
+		},
 		/** Whether anything is listening to this fold, which is what a detach removes. */
 		get attached() {
 			return reporter !== undefined;
@@ -120,7 +132,17 @@ export function specFor(fold: ReturnType<typeof reportingFold>): AnyGenerationSp
 
 export async function openWorld(
 	folds: ReturnType<typeof reportingFold>[],
-	options: {keepStream?: boolean; logs?: ReturnType<typeof makeLog>[]} = {},
+	options: {
+		keepStream?: boolean;
+		logs?: ReturnType<typeof makeLog>[];
+		/**
+		 * The promotion policy, for the cases about what a POINTER MOVE does to the
+		 * token. `manual` by default (see below); naming `on-catch-up` here is how a
+		 * case asserts that the move the CONTAINER makes on its own does the same
+		 * thing as the one a caller asked for.
+		 */
+		promotion?: {policy?: PromotionPolicy; dropOnPromotion?: boolean};
+	} = {},
 ) {
 	const chain = fakeChain(options.logs ?? BRANCH_A, 105);
 	const stream = memoryStream();
@@ -129,9 +151,9 @@ export async function openWorld(
 		registry,
 		provider: chain.provider,
 		source: SOURCE,
-		// MANUAL, so which generation is canonical is decided by these tests and not
-		// by a successor catching up half way through one.
-		promotion: {policy: 'manual'},
+		// MANUAL by default, so which generation is canonical is decided by these tests
+		// and not by a successor catching up half way through one.
+		promotion: options.promotion ?? {policy: 'manual'},
 		config: {
 			stream: {finality: FINALITY},
 			...(options.keepStream ? {keepStream: stream.keeper} : {}),

@@ -865,6 +865,13 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * resolution, so two such reads either side of a promotion can straddle it.
 	 * That is tolerable and bounded: each read is answered by a generation that
 	 * was canonical when it was made, and neither read is stale.
+	 *
+	 * ## And the COHERENCE TOKEN rotates with it
+	 *
+	 * A reader that is not in this heap holds a cache rather than a handle, and
+	 * nothing about the pointer reaches it -- so every notification after this one
+	 * carries a token it has never seen, which is its instruction to invalidate
+	 * EVERYTHING and re-read. See `movePointerTo` for where that sits and why.
 	 */
 	async promote(id: GenerationId): Promise<GenerationRecord> {
 		return this.movePointerTo(this.require(id));
@@ -1166,6 +1173,29 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// later must not re-promote it on the next cycle.
 		entry.candidate = false;
 		if (superseded !== entry) {
+			// THE TOKEN ROTATES, because a DIFFERENT FOLD answers from here on and that
+			// is indistinguishable, to a cache, from "everything you hold may be wrong"
+			// (ADR-0083). The SAME mechanism a retraction uses and deliberately not a
+			// second event kind: a reader does not care that a promotion is a different
+			// thing, and two kinds would be two code paths in every app ever written.
+			// Nothing is PUBLISHED here -- there is no block to name, the pointer moved
+			// and no fold applied anything -- so what a reader receives is the next
+			// notification, carrying a token it has never seen.
+			//
+			// FIRST, before the pointer-moved callback below and before the state
+			// notification that applies the move, because both of them are a reader being
+			// told to re-read: a rotation that happened after either would let one
+			// notification's worth of questions about the new generation be answered under
+			// the retired one's token. AFTER the registry write, so a move that did not
+			// happen does not invalidate every reader's cache.
+			//
+			// EVERY move of the pointer and not the forward ones alone: a REVERT changes
+			// which fold answers exactly as a promotion does, which is the only thing a
+			// reader can see of either.
+			this.stateMoved.rotate(
+				`a pointer move: reads are answered by the generation {stream: ${entry.record.stream}, processor: ` +
+					`${entry.record.processor}} from here on`,
+			);
 			// BEFORE the notification, so a consumer drops what it derived from the
 			// retired generation's cursor before it is told to re-read.
 			try {
