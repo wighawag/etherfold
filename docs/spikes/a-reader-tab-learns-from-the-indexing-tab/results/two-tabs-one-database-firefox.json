@@ -1,0 +1,322 @@
+{
+  "project": "firefox",
+  "listening": {
+    "tabScope": "Window",
+    "scope": "DedicatedWorkerGlobalScope",
+    "host": "dedicated-worker",
+    "phase": "catching-up",
+    "channel": "etherfold/state-moved/cross-tab-<run>-cross-tab",
+    "nextDoorChannel": "etherfold/state-moved/cross-tab-<run>-cross-tab-next-door",
+    "told": [],
+    "stateBeforeAnyNotification": {
+      "owners": {},
+      "transfers": 0
+    }
+  },
+  "nextDoor": {
+    "scope": "DedicatedWorkerGlobalScope",
+    "host": "dedicated-worker",
+    "channel": "etherfold/state-moved/cross-tab-<run>-cross-tab-next-door",
+    "lastToBlock": 105,
+    "transfers": 5,
+    "published": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 104,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ]
+  },
+  "quiet": {
+    "nextDoor": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 104,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ],
+    "told": [],
+    "read": 0
+  },
+  "writerHeld": {
+    "tabScope": "Window",
+    "scope": "DedicatedWorkerGlobalScope",
+    "host": "dedicated-worker",
+    "channel": "etherfold/state-moved/cross-tab-<run>-cross-tab",
+    "phase": "catching-up",
+    "lastToBlock": 103,
+    "published": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ]
+  },
+  "readerLate": {
+    "told": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ],
+    "reads": [
+      {
+        "block": 100
+      },
+      {
+        "block": 102,
+        "state": {
+          "owners": {
+            "1": "0x0000000000000000000000000000000000000022",
+            "2": "0x0000000000000000000000000000000000000022"
+          },
+          "transfers": 3
+        }
+      }
+    ],
+    "lateTold": []
+  },
+  "writerFinished": {
+    "scope": "DedicatedWorkerGlobalScope",
+    "host": "dedicated-worker",
+    "lastToBlock": 105,
+    "latestBlock": 105,
+    "transfers": 5,
+    "published": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 104,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ]
+  },
+  "report": {
+    "tabScope": "Window",
+    "channel": "etherfold/state-moved/cross-tab-<run>-cross-tab",
+    "told": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 104,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ],
+    "reads": [
+      {
+        "block": 100
+      },
+      {
+        "block": 102
+      },
+      {
+        "block": 104,
+        "state": {
+          "owners": {
+            "1": "0x0000000000000000000000000000000000000022",
+            "2": "0x0000000000000000000000000000000000000055",
+            "3": "0x0000000000000000000000000000000000000044"
+          },
+          "transfers": 5
+        }
+      }
+    ],
+    "lateTold": [
+      {
+        "kind": "applied",
+        "block": 104,
+        "coherence": "fold-2",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ],
+    "lateReads": [
+      {
+        "block": 104,
+        "state": {
+          "owners": {
+            "1": "0x0000000000000000000000000000000000000022",
+            "2": "0x0000000000000000000000000000000000000055",
+            "3": "0x0000000000000000000000000000000000000044"
+          },
+          "transfers": 5
+        }
+      }
+    ],
+    "nextDoor": [
+      {
+        "kind": "applied",
+        "block": 100,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 102,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      },
+      {
+        "kind": "applied",
+        "block": 104,
+        "coherence": "fold-1",
+        "entities": [
+          "counter",
+          "token"
+        ],
+        "generation": "de92321be3f5a7985a83d20f8e3a4c0e"
+      }
+    ],
+    "published": [],
+    "state": {
+      "owners": {
+        "1": "0x0000000000000000000000000000000000000022",
+        "2": "0x0000000000000000000000000000000000000055",
+        "3": "0x0000000000000000000000000000000000000044"
+      },
+      "transfers": 5
+    },
+    "ownHostLastToBlock": 0
+  }
+}

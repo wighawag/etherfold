@@ -88,6 +88,25 @@ The host starts folding as soon as it exists. `startIndexing()` / `stopIndexing(
 
 `onStateMoved` is deliberately a plain callback and nothing more: it is what every client library's invalidation API already is (`invalidateQueries`, `refetchQueries`, `reexecuteOperation`), and the value it hands you is the one `@etherfold/core` published, unchanged — so the same handler works when the notification later arrives from another tab or from a server. A tab that attaches part way through is told nothing until the fold next moves, because a notification is a thing that HAPPENED rather than a value to render: read through the surface you already hold instead.
 
+### A second window is not a stale window
+
+A tab that is not doing the indexing has no host to ask. `openStateMovedAcrossTabs` carries the same notification between tabs of one profile over a `BroadcastChannel`, so it re-reads when the state moved instead of polling:
+
+```ts
+import {openStateMovedAcrossTabs} from '@etherfold/browser';
+
+// every tab, whether or not it is the one indexing
+const tabs = openStateMovedAcrossTabs({databaseName: 'my-app'});
+tabs.onStateMoved(rerenderFromTheStore); // the SAME handler you wrote for the port
+
+// and, in a tab that holds a host, forward what that host tells it
+indexer.onStateMoved(tabs.publish);
+```
+
+The channel is scoped by the **storage** this state lives in — the `databaseName` you built the store with, which is the same thing the writer claim is scoped to — so two tabs of one app hear each other and two unrelated indexers on one origin never do. Pass the same value you passed `createBrowserStateStore`; a name invented here would be a second answer to "which store is this".
+
+It is an ADAPTER and not a second mechanism: what crosses is the value the fold published, so a reader's rule is unchanged. Delivery is best-effort — nothing is buffered for a tab that was not listening, and a tab that missed one converges on the next, because the coherence token it carries is one that tab has not seen. A tab is never handed back its own publication, so wiring both lines above in every tab is correct rather than noisy. **Which tab indexes is not decided here** and there is no election, lease or heartbeat: every indexing tab publishes, every tab listens, and the writer claim is what already guarantees only one of them is writing.
+
 ### A SharedWorker
 
 The same entry point with one word changed (`hostIndexerInThisSharedWorker`), and `sharedWorkerHost(() => new SharedWorker(url, {type: 'module', name: 'my-app-indexer'}))` in the tab. It wins one store connection and no election at all, and pays for it: no devtools panel (it needs `chrome://inspect`), no `terminate()`, and every tab's reads funnel through the one instance instead of parallelising across a worker per tab. **Name it** — the name is half of a SharedWorker's identity, the script URL being the other half, which is what keeps two apps on one origin apart with nothing to configure.
