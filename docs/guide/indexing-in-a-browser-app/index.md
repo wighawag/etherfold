@@ -216,6 +216,79 @@ indexer.syncing.subscribe(($syncing) => {
 
 **And you can ask for it.** `indexer.demoteToReader('lease-lost')` is the same code path, for an app that elects one indexing tab itself and wants the others to read. Note that it is not the opposite of `promote()`: that moves the canonical pointer between generations, this drops the write duty over the storage they all fold into ([ADR-0078](../../adr/0078-a-demotion-lives-where-the-store-does-and-an-advance-that-answers-nothing-is-how-a-driver-learns.md)).
 
+## How your app learns the state moved
+
+Everything above tells you how the state gets there. This is how your UI finds out it did, without inventing a polling interval.
+
+The side that applied the block **tells** the sides that are reading, and what it says is the same in every deployment ([ADR-0083](../../adr/0083-a-reader-is-told-the-state-moved-by-a-signal-carrying-a-coherence-token.md)). Two things can be said, and they are a discriminated union on `kind` rather than one shape with optional fields, so a handler that reads `block` off a withdrawal does not compile:
+
+```ts
+type StateMoved =
+	| {kind: 'applied'; block: number; coherence: string; entities: readonly string[]; generation: string}
+	| {kind: 'retracted'; forkPoint: number; coherence: string; generation: string};
+```
+
+**Your whole rule is two lines.** `coherence` is an opaque **coherence token**: compare it, never parse it.
+
+```ts
+let held: string | undefined;
+port.onStateMoved((moved) => {
+	if (moved.coherence !== held) {held = moved.coherence; return invalidateEverything();}
+	if (moved.kind === 'applied') for (const entity of moved.entities) invalidate(entity);
+});
+```
+
+**Who needs this, and who does not.** An app holding `createIndexerState(...)` directly has the indexer in its own heap and already has `state` to subscribe to — that is the case that always worked, and it is why the hook itself has no `onStateMoved`. The signal is for the readers that heap does not reach: a tab whose indexer is in a worker (the default, and the `port` above), a tab that is not the one indexing, and an app pointed at a hosted indexer. On the main thread the port is `connectToIndexerHost(indexer.mainThreadHost(), {watch: false})`, which is a wire to the host that is already there rather than a second one.
+
+Note what those two lines do **not** have to do. A reorg arrives with a rotated token, so the first line already covers it. A promotion — a different fold now answering your reads — publishes nothing of its own and shows up as a token you have never held on the next notification. And a notification you **missed** is covered by the same line at the next one, which is why nothing is buffered for you and why a producer's memory does not grow with the number of open tabs.
+
+### Three transports, one handler
+
+Which object you attach it to is a deployment choice, and the handler does not change:
+
+```ts
+port.onStateMoved(handler); // a tab's port to its worker (@etherfold/browser)
+tabs.onStateMoved(handler); // the cross-tab channel, in a tab with no host of its own
+// GET /{indexer}/state-moved -- server-sent events, from a hosted indexer, same JSON
+```
+
+That is not a promise made in prose: one parameterised suite ([`@etherfold/state-moved-conformance`](https://github.com/wighawag/etherfold/tree/main/packages/state-moved-conformance)) runs the same cases over all three and fails on the transport that drifted.
+
+**A handler you attach part way through is told nothing until the fold moves again.** A notification is a thing that *happened*, so there is nothing current to hand you and replaying the last one would report a move that landed some time ago. What a freshly attached reader does instead is read — which is what it was going to do with the notification anyway. (`onProgress` is the opposite and deliberately so: how far the fold has got is a *state*, so subscribing to it answers with the current value.)
+
+**A tab that is not indexing gets the same signal over the cross-tab channel.** The channel is named from the **storage identity** the fold writes into — the `databaseName` you passed to `createBrowserStateStore` — so two tabs of one app hear each other and two unrelated indexers on one origin never do:
+
+```ts
+const tabs = openStateMovedAcrossTabs({databaseName});
+tabs.onStateMoved(handler); // every tab
+port.onStateMoved(tabs.publish); // and, in a tab that holds a host, forward what it is told
+```
+
+Sync progress rides that same channel (`port.onProgress(tabs.publishProgress)` / `tabs.onProgress`), so a reader tab renders "syncing, 400 blocks behind" from the host's own numbers rather than a second mechanism.
+
+### Wiring it to a cache you already use
+
+Every client library's invalidation API is a plain callback, which is why the signal is a plain callback. With TanStack Query it is the two lines above and nothing else:
+
+```ts
+let held: string | undefined;
+port.onStateMoved((moved) => {
+	if (moved.coherence !== held) {
+		held = moved.coherence;
+		return void queryClient.invalidateQueries(); // token changed: everything you hold may be wrong
+	}
+	if (moved.kind === 'applied') {
+		for (const entity of moved.entities) void queryClient.invalidateQueries({queryKey: [entity]});
+	}
+});
+```
+
+etherfold does not depend on TanStack Query, Apollo, urql or Houdini, and will not: which cache your app uses is your decision, and this is the whole of the integration.
+
+**One thing to know before you write the narrow half.** `entities` carries entity *names* — `'token'`, `'counter'` — which is your processor's vocabulary, and no cache library knows it. The coarse line composes with every library as it stands (`queryClient.invalidateQueries()`, Apollo's `client.refetchQueries({include: 'active'})`, urql's `reexecuteOperation`), because "invalidate everything" needs no vocabulary at all. The narrow line needs a **mapping from an entity name to that library's own unit of invalidation**, and how cheap that is depends on which library you picked: a query key you already control (TanStack Query, the example above — free, as long as you key your queries by entity name), a list of query names (Apollo), or the operations you chose to re-execute (urql). None of them offers "invalidate everything of type X" for nothing. Declare the mapping once, beside your queries; do not try to derive it. See [`work/notes/findings/what-the-state-moved-payload-costs-a-normalised-cache.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-the-state-moved-payload-costs-a-normalised-cache.md) for why the payload is entity names rather than ids, and what that buys and costs.
+
+**Do not apply the delta by hand.** The signal says *what moved* so that you re-read through the surface you already hold; it carries no rows, no mutations and no state handle, deliberately. A reader handed a delta applies it by hand, and applying a delta by hand is exactly what goes wrong at the next reorg.
+
 ## Telling whether the state already accounts for your transaction
 
 Before an app lays an **optimistic update** over indexed state, it has to know whether the indexed state already contains the transaction's effects — because applied on top of a state that already has it, a non-idempotent update (a counter, a balance, an append) is counted twice.

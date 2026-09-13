@@ -1,7 +1,7 @@
 {
-	"name": "@etherfold/server",
+	"name": "@etherfold/state-moved-conformance",
 	"version": "0.1.0",
-	"description": "Platform-agnostic indexer-server for etherfold: a Hono app that receives its database and environment by injection, so the same server runs on Node, Cloudflare Workers or anything else.",
+	"description": "The conformance suite a state-moved TRANSPORT must pass to be an adapter rather than a second semantics: one parameterised case list, run over a worker's port, the cross-tab channel and a server's stream, asserting the app-visible outcome of an append, a retraction, a promotion and a dropped notification is identical on all of them.",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -22,31 +22,26 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/wighawag/etherfold.git",
-		"directory": "packages/server"
+		"directory": "packages/state-moved-conformance"
 	},
 	"dependencies": {
-		"@etherfold/core": "workspace:*",
-		"hono": "^4.13.3",
-		"named-logs": "^0.4.1",
-		"remote-sql": "^0.0.7"
+		"@etherfold/core": "workspace:*"
+	},
+	"peerDependencies": {
+		"vitest": ">=3"
 	},
 	"devDependencies": {
-		"@etherfold/processor-sqlite": "workspace:*",
-		"@etherfold/state-moved-conformance": "workspace:*",
-		"@libsql/client": "^0.17.3",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
-		"remote-sql-libsql": "^0.0.7",
+		"tsx": "^4.21.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.8"
 	},
 	"scripts": {
-		"sql2ts": "node sql2ts.cjs ./src/schema/sql",
-		"build": "rm -rf dist && pnpm sql2ts && tsc",
+		"build": "rm -rf dist && tsc",
 		"prepack": "cp ../../LICENSE LICENSE",
 		"typecheck": "tsc -p tsconfig.typecheck.json",
 		"dev": "as-soon -w src pnpm build",
-		"test": "vitest run",
-		"test:watch": "vitest"
+		"test": "vitest run --passWithNoTests"
 	}
 }
