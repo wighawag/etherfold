@@ -147,6 +147,38 @@ export type StoredLastSync = {
  */
 export type EmittedLog = NumberifiedLog;
 
+/**
+ * ONE BLOCK A FOLD APPLIED, as the layer that collected the mutations saw it.
+ *
+ * The upward half of the signal channel (ADR-0083): `@etherfold/core` owns the
+ * block numbers, the generations and the coherence token, and it CANNOT see
+ * entity names -- `EventProcessor.process` returns an opaque `ProcessResultType`
+ * and the word *mutation* does not occur anywhere in this package. The
+ * `Mutation` objects that carry an entity name are collected one package down,
+ * in `@etherfold/processor-entities`, so the touched-entity set is produced
+ * THERE and reaches core through this narrow additive channel, which core then
+ * RELAYS into a `StateMoved` alongside the facts only core holds.
+ *
+ * The alternative -- widening `process` to return a touched-entity set -- would
+ * reach core, processor-entities, processor-sqlite, the CLI and the browser to
+ * move information that already exists at the lower layer, which is why it is
+ * not that. It follows ADR-0078's precedent rather than inventing a rule.
+ */
+export type AppliedBlock = {
+	/** The block, as the fold applied it. */
+	readonly block: number;
+	/**
+	 * The entity NAMES that block touched, deduplicated and sorted, derived from
+	 * the mutations ACTUALLY applied -- so an entity that is declared and untouched
+	 * is absent, and a block whose handlers produced nothing reports an empty set
+	 * rather than nothing at all.
+	 */
+	readonly entities: readonly string[];
+};
+
+/** Where a fold REPORTS a block it applied. See `AppliedBlock` and `EventProcessor.setAppliedBlockReporter`. */
+export type AppliedBlockReporter = (applied: AppliedBlock) => void;
+
 export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	getVersionHash(): string;
 	/**
@@ -177,6 +209,29 @@ export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	process: (eventStream: LogEvent<ABI>[], lastSync: LastSync<ABI>) => Promise<ProcessResultType>;
 	reset: () => Promise<void>;
 	clear: () => Promise<void>;
+	/**
+	 * ATTACH THE APPLIED-BLOCK CHANNEL: where this fold reports each block it
+	 * applied and the entity names that block touched (`AppliedBlock`).
+	 *
+	 * ONE SLOT, owned by whoever DRIVES this processor -- a container sets it when
+	 * it builds a generation and again when a reconfigure swaps the fold in place,
+	 * and `undefined` detaches. It is not a subscription: the fan-out to readers is
+	 * the container's (`StateMovedPublisher`), and a second list here would be a
+	 * second place for it to go wrong.
+	 *
+	 * OPTIONAL, unlike `getCodeFingerprint` beside it, and the asymmetry is
+	 * deliberate: a fingerprint is something every processor can answer, while
+	 * naming the entities a block touched is something only a fold with entity
+	 * declarations CAN do -- and making it required would change the seam for
+	 * processor-sqlite, the CLI and the browser to add a method most of them would
+	 * implement as a no-op. The cost is the one an optional method always has: a
+	 * WRAPPER that forgets to forward it takes the wrapped fold's reporting down
+	 * with it silently, which is why `VersionedStateEventProcessor` forwarding it
+	 * is pinned by a test of its own. A processor that implements nothing here
+	 * publishes NO signal rather than a fabricated one; core cannot know what such
+	 * a fold applied.
+	 */
+	setAppliedBlockReporter?: (reporter: AppliedBlockReporter | undefined) => void;
 };
 
 export type IncludedEIP1193Log = EIP1193Log & {

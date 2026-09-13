@@ -11,6 +11,17 @@ export * from './errors.js';
  * read, so that the list exists once.
  */
 export * from './providerSurface.js';
+/**
+ * THE SIGNAL A READER LEARNS THE STATE MOVED FROM (ADR-0083).
+ *
+ * Exported from core because it is ONE notification model across every
+ * transport: the `MessagePort` a tab holds, the `BroadcastChannel` a reader tab
+ * listens on and the server's endpoint are ADAPTERS that carry this shape
+ * unchanged, and each of them lives in a different package. The PUBLISHER is
+ * exported for the same reason the type is -- both containers publish from this
+ * one assembly rather than from two implementations that drift.
+ */
+export * from './stateMoved.js';
 export * from './indexer.js';
 export * from './streamBuilder.js';
 /**

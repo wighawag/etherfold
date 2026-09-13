@@ -1,4 +1,4 @@
-import type {Abi, LastSync, LogEvent} from '@etherfold/core';
+import type {Abi, AppliedBlockReporter, LastSync, LogEvent} from '@etherfold/core';
 import {createMutationContext, type Mutation, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import {serializeLastSync, syncedThrough} from './cursor.js';
@@ -78,6 +78,17 @@ export async function runBlockHandlers<ABI extends Abi, ProcessorConfig>(
  *    self-healing in either direction (see `cursor.ts`). A caller that omits it
  *    -- a test, or the conformance workload -- gets the old behaviour and owns
  *    its own cursor.
+ *
+ * 5. **A block that was applied is REPORTED**, when a reporter is given, and it
+ *    is reported from HERE because this is where the mutations are. The
+ *    `Mutation` objects carry the entity name and `@etherfold/core` has no
+ *    mutation vocabulary at all, so the touched-entity set is produced at this
+ *    layer and RELAYED upward into the signal a reader learns from (ADR-0083).
+ *    One report per `applyBlock` that RETURNED, after it returned: a block that
+ *    threw was not applied, and reporting it would tell a reader to re-read for a
+ *    change that is not there. A block whose handlers produced NO mutation is
+ *    still reported, with an empty set -- it was applied, the cursor moved with
+ *    it, and "applied" is the thing being reported.
  */
 export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 	store: WritableStateStore,
@@ -85,6 +96,7 @@ export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 	eventStream: readonly LogEvent<ABI>[],
 	config: ProcessorConfig,
 	cursor?: {key: string; lastSync: LastSync<ABI>},
+	report?: AppliedBlockReporter,
 ): Promise<void> {
 	const fork = forkPoint(eventStream);
 	if (fork !== undefined) {
@@ -104,6 +116,7 @@ export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 				? {key: cursor.key, value: serializeLastSync(cursor.lastSync)}
 				: {key: cursor.key, value: serializeLastSync(syncedThrough(cursor.lastSync, block.number))});
 		await store.applyBlock(blockPointer(block), mutations, write);
+		report?.({block: block.number, entities: entitiesTouchedBy(mutations)});
 	}
 
 	// A stream with no blocks in it is still progress: a range that carried none of
@@ -113,4 +126,18 @@ export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 	if (cursor && blocks.length === 0) {
 		await store.writeCursor(cursor.key, serializeLastSync(cursor.lastSync));
 	}
+}
+
+/**
+ * The entity NAMES a block's mutations touched: deduplicated, and SORTED so that
+ * two runs of one block produce one payload.
+ *
+ * NAMES and not ids (ADR-0083): the set is bounded by the DECLARATION rather
+ * than by the block, so the worst block on the real measured stream (457
+ * mutations) reports at most as many names as the processor declares. Derived
+ * from the mutations ACTUALLY applied, so a declared entity nothing touched is
+ * absent -- which is what makes narrow invalidation worth anything.
+ */
+function entitiesTouchedBy(mutations: readonly Mutation[]): string[] {
+	return [...new Set(mutations.map((mutation) => mutation.entity))].sort();
 }

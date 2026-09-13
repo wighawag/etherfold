@@ -3,6 +3,7 @@ import {
 	processorCodeFingerprint,
 	simple_hash,
 	type Abi,
+	type AppliedBlockReporter,
 	type EventProcessor,
 	type IndexingSource,
 	type LastSync,
@@ -122,6 +123,13 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	protected source: IndexingSource<ABI> | undefined;
 	private finality: number | undefined;
 	private migrated = false;
+	/**
+	 * Where each applied block is REPORTED, or nothing when nobody is driving this
+	 * fold for a reader.
+	 *
+	 * ONE slot, set by whoever drives this processor (`setAppliedBlockReporter`).
+	 */
+	private appliedBlockReporter: AppliedBlockReporter | undefined;
 
 	constructor(
 		protected readonly store: WritableStateStore,
@@ -204,6 +212,25 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 		this.config = config;
 	}
 
+	/**
+	 * REPORT EACH APPLIED BLOCK, and the entity names it touched, to whoever is
+	 * driving this fold.
+	 *
+	 * This is the bottom of the signal channel (ADR-0083): the `Mutation` objects
+	 * that name an entity exist HERE and nowhere above, so the touched-entity set
+	 * is produced at this layer and the container RELAYS it into a `StateMoved`
+	 * with the block, the generation and the coherence token. Nothing about
+	 * `process` changes, which is the point -- widening it would have reached every
+	 * package in the tree to move information that already exists here.
+	 *
+	 * A processor that declares no entities reports an EMPTY set per block rather
+	 * than failing or fabricating one, and narrow invalidation then degrades to
+	 * whatever the token says, which is correct if coarse.
+	 */
+	setAppliedBlockReporter(reporter: AppliedBlockReporter | undefined): void {
+		this.appliedBlockReporter = reporter;
+	}
+
 	async load(
 		source: IndexingSource<ABI>,
 		streamConfig: UsedStreamConfig,
@@ -250,10 +277,14 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 		}
 		await this.ensureMigrated();
 
-		await applyEventStream(this.store, this.processor, eventStream, this.config as ProcessorConfig, {
-			key: SYNC_CURSOR_KEY,
-			lastSync,
-		});
+		await applyEventStream(
+			this.store,
+			this.processor,
+			eventStream,
+			this.config as ProcessorConfig,
+			{key: SYNC_CURSOR_KEY, lastSync},
+			this.appliedBlockReporter,
+		);
 
 		return this.view;
 	}
