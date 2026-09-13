@@ -1,0 +1,485 @@
+{
+  "project": "webkit",
+  "readerWithAHost": {
+    "tabScope": "Window",
+    "channel": "etherfold/state-moved/progress-<run>-progress-cross-tab",
+    "ownHost": {
+      "host": "dedicated-worker",
+      "scope": "DedicatedWorkerGlobalScope",
+      "phase": "catching-up",
+      "lastToBlock": 0,
+      "latestBlock": 0,
+      "blocksBehindTip": null,
+      "syncPercentage": null
+    },
+    "told": [],
+    "rendered": "nothing yet"
+  },
+  "readerWithNoHost": {
+    "tabScope": "Window",
+    "channel": "etherfold/state-moved/progress-<run>-progress-cross-tab",
+    "told": [],
+    "rendered": "nothing yet"
+  },
+  "writerHeld": {
+    "tabScope": "Window",
+    "channel": "etherfold/state-moved/progress-<run>-progress-cross-tab",
+    "scope": "DedicatedWorkerGlobalScope",
+    "host": "dedicated-worker",
+    "lastToBlock": 103,
+    "published": [
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "waiting",
+        "lastToBlock": null,
+        "latestBlock": null,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "loading",
+        "lastToBlock": null,
+        "latestBlock": null,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "loading",
+        "lastToBlock": 0,
+        "latestBlock": 0,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 0,
+        "latestBlock": 0,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 103,
+        "latestBlock": 105,
+        "blocksBehindTip": 2,
+        "syncPercentage": 60
+      }
+    ],
+    "rendered": "syncing, 2 blocks behind"
+  },
+  "readersMidway": {
+    "hosted": {
+      "tabScope": "Window",
+      "told": [
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "waiting",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 103,
+          "latestBlock": 105,
+          "blocksBehindTip": 2,
+          "syncPercentage": 60
+        }
+      ],
+      "rendered": "syncing, 2 blocks behind",
+      "heldByTheHelper": {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 103,
+        "latestBlock": 105,
+        "blocksBehindTip": 2,
+        "syncPercentage": 60
+      },
+      "holdsTheLastOneByReference": true,
+      "ownHost": {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 0,
+        "latestBlock": 0,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      }
+    },
+    "plain": {
+      "tabScope": "Window",
+      "told": [
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "waiting",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 103,
+          "latestBlock": 105,
+          "blocksBehindTip": 2,
+          "syncPercentage": 60
+        }
+      ],
+      "rendered": "syncing, 2 blocks behind",
+      "heldByTheHelper": {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 103,
+        "latestBlock": 105,
+        "blocksBehindTip": 2,
+        "syncPercentage": 60
+      },
+      "holdsTheLastOneByReference": true,
+      "ownHost": null
+    }
+  },
+  "writerFinished": {
+    "scope": "DedicatedWorkerGlobalScope",
+    "host": "dedicated-worker",
+    "lastToBlock": 105,
+    "latestBlock": 105,
+    "rendered": "live",
+    "atTip": {
+      "host": "dedicated-worker",
+      "scope": "DedicatedWorkerGlobalScope",
+      "phase": "at-tip",
+      "lastToBlock": 105,
+      "latestBlock": 105,
+      "blocksBehindTip": 0,
+      "syncPercentage": 100
+    },
+    "published": [
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "waiting",
+        "lastToBlock": null,
+        "latestBlock": null,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "loading",
+        "lastToBlock": null,
+        "latestBlock": null,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "loading",
+        "lastToBlock": 0,
+        "latestBlock": 0,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 0,
+        "latestBlock": 0,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 103,
+        "latestBlock": 105,
+        "blocksBehindTip": 2,
+        "syncPercentage": 60
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100
+      },
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "at-tip",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100
+      }
+    ],
+    "movedBlocks": [
+      100,
+      102,
+      104
+    ]
+  },
+  "readersAtTheTip": {
+    "hosted": {
+      "tabScope": "Window",
+      "told": [
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "waiting",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 103,
+          "latestBlock": 105,
+          "blocksBehindTip": 2,
+          "syncPercentage": 60
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 105,
+          "latestBlock": 105,
+          "blocksBehindTip": 0,
+          "syncPercentage": 100
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "at-tip",
+          "lastToBlock": 105,
+          "latestBlock": 105,
+          "blocksBehindTip": 0,
+          "syncPercentage": 100
+        }
+      ],
+      "rendered": "live",
+      "heldByTheHelper": {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "at-tip",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100
+      },
+      "holdsTheLastOneByReference": true,
+      "ownHost": {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "catching-up",
+        "lastToBlock": 0,
+        "latestBlock": 0,
+        "blocksBehindTip": null,
+        "syncPercentage": null
+      }
+    },
+    "plain": {
+      "tabScope": "Window",
+      "told": [
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "waiting",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": null,
+          "latestBlock": null,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "loading",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 0,
+          "latestBlock": 0,
+          "blocksBehindTip": null,
+          "syncPercentage": null
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 103,
+          "latestBlock": 105,
+          "blocksBehindTip": 2,
+          "syncPercentage": 60
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "catching-up",
+          "lastToBlock": 105,
+          "latestBlock": 105,
+          "blocksBehindTip": 0,
+          "syncPercentage": 100
+        },
+        {
+          "host": "dedicated-worker",
+          "scope": "DedicatedWorkerGlobalScope",
+          "phase": "at-tip",
+          "lastToBlock": 105,
+          "latestBlock": 105,
+          "blocksBehindTip": 0,
+          "syncPercentage": 100
+        }
+      ],
+      "rendered": "live",
+      "heldByTheHelper": {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "at-tip",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100
+      },
+      "holdsTheLastOneByReference": true,
+      "ownHost": null
+    }
+  },
+  "newcomer": {
+    "tabScope": "Window",
+    "channel": "etherfold/state-moved/progress-<run>-progress-cross-tab",
+    "told": [
+      {
+        "host": "dedicated-worker",
+        "scope": "DedicatedWorkerGlobalScope",
+        "phase": "at-tip",
+        "lastToBlock": 105,
+        "latestBlock": 105,
+        "blocksBehindTip": 0,
+        "syncPercentage": 100
+      }
+    ],
+    "rendered": "live"
+  }
+}

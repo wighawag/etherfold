@@ -22,9 +22,11 @@ export * from './host/index.js';
  * `BroadcastChannel`, scoped to the store it is about (ADR-0083), so a window
  * that is not doing the indexing is not a stale window.
  *
- * An ADAPTER over the notion the port already carries, and not a second one:
- * `indexer.onStateMoved(tabs.publish)` in a tab that holds a host, and
- * `tabs.onStateMoved(...)` in every tab.
+ * An ADAPTER over the notions the port already carries, and not a second one:
+ * `indexer.onStateMoved(tabs.publish)` and `indexer.onProgress(tabs.publishProgress)`
+ * in a tab that holds a host, and `tabs.onStateMoved(...)` /
+ * `createProgressReadable(tabs)` in every tab. ONE channel for both, because a
+ * reader tab needs one ear open and not two.
  */
 export * from './stateMovedAcrossTabs.js';
 

@@ -1,6 +1,7 @@
 import type {StateMoved, StateMovedDetach, StateMovedHandler} from '@etherfold/core';
 import {DEFAULT_DATABASE_NAME} from '@etherfold/state-store-indexeddb';
 import {logs} from 'named-logs';
+import {sameProgress, type HostProgress} from './host/envelope.js';
 
 const namedLogger = logs('@etherfold/browser');
 
@@ -73,6 +74,37 @@ type StateMovedMessage = {
 };
 
 /**
+ * WHERE THE FOLD HAS GOT TO, on the same channel: the host's own report,
+ * forwarded unchanged.
+ *
+ * A SECOND KIND on one envelope and deliberately not a second MESSAGE SHAPE and
+ * not a second CHANNEL: it is the same split the port already makes (ADR-0082),
+ * where `progress` and the notification are two pushes that answer different
+ * questions at different cadences and are never merged into one. What a reader
+ * has to have is an ear open, and it already has exactly one.
+ */
+type ProgressMessage = {
+	readonly protocol: typeof STATE_MOVED_CHANNEL_PROTOCOL;
+	readonly kind: 'progress';
+	readonly value: HostProgress;
+};
+
+/**
+ * WHERE IS THE FOLD? -- posted by a tab that has heard no report yet, and
+ * answered by any tab that has one to give.
+ *
+ * It carries nothing, because it asks for one thing and names nobody: there is
+ * no client id, no reply address and nothing to correlate, so no tab holds
+ * anything about the tab that asked. See `onProgress` for why an ask exists at
+ * all -- a host resting at the tip pushes nothing, so a tab opened into a quiet
+ * chain would otherwise have nothing to render until the chain moved.
+ */
+type ProgressAskMessage = {
+	readonly protocol: typeof STATE_MOVED_CHANNEL_PROTOCOL;
+	readonly kind: 'progressAsk';
+};
+
+/**
  * OURS, or somebody else's? Narrow enough to be sure, and no wider.
  *
  * The same shape of check `isPortPush` makes on the port, and it is not
@@ -89,11 +121,48 @@ function isStateMoved(data: unknown): data is StateMovedMessage {
 }
 
 /**
+ * OURS, AND A REPORT? The same line as above, held at the same height.
+ *
+ * The four fields checked are the four a `HostProgress` always carries, so this
+ * refuses a stranger's `{phase: 42}` rather than handing a progress bar a number
+ * that is not one. The block figures are deliberately NOT required: they are
+ * ABSENT until a tip has been learnt, which is the honest report of a host that
+ * has not fetched.
+ */
+function isProgress(data: unknown): data is ProgressMessage {
+	if (typeof data !== 'object' || data === null) return false;
+	const message = data as Partial<ProgressMessage>;
+	if (message.protocol !== STATE_MOVED_CHANNEL_PROTOCOL || message.kind !== 'progress') return false;
+	const value = message.value as Partial<HostProgress> | undefined;
+	if (typeof value !== 'object' || value === null) return false;
+	return (
+		typeof value.host === 'string' &&
+		typeof value.scope === 'string' &&
+		typeof value.indexing === 'boolean' &&
+		typeof value.phase === 'string'
+	);
+}
+
+/** Ours, and an ask? It carries nothing, so the envelope is the whole of it. */
+function isProgressAsk(data: unknown): data is ProgressAskMessage {
+	if (typeof data !== 'object' || data === null) return false;
+	const message = data as Partial<ProgressAskMessage>;
+	return message.protocol === STATE_MOVED_CHANNEL_PROTOCOL && message.kind === 'progressAsk';
+}
+
+/**
  * THIS TAB'S END OF THE CROSS-TAB SIGNAL: what it says to the other tabs, and
  * what it is told by them.
  *
  * ONE object for both directions deliberately -- see `openStateMovedAcrossTabs`
  * on why that is what keeps a tab from hearing itself.
+ *
+ * TWO THINGS a reader can be told over it, and they are the two the port already
+ * carries (ADR-0082): the state MOVED (`publish` / `onStateMoved`), and WHERE
+ * THE FOLD IS (`publishProgress` / `onProgress`). They are not merged, because
+ * they answer different questions at different cadences; they share a channel,
+ * because a second channel would be a second lifetime and a second silence for
+ * a reader that already has this one open.
  */
 export type StateMovedAcrossTabs = {
 	/** WHICH channel this is on, as `stateMovedChannelName` composed it. */
@@ -137,6 +206,86 @@ export type StateMovedAcrossTabs = {
 	 */
 	onStateMoved(listener: StateMovedHandler): StateMovedDetach;
 	/**
+	 * TELL THE OTHER TABS WHERE THIS TAB'S FOLD HAS GOT TO, so a tab that is merely
+	 * reading can render "syncing, 400 blocks behind".
+	 *
+	 * Handed the report a HOST made and posts it unchanged, so it is wired straight
+	 * onto the push a tab with a host already receives:
+	 *
+	 * ```ts
+	 * const tabs = openStateMovedAcrossTabs({databaseName});
+	 * indexer.onProgress(tabs.publishProgress); // this tab has a host; the others do not
+	 * ```
+	 *
+	 * ## The value is the HOST'S, and this is a VIEW of it
+	 *
+	 * Nothing here composes, rounds, re-derives or re-times: a reader tab and a
+	 * hosting tab render the same words from the same numbers because they are
+	 * literally the same value (`HostProgress`, ADR-0082's vocabulary, whose
+	 * distance to the chain tip is `blocksBehindTip` -- named for the tip it
+	 * measures against, since bare `blocksBehind` already means how far a
+	 * NON-CANONICAL generation is behind the canonical one). A reader could not
+	 * compute this for itself in any case: the **sync cursor** is opaque behind the
+	 * storage seam (ADR-0027), so the side that knows has to say.
+	 *
+	 * ## The CADENCE is the host's too, and no timer is introduced
+	 *
+	 * A report is posted when one is pushed at this tab, and the host pushes when a
+	 * batch has been APPLIED or the phase changed and says nothing when the report
+	 * would repeat the last one. So this channel carries progress at the port's
+	 * cadence rather than at the cadence of the applied blocks it otherwise
+	 * carries: nothing polls, nothing beats, and a host resting at the tip is
+	 * silent.
+	 *
+	 * POST AND FORGET, exactly as `publish` is, with ONE report held: the last one
+	 * THIS tab published, which is what an ask from a tab that opened later is
+	 * answered with. One value whatever the number of listening tabs -- nothing is
+	 * kept PER TAB, which is the property every transport in ADR-0083 rests on.
+	 */
+	publishProgress(progress: HostProgress): void;
+	/**
+	 * BE TOLD WHERE THE FOLD HAS GOT TO by the tab that is doing it. Returns the
+	 * detach.
+	 *
+	 * The same verb, the same value and the same meaning as `IndexerPort.onProgress`,
+	 * because it is the same report over a second transport -- so an app binds it
+	 * with the same helper it would bind a port with:
+	 *
+	 * ```ts
+	 * const progress = createProgressReadable(tabs); // a port works here too
+	 * // {$progress.phase === 'at-tip' ? 'live' : `syncing, ${$progress.blocksBehindTip} blocks behind`}
+	 * ```
+	 *
+	 * ## A tab attaching part way through IS told, and that is the opposite of
+	 * `onStateMoved` one line above
+	 *
+	 * Progress is a STATE rather than a thing that HAPPENED, which is the same
+	 * split the port makes: its progress subscribe ANSWERS with the current value,
+	 * while its notification subscribe answers nothing. So a listener here is
+	 * handed WHERE THE FOLD IS as soon as this tab knows it:
+	 *
+	 * - if this tab has already heard a report, that one, immediately;
+	 * - otherwise this tab ASKS the other tabs, and any tab holding a report of its
+	 *   own re-posts it. That ask is what stops a tab OPENED INTO A QUIET CHAIN
+	 *   being blank for ever: a host resting at the tip pushes nothing, so there is
+	 *   no next push to wait for.
+	 *
+	 * It is an ASK and not a request. Nothing is awaited, nothing is retried and no
+	 * tab is remembered, so a channel with no tab holding a report answers nothing
+	 * at all and this listener simply waits for the next push -- best-effort,
+	 * exactly like everything else here.
+	 *
+	 * ## A REPEAT is not delivered
+	 *
+	 * A report identical to the one this tab already holds is dropped rather than
+	 * handed on, which is the rule the host itself follows on the port (it posts
+	 * nothing where the report would repeat the last one). It is what makes several
+	 * tabs asking at once cost one render rather than one per ask, and it is
+	 * SUPPRESSION and never composition: what is held is one report, by reference,
+	 * replaced wholesale.
+	 */
+	onProgress(listener: (progress: HostProgress) => void): () => void;
+	/**
 	 * This tab is done with the signal: stop listening and stop being able to
 	 * publish.
 	 *
@@ -158,20 +307,36 @@ export type StateMovedAcrossTabs = {
  * // every tab, whether or not it is the one indexing
  * const tabs = openStateMovedAcrossTabs({databaseName: 'my-app-state'});
  * tabs.onStateMoved(() => rerenderFromTheStore());
+ * const progress = createProgressReadable(tabs); // "syncing, 400 blocks behind"
  *
  * // and, in a tab that holds a host, forward what that host tells it
  * indexer.onStateMoved(tabs.publish);
+ * indexer.onProgress(tabs.publishProgress);
  * ```
+ *
+ * ## ONE CHANNEL, TWO THINGS A READER CAN BE TOLD
+ *
+ * They are the same two the PORT carries and they are kept apart for the same
+ * reason (ADR-0082): where the fold has got to is a STATE a progress bar renders,
+ * and the notification says WHAT MOVED so a cache invalidates narrowly. What they
+ * SHARE is the channel, because a reader tab needs one ear open and not two -- a
+ * second `BroadcastChannel` would be a second lifetime, a second name to scope
+ * against the app next door, and a second thing that can be silent for one
+ * question. The port's own `progress` push is untouched by any of this: a tab
+ * holding a port is told over it, and this is for the tab that holds none.
  *
  * ## It is an ADAPTER and not a second semantics
  *
- * What is posted is the value the fold published, and a tab that receives it does
- * exactly what a tab receiving it over a port does. That is the claim ADR-0083
- * makes about every transport (`MessagePort`, `BroadcastChannel`, a server's
- * stream): the same notion, delivered over whichever one a deployment has, so an
- * app that later points at a remote indexer keeps its handler. Nothing here
- * composes, coalesces, filters or re-orders, and nothing here produces a
- * notification of its own.
+ * What is posted is the value the fold published, or the report the HOST made,
+ * and a tab that receives either does exactly what a tab receiving it over a port
+ * does. That is the claim ADR-0083 makes about every transport (`MessagePort`,
+ * `BroadcastChannel`, a server's stream): the same notion, delivered over
+ * whichever one a deployment has, so an app that later points at a remote indexer
+ * keeps its handler. Nothing here composes, coalesces, filters or re-orders,
+ * nothing here produces a notification of its own, and nothing here computes a
+ * progress figure -- a reader could not, since the **sync cursor** is opaque
+ * behind the storage seam (ADR-0027), which is precisely why the side that knows
+ * has to say.
  *
  * ## What it is FOR: a second window that is not a stale window
  *
@@ -221,40 +386,106 @@ export function openStateMovedAcrossTabs(storage: CrossTabStateStorage = {}): St
 	const channelName = stateMovedChannelName(storage);
 	if (typeof BroadcastChannel === 'undefined') {
 		throw new Error(
-			`this runtime has no BroadcastChannel, so the state-moved signal cannot cross between tabs here. ` +
-				`A tab that holds a port to a host is told over that port (\`IndexerPort.onStateMoved\`) and needs none of ` +
-				`this; what is unavailable is only the cross-tab hop. Nothing here falls back on its own: a poll invented ` +
-				`at this boundary would be the interval ADR-0083 exists to replace.`,
+			`this runtime has no BroadcastChannel, so the state-moved signal and the fold's progress cannot cross between ` +
+				`tabs here. A tab that holds a port to a host is told both over that port (\`IndexerPort.onStateMoved\`, ` +
+				`\`IndexerPort.onProgress\`) and needs none of this; what is unavailable is only the cross-tab hop. Nothing ` +
+				`here falls back on its own: a poll invented at this boundary would be the interval ADR-0083 exists to ` +
+				`replace.`,
 		);
 	}
 
 	const channel = new BroadcastChannel(channelName);
 	/**
-	 * WHO IS LISTENING in this tab, and deliberately NO "last thing another tab
-	 * said" beside them.
+	 * WHO IS LISTENING FOR A NOTIFICATION in this tab, and deliberately NO "last
+	 * notification another tab published" beside them.
 	 *
 	 * The absence is the same decision the port makes: a notification is a thing
 	 * that HAPPENED, so handing a late listener the previous one would have it
-	 * invalidate for a block it may already have read.
+	 * invalidate for a block it may already have read. The REPORT below is kept
+	 * precisely because it is the other kind of thing -- a state, whose current
+	 * value is what a late listener wants.
 	 */
 	const listeners = new Set<StateMovedHandler>();
+	/** Who is listening for WHERE THE FOLD IS, which is a different question. */
+	const progressListeners = new Set<(progress: HostProgress) => void>();
+	/**
+	 * THE LAST REPORT ANOTHER TAB PUBLISHED, which is what a listener attaching
+	 * later is handed.
+	 *
+	 * Kept where the notification deliberately keeps nothing, and the difference is
+	 * the port's own: progress is a STATE, so the current one is the right thing to
+	 * hand a late listener, while a notification is a thing that HAPPENED and
+	 * replaying one would have a reader invalidate for a block it may already have
+	 * read. It is recorded whether or not anybody is listening, since the whole
+	 * point is the listener that attaches afterwards.
+	 */
+	let lastHeard: HostProgress | undefined;
+	/**
+	 * THE LAST REPORT THIS TAB PUBLISHED, which is what an ask is answered with.
+	 *
+	 * ONE value, replaced wholesale, and deliberately not one per listening tab:
+	 * nothing here grows with the number of tabs (ADR-0083). Only what this tab's
+	 * OWN host said is re-posted -- a tab that merely HEARD a report does not gossip
+	 * it onwards, because that would keep a dead indexer's last number alive on the
+	 * channel long after the tab that made it went away.
+	 */
+	let lastPublished: HostProgress | undefined;
 	let closed = false;
+
+	/** Post, or say why not. A failure here is the CHANNEL being gone, which is a tab going away. */
+	const post = (message: StateMovedMessage | ProgressMessage | ProgressAskMessage, what: string): void => {
+		try {
+			channel.postMessage(message);
+		} catch (error) {
+			namedLogger.error(`${what} could not be posted to the other tabs`, error);
+		}
+	};
+
+	/** Hand one report to one listener, CONTAINED exactly as a notification is. */
+	const tell = (listener: (progress: HostProgress) => void, progress: HostProgress): void => {
+		try {
+			listener(progress);
+		} catch (error) {
+			namedLogger.error(`a cross-tab onProgress listener threw`, error);
+		}
+	};
 
 	channel.addEventListener('message', (event: MessageEvent) => {
 		// HEARD, and only from a message that is OURS. A channel carries whatever
 		// anybody on this origin posts to its name, and somebody else's traffic is not
 		// a notification about this store.
-		if (listeners.size === 0 || !isStateMoved(event.data)) return;
-		const moved = event.data.value;
-		for (const listener of [...listeners]) {
-			try {
-				listener(moved);
-			} catch (error) {
-				// CONTAINED, exactly as the producer contains one: a listener is somebody
-				// else's code, and letting it break delivery would make one reader's
-				// correctness depend on another's.
-				namedLogger.error(`a cross-tab onStateMoved listener threw`, error);
+		if (isStateMoved(event.data)) {
+			if (listeners.size === 0) return;
+			const moved = event.data.value;
+			for (const listener of [...listeners]) {
+				try {
+					listener(moved);
+				} catch (error) {
+					// CONTAINED, exactly as the producer contains one: a listener is somebody
+					// else's code, and letting it break delivery would make one reader's
+					// correctness depend on another's.
+					namedLogger.error(`a cross-tab onStateMoved listener threw`, error);
+				}
 			}
+			return;
+		}
+		if (isProgress(event.data)) {
+			const progress = event.data.value;
+			// NO NEWS IS NOT DELIVERED, which is the rule the host follows on the port and
+			// is what makes several tabs asking at once cost one render. Compared field by
+			// field by the ONE function that decides what "the same report" means.
+			if (lastHeard && sameProgress(lastHeard, progress)) return;
+			lastHeard = progress;
+			for (const listener of [...progressListeners]) tell(listener, progress);
+			return;
+		}
+		if (isProgressAsk(event.data)) {
+			// A TAB OPENED AND HAS NOTHING TO RENDER. Answered with what this tab's own
+			// host last said, or not at all: an ask nobody can answer is silence and not a
+			// failure, and every tab that hears the answer drops it as a repeat unless it
+			// is news to that tab.
+			if (closed || !lastPublished) return;
+			post({protocol: STATE_MOVED_CHANNEL_PROTOCOL, kind: 'progress', value: lastPublished}, `the fold's progress`);
 		}
 	});
 
@@ -293,10 +524,47 @@ export function openStateMovedAcrossTabs(storage: CrossTabStateStorage = {}): St
 				listeners.delete(listener);
 			};
 		},
+		publishProgress(progress: HostProgress): void {
+			if (closed) {
+				// A TAB GOING AWAY, not a failure -- the same reading `publish` gives it, and
+				// for the same reason: the ordinary cause is a teardown that let this go before
+				// the port subscription feeding it.
+				namedLogger.info(
+					`this cross-tab state-moved channel is closed, so a report of a fold at block ` +
+						`${progress.lastToBlock ?? 'nowhere yet'} was not posted to the other tabs.`,
+				);
+				return;
+			}
+			// HELD so a tab that opens later can ASK. By reference and replaced wholesale:
+			// this is a view of the host's last report and never a second source of truth.
+			lastPublished = progress;
+			post({protocol: STATE_MOVED_CHANNEL_PROTOCOL, kind: 'progress', value: progress}, `the fold's progress`);
+		},
+		onProgress(listener: (progress: HostProgress) => void): () => void {
+			progressListeners.add(listener);
+			const held = lastHeard;
+			if (held) {
+				// ON A MICROTASK, so a listener is never called before the caller holds the
+				// detach this returns -- and skipped if it let go in between.
+				queueMicrotask(() => {
+					if (progressListeners.has(listener)) tell(listener, held);
+				});
+			} else if (!closed) {
+				// NOTHING TO RENDER AND NOTHING COMING: a host at the tip pushes nothing, so
+				// this asks rather than waiting on a chain that may not move for hours.
+				post({protocol: STATE_MOVED_CHANNEL_PROTOCOL, kind: 'progressAsk'}, `an ask for the fold's progress`);
+			}
+			return () => {
+				progressListeners.delete(listener);
+			};
+		},
 		close(): void {
 			if (closed) return;
 			closed = true;
 			listeners.clear();
+			progressListeners.clear();
+			lastHeard = undefined;
+			lastPublished = undefined;
 			channel.close();
 		},
 	};
