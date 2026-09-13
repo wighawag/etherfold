@@ -1,0 +1,75 @@
+---
+status: accepted, not yet implemented
+---
+
+# A reader is TOLD the state moved, by a SIGNAL carrying a coherence token
+
+A client can read the state and has no way to know when to read it again. Today an app subscribes to a reactive store in the same thread as the indexer, which works precisely because everything is in one heap, and every direction this project is going breaks it: the indexer moves into a worker (ADR-0082) and the subscription is on the wrong side of a `postMessage`; a query surface arrives and the app sends documents rather than holding a handle; a remote indexer has no shared heap in principle; an elected tab indexes and the other tabs have no indexer to subscribe to. Without an answer, "a client can query state" means "a client can poll", and an interval invented separately by every app is worse than one answer.
+
+We decided: **the side that applied the block TELLS the sides that are reading, over whichever transport the deployment has, and what it says is `{block, coherence, entities, generation}`.**
+
+```ts
+type StateMoved = {
+	block: number;
+	/** Opaque. COMPARE it, never parse it. Changes when cached data may be stale. */
+	coherence: string;
+	/** Entity NAMES this block touched. Bounded by the declaration, not by block size. */
+	entities: readonly string[];
+	/** WHICH generation answered, so a refetch is not served by another lineage. */
+	generation: string;
+};
+```
+
+The `generation` field is carried IN ADDITION to the token rather than folded into it, because the two answer different questions: the token says WHETHER what you hold may be stale, and a reader must never parse it, so it can NAME nothing. A reader that refetches after a promotion needs to know which lineage answered, which is a fact it renders and compares rather than an invalidation trigger. Both are needed; neither substitutes for the other.
+
+A reader's whole rule is two lines: **token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything.**
+
+This is recorded as an ADR rather than left to its callers because it is a decision that belongs to NEITHER of them. The query surface needs it and lists it out of scope; the election spec needs it and cannot answer it alone. Deciding it in either would give the other a second, incompatible answer. A notification model is also very hard to widen later: a bare "something changed" signal shipped first is consumed by every app, and adding retraction or per-entity detail afterwards changes every consumer.
+
+## The token is the load-bearing part, because best-effort delivery and retraction do not otherwise compose
+
+Delivery is best-effort, at-most-once and unordered, and the producer holds NO per-client state. That is what stops a SharedWorker's memory growing with the number of open tabs, which is the case that would otherwise decide this by accident.
+
+"A missed notification is repaired by the next one" is true for an append and FALSE for a retraction. After a reorg the stale entities are the ones the ABANDONED branch touched, and those are generally not in the changed-set of whatever block arrives next, so a reader that misses the retraction, receives the next append and invalidates narrowly under-invalidates and keeps dead-branch rows on screen indefinitely. The token closes it for the cost of one field: the next notification already carries a different one, so a missed retraction is self-correcting.
+
+**A retraction is carried explicitly even so**, and it names a FORK POINT rather than a set of blocks, which is the vocabulary the emission stream, the `removed` marker and `revertTo` already share. The token makes a MISSED retraction safe; it does not make an explicit one unnecessary, because a reader that received it can act at once instead of at the next block.
+
+**The token also rotates on a PROMOTION, deliberately by the same mechanism.** A promotion means a different fold now answers, which from a cache's point of view is indistinguishable from "everything you hold may be wrong". One comparison and one code path rather than two, and it follows the existing convention that a generation is rendered so a reader compares the value and never parses it.
+
+## The entity set is produced where the mutations are, and core RELAYS it
+
+The producer is whoever applied the block, and in this system that is two packages rather than one. `@etherfold/core` owns the block number, the generations and the canonical pointer, so it owns the token and its rotation. It cannot see entity names: `EventProcessor.process` returns an opaque `ProcessResultType`, and the word *mutation* does not occur anywhere in the package. The `Mutation` objects that carry an entity name are collected and consumed one package down, in `@etherfold/processor-entities`.
+
+So **the entity set is produced in `@etherfold/processor-entities`, where the mutations already are, and core RELAYS it into the signal** alongside the facts only core holds. This follows ADR-0078's precedent rather than inventing a rule: that ADR put demotion in `@etherfold/browser` because a demoted writer must narrow a store handle, and core deliberately has no store and could never narrow a handle whose type it has never seen. The same argument applies here, and the alternative (widening `EventProcessor.process` to return a touched-entity set) would reach core, processor-entities, processor-sqlite, the CLI and the browser to move information that already exists at the lower layer.
+
+A consequence worth stating: a processor that is not entity-declared has no entity names to report, and an empty set is the honest answer there rather than a fabricated one. Narrow invalidation then degrades to whatever the token says, which is correct if coarse.
+
+**BOTH containers publish, from one assembly.** This system has two things that apply blocks: the chain-facing container that fetches and folds, and the receiving container that folds a stream it is pushed and is deliberately chain-free. Every server and CLI deployment runs the second, which published nothing before this decision. Both emit the same signal from the same assembly rather than two implementations, because one notification model is the claim being made and two producers that drift is how that claim dies. What the receiving container still withholds is a state HANDLE, which was a deliberate decision and is a different thing from a notification.
+
+**Only the CANONICAL fold publishes.** A non-canonical generation re-folds a whole stored stream to catch up, and publishing per block there would emit thousands of notifications naming past blocks while nothing a reader can see has moved. The chain-facing container already filters its per-generation callbacks this way; the notification follows the same rule rather than inventing a second one.
+
+## Entity NAMES, not ids, in v1
+
+Entity names are bounded by the declaration, so the payload is O(schema) rather than O(mutations). That matters because the worst block on the real measured stream carried **457 mutations** against a median of 7. Type-level invalidation is also what a normalised GraphQL cache does well and what most apps use anyway.
+
+Ids can be ADDED later as an optional field without breaking a reader, while they could not be removed, so starting narrow is the reversible direction. There is a trap in shipping them early: ids invite a reader to apply the delta by hand instead of re-reading, which is precisely what goes wrong under reorg.
+
+## It is a SIGNAL on its own channel; a GraphQL subscription is an adapter over it, and is anticipated
+
+The signal has to exist anyway for the worker path, because a `MessagePort` has no GraphQL on it. The derivability is one-way: a subscription is derivable from a signal by wrapping it in an `AsyncIterable`, while a signal is NOT derivable from a subscription without a GraphQL runtime, which is exactly what a read-surface-only app has deliberately not loaded. Every client library's invalidation API is a plain callback (`invalidateQueries`, `refetchQueries`, `reexecuteOperation`), so a signal composes with all of them in a few lines where a subscription needs a second link or exchange configured in each. And a subscription whose payload is "block N changed" is a heavyweight way to deliver a number: subscriptions earn their weight by pushing DATA, and pushing data means per-client state, which the delivery decision rules out.
+
+**A server-side GraphQL subscription, over WebSocket or SSE, is anticipated and deferred rather than rejected.** When it is wanted it arrives as an ADAPTER over this signal, which is why the server's producer is required to be transport-agnostic: adding one must need no change to the code that publishes. What it must not become is the primitive.
+
+**The signal is NOT SUPPORTED on Cloudflare Workers, and that is stated rather than discovered.** A Worker invocation is isolated: an I/O object created in one request handler cannot be touched from another, so an ingest POST cannot write into a stream opened by a different request (`work/notes/findings/a-worker-cannot-hold-a-timer-across-requests.md` is the same constraint from the timer side). The remedy would be a Durable Object, which is infrastructure and cost this deployment has not taken on, and the question properly belongs to whoever adds the subscription adapter. The failure mode is what makes silence unacceptable: the server package deliberately names no runtime, enforced by its own platform-agnostic test, so a module-global subscriber registry COMPILES, passes on Node, and never fires on a Worker, which a reader cannot distinguish from a quiet chain. So the host must REFUSE the endpoint where it cannot serve it. This is the same shape of statement `platforms/cf-worker` already makes about the chain-facing half being a poor fit there.
+
+**Sync progress rides the same stream**, because a reader cannot compute it — the cursor is opaque behind the storage seam (ADR-0027) and deserialising it in a reader would breach that — so it must be published by the producer, and a second channel would be two mechanisms with two failure modes for one question. This does not disturb ADR-0082's decision that a HOST pushes status to its own tab over its port; that push stays as it is, and what rides this stream is the cross-tab AND cross-network case, where a reader has no host to ask. Both halves are owed: a tab reading from an indexing tab and an app reading from a hosted indexer must each be able to render how far behind the fold is.
+
+## Consequences
+
+**It answers `the-same-query-runs-against-a-worker-and-a-server`'s open question 1 as NO**: `QueryExecutor` stays `Promise`-returning on day one, with no `AsyncIterable`. If subscriptions are ever wanted they arrive as a separate `subscribe` on the same port rather than by widening the executor, which is a cleaner shape regardless — two functions rather than one polymorphic one.
+
+**The retraction is produced in core and the `StateStore` seam is NOT widened.** `revertTo` returns `void` at the interface; the IndexedDB and SQLite implementations walk their version indexes and could report what they touched, but the fold already knows the fork point above the seam, and the entity-level detail is unnecessary because a rotated token means invalidate everything. Widening the seam would be a breaking change across four backends and the conformance suite for information that is not needed.
+
+**A remote reader has no state query surface yet, and this signal does not wait for one.** The server exposes status, ingest, feed and admin; the query layer is deliberately deferred to `the-same-query-runs-against-a-worker-and-a-server`, and the feed is the CONSUMER path with its own cursor rather than a state read. So a remote reader converges by being told the current position when it connects, not by re-querying state it cannot yet ask for. When the query surface lands, re-query convergence and per-operation block pinning join it there.
+
+**One limit is accepted rather than solved.** If a notification is lost and the chain then goes quiet, a reader stays stale until the next block moves. That is inherent to push, and the honest mitigations belong to the reader: re-query on visibility change, or a slow poll as a backstop. Building delivery guarantees for it would mean buffering per client, which is exactly the per-client state this rejects.
