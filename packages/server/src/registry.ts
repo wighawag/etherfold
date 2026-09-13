@@ -1,4 +1,4 @@
-import type {GenerationId, GenerationRecord, LogIngestion} from '@etherfold/core';
+import type {GenerationId, GenerationRecord, LogIngestion, StateMovedDetach, StateMovedHandler} from '@etherfold/core';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
@@ -149,6 +149,32 @@ export type IndexerRegistryEntry = {
 	 * ordinary case on a host redeployed with the new processor alone.
 	 */
 	promote?(id: GenerationId): Promise<GenerationRecord>;
+	/**
+	 * BE TOLD THE STATE MOVED, for this name: the state-moved SIGNAL the fold that
+	 * answers reads publishes as it applies each block (ADR-0083). Returns the detach.
+	 *
+	 * This package APPLIES NO BLOCKS -- an ingest route delegates to a receiver the
+	 * host constructed -- so the signal is produced in `@etherfold/core`
+	 * (`ReceivingIndexer.onStateMoved`) and what an entry adds is the way to REACH it
+	 * from a route, which is the only handle a route has on a name. A transport that
+	 * pushes it to a client (SSE, a socket) attaches here; the publication needs no
+	 * change to acquire one, which is what ADR-0083 means by the producer being
+	 * transport-agnostic.
+	 *
+	 * OPTIONAL, and paired with nothing: `generations` and `promote` are absent
+	 * together because a host with no registry has neither, while this is absent on a
+	 * host that holds a bare receiver and no container (`singleContextEntry`), which
+	 * has no publisher at all. Absent is a CAPABILITY statement, exactly as it is for
+	 * those two, and a surface built over it says so rather than going quiet -- which
+	 * matters most on Cloudflare Workers, where an ingest invocation cannot write into
+	 * a stream opened by another request and the host must REFUSE rather than appear
+	 * to work.
+	 *
+	 * Best-effort and nothing held per subscriber, which is the producer's own
+	 * property and is not softened by being reached through here: a client that missed
+	 * a notification is repaired by the next one plus the coherence token.
+	 */
+	onStateMoved?(handler: StateMovedHandler): StateMovedDetach;
 };
 
 /**
@@ -224,6 +250,12 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 			: {}),
 		...(holds.promote
 			? {promote: (id: GenerationId) => (holds.promote as (id: GenerationId) => Promise<GenerationRecord>)(id)}
+			: {}),
+		...(holds.onStateMoved
+			? {
+					onStateMoved: (handler: StateMovedHandler) =>
+						(holds.onStateMoved as (handler: StateMovedHandler) => StateMovedDetach)(handler),
+				}
 			: {}),
 	};
 }

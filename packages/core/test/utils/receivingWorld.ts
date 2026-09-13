@@ -5,8 +5,17 @@ import {createMemoryGenerationRegistryPort} from '../../src/generation/memory.js
 import type {ReplayRead, ReplaySource} from '../../src/generation/rebuild.js';
 import type {GenerationRegistryPort} from '../../src/generation/registry.js';
 import {openReceivingIndexer, type ReceivingIndexer} from '../../src/receivingContainer.js';
-import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../../src/types.js';
+import type {
+	EmittedLog,
+	EventProcessor,
+	FoldReporter,
+	IndexingSource,
+	LastSync,
+	LogEvent,
+	WireBatch,
+} from '../../src/types.js';
 import {taggedBnReplacer, taggedBnReviver} from '../../src/utils/bigint.js';
+import {appliedBlocksOf, forkPointOf} from './stateMovedWorld.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE WORLD A RECEIVING CONTAINER RUNS IN: a stored stream, a registry substrate,
@@ -197,6 +206,18 @@ function eventsOf(rows: readonly StoredRow[]): LogEvent<TestABI>[] {
 export type MemoryStore = {rows: string[]; lastSync?: LastSync<TestABI>};
 
 /**
+ * The one entity name the folds in this world report touching.
+ *
+ * A CONSTANT on purpose: the entity set is produced one package down, from real
+ * mutations, and is asserted where it is produced
+ * (`@etherfold/conformance-workload-stratagems`). What this world exists to ask
+ * is the CONTAINER's half -- which reports become notifications, for which
+ * generation, and what the token does -- so the folds here report a name of
+ * their own and the generation digest is what tells two of them apart.
+ */
+export const REPORTED_ENTITY = 'row';
+
+/**
  * A fold whose state is a list of emission ids and whose REVERT IS EXACT, so
  * "the re-fold reproduces the original state" is a real claim rather than one an
  * approximate revert could pass by luck.
@@ -206,11 +227,17 @@ export type MemoryStore = {rows: string[]; lastSync?: LastSync<TestABI>};
  * the other is exactly what ADR-0027 puts behind the storage seam to prevent.
  */
 function foldingProcessor(version: string, store: MemoryStore, weight: number): EventProcessor<TestABI, string[]> {
+	let reporter: FoldReporter | undefined;
 	return {
 		getVersionHash: () => version,
 		getCodeFingerprint: () => undefined,
 		load: async () => (store.lastSync ? {state: store.rows, lastSync: clone(store.lastSync)} : undefined),
 		process: async (eventStream, lastSync) => {
+			// REPORTED from inside `process()`, in the order and at the place the shipped
+			// entity fold reports from: the retraction ONCE, at the fork point, before
+			// anything is applied, then one report per block applied.
+			const fork = forkPointOf(eventStream);
+			if (fork !== undefined) reporter?.({kind: 'retracted', forkPoint: fork});
 			for (const event of eventStream) {
 				const mark = `${idOf(event)}x${weight}`;
 				if (event.removed) {
@@ -219,6 +246,9 @@ function foldingProcessor(version: string, store: MemoryStore, weight: number): 
 				} else {
 					store.rows.push(mark);
 				}
+			}
+			for (const block of appliedBlocksOf(eventStream)) {
+				reporter?.({kind: 'applied', block: block.number, entities: [REPORTED_ENTITY]});
 			}
 			// the state and the CHECKPOINT, together, which is what makes a kill between
 			// two chunks resume rather than re-apply or skip
@@ -232,6 +262,9 @@ function foldingProcessor(version: string, store: MemoryStore, weight: number): 
 		clear: async () => {
 			store.rows.length = 0;
 			store.lastSync = undefined;
+		},
+		setFoldReporter: (next) => {
+			reporter = next;
 		},
 	};
 }

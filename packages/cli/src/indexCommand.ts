@@ -301,6 +301,13 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// -- promote forwards, revert BACK -- answer here instead of `501`.
 							generations: () => container.generations(),
 							promote: (id) => container.promote(id),
+							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
+							// reached the same way and for the same reason: this command is the half of
+							// a split deployment that APPLIES the blocks, so it is the only half that
+							// can tell a reader the state moved. The server package applies none, which
+							// is why what it holds is the way to reach this rather than a producer of
+							// its own, and why a transport over it needs no change here to attach.
+							onStateMoved: (handler) => container.onStateMoved(handler),
 						}
 					: undefined,
 			// ...and this is what makes a split deployment observable: `index` owns the

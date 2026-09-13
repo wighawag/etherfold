@@ -3,6 +3,7 @@ import {logs} from 'named-logs';
 
 import type {GenerationContext, GenerationSpec} from './container.js';
 import type {EmissionAppender} from './emissionStream.js';
+import {generationDigestOf} from './generation/identity.js';
 import {
 	promotionOnAdd,
 	readyForPromotion,
@@ -23,9 +24,10 @@ import {
 } from './generation/registry.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
 import type {ReorgRecorder} from './reorgCounters.js';
+import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import {StreamBuilder, type GenerationContainer, type LogIngestion} from './streamBuilder.js';
 import {streamDigestOf} from './stream/identity.js';
-import type {EventProcessor, IndexingSource, ProvidedStreamConfig, UsedStreamConfig} from './types.js';
+import type {EventProcessor, FoldReport, IndexingSource, ProvidedStreamConfig, UsedStreamConfig} from './types.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -106,11 +108,21 @@ const namedLogger = logs('@etherfold/core');
  *    happens on the ordinary upgrade, where the host holds only the NEW
  *    processor. Refusing there would turn every upgrade into the outage this
  *    exists to remove.
- * 2. **It publishes no state handle and notifies nobody.** Reads on this runtime
- *    resolve the canonical pointer to a TABLE NAMESPACE (ADR-0053) rather than
- *    subscribing to a container, so a promotion here is the registry write and
- *    the log line, and nothing else. Moving the pointer BACK is
- *    `the-canonical-pointer-moves-back-without-re-ingesting`.
+ * 2. **It publishes no state handle.** Reads on this runtime resolve the
+ *    canonical pointer to a TABLE NAMESPACE (ADR-0053) rather than subscribing
+ *    to a container, so `stateOf` is left out of `ReceivedGenerationSpec` and a
+ *    host reaches the state it built through `HeldFold.state`. Moving the
+ *    pointer BACK is `the-canonical-pointer-moves-back-without-re-ingesting`.
+ *
+ *    **That is a state HANDLE and never a NOTIFICATION**, and the two are
+ *    deliberately not the same withholding. This container DOES tell the sides
+ *    that are reading when it moved the state (`onStateMoved`, ADR-0083): every
+ *    server and CLI deployment folds through THIS container, so a signal it did
+ *    not publish would be a signal no deployment that runs on a server could
+ *    have. What goes out is four facts and no data -- no rows, no mutations and,
+ *    exactly as before, no state handle -- so a reader re-reads through the
+ *    surface it already has, which on this runtime is the table namespace the
+ *    canonical pointer names.
  *
  * ## What DOES come over, because ADR-0052 requires it: the ONE-WRITER RULE
  *
@@ -137,10 +149,13 @@ const namedLogger = logs('@etherfold/core');
  * building" rule are inherited from the one place they are written down.
  *
  * The one that is left out is left out because it would be ACCEPTED AND IGNORED
- * here, which this repository does not do: `stateOf` publishes a read handle to
- * a subscriber, and nothing subscribes to a receiver -- a read tier answers over
- * the database, by resolving the canonical pointer to a table namespace
- * (ADR-0053).
+ * here, which this repository does not do: `stateOf` publishes a read HANDLE, and
+ * nothing on this runtime reads through one -- a read tier answers over the
+ * database, by resolving the canonical pointer to a table namespace (ADR-0053).
+ * That is unchanged by this container publishing the state-moved SIGNAL
+ * (`ReceivingIndexer.onStateMoved`): the signal says WHAT MOVED and carries no
+ * handle, precisely so that a reader re-reads through the surface it already
+ * has.
  *
  * `source` IS taken, because it is how a second LIVE WIRE CONTEXT is expressed:
  * a fold naming a different fetch filter is a different stream and therefore a
@@ -449,6 +464,25 @@ export class ReceivingIndexer<
 	readonly registry: GenerationRegistry;
 
 	/**
+	 * THE SIGNAL, and the token it carries: what this container tells the sides that
+	 * are READING (ADR-0083).
+	 *
+	 * The SAME class the chain-facing container holds and deliberately not a second
+	 * implementation of it: there are two things in this system that apply blocks,
+	 * both publish the same signal, and one notification model is the claim being
+	 * made -- two producers that drift is how that claim dies. So the subscription,
+	 * the containment of a throwing handler and the token's rotation are all
+	 * `StateMovedPublisher`'s, and what is here is the half only a container knows:
+	 * WHICH generation applied the block, and whether it is the one that answers
+	 * reads.
+	 *
+	 * It matters most HERE rather than on the chain-facing twin: every server and
+	 * CLI deployment folds through this container, so a reader of a hosted indexer
+	 * has no other producer to be told by.
+	 */
+	protected readonly stateMoved = new StateMovedPublisher();
+
+	/**
 	 * THE FOLDS THIS INDEXER HOLDS, in the order they were added, at most ONE PER
 	 * STREAM.
 	 *
@@ -524,6 +558,34 @@ export class ReceivingIndexer<
 	 */
 	private readonly origins = new WeakMap<HeldFold<ABI, ProcessResultType, unknown>, FoldOrigin<ABI>>();
 
+	/**
+	 * WHICH held fold the canonical pointer names, as of the last time this container
+	 * READ the pointer -- the one thing that must be answerable SYNCHRONOUSLY,
+	 * because a fold reports a block from inside `process()` and only the canonical
+	 * fold publishes.
+	 *
+	 * IN MEMORY, for the reason `candidates` and `everCanonical` above are: the
+	 * registry records what a generation IS, and this is what a container is DOING
+	 * with one. It is DERIVED and never set by a caller -- `noteCanonical` re-reads it
+	 * from the records wherever this container already reads the pointer, which is
+	 * every path that precedes a fold (`liveIngestions` before a batch is routed,
+	 * `rebuildMore` before a chunk is replayed) as well as every move this process
+	 * makes itself.
+	 *
+	 * `undefined` is a real answer and the common one on a redeployed host: the
+	 * canonical generation needs no engine here (see the module JSDoc, rule 1), so a
+	 * process holding only a successor holds no canonical fold and publishes nothing
+	 * until the pointer moves onto one it does hold.
+	 *
+	 * What it COSTS is stated rather than discovered: a pointer moved by ANOTHER
+	 * process is not seen until the next read, so this container can briefly publish
+	 * from a fold that has just stopped being canonical elsewhere. That is the same
+	 * in-process pointer the chain-facing container keeps (`Indexer.current`), and
+	 * the signal is best-effort by decision -- the next notification after the read
+	 * carries the truth, and the token the move rotated is what a reader acts on.
+	 */
+	private canonicalFold: HeldFold<ABI, ProcessResultType, unknown> | undefined;
+
 	constructor(registry: GenerationRegistry, options: ReceivingIndexerOptions<ABI, ProcessResultType, State>) {
 		this.registry = registry;
 		this.options = options;
@@ -568,6 +630,32 @@ export class ReceivingIndexer<
 	/** Every fold held, oldest first. At most one per stream; see the module JSDoc. */
 	held(): readonly HeldFold<ABI, ProcessResultType, unknown>[] {
 		return this.folds;
+	}
+
+	/**
+	 * BE TOLD THE STATE MOVED: one notification per block the CANONICAL fold applied,
+	 * and one per branch it took back, with a token that says whether anything else a
+	 * reader holds may now be wrong (ADR-0083). Returns the detach.
+	 *
+	 * ```ts
+	 * const detach = container.onStateMoved((moved) => {
+	 *   if (moved.coherence !== held) {held = moved.coherence; return invalidateEverything();}
+	 *   if (moved.kind === 'applied') for (const entity of moved.entities) invalidate(entity);
+	 * });
+	 * ```
+	 *
+	 * This is the HOST's attachment point, and it is the same name and the same shape
+	 * as the chain-facing container's, so a transport adapts to ONE surface: the
+	 * server registers this container under a name (`indexerEntryOn`,
+	 * `@etherfold/server`, which forwards this method), and the CLI's `index` command
+	 * forwards it on the entry it writes out.
+	 *
+	 * It is a SIGNAL and not a delivery of data: no rows, no mutations and no state
+	 * handle, which is why it does not disturb rule 2 of the module JSDoc. Best-effort,
+	 * with nothing held per subscriber: see `StateMovedPublisher`.
+	 */
+	onStateMoved(handler: StateMovedHandler): StateMovedDetach {
+		return this.stateMoved.subscribe(handler);
 	}
 
 	/** WHICH STREAM the opening fold folds, as `streamDigestOf` renders it. */
@@ -628,8 +716,8 @@ export class ReceivingIndexer<
 	}
 
 	/** The generation reads resolve through, which is NOT necessarily one folding here. */
-	canonical(): Promise<GenerationRecord | undefined> {
-		return this.registry.canonical();
+	async canonical(): Promise<GenerationRecord | undefined> {
+		return this.noteCanonical(await this.registry.canonical());
 	}
 
 	/**
@@ -662,7 +750,7 @@ export class ReceivingIndexer<
 	 * report.
 	 */
 	async canonicalGeneration(): Promise<GenerationId | undefined> {
-		const canonical = await this.registry.canonical();
+		const canonical = this.noteCanonical(await this.registry.canonical());
 		if (!canonical) {
 			namedLogger.info(
 				`the registry names no canonical generation, so this container answers NONE rather than falling back to the ` +
@@ -698,6 +786,11 @@ export class ReceivingIndexer<
 		// deleting a stream's writer makes the next-oldest generation the writer, and a
 		// batch arriving after that must reach the fold that now holds the duty.
 		await this.reconcileWriters(registered);
+		// ...and WHICH fold answers reads, for the same reason one step further out: the
+		// batch this list is being answered for is about to be FOLDED, and only the
+		// canonical fold publishes what it applied (ADR-0083). Read here rather than
+		// cached at open, because the pointer is durable and shared.
+		this.noteCanonical(await this.registry.canonical());
 		return this.folds
 			.filter((fold) => !!fold.ingestion && registered.some((record) => sameGeneration(record, fold.record)))
 			.map((fold) => fold.ingestion as StreamBuilder<ABI, ProcessResultType>);
@@ -913,6 +1006,15 @@ export class ReceivingIndexer<
 					}),
 		};
 		this.folds.push(fold as HeldFold<ABI, ProcessResultType, unknown>);
+		// WHICH fold answers reads, re-derived from what was just read and written rather
+		// than inferred later: it is the fold added here when the pointer named it or took
+		// it, and otherwise whichever held fold the pointer already named.
+		this.noteCanonical(canonicalOnAdd ? record : canonicalBefore);
+		// THE SIGNAL's relay, attached BEFORE anything folds and to EVERY fold rather
+		// than to the canonical one: the pointer moves, and a relay attached only to the
+		// fold that happens to be canonical now would have to be re-attached at every
+		// promotion. The filter is in `publishFoldReport`, at the moment a report arrives.
+		this.relayFoldReports(fold as HeldFold<ABI, ProcessResultType, unknown>, processor);
 		// REMEMBERED for succession: a follower that later becomes its stream's writer
 		// needs a receiver built from the same source and stream config it was added
 		// with. `level` starts false for a follower, which is what stops a fold that has
@@ -959,6 +1061,11 @@ export class ReceivingIndexer<
 	 */
 	async rebuildMore(options?: {maxEmissions?: number}): Promise<RebuildReport[]> {
 		const registered = await this.registry.list();
+		// BEFORE the chunks, because a chunk FOLDS: only the canonical fold publishes what
+		// it applied, and a follower re-folding a whole stored stream must publish nothing
+		// (ADR-0083). Read here for the reason `liveIngestions` reads it -- the pointer is
+		// durable and shared, so a move made elsewhere is seen where the records are.
+		this.noteCanonical(await this.registry.canonical());
 		const reports: RebuildReport[] = [];
 		for (const fold of [...this.folds]) {
 			if (!fold.rebuild) continue;
@@ -1058,7 +1165,7 @@ export class ReceivingIndexer<
 	 */
 	private async settlePromotion(): Promise<void> {
 		if (this.candidates.size === 0) return;
-		const canonical = await this.registry.canonical();
+		const canonical = this.noteCanonical(await this.registry.canonical());
 		if (!canonical) return;
 		const current = this.folds.find((fold) => sameGeneration(fold.record, canonical));
 		if (!current) return;
@@ -1125,6 +1232,28 @@ export class ReceivingIndexer<
 		 */
 		const wasRevert = !fold || this.everCanonical.has(fold);
 		const record = await this.registry.moveCanonicalTo(id);
+		if (!supersededRecord || !sameGeneration(supersededRecord, record)) {
+			// THE TOKEN ROTATES, because a DIFFERENT FOLD answers from here on and that is
+			// indistinguishable, to a cache, from "everything you hold may be wrong"
+			// (ADR-0083). The same mechanism a retraction uses and deliberately not a second
+			// event kind, and the same one line at the same point the chain-facing container
+			// puts it at (`Indexer.movePointerTo`) -- one rule, two containers.
+			//
+			// Nothing is PUBLISHED here: a pointer move has no block to name and no fold
+			// applied anything, so what a reader receives is the NEXT notification carrying a
+			// token it has never seen. AFTER the registry write, so a move that did not happen
+			// does not invalidate every reader's cache; and EVERY move rather than the forward
+			// ones alone, because a REVERT changes which fold answers exactly as a promotion
+			// does, which is the only thing a reader can see of either.
+			this.stateMoved.rotate(
+				`a pointer move: reads are answered by the generation {stream: ${record.stream}, processor: ` +
+					`${record.processor}} from here on`,
+			);
+		}
+		// The fold that answers reads NOW, which is what the publication filter reads.
+		// `undefined` where this container holds no fold for the target, which is the
+		// ordinary post-redeploy revert: nothing here publishes then, and nothing should.
+		this.noteCanonical(record);
 		if (fold) {
 			// It is canonical: it is no longer waiting to become so, and a REVERT past it
 			// later must not re-promote it on the next chunk.
@@ -1180,6 +1309,10 @@ export class ReceivingIndexer<
 		// dropped underneath it.
 		this.folds.splice(this.folds.indexOf(superseded), 1);
 		this.candidates.delete(superseded);
+		// ...and nothing relays what it did: this container no longer drives it, and a
+		// dropped fold that went on reporting would be a channel into a publisher nothing
+		// can reach it through any more.
+		superseded.processor.setFoldReporter?.(undefined);
 		try {
 			const deletion = await this.registry.deleteGeneration(superseded.record);
 			namedLogger.info(
@@ -1211,6 +1344,91 @@ export class ReceivingIndexer<
 	 * cursor read (`StreamBuilder.currentLastSync`), and a generation created
 	 * BESIDE a live one is the moment an operator most wants to see in a log.
 	 */
+	// ------------------------------------------------------------------------------------------------------------------
+	// THE SIGNAL: which fold answers reads, and what it tells the sides that are reading
+	// ------------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * Remember WHICH HELD FOLD this record names, and hand the record back unchanged.
+	 *
+	 * Called wherever this container already reads or writes the canonical pointer, so
+	 * there is no read added for it anywhere the pointer was not being consulted
+	 * anyway -- except deliberately on the two paths that PRECEDE a fold
+	 * (`liveIngestions`, `rebuildMore`), where the answer is what decides whether the
+	 * blocks about to be applied are published at all.
+	 *
+	 * A record naming a generation this container holds no FOLD for leaves it
+	 * `undefined`, which is a real state and not a failure: reads here are answered
+	 * from a table namespace with no engine (module JSDoc, rule 1), so a host may
+	 * perfectly well fold only generations that do not answer reads -- and it must
+	 * then publish nothing.
+	 */
+	private noteCanonical(record: GenerationRecord | undefined): GenerationRecord | undefined {
+		this.canonicalFold = record ? this.folds.find((fold) => sameGeneration(fold.record, record)) : undefined;
+		return record;
+	}
+
+	/**
+	 * RELAY: hand this fold the reporter it names what it did to.
+	 *
+	 * The entity set is produced where the mutations are, and the fork point where the
+	 * `removed` markers are read and `revertTo` is called -- both one package down --
+	 * and this container assembles the signal from them plus what only a container
+	 * holds (ADR-0083). It is the chain-facing container's `relayFoldReports` over this
+	 * container's own unit of bookkeeping, so a fold reports through ONE channel
+	 * whichever container is driving it.
+	 *
+	 * A fold that implements nothing here reports nothing and therefore publishes
+	 * nothing, which is the honest coarse answer rather than a fabricated one: core
+	 * cannot know which blocks such a fold applied, what they touched, or what it took
+	 * back.
+	 */
+	private relayFoldReports(
+		fold: HeldFold<ABI, ProcessResultType, unknown>,
+		processor: EventProcessor<ABI, ProcessResultType>,
+	): void {
+		processor.setFoldReporter?.((report) => this.publishFoldReport(fold, report));
+	}
+
+	/**
+	 * ASSEMBLE and PUBLISH one thing a fold did, and ONLY for the CANONICAL fold.
+	 *
+	 * Every rule here is the chain-facing container's (`Indexer.publishFoldReport`),
+	 * consumed rather than restated, because both containers publish ONE signal.
+	 *
+	 * The FILTER is the load-bearing half on this runtime: a follower here re-folds a
+	 * whole stored stream to catch up (`GenerationRebuild`), so publishing per block
+	 * there would fire one notification per past block while nothing a reader can see
+	 * has moved -- thousands of them, on the deployment shape an upgrade actually
+	 * takes. It covers the TOKEN as well as the notification, so a follower replaying
+	 * a stored stream's reorg rotates nothing; rotating there would have every reader
+	 * of the canonical fold throw its cache away because a second generation caught up.
+	 *
+	 * It fires AS THE BLOCK LANDS, inside the `process()` call that applied it, which
+	 * is safe in the direction that matters: a block and its cursor are ONE atomic unit
+	 * behind the storage seam (ADR-0027), so a reader that re-reads the instant it is
+	 * told sees that block's effects. Holding the reports back until the batch was
+	 * acknowledged would BUFFER, which is the one thing the producer must not do.
+	 */
+	private publishFoldReport(fold: HeldFold<ABI, ProcessResultType, unknown>, report: FoldReport): void {
+		if (fold !== this.canonicalFold) {
+			return;
+		}
+		// Rendered as everything that REPORTS which generation answered already renders it
+		// (`generationDigestOf`): ONE opaque value, compared and never parsed.
+		const generation = generationDigestOf(fold.record);
+		if (report.kind === 'retracted') {
+			// ROTATES as it publishes, inside the publisher: see `publishRetraction`.
+			this.stateMoved.publishRetraction({forkPoint: report.forkPoint, generation});
+			return;
+		}
+		this.stateMoved.publish({
+			block: report.block,
+			entities: report.entities,
+			generation,
+		});
+	}
+
 	async resolveGeneration(id: GenerationId): Promise<GenerationRecord> {
 		const key = keyOf(id);
 		const known = this.records.get(key);
