@@ -20,6 +20,7 @@ import {listen, type HostAccess} from './endpoint.js';
 import {
 	INDEXER_PORT_PROTOCOL,
 	isPortRequest,
+	sameProgress,
 	type HostGeneration,
 	type HostProgress,
 	type HostReconfigure,
@@ -455,31 +456,6 @@ export function derivedProgress<ABI extends Abi>(
 				? 100
 				: Math.min(100, Math.floor((numBlocksProcessedSoFar * 1000000) / totalToProcess) / 10000),
 	};
-}
-
-/**
- * WHETHER TWO REPORTS SAY THE SAME THING, which is how a push that carries no
- * news is suppressed.
- *
- * Field by field rather than by serialising both, because the equality is the
- * one this decides on: `failure` is compared on what a tab acts on (its name and
- * its message) and never on the host's stack, which is a string the same failure
- * can spell differently and which nothing renders.
- */
-export function sameProgress(a: HostProgress, b: HostProgress): boolean {
-	return (
-		a.host === b.host &&
-		a.scope === b.scope &&
-		a.indexing === b.indexing &&
-		a.phase === b.phase &&
-		a.lastToBlock === b.lastToBlock &&
-		a.latestBlock === b.latestBlock &&
-		a.blocksBehindTip === b.blocksBehindTip &&
-		a.numBlocksProcessedSoFar === b.numBlocksProcessedSoFar &&
-		a.syncPercentage === b.syncPercentage &&
-		a.failure?.name === b.failure?.name &&
-		a.failure?.message === b.failure?.message
-	);
 }
 
 /**

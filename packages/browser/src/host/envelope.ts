@@ -707,6 +707,38 @@ function isEnvelope(value: unknown): value is {protocol: string; kind: string; i
 	return isOurs(value) && typeof (value as {id?: unknown}).id === 'number';
 }
 
+/**
+ * WHETHER TWO REPORTS SAY THE SAME THING, which is how a push that carries no
+ * news is suppressed.
+ *
+ * Field by field rather than by serialising both, because the equality is the
+ * one this decides on: `failure` is compared on what a tab acts on (its name and
+ * its message) and never on the host's stack, which is a string the same failure
+ * can spell differently and which nothing renders.
+ *
+ * It lives HERE, beside the type it is about, rather than beside the push that
+ * first needed it: BOTH transports that carry a report suppress a repeat with it
+ * -- the host's push over the port, and the cross-tab channel a reader is told
+ * on -- and "the same report" has to mean one thing in both. Keeping it in
+ * `cases.ts` would also have tied a tab that holds NO host, and imports only
+ * `openStateMovedAcrossTabs`, to the module that serves every case.
+ */
+export function sameProgress(a: HostProgress, b: HostProgress): boolean {
+	return (
+		a.host === b.host &&
+		a.scope === b.scope &&
+		a.indexing === b.indexing &&
+		a.phase === b.phase &&
+		a.lastToBlock === b.lastToBlock &&
+		a.latestBlock === b.latestBlock &&
+		a.blocksBehindTip === b.blocksBehindTip &&
+		a.numBlocksProcessedSoFar === b.numBlocksProcessedSoFar &&
+		a.syncPercentage === b.syncPercentage &&
+		a.failure?.name === b.failure?.name &&
+		a.failure?.message === b.failure?.message
+	);
+}
+
 /** Ours and a request. Anything else on the endpoint belongs to somebody else. */
 export function isPortRequest(value: unknown): value is PortRequest {
 	return isEnvelope(value) && value.kind === 'request';

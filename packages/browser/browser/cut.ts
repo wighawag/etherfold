@@ -76,6 +76,17 @@
  *   heard, then a fold this tab's channel carries, with a listener attaching half
  *   way through it), and module state is what carries a tab's channels between its
  *   own runs -- the same split `shared-attach` / `shared-finish` already makes.
+ * - `sync-progress-reader-with-a-host` / `sync-progress-reader-with-no-host`
+ *   / `sync-progress-writer-start` / `sync-progress-reader-report`
+ *   / `sync-progress-writer-finish` / `sync-progress-newcomer` / the two `-done`
+ *   runs: SYNC PROGRESS riding that same channel, so "syncing, 400 blocks behind"
+ *   is renderable in a tab that is not the one folding. They run here for the
+ *   reason the case above does -- the tabs that render it hold no port to the host
+ *   that computed it -- and the fold is HELD mid-flight so the number asserted on
+ *   is one somebody would put on a screen rather than zero. The newcomer is a tab
+ *   opened AFTER the fold reached the tip, which is the case that cannot be
+ *   arranged any other way: nothing is going to be pushed to it, so it can only
+ *   learn where things are by asking.
  * - `hosting-shapes`: ONE behaviour suite (`hostingShapes.ts`) run against all
  *   THREE hosting shapes in one page -- a dedicated worker, a SharedWorker and
  *   `createIndexerState` on this thread. It runs here because it is the only
@@ -1830,6 +1841,317 @@ async function crossTabReaderReportCase(): Promise<Record<string, unknown>> {
 	}
 }
 
+/* ---------------------------------------------------------------------------
+ * SYNC PROGRESS RIDING THAT SAME SIGNAL TO A READER TAB.
+ *
+ * "Syncing, 400 blocks behind", rendered in tabs that are not the one folding.
+ * The tab with a host is told over its PORT (ADR-0082, untouched by any of
+ * this); a reader tab has no host to ask and cannot work it out, because the
+ * cursor is opaque behind the storage seam (ADR-0027). So the tab that knows
+ * publishes, on the one channel a reader already listens to.
+ * ------------------------------------------------------------------------- */
+
+/** The store this case is about. Its own, so the fold here is the only thing moving in it. */
+const progressDatabase = (params: Params) => databaseName(params, 'progress-cross-tab');
+
+/** One report, flattened to what a committed result can carry. */
+type ProgressOf = {
+	host: string;
+	scope: string;
+	phase: string;
+	lastToBlock: number | null;
+	latestBlock: number | null;
+	blocksBehindTip: number | null;
+	syncPercentage: number | null;
+};
+
+const progressOf = (progress: HostProgress): ProgressOf => ({
+	host: progress.host,
+	scope: progress.scope,
+	phase: progress.phase,
+	lastToBlock: progress.lastToBlock ?? null,
+	latestBlock: progress.latestBlock ?? null,
+	blocksBehindTip: progress.blocksBehindTip ?? null,
+	syncPercentage: progress.syncPercentage ?? null,
+});
+
+/** The SENTENCE an app puts on screen, from the last thing a tab was told. */
+const renders = (progress: HostProgress | undefined): string =>
+	!progress
+		? 'nothing yet'
+		: progress.phase === 'at-tip'
+			? 'live'
+			: `syncing, ${progress.blocksBehindTip ?? '?'} blocks behind`;
+
+/**
+ * WHAT THIS TAB WAS TOLD ABOUT WHERE THE FOLD IS, and what it would put on
+ * screen.
+ *
+ * The re-render is not simulated: `createProgressReadable` is the helper this
+ * package ships for exactly this, and it binds to the cross-tab end the same way
+ * it binds to a port -- which is the claim, so it is what the fixture uses.
+ */
+function whatThisTabRenders(tabs: StateMovedAcrossTabs) {
+	const heard: HostProgress[] = [];
+	const waiting: {matches: (progress: HostProgress) => boolean; resolve: () => void}[] = [];
+	const view = createProgressReadable(tabs);
+	const stop = tabs.onProgress((progress) => {
+		heard.push(progress);
+		for (const waiter of [...waiting]) {
+			if (waiter.matches(progress)) {
+				waiting.splice(waiting.indexOf(waiter), 1);
+				waiter.resolve();
+			}
+		}
+	});
+	return {
+		heard,
+		stop: () => {
+			stop();
+			view.close();
+		},
+		told: () => heard.map(progressOf),
+		/** What the SHIPPED helper holds, which is what a progress bar is bound to. */
+		rendered: () => renders(view.$state),
+		heldByTheHelper: () => (view.$state ? progressOf(view.$state) : null),
+		/** The helper holds the last report BY REFERENCE: a view, never a value it assembled. */
+		holdsTheLastOneByReference: () => view.$state === heard[heard.length - 1],
+		/** Wait for a REPORT and never for a duration; the bound is a failure bound. */
+		until(matches: (progress: HostProgress) => boolean, withinMs = 30_000): Promise<void> {
+			if (heard.some(matches)) return Promise.resolve();
+			return new Promise<void>((resolve, reject) => {
+				const patience = setTimeout(
+					() =>
+						reject(new Error(`this tab was never told where the fold is: ${JSON.stringify(heard.map(progressOf))}`)),
+					withinMs,
+				);
+				waiting.push({
+					matches,
+					resolve: () => {
+						clearTimeout(patience);
+						resolve();
+					},
+				});
+			});
+		},
+	};
+}
+
+/** A READER TAB in this case, kept between its own runs. See `readerTab` for why module state. */
+let progressReaderTab:
+	| {
+			tabs: StateMovedAcrossTabs;
+			rendering: ReturnType<typeof whatThisTabRenders>;
+			/** Its OWN host, where it has one: a second reader tab deliberately has none. */
+			port?: IndexerPort;
+	  }
+	| undefined;
+
+function theProgressReaderTab() {
+	if (!progressReaderTab) throw new Error(`this tab is not listening for progress, so there is nothing to report`);
+	return progressReaderTab;
+}
+
+/**
+ * A READER TAB WITH A HOST OF ITS OWN, which is the sharpest version of the
+ * case.
+ *
+ * Its host is HELD at its very first fetch, so it holds the store, folds nothing
+ * and can therefore only report a standstill. That is the point: this tab COULD
+ * ask a host and the answer would be wrong, so what it renders has to come from
+ * the tab that is doing the work. It publishes nothing itself -- progress is
+ * published by the tab whose fold is moving, and a held host broadcasting its own
+ * standstill is exactly the pre-election noise `one-tab-indexes-and-the-others-read`
+ * removes.
+ */
+async function progressReaderWithAHostCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = progressDatabase(params);
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdAbove=99`, import.meta.url),
+	);
+	const port = connectToIndexerHost(dedicatedWorkerHost(workers.create));
+	const tabs = openStateMovedAcrossTabs({databaseName: database});
+	const rendering = whatThisTabRenders(tabs);
+	progressReaderTab = {tabs, rendering, port};
+
+	// ITS OWN HOST IS REALLY RUNNING, and waited for so that the indexing tab's host
+	// claims the store AFTER this one rather than racing it (ADR-0075).
+	const own = await timed('reader-host-loaded', timings, () => until(port, (value) => value.phase === 'catching-up'));
+
+	return {
+		tabScope: executionScopeName(),
+		channel: tabs.channelName,
+		// what its OWN host says, which is a standstill and not the fold's position
+		ownHost: progressOf(own),
+		// ...and what the channel has told it, which is nothing: no fold has published
+		told: rendering.told(),
+		rendered: rendering.rendered(),
+	};
+}
+
+/**
+ * A READER TAB WITH NO HOST AT ALL: a window that only renders.
+ *
+ * The ordinary shape of the story once one tab indexes -- it holds no port, no
+ * container and no provider, so the channel is the only thing in this document
+ * that could know where the fold is.
+ */
+async function progressReaderWithNoHostCase(params: Params): Promise<Record<string, unknown>> {
+	const database = progressDatabase(params);
+	const tabs = openStateMovedAcrossTabs({databaseName: database});
+	const rendering = whatThisTabRenders(tabs);
+	progressReaderTab = {tabs, rendering};
+	return {
+		tabScope: executionScopeName(),
+		channel: tabs.channelName,
+		told: rendering.told(),
+		rendered: rendering.rendered(),
+	};
+}
+
+/**
+ * THE INDEXING TAB: the only tab here that holds a host that is folding, and the
+ * only one that publishes.
+ *
+ * The whole of the wiring an app writes is the one line below. The fold is gated
+ * at block 103 so the reader tabs can be asserted on MID-FLIGHT, where
+ * `blocksBehindTip` is a number somebody would put on a screen rather than zero.
+ */
+async function progressWriterStartCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = progressDatabase(params);
+	const workers = hostedWorkers(
+		new URL(`./worker.js?db=${encodeURIComponent(database)}&fetch=4&holdAbove=103`, import.meta.url),
+	);
+	const port = connectToIndexerHost(dedicatedWorkerHost(workers.create));
+	const tabs = openStateMovedAcrossTabs({databaseName: database});
+	const published: HostProgress[] = [];
+	const movedPublished: StateMoved[] = [];
+	// THE TWO LINES a tab with a host writes, onto ONE channel: where the fold is,
+	// and what it just did.
+	port.onProgress((progress) => {
+		published.push(progress);
+		tabs.publishProgress(progress);
+	});
+	port.onStateMoved((moved) => {
+		movedPublished.push(moved);
+		tabs.publish(moved);
+	});
+	progressWritingTab = {port, tabs, workers, published, movedPublished};
+
+	const held = await timed('fold-to-the-hold', timings, () => until(port, (value) => value.lastToBlock === 103));
+	return {
+		tabScope: executionScopeName(),
+		channel: tabs.channelName,
+		scope: held.scope,
+		host: held.host,
+		lastToBlock: held.lastToBlock,
+		// every report this tab has forwarded so far, in order
+		published: published.map(progressOf),
+		rendered: renders(published[published.length - 1]),
+	};
+}
+
+/** THE INDEXING TAB FINISHES: the gate is released and the fold reaches the tip. */
+async function progressWriterFinishCase(_params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const tab = progressWritingTab;
+	if (!tab) throw new Error(`this tab holds no host, so there is no fold to finish`);
+	tab.workers.latest().postMessage({fixture: 'release', gate: 'fetches'});
+	const done = await timed('fold-to-the-tip', timings, () => untilAtTip(tab.port));
+	return {
+		scope: done.scope,
+		host: done.host,
+		lastToBlock: done.lastToBlock,
+		latestBlock: done.latestBlock,
+		// WHAT THE TAB DOING THE WORK RENDERS, from its own port
+		rendered: renders(done),
+		atTip: progressOf(done),
+		published: tab.published.map(progressOf),
+		// the notifications on the same channel, to show one channel carrying both
+		movedBlocks: tab.movedPublished.map((moved) => (moved.kind === 'applied' ? moved.block : moved.forkPoint)),
+	};
+}
+
+/** WHAT A READER TAB HAS BEEN TOLD so far, waited for as a VALUE. */
+async function progressReaderReportCase(params: Params): Promise<Record<string, unknown>> {
+	const tab = theProgressReaderTab();
+	const awaited = params.until as {lastToBlock?: number; phase?: string};
+	await tab.rendering.until(
+		(progress) =>
+			(awaited.lastToBlock === undefined || progress.lastToBlock === awaited.lastToBlock) &&
+			(awaited.phase === undefined || progress.phase === awaited.phase),
+	);
+	const own = tab.port ? progressOf(await tab.port.progress()) : null;
+	return {
+		tabScope: executionScopeName(),
+		told: tab.rendering.told(),
+		rendered: tab.rendering.rendered(),
+		heldByTheHelper: tab.rendering.heldByTheHelper(),
+		holdsTheLastOneByReference: tab.rendering.holdsTheLastOneByReference(),
+		// where this tab's OWN host is, where it has one: nowhere, which is why the
+		// channel is the only honest source
+		ownHost: own,
+	};
+}
+
+/** A READER TAB IS DONE: release everything it held. */
+async function progressReaderDoneCase(): Promise<Record<string, unknown>> {
+	const tab = theProgressReaderTab();
+	const told = tab.rendering.told();
+	tab.rendering.stop();
+	tab.tabs.close();
+	tab.port?.close();
+	progressReaderTab = undefined;
+	return {told};
+}
+
+/**
+ * A TAB OPENED AFTER THE FOLD WENT QUIET, which is the case an ask exists for.
+ *
+ * A host at the tip pushes nothing, so there is no next push for this tab to
+ * wait for: if attaching did not ask, this window would render "nothing yet"
+ * until the chain moved -- which on a quiet chain is hours.
+ */
+async function progressNewcomerCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const database = progressDatabase(params);
+	const tabs = openStateMovedAcrossTabs({databaseName: database});
+	const rendering = whatThisTabRenders(tabs);
+	try {
+		await timed('answered-by-the-tab-that-knows', timings, () => rendering.until(() => true));
+		return {
+			tabScope: executionScopeName(),
+			channel: tabs.channelName,
+			// ONE report, and it is where the fold IS: nothing is replayed, so a tab that
+			// missed a hundred of them is handed the hundredth and not the hundred
+			told: rendering.told(),
+			rendered: rendering.rendered(),
+		};
+	} finally {
+		rendering.stop();
+		tabs.close();
+	}
+}
+
+/** THE INDEXING TAB's host and channel for the PROGRESS case, kept between its runs. */
+let progressWritingTab:
+	| {
+			port: IndexerPort;
+			tabs: StateMovedAcrossTabs;
+			workers: ReturnType<typeof hostedWorkers>;
+			published: HostProgress[];
+			movedPublished: StateMoved[];
+	  }
+	| undefined;
+
+/** THE INDEXING TAB is done: release the host and the channel. */
+async function progressWriterDoneCase(): Promise<Record<string, unknown>> {
+	const tab = progressWritingTab;
+	if (!tab) throw new Error(`this tab holds no host, so there is nothing to release`);
+	tab.tabs.close();
+	tab.port.close();
+	progressWritingTab = undefined;
+	return {closed: true};
+}
+
 /** THE INDEXING TAB's host and channel, kept between its two runs. See `readerTab`. */
 let writingTab:
 	| {
@@ -2015,6 +2337,30 @@ const cut: CodeUnderTest = {
 						break;
 					case 'cross-tab-reader-report':
 						results = await crossTabReaderReportCase();
+						break;
+					case 'sync-progress-reader-with-a-host':
+						results = await progressReaderWithAHostCase(ctx.params, timings);
+						break;
+					case 'sync-progress-reader-with-no-host':
+						results = await progressReaderWithNoHostCase(ctx.params);
+						break;
+					case 'sync-progress-writer-start':
+						results = await progressWriterStartCase(ctx.params, timings);
+						break;
+					case 'sync-progress-writer-finish':
+						results = await progressWriterFinishCase(ctx.params, timings);
+						break;
+					case 'sync-progress-writer-done':
+						results = await progressWriterDoneCase();
+						break;
+					case 'sync-progress-reader-report':
+						results = await progressReaderReportCase(ctx.params);
+						break;
+					case 'sync-progress-reader-done':
+						results = await progressReaderDoneCase();
+						break;
+					case 'sync-progress-newcomer':
+						results = await progressNewcomerCase(ctx.params, timings);
 						break;
 					case 'shared-attach':
 						results = await sharedAttachCase(ctx.params, timings);

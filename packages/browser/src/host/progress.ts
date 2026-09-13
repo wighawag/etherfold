@@ -47,13 +47,23 @@ export type ProgressReadable = Readable<HostProgress | undefined> & {
 	close(): void;
 };
 
-/** What this needs of a port: the push, and nothing else. */
+/**
+ * What this needs of a port: the push, and nothing else.
+ *
+ * Which is why the CROSS-TAB end satisfies it too (`openStateMovedAcrossTabs`,
+ * whose `onProgress` is the same report over a `BroadcastChannel`): a tab that
+ * hosts the fold binds this to its port, a tab that merely reads binds it to the
+ * channel, and the app's progress bar is the same line either way. That is the
+ * point of taking the PUSH rather than the port -- a helper that named
+ * `IndexerPort` would have made the reader tab write its own.
+ */
 export type PortWithProgress = {
 	onProgress(listener: (progress: HostProgress) => void): () => void;
 };
 
 /**
- * FOLLOW A HOST'S PROGRESS as a reactive value.
+ * FOLLOW A HOST'S PROGRESS as a reactive value, over a PORT to that host or over
+ * the CROSS-TAB channel a reader tab is told on.
  *
  * It subscribes IMMEDIATELY rather than on the first `subscribe`, so the round
  * trip that fetches the current progress is in flight while the app is still
