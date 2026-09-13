@@ -24,7 +24,9 @@ import {
 	openIndexer,
 	openMemoryGenerationRegistry,
 	generationDigestOf,
+	type AppliedBlock,
 	type LastSync,
+	type StateApplied,
 	type StateMoved,
 } from '@etherfold/core';
 import {
@@ -101,28 +103,52 @@ async function foldThroughAContainer() {
  */
 async function touchedPerBlock(eventStream: ReturnType<typeof loadStream>['eventStream']) {
 	const store = await openForWriting(new MemoryStateStore(stratagemsProcessor.entities));
-	const applied: {block: number; entities: readonly string[]}[] = [];
-	await applyEventStream(store, stratagemsProcessor, eventStream, undefined, undefined, (block) => applied.push(block));
+	const applied: AppliedBlock[] = [];
+	await applyEventStream(store, stratagemsProcessor, eventStream, undefined, undefined, (report) => {
+		if (report.kind !== 'applied') {
+			throw new Error(`this capture holds no reorg, yet the fold retracted to ${report.forkPoint}`);
+		}
+		applied.push(report);
+	});
 	return applied;
+}
+
+/**
+ * The notifications as APPENDS, REFUSING one that is not.
+ *
+ * The signal is a union since a retraction became a first-class case of it
+ * (`aRetractionNamesTheForkPoint.test.ts` is where that case is asked about), so
+ * an assertion about `block` or `entities` has to narrow. Refusing rather than
+ * filtering keeps this honest: this capture holds no reorg, so a retraction here
+ * is a failure and not something to skip.
+ */
+function appendsIn(moved: readonly StateMoved[]): StateApplied[] {
+	return moved.map((notification) => {
+		if (notification.kind !== 'applied') {
+			throw new Error(`expected an applied-block notification, got '${notification.kind}'`);
+		}
+		return notification;
+	});
 }
 
 describe('a fold over the stratagems capture publishes what it just changed', () => {
 	it('publishes one notification per applied block, naming the entities that block really touched', async () => {
 		const {fixture, moved} = await foldThroughAContainer();
 		const expected = await touchedPerBlock(fixture.eventStream);
+		const appends = appendsIn(moved);
 
 		// one per APPLIED block, in order, naming that block
-		expect(moved.map((notification) => notification.block)).toEqual(expected.map((block) => block.block));
+		expect(appends.map((notification) => notification.block)).toEqual(expected.map((block) => block.block));
 		// and the entity NAMES are the ones the mutations carried
-		expect(moved.map((notification) => notification.entities)).toEqual(expected.map((block) => block.entities));
+		expect(appends.map((notification) => notification.entities)).toEqual(expected.map((block) => block.entities));
 		// which is a real set and not an empty one
-		expect(moved.flatMap((notification) => notification.entities).length).toBeGreaterThan(0);
+		expect(appends.flatMap((notification) => notification.entities).length).toBeGreaterThan(0);
 	});
 
 	it('names only entities the mutations touched, so a declared-but-untouched one is absent', async () => {
 		const {moved} = await foldThroughAContainer();
 		const declared = stratagemsProcessor.entities.map((entity) => entity.name);
-		const named = new Set(moved.flatMap((notification) => notification.entities));
+		const named = new Set(appendsIn(moved).flatMap((notification) => notification.entities));
 
 		// every name is a declared entity: the payload is O(schema), never O(mutations)
 		expect([...named].filter((name) => !declared.includes(name))).toEqual([]);
@@ -137,7 +163,7 @@ describe('a fold over the stratagems capture publishes what it just changed', ()
 		// it) and it touched no entity, so it is published with nothing to invalidate
 		// narrowly rather than not published at all.
 		const {moved} = await foldThroughAContainer();
-		const empty = moved.filter((notification) => notification.entities.length === 0);
+		const empty = appendsIn(moved).filter((notification) => notification.entities.length === 0);
 		expect(empty.length).toBeGreaterThan(0);
 		expect(moved.length).toBeGreaterThan(empty.length);
 	});
@@ -152,12 +178,12 @@ describe('a fold over the stratagems capture publishes what it just changed', ()
 
 	it('carries no rows, no mutations and no state handle: it is a SIGNAL', async () => {
 		// A reader handed the delta applies it by hand, and applying a delta by hand
-		// is what goes wrong at the next reorg. So the payload is four fields, and
-		// what a reader does with it is re-read through the surface it already has --
-		// which for an in-process caller is the container's own handle.
+		// is what goes wrong at the next reorg. So the payload is its case plus four
+		// facts, and what a reader does with it is re-read through the surface it
+		// already has -- which for an in-process caller is the container's own handle.
 		const {indexer, moved} = await foldThroughAContainer();
-		for (const notification of moved) {
-			expect(Object.keys(notification).sort()).toEqual(['block', 'coherence', 'entities', 'generation']);
+		for (const notification of appendsIn(moved)) {
+			expect(Object.keys(notification).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
 			// NAMES, not ids and not rows: a string per entity and nothing structured
 			expect(notification.entities.every((entity) => typeof entity === 'string')).toBe(true);
 		}

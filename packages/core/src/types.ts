@@ -165,6 +165,8 @@ export type EmittedLog = NumberifiedLog;
  * not that. It follows ADR-0078's precedent rather than inventing a rule.
  */
 export type AppliedBlock = {
+	/** WHICH of the two things a fold does to state this report is. See `FoldReport`. */
+	readonly kind: 'applied';
 	/** The block, as the fold applied it. */
 	readonly block: number;
 	/**
@@ -176,8 +178,49 @@ export type AppliedBlock = {
 	readonly entities: readonly string[];
 };
 
-/** Where a fold REPORTS a block it applied. See `AppliedBlock` and `EventProcessor.setAppliedBlockReporter`. */
-export type AppliedBlockReporter = (applied: AppliedBlock) => void;
+/**
+ * ONE BRANCH A FOLD TOOK BACK, named by the FORK POINT it reverted to.
+ *
+ * The other thing a fold does to state, and the one a reader cannot survive
+ * being told about badly: a reorg does not ADD data, it WITHDRAWS it, so a
+ * channel that can only say "there is more" leaves a reader rendering the branch
+ * the chain abandoned (ADR-0083).
+ *
+ * It names a FORK POINT and NOT a set of blocks, which is the vocabulary
+ * `revertTo(keepUpTo)`, the emission stream's `removed` markers and the
+ * canonical view's rewind already share: the fork point is the highest block
+ * still standing, and everything above it was taken back.
+ *
+ * It deliberately carries NO entity set. What moved back is a question for the
+ * storage seam, where `revertTo` answers `void` on every backend, and the answer
+ * is not needed: the token rotates with a retraction, and a rotated token means
+ * invalidate EVERYTHING, which is the correct instruction after a revert.
+ */
+export type Retraction = {
+	/** WHICH of the two things a fold does to state this report is. See `FoldReport`. */
+	readonly kind: 'retracted';
+	/**
+	 * The highest block that STILL STANDS: everything above it was withdrawn.
+	 *
+	 * Exactly the number the fold handed `revertTo`, which is one below the lowest
+	 * block the delivered stream retracted.
+	 */
+	readonly forkPoint: number;
+};
+
+/**
+ * WHAT A FOLD DID TO THE STATE, in the two shapes a reader has to tell apart: it
+ * APPLIED a block, or it RETRACTED to a fork point.
+ *
+ * A DISCRIMINATED union rather than one shape with optional fields, because the
+ * two are not variations of one another and the difference must not be
+ * inferrable from a field being absent: a reader switches on `kind`, and reading
+ * `block` off a retraction does not compile.
+ */
+export type FoldReport = AppliedBlock | Retraction;
+
+/** Where a fold REPORTS what it did. See `FoldReport` and `EventProcessor.setFoldReporter`. */
+export type FoldReporter = (report: FoldReport) => void;
 
 export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	getVersionHash(): string;
@@ -210,8 +253,9 @@ export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	reset: () => Promise<void>;
 	clear: () => Promise<void>;
 	/**
-	 * ATTACH THE APPLIED-BLOCK CHANNEL: where this fold reports each block it
-	 * applied and the entity names that block touched (`AppliedBlock`).
+	 * ATTACH THE FOLD-REPORT CHANNEL: where this fold reports each block it applied
+	 * with the entity names that block touched (`AppliedBlock`), and each branch it
+	 * took back with the fork point it kept (`Retraction`).
 	 *
 	 * ONE SLOT, owned by whoever DRIVES this processor -- a container sets it when
 	 * it builds a generation and again when a reconfigure swaps the fold in place,
@@ -229,9 +273,9 @@ export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	 * with it silently, which is why `VersionedStateEventProcessor` forwarding it
 	 * is pinned by a test of its own. A processor that implements nothing here
 	 * publishes NO signal rather than a fabricated one; core cannot know what such
-	 * a fold applied.
+	 * a fold applied, nor what it took back.
 	 */
-	setAppliedBlockReporter?: (reporter: AppliedBlockReporter | undefined) => void;
+	setFoldReporter?: (reporter: FoldReporter | undefined) => void;
 };
 
 export type IncludedEIP1193Log = EIP1193Log & {

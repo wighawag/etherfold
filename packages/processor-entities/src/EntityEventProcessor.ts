@@ -3,8 +3,8 @@ import {
 	processorCodeFingerprint,
 	simple_hash,
 	type Abi,
-	type AppliedBlockReporter,
 	type EventProcessor,
+	type FoldReporter,
 	type IndexingSource,
 	type LastSync,
 	type LogEvent,
@@ -124,12 +124,12 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	private finality: number | undefined;
 	private migrated = false;
 	/**
-	 * Where each applied block is REPORTED, or nothing when nobody is driving this
-	 * fold for a reader.
+	 * Where each applied block and each retraction is REPORTED, or nothing when
+	 * nobody is driving this fold for a reader.
 	 *
-	 * ONE slot, set by whoever drives this processor (`setAppliedBlockReporter`).
+	 * ONE slot, set by whoever drives this processor (`setFoldReporter`).
 	 */
-	private appliedBlockReporter: AppliedBlockReporter | undefined;
+	private foldReporter: FoldReporter | undefined;
 
 	constructor(
 		protected readonly store: WritableStateStore,
@@ -213,22 +213,25 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	}
 
 	/**
-	 * REPORT EACH APPLIED BLOCK, and the entity names it touched, to whoever is
-	 * driving this fold.
+	 * REPORT WHAT THIS FOLD DID -- each applied block with the entity names it
+	 * touched, and each retraction with the fork point it reverted to -- to whoever
+	 * is driving it.
 	 *
-	 * This is the bottom of the signal channel (ADR-0083): the `Mutation` objects
-	 * that name an entity exist HERE and nowhere above, so the touched-entity set
-	 * is produced at this layer and the container RELAYS it into a `StateMoved`
-	 * with the block, the generation and the coherence token. Nothing about
-	 * `process` changes, which is the point -- widening it would have reached every
-	 * package in the tree to move information that already exists here.
+	 * This is the bottom of the signal channel (ADR-0083). Both halves are known
+	 * HERE and nowhere above: the `Mutation` objects that name an entity are
+	 * collected on this path, and the fork point is derived on this path too, from
+	 * the `removed` markers core emitted, by the same line that calls `revertTo`.
+	 * The container RELAYS them into a `StateMoved` with the generation and the
+	 * coherence token. Nothing about `process` changes, which is the point --
+	 * widening it would have reached every package in the tree to move information
+	 * that already exists here.
 	 *
 	 * A processor that declares no entities reports an EMPTY set per block rather
 	 * than failing or fabricating one, and narrow invalidation then degrades to
 	 * whatever the token says, which is correct if coarse.
 	 */
-	setAppliedBlockReporter(reporter: AppliedBlockReporter | undefined): void {
-		this.appliedBlockReporter = reporter;
+	setFoldReporter(reporter: FoldReporter | undefined): void {
+		this.foldReporter = reporter;
 	}
 
 	async load(
@@ -259,7 +262,7 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 
 	/**
 	 * Apply a stream, reverting first if any of it is a retraction, and move the
-	 * cursor WITH the blocks that caused it.
+	 * cursor WITH the blocks that caused it. Report both, if anybody is listening.
 	 *
 	 * All of it is `applyEventStream`, at the seam: revert ONCE at the fork point,
 	 * group by block hash, run the handlers with read-your-writes, apply each
@@ -283,7 +286,7 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 			eventStream,
 			this.config as ProcessorConfig,
 			{key: SYNC_CURSOR_KEY, lastSync},
-			this.appliedBlockReporter,
+			this.foldReporter,
 		);
 
 		return this.view;

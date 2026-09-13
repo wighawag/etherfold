@@ -1,5 +1,5 @@
 ---
-status: accepted; the CHAIN-FACING producer is built (`StateMoved` / `StateMovedPublisher` / `Indexer.onStateMoved`, and the relay up from `@etherfold/processor-entities`). The receiving container, the three transports, and the token's two rotations (a retraction, a promotion) are not yet.
+status: accepted; the CHAIN-FACING producer is built (`StateMoved` / `StateMovedPublisher` / `Indexer.onStateMoved`, and the relay up from `@etherfold/processor-entities`), including the RETRACTION case and the token rotation that goes with it (`StateMoved` is a union tagged `kind`; a retraction names a `forkPoint`). The receiving container, the three transports, and the token's OTHER rotation (a promotion) are not yet.
 ---
 
 # A reader is TOLD the state moved, by a SIGNAL carrying a coherence token
@@ -20,6 +20,8 @@ type StateMoved = {
 };
 ```
 
+As BUILT it is a union tagged `kind`, because the retraction below is a case of this signal and not a variation of the shape above: the four fields are the `'applied'` case, and the `'retracted'` case carries `{forkPoint, coherence, generation}`. The tag is on BOTH cases deliberately, so a reader that read `block` off a retraction does not compile rather than rendering a number that means the opposite of what it thinks.
+
 The `generation` field is carried IN ADDITION to the token rather than folded into it, because the two answer different questions: the token says WHETHER what you hold may be stale, and a reader must never parse it, so it can NAME nothing. A reader that refetches after a promotion needs to know which lineage answered, which is a fact it renders and compares rather than an invalidation trigger. Both are needed; neither substitutes for the other.
 
 A reader's whole rule is two lines: **token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything.**
@@ -33,6 +35,8 @@ Delivery is best-effort, at-most-once and unordered, and the producer holds NO p
 "A missed notification is repaired by the next one" is true for an append and FALSE for a retraction. After a reorg the stale entities are the ones the ABANDONED branch touched, and those are generally not in the changed-set of whatever block arrives next, so a reader that misses the retraction, receives the next append and invalidates narrowly under-invalidates and keeps dead-branch rows on screen indefinitely. The token closes it for the cost of one field: the next notification already carries a different one, so a missed retraction is self-correcting.
 
 **A retraction is carried explicitly even so**, and it names a FORK POINT rather than a set of blocks, which is the vocabulary the emission stream, the `removed` marker and `revertTo` already share. The token makes a MISSED retraction safe; it does not make an explicit one unnecessary, because a reader that received it can act at once instead of at the next block.
+
+As BUILT, the rotation is not a second call a caller has to remember: `StateMovedPublisher.publishRetraction` rotates AS IT PUBLISHES, in the one assembly both containers publish from, so a retraction under the old token is unexpressible. The retraction therefore carries the NEW token, which is the one the appends after it carry, so a reader that RECEIVED it invalidates everything once and goes back to invalidating narrowly at the next block. And the "only the canonical fold publishes" filter covers the ROTATION as well as the notification: a follower re-folding a stored stream's reorg must not rotate, or every reader of the canonical fold would throw its cache away because a second generation caught up.
 
 **The token also rotates on a PROMOTION, deliberately by the same mechanism.** A promotion means a different fold now answers, which from a cache's point of view is indistinguishable from "everything you hold may be wrong". One comparison and one code path rather than two, and it follows the existing convention that a generation is rendered so a reader compares the value and never parses it.
 

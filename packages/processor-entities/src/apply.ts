@@ -1,4 +1,4 @@
-import type {Abi, AppliedBlockReporter, LastSync, LogEvent} from '@etherfold/core';
+import type {Abi, FoldReporter, LastSync, LogEvent} from '@etherfold/core';
 import {createMutationContext, type Mutation, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import {serializeLastSync, syncedThrough} from './cursor.js';
@@ -89,6 +89,18 @@ export async function runBlockHandlers<ABI extends Abi, ProcessorConfig>(
  *    change that is not there. A block whose handlers produced NO mutation is
  *    still reported, with an empty set -- it was applied, the cursor moved with
  *    it, and "applied" is the thing being reported.
+ *
+ * 6. **The REVERT is reported too, naming the fork point**, and it is reported
+ *    from here for the same reason: rule 1's fork point is derived HERE, from the
+ *    `removed` markers core emitted, and core is where the reader-facing signal is
+ *    assembled. A reorg WITHDRAWS data, so a channel that reported only rule 5
+ *    would leave a reader rendering the branch the chain abandoned. It is reported
+ *    AFTER `revertTo` returned and BEFORE the replacements are applied, which is
+ *    the order they happened in: a reader told the other way round would re-read
+ *    the replacement and then be told to throw it away. What it names is the fork
+ *    point and NOT the rows that moved -- `revertTo` answers `void` at the seam,
+ *    on purpose, and the token that rotates with this retraction already says
+ *    invalidate everything.
  */
 export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 	store: WritableStateStore,
@@ -96,12 +108,16 @@ export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 	eventStream: readonly LogEvent<ABI>[],
 	config: ProcessorConfig,
 	cursor?: {key: string; lastSync: LastSync<ABI>},
-	report?: AppliedBlockReporter,
+	report?: FoldReporter,
 ): Promise<void> {
 	const fork = forkPoint(eventStream);
 	if (fork !== undefined) {
 		logger.info(`retraction in stream: reverting state above block ${fork}`);
 		await store.revertTo(fork);
+		// AFTER the revert returned, exactly as a block is reported after it landed: a
+		// revert that threw took nothing back, and telling a reader otherwise would
+		// rotate a token over a branch that is still standing.
+		report?.({kind: 'retracted', forkPoint: fork});
 	}
 
 	const blocks = groupByBlock(eventStream);
@@ -116,7 +132,7 @@ export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 				? {key: cursor.key, value: serializeLastSync(cursor.lastSync)}
 				: {key: cursor.key, value: serializeLastSync(syncedThrough(cursor.lastSync, block.number))});
 		await store.applyBlock(blockPointer(block), mutations, write);
-		report?.({block: block.number, entities: entitiesTouchedBy(mutations)});
+		report?.({kind: 'applied', block: block.number, entities: entitiesTouchedBy(mutations)});
 	}
 
 	// A stream with no blocks in it is still progress: a range that carried none of

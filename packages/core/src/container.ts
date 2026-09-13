@@ -23,8 +23,8 @@ import {readOnlyStream} from './stream/readOnly.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
 import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import type {
-	AppliedBlock,
 	EventProcessor,
+	FoldReport,
 	IndexingSource,
 	LastSync,
 	LogEvent,
@@ -763,7 +763,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// publication, exactly like the cursor callback above: which generation is
 		// canonical moves, and a relay attached only to the canonical one would have to
 		// be re-attached at every promotion.
-		this.relayAppliedBlocks(entry, processor);
+		this.relayFoldReports(entry, processor);
 
 		await this.applyPolicyTo(entry);
 		return this.heldOf(entry);
@@ -774,18 +774,23 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 *
 	 * One notification per block the CANONICAL fold applies, naming that block, the
 	 * generation that answered, the entity names that block touched and a coherence
-	 * token to compare (`StateMoved`). It is a SIGNAL and not a delivery of data: it
-	 * says what moved so a reader re-reads through the surface it already has --
-	 * `state` here, a port in a tab, a feed or a query surface across a network.
+	 * token to compare -- and one per REORG, naming the fork point that fold
+	 * reverted to, with a token that has ROTATED (`StateMoved`). It is a SIGNAL and
+	 * not a delivery of data: it says what moved so a reader re-reads through the
+	 * surface it already has -- `state` here, a port in a tab, a feed or a query
+	 * surface across a network.
 	 *
 	 * ```ts
-	 * const detach = indexer.onStateMoved(({block, entities, coherence}) => {
-	 *   if (coherence !== held) {held = coherence; return invalidateEverything();}
-	 *   for (const entity of entities) invalidate(entity);
+	 * const detach = indexer.onStateMoved((moved) => {
+	 *   if (moved.coherence !== held) {held = moved.coherence; return invalidateEverything();}
+	 *   if (moved.kind === 'applied') for (const entity of moved.entities) invalidate(entity);
 	 * });
 	 * ```
 	 *
-	 * Best-effort, with nothing held per subscriber: see `StateMovedPublisher`.
+	 * Best-effort, with nothing held per subscriber: see `StateMovedPublisher`. A
+	 * reader that MISSES a retraction is repaired by the next notification it does
+	 * receive, because that one carries the rotated token and the first line above
+	 * invalidates everything.
 	 */
 	onStateMoved(handler: StateMovedHandler): StateMovedDetach {
 		return this.stateMoved.subscribe(handler);
@@ -1048,19 +1053,19 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// afterwards would go quiet for exactly those blocks. Attaching to a processor
 		// the swap then declines costs nothing -- a processor this container does not
 		// hold folds nothing and therefore reports nothing -- and it is detached below.
-		this.relayAppliedBlocks(entry, newProcessor);
+		this.relayFoldReports(entry, newProcessor);
 		const outcome = await entry.generation.updateProcessor(newProcessor, options);
 		if (outcome.stateDiscarded) {
 			// Recorded BEFORE the discard is published, and unconditionally: the state to
 			// publish is the NEW fold's read handle, which is a handle onto a different
 			// store whenever the declarations changed.
-			this.stopRelayingAppliedBlocks(entry.processor, newProcessor);
+			this.stopRelayingFoldReports(entry.processor, newProcessor);
 			entry.processor = newProcessor;
 		} else {
 			// The swap was declined (same version hash, not forced), so this generation
 			// goes on folding with the processor it already had and the newcomer is not
 			// this container's.
-			this.stopRelayingAppliedBlocks(newProcessor, entry.processor);
+			this.stopRelayingFoldReports(newProcessor, entry.processor);
 		}
 		this.publishDiscard(entry, outcome, publishedBefore);
 		return outcome;
@@ -1402,36 +1407,36 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	/**
-	 * RELAY: hand this generation's fold the reporter it names its applied blocks
-	 * to.
+	 * RELAY: hand this generation's fold the reporter it names what it did to.
 	 *
-	 * The entity set is produced where the mutations are, one package down, and
-	 * this container assembles the signal from it plus what only a container holds
-	 * (ADR-0083). A fold that implements nothing here reports nothing and therefore
-	 * publishes nothing, which is the honest coarse answer rather than a fabricated
-	 * set: core cannot know which blocks such a fold applied, let alone what they
-	 * touched.
+	 * The entity set is produced where the mutations are, and the fork point where
+	 * the `removed` markers are read and `revertTo` is called -- both one package
+	 * down -- and this container assembles the signal from them plus what only a
+	 * container holds (ADR-0083). A fold that implements nothing here reports
+	 * nothing and therefore publishes nothing, which is the honest coarse answer
+	 * rather than a fabricated one: core cannot know which blocks such a fold
+	 * applied, what they touched, or what it took back.
 	 */
-	protected relayAppliedBlocks(
+	protected relayFoldReports(
 		entry: HeldEntry<ABI, ProcessResultType>,
 		processor: EventProcessor<ABI, ProcessResultType>,
 	): void {
-		processor.setAppliedBlockReporter?.((applied) => this.publishStateMoved(entry, applied));
+		processor.setFoldReporter?.((report) => this.publishFoldReport(entry, report));
 	}
 
 	/** Detach a fold this container no longer drives, unless it is the one it kept. */
-	protected stopRelayingAppliedBlocks(
+	protected stopRelayingFoldReports(
 		processor: EventProcessor<ABI, ProcessResultType>,
 		keeping: EventProcessor<ABI, ProcessResultType>,
 	): void {
 		if (processor === keeping) {
 			return;
 		}
-		processor.setAppliedBlockReporter?.(undefined);
+		processor.setFoldReporter?.(undefined);
 	}
 
 	/**
-	 * ASSEMBLE and PUBLISH one applied block, and ONLY for the CANONICAL fold.
+	 * ASSEMBLE and PUBLISH one thing the fold did, and ONLY for the CANONICAL fold.
 	 *
 	 * A non-canonical generation re-folds a whole stored stream to catch up, so
 	 * publishing per block there would fire thousands of notifications naming past
@@ -1448,18 +1453,30 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * the reports back until the batch's state notification -- would buffer, which
 	 * is the one thing the producer must not do, and would collapse a batch's
 	 * blocks into one moment for no reader's benefit.
+	 *
+	 * A RETRACTION goes out the same way and through the same filter, which is the
+	 * half worth stating: the filter covers the TOKEN as well as the notification,
+	 * so a follower re-folding a stored stream's reorg rotates nothing. Rotating
+	 * there would have every reader of the canonical fold throw its cache away
+	 * because a second generation caught up.
 	 */
-	protected publishStateMoved(entry: HeldEntry<ABI, ProcessResultType>, applied: AppliedBlock): void {
+	protected publishFoldReport(entry: HeldEntry<ABI, ProcessResultType>, report: FoldReport): void {
 		if (entry !== this.current) {
 			return;
 		}
+		// Rendered as everything that REPORTS which generation answered already renders
+		// it (`generationDigestOf`): ONE opaque value, compared and never parsed, so
+		// what a generation is composed of stays changeable.
+		const generation = generationDigestOf(entry.record);
+		if (report.kind === 'retracted') {
+			// ROTATES as it publishes, inside the publisher: see `publishRetraction`.
+			this.stateMoved.publishRetraction({forkPoint: report.forkPoint, generation});
+			return;
+		}
 		this.stateMoved.publish({
-			block: applied.block,
-			entities: applied.entities,
-			// Rendered as everything that REPORTS which generation answered already renders
-			// it (`generationDigestOf`): ONE opaque value, compared and never parsed, so
-			// what a generation is composed of stays changeable.
-			generation: generationDigestOf(entry.record),
+			block: report.block,
+			entities: report.entities,
+			generation,
 		});
 	}
 
