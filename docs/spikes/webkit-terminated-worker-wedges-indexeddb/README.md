@@ -72,7 +72,7 @@ The page refuses to be used carelessly on a phone: it detects being backgrounded
 
 `bug-report/bugzilla.txt` is the report body, ready to paste.
 
-Nothing has been filed yet. `bug-report/bugzilla.txt` carries the report body and the form fields, both checked against the live Bugzilla rather than guessed -- the component is **Website Storage**, since WebKit has no `IndexedDB` component.
+**Filed 2026-09-13 as [WebKit bug 324094](https://bugs.webkit.org/show_bug.cgi?id=324094)** (NEW, Website Storage, Major), with `bug-report/index.html` attached as attachment 481372, and a comment on [251203](https://bugs.webkit.org/show_bug.cgi?id=251203) pointing at it. `bug-report/bugzilla.txt` keeps the body as submitted.
 
 **It is not a duplicate, and four bugs have to be cited so that it does not look like one.** Searched via Bugzilla's REST API on 2026-09-12 (298 bugs in Website Storage, plus a full-text sweep for `Worker.terminate` across every component):
 

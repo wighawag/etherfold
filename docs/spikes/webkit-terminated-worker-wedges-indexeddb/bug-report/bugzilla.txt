@@ -1,46 +1,30 @@
-HOW TO FILE THIS
-================
+FILED 2026-09-13 AS https://bugs.webkit.org/show_bug.cgi?id=324094
+================================================================
 
-File at https://bugs.webkit.org/enter_bug.cgi?product=WebKit
-(WebKit's tracker is Bugzilla, not GitHub. The WebKit/WebKit ReadMe says so.
- Safari-specific reports go to Apple's Feedback Assistant instead, and
- webkit.org is explicit that "Safari is not WebKit" -- this one is an engine
- bug reproducing on two ports, so Bugzilla is the right place.)
+  Status:    NEW
+  Product:   WebKit / Website Storage
+  Version:   Safari 18 | Platform: All / All | Severity: Major
+  Reproduction attached as attachment 481372 (bug-report/index.html).
 
-Form fields, all checked against the live Bugzilla rather than guessed:
+A comment pointing at it was added to bug 251203, which has described this
+symptom in web workers since 2023 with no trigger ever identified.
 
-  Product:    WebKit
-  Component:  Website Storage        <- NOT "IndexedDB"; there is no such
-                                        component. Website Storage is
-                                        "Bugs related to storage APIs,
-                                        including IndexedDB and localStorage".
-  Version:    Safari 18              <- the oldest affected thing we actually
-                                        tested (iOS 18.3.2). The valid values
-                                        are: Other, Safari 15/16/17/18/26,
-                                        Safari Technology Preview,
-                                        WebKit Local Build, WebKit Nightly Build.
-  Platform:   All          OS: All   <- reproduced on iOS and on Linux/WebKitGTK
-  Severity:   Normal is fine; this is data loss, so Major is defensible.
+What follows is the body as submitted, kept so that the claim is readable
+without a network round trip, and so that a later revision of the evidence can
+be diffed against what Apple was actually told.
 
-There is no need for a separate Apple Feedback Assistant report. This is an
-ENGINE bug, not a Safari-the-app bug, and it reproduces on a non-Apple port as
-well as on iOS, which is the evidence for that. Filing here already reaches
-Apple: bugs 288682, 251203 and 315804 each carry an <rdar://...> posted by
-webkit-bug-importer@group.apple.com and the `InRadar` keyword, so the mirror
-into Apple's internal tracker is automatic. A Feedback Assistant report would be
-the same bug in a channel nobody can search, dupe against or follow.
+The form fields above were checked against the live Bugzilla rather than
+guessed. Two things worth remembering if this is ever done again:
 
-ATTACH index.html to the bug (Bugzilla takes attachments). Do not only link it:
-a report whose reproduction is a URL ages badly.
-
-BEFORE SUBMITTING, check nothing new has landed: the four related bugs below
-were read on 2026-09-12, and one of them was filed that same day.
-
-AFTER SUBMITTING, add a short comment on bug 251203 pointing at the new bug
-number: that report has been open since 2023 describing this symptom in web
-workers with no identified trigger, and this may be the reproduction it needs.
-
-Everything below the line is the report body.
+  - The component is "Website Storage". There is NO "IndexedDB" component,
+    and an earlier draft of this file asserted one.
+  - There is no need for a separate Apple Feedback Assistant report. This is
+    an ENGINE bug, not a Safari-the-app bug, and it reproduces on a non-Apple
+    port as well as on iOS, which is the evidence for that. Filing on Bugzilla
+    already reaches Apple: bugs 288682, 251203 and 315804 each carry an
+    <rdar://...> posted by webkit-bug-importer@group.apple.com and the
+    `InRadar` keyword, so the mirror into Apple's internal tracker is
+    automatic.
 
 --------------------------------------------------------------------------------
 
