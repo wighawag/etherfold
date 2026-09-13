@@ -22,6 +22,14 @@ Form fields, all checked against the live Bugzilla rather than guessed:
   Platform:   All          OS: All   <- reproduced on iOS and on Linux/WebKitGTK
   Severity:   Normal is fine; this is data loss, so Major is defensible.
 
+There is no need for a separate Apple Feedback Assistant report. This is an
+ENGINE bug, not a Safari-the-app bug, and it reproduces on a non-Apple port as
+well as on iOS, which is the evidence for that. Filing here already reaches
+Apple: bugs 288682, 251203 and 315804 each carry an <rdar://...> posted by
+webkit-bug-importer@group.apple.com and the `InRadar` keyword, so the mirror
+into Apple's internal tracker is automatic. A Feedback Assistant report would be
+the same bug in a channel nobody can search, dupe against or follow.
+
 ATTACH index.html to the bug (Bugzilla takes attachments). Do not only link it:
 a report whose reproduction is a URL ages badly.
 

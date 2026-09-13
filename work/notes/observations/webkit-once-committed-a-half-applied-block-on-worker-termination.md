@@ -18,8 +18,10 @@ If a half-applied block can commit, the guarantee that fails is not "the fold is
 
 Nobody has checked whether this project can still produce a half-applied block on an affected engine. Three things would settle it:
 
-1. **Which shipped versions carry the fix.** "Committed to main in March 2025" is not a Safari version; the mapping needs looking up, and it decides whether this is a live risk for real users or a historical note.
+1. **Which shipped versions carry the fix.** "Committed to main in March 2025" is not a Safari version, and **Bugzilla does not record one**: 288682's `target_milestone` is `---`. So the mapping has to come from somewhere else, and it decides whether this is a live risk or a historical note. The empirical answer available today is not reassuring: the phone used for the wedge measurements is on iOS 18.3.2 in September 2026, about eighteen months behind, so "users are on a fixed version" is an assumption this project's own test hardware already falsifies. 288682 carries an attached testcase (attachment 474365) which would settle it for a given device directly.
 2. **Whether our shape triggers it at all.** The bug needs the transaction to look finished during termination. `applyBlock` awaits `committed(tx)` at the end and issues its writes synchronously in the same turn where it can, so it may or may not present the window the report describes.
 3. **A test that would see it.** The existing case asserts the resumed end state. Catching a half-applied block needs an assertion at the moment of the kill: that the block record, the cursor and the rows the block wrote either all exist or none do. That is a stronger claim than anything currently asserted, and it is worth having on every engine rather than only as a WebKit guard, because it is the seam's own promise.
+
+**A landed fix nearby is not evidence the area is correct**, and this investigation has already shown that twice over: 315804 fixed a transaction that never settles in June 2026, and the wedge being filed still reproduces on a build newer than that fix.
 
 Recording this rather than acting on it, because the wedge work is what is in flight and this is a separate question with its own evidence to gather.
