@@ -796,6 +796,22 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		return this.stateMoved.subscribe(handler);
 	}
 
+	/**
+	 * THE COHERENCE TOKEN IN FORCE RIGHT NOW, read without waiting for a notification.
+	 *
+	 * The same read as `ReceivingIndexer.coherenceNow`, present here so the two
+	 * containers keep differing in exactly ONE place (which fold is canonical) rather
+	 * than in two. A transport that must tell a client AT CONNECT whether what it
+	 * holds may be stale asks this; the browser transports do not, because a reader
+	 * that attaches part way through READS the store it shares (ADR-0083).
+	 *
+	 * OPAQUE and COMPARED, never parsed, exactly as on a notification. It rotates
+	 * nothing and publishes nothing.
+	 */
+	coherenceNow(): string {
+		return this.stateMoved.token;
+	}
+
 	/** Every generation this container holds, in the order it built them. */
 	get generations(): readonly HeldGeneration<ABI, ProcessResultType>[] {
 		return this.held.map((entry) => this.heldOf(entry));

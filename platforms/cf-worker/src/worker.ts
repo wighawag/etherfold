@@ -21,6 +21,16 @@ import type {CloudflareEnv} from './env.js';
  * builds its store with `createD1Store` (`d1.ts`), which is where this host
  * states D1's per-request limits: the store is given the bounds THIS plan
  * allows, instead of a shared package carrying one vendor's numbers.
+ *
+ * And it deliberately does NOT declare `holdsStreamsAcrossRequests`, which is
+ * the one capability this runtime cannot have: an I/O object created in one
+ * request handler is unreachable from another, so an ingest POST could never
+ * write into a stream a different request opened, and `GET /{indexer}/state-moved`
+ * therefore REFUSES here with a `501` naming the reason (ADR-0083). It is an
+ * absence rather than a `false` for the same reason every other capability on
+ * this host is absent: saying nothing is the safe answer, and the field exists so
+ * that a host which CAN hold one says so. A deployment that wants the signal on
+ * Workers takes on a Durable Object, which is infrastructure this one has not.
  */
 export const app = createServer<CloudflareEnv>({
 	getDB: (c) => createD1DB(c.env),

@@ -8,6 +8,19 @@ import {getStatusAPI, recordError} from './api/status.js';
 import {getIngestAPI} from './api/ingest.js';
 import {getFeedAPI} from './api/feed.js';
 /**
+ * THE STATE-MOVED SIGNAL over the network (ADR-0083): `GET /{indexer}/state-moved`,
+ * server-sent events, carrying the SAME value a browser tab is handed over its
+ * port so an app writes one handler for both.
+ *
+ * A TRANSPORT and never a producer: this package applies no blocks, so it
+ * subscribes to what the host's container publishes (`IndexerRegistryEntry.onStateMoved`)
+ * and a later subscription adapter attaches at that same seam with no change to
+ * the publication. It REFUSES where it cannot be served -- a runtime the host has
+ * not declared can hold a stream across requests, or a name whose host publishes
+ * nothing -- rather than accepting a connection it will never write to.
+ */
+import {getStateMovedAPI} from './api/stateMoved.js';
+/**
  * The OPERATOR's surface on one named indexer: which generation answers reads,
  * and moving that pointer -- forwards to promote, BACK to revert (ADR-0057).
  * Guarded by `ADMIN_TOKEN`, which fails closed and is deliberately not the
@@ -153,6 +166,17 @@ export type {
  * inside this package, where the two views share it.
  */
 export type {CanonicalEntry, FeedEntry} from './feed/entries.js';
+/**
+ * THE TWO FRAME NAMES the state-moved stream writes, and what rides beside the
+ * signal on it.
+ *
+ * Exported because an app reading `GET /{indexer}/state-moved` matches on the
+ * names and renders the progress: a string copied into a client would be a
+ * contract nothing checks. `StateMoved` itself is `@etherfold/core`'s and is
+ * carried unchanged, which is the point.
+ */
+export {STATE_MOVED_EVENT, STATE_MOVED_PROGRESS_EVENT} from './api/stateMoved.js';
+export type {StateMovedProgress} from './api/stateMoved.js';
 
 const corsSetup = cors({
 	origin: '*',
@@ -179,6 +203,7 @@ export function createServer<CustomEnv extends Env>(options: ServerOptions<Custo
 		.route('/', getStatusAPI(options))
 		.route('/', getIngestAPI(options))
 		.route('/', getFeedAPI(options))
+		.route('/', getStateMovedAPI(options))
 		.route('/', getAdminAPI(options))
 		.onError((err, c) => {
 			const env = c.get('config')?.env || {};

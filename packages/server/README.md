@@ -41,6 +41,8 @@ It is optional because an indexer-server is useful before it ingests anything: `
 
 `getCursorReport` is optional for the same kind of reason: only the process that OWNS the store can read a cursor, and this package has no store dependency. A host with none (the Cloudflare Worker host is one) injects no reporter and `/status` carries no `cursor` field, rather than an invented one.
 
+`holdsStreamsAcrossRequests` is not a reporter but a CAPABILITY the host declares about its runtime, and it gates exactly one surface: `GET /{indexer}/state-moved`, below. Absent means NO, so a host that says nothing gets a refusal rather than a stream nothing can write to. See that section for why it is declared rather than detected.
+
 `getFetcherLimits` is optional on the same ground, one half of the pipeline further out: it reports what this deployment's LOG-FETCHER has learned about the node it reads, and almost no host has one. The receiving half of ADR-0003 makes no chain call at all, so `etherfold index`, `etherfold serve` and the Workers host inject none and `/status` carries no `fetcher` field; the COMBINED shape (`etherfold run`) holds both halves and is the one that reports it. What it carries is `{reported: true, learnedRange: {ceiling?, safeSpan?, nextSize}, suspectResultCount: {count, source}}`, or `{reported: false, reason}` when a reporter cannot answer. Unlike the cursor it is TYPED here rather than opaque: a learned range is `@etherfold/core`'s, it is three numbers, and it hides behind no storage seam -- so a dashboard reading `fetcher.learnedRange.ceiling` is reading a documented field. It is reported so an operator can hand it BACK as configuration on the next start, which is how a restart resumes where discovery left off while the fetcher itself persists nothing (ADR-0074).
 
 **What a reporter owes the server: a SMALL, JSON-serialisable summary, and never the store's raw serialized cursor.** That value is a serialized `LastSync` carrying an unconfirmed window of DECODED EVENTS, so handing it over whole would put an unbounded blob on the one page an operator refreshes while something is wrong. The constraint lives on the seam because `/status` reports what the reporter returns VERBATIM: the server does not parse it (the cursor is opaque behind the storage seam, ADR-0027, and only the processor knows what one means), so it cannot bound it afterwards either.
@@ -55,6 +57,7 @@ It is optional because an indexer-server is useful before it ingests anything: `
 | `POST /{indexer}/ingest/expected-from-block` | where the next batch must start, as one `{context, expectedFromBlock}` per LIVE wire context that named indexer holds |
 | `GET /{indexer}/feed` | the RETRACTION-AWARE view over the stored emission stream: `seq`-ordered, `removed` entries included, resumed from an opaque `cursor` the caller holds, `limit` entries at a time |
 | `GET /{indexer}/canonical` | the CANONICAL view over the same stream: live entries only, ordered by `(blockNumber, logIndex)`, at or below the caller's REQUIRED `gate`, resumed from an opaque `cursor` whose block hash the server validates |
+| `GET /{indexer}/state-moved` | the STATE-MOVED SIGNAL as server-sent events: one `state-moved` frame per block the canonical fold applies (and per reorg it takes back), plus a `progress` frame on connect and whenever the fold moves. Best-effort, nothing held per client, `501` where the host cannot serve it |
 | `GET /{indexer}/admin/canonical-generation` | which generation answers reads, and every generation this name holds -- each with the opaque `digest` a feed response advertises it by. `ADMIN_TOKEN` |
 | `POST /{indexer}/admin/canonical-generation` | MOVE the canonical pointer to `{stream, processor}`: forwards it promotes, BACK it REVERTS, with no re-index and no re-fetch. `ADMIN_TOKEN` |
 
@@ -202,6 +205,39 @@ const report = await compactEmissionPairs(db, {
 **One call does BOUNDED work** (ADR-0022): at most `maxPairs * 2` candidate rows read and `maxPairs` pairs deleted, every row named by its `seq`, in statements chunked to 100 bound parameters inside one batch. `complete` says whether the scan reached the end, so an amortised policy (a small budget, often) and a whole sweep (loop while `complete` is false) are both expressible without this package inventing a cadence.
 
 **A pair goes together or not at all**, and `seq` is never renumbered: the holes left behind are legal by contract and both cursors already tolerate them. An unmatched row is left alone, and a LIVE row is never a candidate however old.
+
+## The state-moved stream
+
+`GET /{indexer}/state-moved` tells a remote client that the state moved, over server-sent events, so an app reading from a hosted indexer runs the SAME notification handler as an app indexing in its own browser (ADR-0083). What crosses is `@etherfold/core`'s `StateMoved` serialised as JSON and otherwise untouched, so a reader's whole rule is the same two lines everywhere: **token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything.**
+
+```
+event: progress
+data: {"lastToBlock":105,"latestBlock":205,"blocksBehindTip":100,"coherence":"…","generation":"…"}
+
+event: state-moved
+data: {"kind":"applied","block":106,"coherence":"…","entities":["token"],"generation":"…"}
+```
+
+**This package APPLIES NO BLOCKS, so this is a TRANSPORT and never a producer.** The signal is published by the generation container that folds (`ReceivingIndexer.onStateMoved`, `@etherfold/core`), and a route holds an ENTRY rather than a container -- so this route subscribes at `IndexerRegistryEntry.onStateMoved` and adds nothing of its own. A second transport (a `graphql-ws` adapter, a hibernating socket) attaches at that same seam with NO change to the code that publishes. No GraphQL runtime, schema or subscription is here: the signal is the primitive and a subscription is a derivable adapter over it.
+
+**TWO frame kinds, and their difference is the one a tab's port already makes** (ADR-0082). `progress` is a STATE -- where the fold has got to -- so it is sent ON CONNECT and again whenever it moves. `state-moved` is a NOTIFICATION, a thing that HAPPENED, so nothing is ever replayed to a client that missed one: there is nothing held to replay, and replaying would have a reader invalidate for a block it may already have read.
+
+**Progress rides this stream because a reader cannot compute it.** The sync cursor is opaque behind the storage seam (ADR-0027), so "syncing, 100 blocks behind" has to be published by the side that knows, and a second endpoint would be two mechanisms with two failure modes for one question. The figures are `lastToBlock` / `latestBlock` / `blocksBehindTip` -- the vocabulary a tab already binds to a progress bar -- read from the stream's own **coverage claim**, which is written on every batch including one that carried no logs. They are ABSENT rather than zeroed before the first batch, because "nothing folded yet" and "level at block 0" are different claims.
+
+**A connecting client is told the position AND the coherence token at once**, which is how a remote reader converges: it has no store to re-read and no state query surface yet, so it compares the token it holds against the one in force and knows immediately whether it is stale. That is what `IndexerRegistryEntry.coherenceNow` answers, paired with `onStateMoved`.
+
+**Nothing is held per client.** One handler reference per open stream, no client identity, nothing buffered, nothing retried, and a disconnect detaches. A client that missed a notification is repaired by the next one plus the token; one that was cut off is repaired by the `progress` frame it is handed on reconnect. There is deliberately **no heartbeat**: an interval invented here would be the polling interval the signal exists to replace, and no number fits a Node process, a reverse proxy and a CDN at once -- a deployment that needs idle connections held open configures its own edge. (`X-Accel-Buffering: no` is sent for the neighbouring problem: it asks a buffering proxy not to WITHHOLD frames that were written.)
+
+**It REFUSES where it cannot be served, rather than accepting a connection it will never write to.** Two `501`s beside the shared name refusals (`501` no registry, `404` a name this host was not built with) and the `503` an indexer with no canonical generation answers:
+
+- `state-moved-unsupported-runtime` -- the host has not declared `holdsStreamsAcrossRequests`. A block is folded inside an INGEST request while the stream was opened by another, so the runtime has to let one request write into a stream a different one opened. On **Cloudflare Workers it cannot**: an I/O object created in one request handler is unreachable from another, and the remedy is a Durable Object, which is infrastructure a deployment takes on deliberately. `platforms/nodejs` declares it; the Worker host deliberately does not.
+- `state-moved-not-published` -- the name resolves to a host holding a bare receiver and no container, which publishes nothing. Absent is a capability statement, exactly as it is for `generations` and `promote`.
+
+**The condition is a capability the HOST declares and never a runtime this package detects**, because it names no runtime at all (asserted by test) and because the failure being prevented is the invisible one: a subscriber registry COMPILES, passes on Node and silently never fires on a Worker, which a reader cannot tell apart from a quiet chain.
+
+**It is a PUBLIC read, like the feed.** `INGEST_TOKEN` guards the routes that can move the cursor; this one moves nothing and reads no rows, and what crosses is a block number, entity NAMES and two opaque digests. A deployment that needs it private puts it behind its own edge.
+
+Note what this is NOT: the **feed**. A feed consumer owns a cursor and reads the sequenced emission stream on its own cadence; a reader here holds no cursor and is told, best-effort, that the state moved.
 
 ## Typed client
 

@@ -658,6 +658,31 @@ export class ReceivingIndexer<
 		return this.stateMoved.subscribe(handler);
 	}
 
+	/**
+	 * THE COHERENCE TOKEN IN FORCE RIGHT NOW: the one the next notification will
+	 * carry, read without waiting for one.
+	 *
+	 * OPAQUE exactly as it is on a notification -- COMPARED, never parsed -- and it is
+	 * a READ rather than a second way of publishing: nothing rotates here, nothing is
+	 * delivered, and a reader that asks twice between two blocks gets the same value.
+	 *
+	 * It exists for a transport that must tell a client, AT CONNECT, whether what that
+	 * client already holds may be stale. The BROWSER transports need no such thing,
+	 * because a tab attaching part way through simply READS the store it shares; a
+	 * REMOTE reader has neither that store nor a state query surface yet (the query
+	 * layer is deferred to `the-same-query-runs-against-a-worker-and-a-server`), so
+	 * ADR-0083 makes its convergence "be told the current position and token on
+	 * connect" instead. That is what this answers, and the server's state-moved
+	 * stream is its one caller today.
+	 *
+	 * It is deliberately NOT a notification for a late joiner, which would have a
+	 * reader invalidate for a block it may already have read: a notification is a
+	 * thing that HAPPENED, and this is a fact about the producer's history.
+	 */
+	coherenceNow(): string {
+		return this.stateMoved.token;
+	}
+
 	/** WHICH STREAM the opening fold folds, as `streamDigestOf` renders it. */
 	get streamDigest(): string {
 		return this.opening.streamDigest;
