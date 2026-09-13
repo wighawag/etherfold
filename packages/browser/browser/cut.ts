@@ -85,7 +85,7 @@
 import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-browser-harness/contract';
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
 import {EntityStateView} from '@etherfold/processor-entities';
-import {MemoryStateStore, createReadSurface, openForReading} from '@etherfold/state-store';
+import {MemoryStateStore, createReadSurface, openForReading, type StateStoreBackend} from '@etherfold/state-store';
 import {PatchStateStore} from '@etherfold/state-store-patch';
 import {
 	connectToIndexerHost,
@@ -956,6 +956,140 @@ async function restartsAndResumesCase(params: Params, timings: Timing[]): Promis
 }
 
 /**
+ * A BLOCK APPLIES WHOLE OR NOT AT ALL, even when the worker dies inside it.
+ *
+ * The seam's own promise -- one block is one transaction, with the sync cursor
+ * written inside it (ADR-0027) -- and nothing asserted it on any engine until
+ * now. What made it worth asserting is WebKit bug 288682: a terminated worker's
+ * half-finished IndexedDB transaction was COMMITTED rather than aborted, which
+ * is precisely this shape (every request awaited through a promise) and
+ * precisely this trigger. It is fixed upstream. A test is how we stop taking
+ * that on trust for every engine and version an application actually meets,
+ * rather than for the one on this laptop today.
+ *
+ * Each iteration is its own DATABASE, killed once, then read back cold. Three
+ * facts are recovered per block and they must agree: whether the block record
+ * exists, whether the cursor reached it, and whether the rows that belong to
+ * that block and no other are there. Any disagreement is a torn commit.
+ *
+ * ## The other bug gets in the way of measuring this one
+ *
+ * Killing a worker mid-write is also what can WEDGE the database on WebKit, and
+ * at a few percent per kill that lands often across a run. A wedged database
+ * answers nothing, so the verification is BOUNDED and a timeout is recorded as
+ * `wedged` rather than counted as a torn commit -- the two failures are
+ * opposites and must never be confused. `restartsAndResumes.spec.ts` and the
+ * finding both describe it.
+ */
+async function blockAtomicityCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const iterations = Number(params.iterations ?? 10);
+	const rowsPerBlock = Number(params.rowsPerBlock ?? 24);
+	const patienceMs = Number(params.patienceMs ?? 5000);
+	const firstBlock = 100;
+
+	const torn: Record<string, unknown>[] = [];
+	const outcomes: string[] = [];
+	/** Iterations where the worker died with a block announced and not landed. */
+	let killedInside = 0;
+
+	for (let iteration = 0; iteration < iterations; iteration++) {
+		const database = `${databaseName(params, 'atomicity')}-${iteration}`;
+		const url = new URL(`./worker.js?db=${encodeURIComponent(database)}&rows=${rowsPerBlock}`, import.meta.url);
+		const worker = new Worker(url, {type: 'module'});
+		let announced = firstBlock - 1;
+		let landed = firstBlock - 1;
+
+		try {
+			const killed = await new Promise<boolean>((resolve) => {
+				const patience = setTimeout(() => resolve(false), patienceMs);
+				worker.addEventListener('message', (event) => {
+					const said = event.data as {fixture?: string; ready?: boolean; wrote?: string; block?: number};
+					if (said?.fixture !== 'atomicity') return;
+					if (said.wrote === 'starting' && said.block !== undefined) announced = said.block;
+					if (said.wrote === 'landed' && said.block !== undefined) landed = said.block;
+					// A few blocks in, so there is committed history behind the torn one,
+					// then a RANDOM delay so the kill lands at a different point of the
+					// transaction each time rather than at one reproducible instant.
+					if (said.wrote === 'starting' && (said.block ?? 0) >= firstBlock + 2) {
+						setTimeout(() => {
+							clearTimeout(patience);
+							worker.terminate();
+							resolve(true);
+						}, Math.random() * 12);
+					}
+				});
+			});
+			if (!killed) {
+				outcomes.push('never-started');
+				worker.terminate();
+				continue;
+			}
+
+			// READ IT BACK COLD, on a connection that never saw the worker.
+			const checked = await Promise.race([
+				readBackBlocks(database, firstBlock, announced, rowsPerBlock),
+				new Promise<'wedged'>((resolve) => setTimeout(() => resolve('wedged'), patienceMs)),
+			]);
+			if (checked === 'wedged') {
+				outcomes.push('wedged');
+				continue;
+			}
+
+			const bad = checked.filter((block) => !block.agrees);
+			if (bad.length > 0) torn.push({database, landed, announced, blocks: bad});
+			// DID THE KILL LAND INSIDE A TRANSACTION? A kill that always fell between
+			// two of them would make every iteration pass while asserting nothing, so
+			// the instrument reports its own aim and the spec refuses a run that missed.
+			if (announced > landed) killedInside++;
+			outcomes.push(bad.length > 0 ? 'TORN' : 'atomic');
+		} finally {
+			worker.terminate();
+		}
+	}
+
+	timings.push({label: 'atomicity', ms: 0});
+	return {
+		iterations,
+		outcomes,
+		killedInside,
+		atomic: outcomes.filter((one) => one === 'atomic').length,
+		wedged: outcomes.filter((one) => one === 'wedged').length,
+		torn,
+	};
+}
+
+/** The three facts about each block, from a cold connection. */
+async function readBackBlocks(
+	database: string,
+	firstBlock: number,
+	lastAnnounced: number,
+	rowsPerBlock: number,
+): Promise<{number: number; recorded: boolean; cursorReached: boolean; rows: number; agrees: boolean}[]> {
+	const store = (await createBrowserStateStore(processor.entities, {databaseName: database})) as StateStoreBackend & {
+		getBlock(n: number): Promise<unknown>;
+	};
+	const cursor = await store.readCursor('lastSync');
+	const reached = cursor ? ((JSON.parse(cursor) as {lastToBlock?: number}).lastToBlock ?? -1) : -1;
+
+	const checked = [];
+	for (let number = firstBlock; number <= lastAnnounced; number++) {
+		const recorded = (await store.getBlock(number)) !== undefined;
+		let rows = 0;
+		for (let index = 0; index < rowsPerBlock; index++) {
+			if (await store.getCurrent('token', {id: `b${number}-${index}`})) rows++;
+		}
+		const cursorReached = reached >= number;
+		// ALL THREE OR NONE. A block that is recorded must have every one of its rows
+		// and a cursor that reached it; a block that is not recorded must have none of
+		// its rows and a cursor that stopped below it.
+		const whole = recorded && cursorReached && rows === rowsPerBlock;
+		const absent = !recorded && !cursorReached && rows === 0;
+		checked.push({number, recorded, cursorReached, rows, agrees: whole || absent});
+	}
+	return checked;
+}
+
+/**
  * ONE BEHAVIOUR SUITE, THREE HOSTING SHAPES, IN ONE PAGE.
  *
  * The claim ADR-0082 opens with, checked the only way it can be checked without
@@ -1462,6 +1596,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'restarts-and-resumes':
 						results = await restartsAndResumesCase(ctx.params, timings);
+						break;
+					case 'block-atomicity':
+						results = await blockAtomicityCase(ctx.params, timings);
 						break;
 					case 'shared-attach':
 						results = await sharedAttachCase(ctx.params, timings);

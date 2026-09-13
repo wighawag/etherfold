@@ -14,13 +14,29 @@ If a half-applied block can commit, the guarantee that fails is not "the fold is
 
 **It is fixed upstream**, so this is not a bug to file; it is a statement about which engines a browser deployment can trust. The fix landed in WebKit main on 2025-03-27, which means iOS and Safari releases built before roughly that date carry it. The phone used for the wedge measurements, iOS 18.3.2 (Safari 18.3.1), predates it.
 
+## PARTLY ANSWERED, 2026-09-12
+
+**There is now a test.** `packages/browser/browser/blockAtomicity.spec.ts` kills a worker inside `applyBlock` and reads the database back cold, checking that three facts agree per block: the block record, the cursor, and the rows that belong to that block and no other. It runs on all three engines, because the guarantee is the seam's rather than WebKit's.
+
+**600 kills across three engines, zero torn commits.** The instrument reports its own aim (7 to 9 of every 10 kills land with a block announced and not landed) so a run that fell between transactions is refused rather than believed, and it was falsified before being trusted: injecting one artificial inconsistency, a block record with no rows, makes it fail.
+
+**The engines on this machine are fixed.** Fastmail's own testcase from 288682 (attachment 474365, fetched from Bugzilla rather than reimplemented) passes 5 out of 5 on Chromium 141, Firefox 145 and WebKit 26.5.
+
+What that does NOT establish is the version question, which is the whole of the risk: this machine's WebKit is newer than the fix. The device that matters is one older than March 2025, and the testcase runs on a phone directly:
+
+```sh
+curl -s https://bugs.webkit.org/rest/bug/attachment/474365 \
+  | python3 -c "import json,sys,base64,pathlib; pathlib.Path('t.zip').write_bytes(base64.b64decode(json.load(sys.stdin)['attachments']['474365']['data']))"
+unzip t.zip -d testcase && cd testcase && python3 -m http.server 8000 --bind 0.0.0.0
+```
+
 ## What is NOT known, and what would settle it
 
 Nobody has checked whether this project can still produce a half-applied block on an affected engine. Three things would settle it:
 
 1. **Which shipped versions carry the fix.** "Committed to main in March 2025" is not a Safari version, and **Bugzilla does not record one**: 288682's `target_milestone` is `---`. So the mapping has to come from somewhere else, and it decides whether this is a live risk or a historical note. The empirical answer available today is not reassuring: the phone used for the wedge measurements is on iOS 18.3.2 in September 2026, about eighteen months behind, so "users are on a fixed version" is an assumption this project's own test hardware already falsifies. 288682 carries an attached testcase (attachment 474365) which would settle it for a given device directly.
 2. **Whether our shape triggers it at all.** The bug needs the transaction to look finished during termination. `applyBlock` awaits `committed(tx)` at the end and issues its writes synchronously in the same turn where it can, so it may or may not present the window the report describes.
-3. **A test that would see it.** The existing case asserts the resumed end state. Catching a half-applied block needs an assertion at the moment of the kill: that the block record, the cursor and the rows the block wrote either all exist or none do. That is a stronger claim than anything currently asserted, and it is worth having on every engine rather than only as a WebKit guard, because it is the seam's own promise.
+3. ~~**A test that would see it.**~~ DONE, and described above.
 
 **A landed fix nearby is not evidence the area is correct**, and this investigation has already shown that twice over: 315804 fixed a transaction that never settles in June 2026, and the wedge being filed still reproduces on a build newer than that fix.
 
