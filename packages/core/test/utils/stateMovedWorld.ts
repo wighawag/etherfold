@@ -28,7 +28,9 @@ import {BRANCH_A, fakeChain, FINALITY, makeLog, memoryStream, SOURCE} from './st
  */
 
 /** The distinct blocks a delivered stream would APPLY, in order: removed entries retract. */
-export function appliedBlocksOf(eventStream: readonly LogEvent<Abi>[]): {number: number; hash: string}[] {
+export function appliedBlocksOf<ABI extends Abi>(
+	eventStream: readonly LogEvent<ABI>[],
+): {number: number; hash: string}[] {
 	const blocks: {number: number; hash: string}[] = [];
 	for (const event of eventStream) {
 		if (event.removed) continue;
@@ -47,7 +49,7 @@ export function appliedBlocksOf(eventStream: readonly LogEvent<Abi>[]): {number:
  * anything is applied -- the same rule `applyEventStream` applies at the seam,
  * restated here because core cannot depend on the package that owns it.
  */
-export function forkPointOf(eventStream: readonly LogEvent<Abi>[]): number | undefined {
+export function forkPointOf<ABI extends Abi>(eventStream: readonly LogEvent<ABI>[]): number | undefined {
 	const retracted = eventStream.filter((event) => event.removed).map((event) => event.blockNumber);
 	return retracted.length === 0 ? undefined : Math.min(...retracted) - 1;
 }
