@@ -69,6 +69,40 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 */
 	maxIngestBytes?: number;
 
+	/**
+	 * Whether THIS RUNTIME lets a response stream opened by one request be written
+	 * from ANOTHER one. Absent means NO, and that is what refuses the state-moved
+	 * stream rather than serving a connection nothing can ever write to.
+	 *
+	 * `GET /{indexer}/state-moved` is the one surface that needs it (ADR-0083): the
+	 * blocks a client is told about are folded inside an INGEST POST, so the fold and
+	 * the stream live in two different requests by construction. On a host that can
+	 * hold a process -- Node, Bun, Deno, a container -- that is ordinary. On Cloudflare
+	 * Workers it is FORBIDDEN: "I/O objects (such as streams, request/response bodies,
+	 * and others) created in the context of one request handler cannot be accessed
+	 * from a different request's handler"
+	 * (`work/notes/findings/a-worker-cannot-hold-a-timer-across-requests.md` quotes it
+	 * from the timer side). The remedy there is a Durable Object, which is
+	 * infrastructure a deployment takes on deliberately and a question that belongs to
+	 * whoever adds the subscription adapter.
+	 *
+	 * ## Why the HOST declares it and this package never detects it
+	 *
+	 * Because this package names no runtime, by test (`test/platformAgnostic.test.ts`),
+	 * and that property is exactly what makes the failure invisible: a subscriber
+	 * registry COMPILES, passes on Node, and silently never fires on a Worker, which a
+	 * reader cannot tell apart from a quiet chain. A sniff would also be wrong in both
+	 * directions -- it cannot see a Worker that HAS a Durable Object, and it cannot see
+	 * a host that terminates streams at a proxy. Only the deployment knows, so the
+	 * deployment says: `platforms/nodejs` declares it, `platforms/cf-worker`
+	 * deliberately does not.
+	 *
+	 * ABSENT is the safe answer and therefore the default, on the same rule the
+	 * credential guard follows: a host that says nothing gets a `501` naming this
+	 * field, never a stream that looks alive.
+	 */
+	holdsStreamsAcrossRequests?: boolean;
+
 	getEnv: (c: Context<{Bindings: Env}>) => Env;
 	/**
 	 * The NAME-KEYED REGISTRY of the named indexers this deployment hosts.

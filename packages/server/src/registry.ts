@@ -175,6 +175,22 @@ export type IndexerRegistryEntry = {
 	 * a notification is repaired by the next one plus the coherence token.
 	 */
 	onStateMoved?(handler: StateMovedHandler): StateMovedDetach;
+	/**
+	 * THE COHERENCE TOKEN THAT FOLD IS PUBLISHING UNDER RIGHT NOW
+	 * (`ReceivingIndexer.coherenceNow`), read without waiting for a notification.
+	 *
+	 * PAIRED with `onStateMoved` rather than optional on its own account: both come
+	 * from the one publisher a CONTAINER holds, so an entry has both (`indexerEntryOn`)
+	 * or neither (`singleContextEntry`), and a transport that finds one without the
+	 * other refuses rather than serving half the answer.
+	 *
+	 * It is what lets a stream tell a client AT CONNECT whether what that client
+	 * already holds may be stale, which is how a REMOTE reader converges: it has no
+	 * store to re-read and no state query surface yet, so ADR-0083 gives it the
+	 * current position and token on connect instead of a re-query. Compared and never
+	 * parsed, exactly as on a notification.
+	 */
+	coherenceNow?(): string;
 };
 
 /**
@@ -257,6 +273,7 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 						(holds.onStateMoved as (handler: StateMovedHandler) => StateMovedDetach)(handler),
 				}
 			: {}),
+		...(holds.coherenceNow ? {coherenceNow: () => (holds.coherenceNow as () => string)()} : {}),
 	};
 }
 

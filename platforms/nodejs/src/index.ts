@@ -162,6 +162,15 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 	const app = createServer<NodeEnv>({
 		getDB: () => db,
 		getEnv: () => env,
+		// WHAT THIS RUNTIME CAN DO, declared where a runtime is allowed to be named at
+		// all: Node holds a PROCESS, so a response stream opened by one request is still
+		// writable while another request folds a block, which is what the state-moved
+		// signal needs (ADR-0083). It is stated here rather than detected in the server
+		// package, which names no runtime by test -- and `platforms/cf-worker`
+		// deliberately does not state it, because a Worker invocation cannot touch an I/O
+		// object another one created and the endpoint must REFUSE there rather than
+		// appear to work.
+		holdsStreamsAcrossRequests: true,
 		getIndexer: options.getIndexer,
 		getCursorReport: options.getCursorReport,
 		getFetcherLimits: options.getFetcherLimits,

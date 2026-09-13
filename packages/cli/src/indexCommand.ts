@@ -308,6 +308,11 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// is why what it holds is the way to reach this rather than a producer of
 							// its own, and why a transport over it needs no change here to attach.
 							onStateMoved: (handler) => container.onStateMoved(handler),
+							// ...and the TOKEN that fold is publishing under right now, which is the same
+							// publisher's other answer and is forwarded with it rather than after it: a
+							// transport over the network tells a client AT CONNECT whether what it already
+							// holds is stale, because a remote reader has no store to re-read (ADR-0083).
+							coherenceNow: () => container.coherenceNow(),
 						}
 					: undefined,
 			// ...and this is what makes a split deployment observable: `index` owns the
