@@ -4,7 +4,6 @@ slug: the-cli-selects-its-promotion-policy
 spec: a-reconfigure-is-not-an-outage
 blockedBy: [an-endpoint-triggers-a-reconfigure-in-a-running-process]
 covers: [5]
-needsAnswers: true
 ---
 
 ## What to build
