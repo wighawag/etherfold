@@ -80,11 +80,16 @@ describe('a successor on a SHARED stream is a FOLLOWER, determined and never con
 		// two records tie globally -- and `byAge`, which is what a listing an operator
 		// reads is sorted by, compares globally. Pinned because the weaker form passes
 		// every other case in this suite.
+		//
+		// The third one is registered through the RESOLVE path a receiver uses rather than
+		// by adding a second successor: a second successor would make the first an
+		// ABANDONED SUCCESSOR and drop it, and what has to be observed here is how `create`
+		// stamps a record while the other two are PRESENT.
 		const w = world();
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
 		const incumbent = await w.open('zzz-incumbent', 1);
 		await incumbent.add(w.specFor('aaa-successor', 10));
-		await incumbent.add({...w.specFor('mmm-other-stream', 5), source: {...SOURCE, chainId: '999'}});
+		await incumbent.resolveGeneration({stream: 'another-stream-digest', processor: 'mmm-other-stream'});
 		clock.mockRestore();
 
 		const created = (await w.port.read()).generations.map((record) => record.createdAt);

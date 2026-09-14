@@ -41,6 +41,12 @@
  *   frozen records of what was asked, not navigation.
  * - `work/notes/observations/` -- an observation whose whole subject is a broken reference has to be
  *   able to quote it. This file's own subject is exactly that, so exempting it is not a convenience.
+ * - `work/questions/` -- a question sidecar carries the VERBATIM report that raised it, quoted from
+ *   the moment it was raised. Those reports routinely name the path an item was at THEN, and one of
+ *   them exists precisely to report that the launch snapshot and the item's real folder disagreed.
+ *   Rewording the quote to keep a link alive would falsify the record, which is the `.changeset/`
+ *   argument one surface further in; and a sidecar is not navigation, since its own item is named in
+ *   its `item=` header rather than by a path in its prose.
  * - `archive/` and any untracked build output (`docs/.vitepress/dist/`), which are not source.
  *
  * ## Why it reads the WORKING TREE and not the index
@@ -76,6 +82,7 @@ const EXEMPT = [
 	/^work\/tasks\/cancelled\//,
 	/^work\/specs\/dropped\//,
 	/^work\/notes\/observations\//,
+	/^work\/questions\//,
 	/^archive\//,
 	/^scripts\/check-work-refs\.mjs$/,
 ];
