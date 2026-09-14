@@ -2,7 +2,7 @@
 title: 'The CLI selects its promotion policy, instead of silently taking the default'
 slug: the-cli-selects-its-promotion-policy
 spec: a-reconfigure-is-not-an-outage
-blockedBy: []
+blockedBy: [an-endpoint-triggers-a-reconfigure-in-a-running-process]
 covers: [5]
 needsAnswers: true
 ---
@@ -14,6 +14,8 @@ Reach a capability that is already built, argued for, and currently unreachable 
 `@etherfold/core` has three promotion policies. `on-catch-up` moves the pointer when the successor reaches the cursor the canonical generation had, which is what an app shipping to users wants. `immediate` makes the successor canonical the moment it is created, which is what a developer iterating on a handler wants, "because stale-but-complete answers from the fold they just replaced are more confusing than incomplete answers from the new one". `manual` moves only when asked, so an operator can inspect first.
 
 No CLI command ever passes a promotion config. The container is opened without one, and there is no flag and no environment variable for it, so every CLI deployment silently takes `on-catch-up` and an operator who wants either of the others cannot ask.
+
+Be precise about what that costs TODAY, because the first draft of this task overstated it and a builder who checks will stop. The policy is not merely unreachable from the CLI, it is INERT on the CLI's shape: `applyPolicyTo` returns immediately while `opened` is false, `open()` adds the fold it was configured with BEFORE setting `opened`, and nothing in the CLI calls `container.add`. So all three values behave identically on every CLI deployment, and exposing the input before something can add a successor to a RUNNING container would ship the first accepted-and-ignored flag into the one module whose header forbids exactly that (`packages/cli/src/config.ts`, ADR-0048). That is why this task now waits on the reconfigure endpoint: the endpoint is what makes the policy observable, after which this task is the small one it always described, being one input, one resolver entry, one plumb and one refusal.
 
 This is story 5 of its spec finished rather than a new idea. That story already says the developer is the one who knows "whether my reconfigure made the old answers WRONG or merely INCOMPLETE", and the promotion policy is the lever that acts on that knowledge. The reporting half landed; the lever was built in core and never brought out to the CLI, so on the shape most people run the developer holds the knowledge and cannot act on it.
 
@@ -36,7 +38,7 @@ Out of scope, deliberately: whether the DEFAULT should differ when the successor
 
 ## Blocked by
 
-None. It can start immediately.
+`an-endpoint-triggers-a-reconfigure-in-a-running-process`. This is a REAL dependency and not a sequencing preference: until something adds a successor to a running container, every policy value produces identical behaviour, acceptance criterion 1 cannot be satisfied in any way an operator could observe, and the Prompt's test seam ("a deployment stood up under each policy asserting on when the pointer actually moves") cannot be written honestly.
 
 ## Prompt
 
