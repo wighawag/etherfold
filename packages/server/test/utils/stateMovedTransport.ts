@@ -31,6 +31,7 @@ import {
 	STREAM_CONFIG,
 	TOKEN,
 	transfer,
+	ZERO,
 	type TestABI,
 } from './feedHarness.js';
 import {openSignalStream, type SignalStream} from './signalStream.js';
@@ -101,6 +102,11 @@ function entityProcessorAt(version: string): EntityProcessor<TestABI> {
 		version,
 		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
+			// A BURN this processor does not track: decoded, handed to the handler, and the
+			// handler takes a branch that mutates nothing. That is how a block is APPLIED
+			// while touching no entity, which is what `applyNextEmptyBlock` drives. It is a
+			// different thing from a range carrying no logs, which applies no block at all.
+			if (event.args.to === ZERO) return;
 			state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
 		},
 	};
@@ -211,6 +217,16 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 		async applyNextBlock(): Promise<number> {
 			const block = (told.at(-1)?.block ?? FIRST_EVENT_BLOCK - 1) + 1;
 			told.push({block, hash: `0xa${block.toString(16)}`, id: BigInt(block), to: ALICE});
+			await push(block);
+			return block;
+		},
+
+		async applyNextEmptyBlock(): Promise<number> {
+			// The same event-bearing block as above, sent TO the zero address, which
+			// `entityProcessorAt` does not track: the receiving fold applies the block and
+			// mutates nothing, so the changed-set crossing the stream is empty.
+			const block = (told.at(-1)?.block ?? FIRST_EVENT_BLOCK - 1) + 1;
+			told.push({block, hash: `0xa${block.toString(16)}`, id: BigInt(block), to: ZERO});
 			await push(block);
 			return block;
 		},

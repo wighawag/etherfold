@@ -46,6 +46,40 @@ export function oneHandlerCases(factory: StateMovedTransportFactory): Conformanc
 				expect(applied.generation).toMatch(/\S/);
 			}),
 
+		'tells a reader about a block that touched NOTHING, with an empty set rather than a silence': () =>
+			over(factory, async (transport) => {
+				const reader = await listening(transport);
+				// An ordinary block FIRST, so the reader is holding a token by the time the empty
+				// one arrives. Otherwise the empty block is this reader's first contact, which
+				// invalidates everything for a reason that has nothing to do with emptiness.
+				const first = await transport.applyNextBlock();
+				await told(reader, (received) => received.length >= 1, `the block ${first} it applied`);
+				const held = anAppend(reader.received[0]).coherence;
+
+				const empty = await transport.applyNextEmptyBlock();
+				await told(reader, (received) => received.length >= 2, `the empty block ${empty}`);
+
+				// "One notification per APPLIED block" is ONE rule. The block WAS applied -- its
+				// cursor moved with it -- and its handler simply mutated nothing, so what crosses
+				// is an append naming it with an EMPTY changed-set. A transport that dropped it,
+				// on the reasoning that an empty array is nothing worth posting, would leave a
+				// reader unable to tell a fold that touched nothing from a fold that has STOPPED,
+				// and would make one rule into two with the second one undocumented.
+				const applied = anAppend(reader.received[1]);
+				expect(applied.block).toBe(empty);
+				expect(applied.entities).toEqual([]);
+				// Still the full five fields: an empty changed-set narrows what is IN the payload
+				// and not its shape, so the one handler still reads it without a special case.
+				expect(Object.keys(applied).sort()).toEqual([...APPLIED_FIELDS]);
+
+				// The token did not move, because nothing a reader holds became stale: an empty
+				// block is an APPEND. So the rule's narrow line runs, and narrowly by an empty
+				// set is NOTHING to re-read -- which is the correct answer, and is why publishing
+				// it costs a reader nothing while withholding it would cost it the truth.
+				expect(applied.coherence).toBe(held);
+				expect(reader.decisions[1]).toEqual({invalidate: []});
+			}),
+
 		'runs the two-line rule unchanged: a token it has not held invalidates EVERYTHING, the next one NARROWLY': () =>
 			over(factory, async (transport) => {
 				const reader = await listening(transport);

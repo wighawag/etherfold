@@ -108,6 +108,12 @@ function foldAt(version: string): EntityProcessor<TestABI> {
 			{name: 'head', id: ['name'], fields: {block: 'integer'}},
 		],
 		async onTransfer(state, event) {
+			// A BURN this processor does not track: the event is decoded and handed over, and
+			// this handler takes a branch that mutates nothing. That is how a block gets
+			// APPLIED while touching no entity -- the ordinary shape of an empty changed-set,
+			// and what `applyNextEmptyBlock` drives. A block carrying no logs at all would be
+			// a different thing: no block applied, so nothing to name and nothing published.
+			if (event.args.to === ZERO) return;
 			state.set('token', {id: event.args.id.toString()}, {owner: event.args.to});
 			state.set('head', {name: 'head'}, {block: event.blockNumber});
 		},
@@ -151,6 +157,12 @@ function forkableChain() {
 	let tip = START_BLOCK - 1;
 	let forkedFrom = Number.POSITIVE_INFINITY;
 	let logCounter = 0;
+	/**
+	 * Blocks whose transfer goes TO the zero address, which `foldAt`'s handler does
+	 * not track. They are event-bearing and therefore APPLIED, and they touch no
+	 * entity, which is the pair `applyNextEmptyBlock` needs.
+	 */
+	const untracked = new Set<number>();
 
 	const logsUpTo = (): unknown[] => {
 		const logs: unknown[] = [];
@@ -165,7 +177,11 @@ function forkableChain() {
 				address: CONTRACT,
 				// The token id is the BLOCK, so which branch a row came from is readable.
 				data: `0x${(forked ? block + 1000 : block).toString(16).padStart(64, '0')}`,
-				topics: [TRANSFER_TOPIC, addressTopic(ZERO), addressTopic(forked ? BOB : ALICE)],
+				topics: [
+					TRANSFER_TOPIC,
+					addressTopic(untracked.has(block) ? ALICE : ZERO),
+					addressTopic(untracked.has(block) ? ZERO : forked ? BOB : ALICE),
+				],
 				transactionHash: `0x${logCounter.toString(16).padStart(64, '0')}`,
 				logIndex: '0x0',
 				blockTimestamp: hex(1_700_000_000 + block * 12),
@@ -179,7 +195,8 @@ function forkableChain() {
 			return tip;
 		},
 		/** Put one more event-bearing block on the chain, and carry the tip above it. */
-		advanceTo(block: number) {
+		advanceTo(block: number, touching: 'an entity' | 'nothing' = 'an entity') {
+			if (touching === 'nothing') untracked.add(block);
 			logsThrough = block;
 			tip = block + FINALITY;
 		},
@@ -275,6 +292,14 @@ async function openWorld() {
 			await driveToTip();
 			return applied;
 		},
+		async applyNextEmptyBlock(): Promise<number> {
+			// An event-bearing block whose only event is a burn `foldAt` does not track, so
+			// the fold APPLIES the block and mutates nothing.
+			applied += 1;
+			chain.advanceTo(applied, 'nothing');
+			await driveToTip();
+			return applied;
+		},
 		async retract(): Promise<number> {
 			// THE BLOCK IT JUST APPLIED comes back carrying a different hash. It is inside
 			// the finality window, so the fold re-scans it, meets the contradiction and
@@ -335,6 +360,7 @@ export async function openPortTransport(): Promise<StateMovedTransport> {
 	return {
 		onStateMoved: (handler) => world.port.onStateMoved(handler),
 		applyNextBlock: () => world.applyNextBlock(),
+		applyNextEmptyBlock: () => world.applyNextEmptyBlock(),
 		retract: () => world.retract(),
 		promote: () => world.promote(),
 		async readsUpTo() {
@@ -368,6 +394,7 @@ export async function openCrossTabTransport(): Promise<StateMovedTransport> {
 	return {
 		onStateMoved: (handler) => readerTab.onStateMoved(handler),
 		applyNextBlock: () => world.applyNextBlock(),
+		applyNextEmptyBlock: () => world.applyNextEmptyBlock(),
 		retract: () => world.retract(),
 		promote: () => world.promote(),
 		async readsUpTo() {

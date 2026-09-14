@@ -102,6 +102,30 @@ describe('the suite catches a transport that drifted', () => {
 		);
 	});
 
+	it('catches one that SWALLOWS a notification whose changed-set is empty', async () => {
+		// The "improvement": an empty `entities` array means nothing was touched, so there
+		// is nothing worth posting. It makes "one notification per APPLIED block" into two
+		// rules with the second one undocumented, and it leaves a reader unable to tell a
+		// fold that touched nothing from a fold that has stopped -- the block WAS applied
+		// and its cursor moved with it.
+		const outcome = await runStateMovedConformance(async () => {
+			const real = await openPortTransport();
+			return {
+				...real,
+				onStateMoved(handler: StateMovedHandler) {
+					return real.onStateMoved((moved) => {
+						if (moved.kind === 'applied' && moved.entities.length === 0) return;
+						handler(moved);
+					});
+				},
+			};
+		});
+
+		expect(outcome.failures.map((failure) => failure.name)).toContain(
+			'tells a reader about a block that touched NOTHING, with an empty set rather than a silence',
+		);
+	});
+
 	it('REFUSES a transport that answers neither convergence question, rather than skipping the chapter', async () => {
 		// A capability-driven selection that can select NOTHING is how a suite becomes
 		// decoration: this transport's reader could neither re-read nor be told where

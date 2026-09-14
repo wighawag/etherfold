@@ -52,6 +52,24 @@ export type StateMovedTransport = {
 	 */
 	applyNextBlock(): Promise<number>;
 	/**
+	 * MAKE THE CANONICAL FOLD APPLY A BLOCK THAT TOUCHES NO ENTITY, and answer
+	 * which block that was.
+	 *
+	 * The block is APPLIED -- it carries an event the fold decodes and hands to a
+	 * handler -- and the handler mutates nothing, so the changed-set is empty. That
+	 * is the ordinary case of a handler with a branch it did not take, and it is a
+	 * different thing from a scanned range carrying no logs, which applies no block
+	 * and publishes nothing because there is none to name (ADR-0083).
+	 *
+	 * It is REQUIRED rather than optional, and that is the point. "One notification
+	 * per APPLIED block" is one rule rather than two, so an empty changed-set is a
+	 * notification with `entities: []` and never a silence -- and a transport is
+	 * exactly where that rule gets quietly "improved", by a layer that sees an empty
+	 * array and concludes there is nothing worth posting. A reader that is not told
+	 * has no way to distinguish it from a fold that has stopped.
+	 */
+	applyNextEmptyBlock(): Promise<number>;
+	/**
 	 * MAKE THE CHAIN TAKE A BRANCH BACK, and answer the FORK POINT the fold
 	 * reverted to.
 	 *
