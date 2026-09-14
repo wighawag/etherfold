@@ -4,6 +4,7 @@ slug: the-cli-selects-its-promotion-policy
 spec: a-reconfigure-is-not-an-outage
 blockedBy: []
 covers: [5]
+needsAnswers: true
 ---
 
 ## What to build
