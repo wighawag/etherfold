@@ -136,21 +136,26 @@ const addressTopic = (address: string) => `0x${address.slice(2).toLowerCase().pa
  * contradiction at a height it already holds and concludes a retraction for
  * itself. Below it, byte for byte the same chain.
  *
- * ## The TIP runs `FINALITY` blocks AHEAD of the last event-bearing one, and
- * that is load-bearing rather than decoration
+ * ## The TIP sits ON the last event-bearing block, and the `FINALITY` LEAD it
+ * used to carry is GONE
  *
- * Two things depend on it, in opposite directions, and the lead is the only
- * value that satisfies both. A FOLLOWER asks the stored stream from
- * `getFromBlock`, which at the tip is `latestBlock - finality`: with the tip
- * sitting ON the block just applied, that lands BELOW the stream's own
- * `startBlock`, the stream honestly answers that it does not reach back, and the
- * follower stops advancing for ever -- a fixture running level with its own
- * start block, and not a defect in the engine
+ * The lead was not a property of this world, it was a workaround. A FOLLOWER
+ * asks the stored stream from `getFromBlock`, which at the tip is
+ * `latestBlock - finality`: floored at 0 that landed BELOW the block the stored
+ * stream OPENS at, the keeper honestly answered that it does not reach back, and
+ * the follower stopped advancing for ever -- a world running level with its own
+ * start block, and a defect in the engine after all
  * (`work/notes/observations/a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
- * And a REORG has to fall INSIDE
- * the unconfirmed window, which bounds the lead from the other side: at exactly
- * `finality` the block just applied is still the oldest block in the window, so
- * it is both re-scanned and re-foldable.
+ * The read start is floored at the source's earliest block now, so this world
+ * runs without a lead, and running WITHOUT one is what keeps the fix asserted
+ * from here: restore it and the promotion case stops meeting the condition at
+ * all.
+ *
+ * What the lead was bounded by from the other side still holds and no longer
+ * needs stating as a range: a REORG has to fall INSIDE the unconfirmed window,
+ * and with the tip ON the block just applied it is the NEWEST block in that
+ * window rather than the oldest, so it is re-scanned and re-foldable with room
+ * to spare.
  */
 function forkableChain() {
 	let logsThrough = START_BLOCK - 1;
@@ -198,7 +203,7 @@ function forkableChain() {
 		advanceTo(block: number, touching: 'an entity' | 'nothing' = 'an entity') {
 			if (touching === 'nothing') untracked.add(block);
 			logsThrough = block;
-			tip = block + FINALITY;
+			tip = block;
 		},
 		forkFrom(block: number) {
 			forkedFrom = block;

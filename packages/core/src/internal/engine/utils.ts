@@ -675,6 +675,62 @@ export function cursorSyncedThrough<ABI extends Abi>(lastSync: LastSync<ABI>, bl
 	};
 }
 
+/**
+ * WHERE A FOLD READS FROM NEXT, and the one rule every fold in this system
+ * resumes by.
+ *
+ * The answer is the LOWER of two claims, FLOORED at `defaultFromBlock`. Both
+ * terms of the `min` are wanted and neither is an optimisation:
+ *
+ * - `lastToBlock + 1` is "carry on from where I stopped";
+ * - `latestBlock - finality` is "but never start ABOVE the bottom of the
+ *   unconfirmed window", because anything inside that window can still reorg and
+ *   must be RE-READ rather than trusted. When a fold is LEVEL this term wins and
+ *   deliberately pulls the read start BACKWARDS by `finality`, which is what
+ *   makes a reorg detectable at all.
+ *
+ * ## The FLOOR is `defaultFromBlock`, and it used to be `0`
+ *
+ * A floor of zero meant that a fold sitting within `finality` blocks of the
+ * first block its source can say anything about asked for blocks BELOW it. On
+ * the FETCH path that merely widened a range pointlessly. On the REPLAY path it
+ * was a stall: a stored stream begins where its first batch was accepted from,
+ * the keeper honestly answers `does-not-reach-back` (ADR-0069), and the caller
+ * makes no progress. For an indexing generation that self-heals (it clears and
+ * re-indexes); for a FOLLOWER or a `rebuildMore` it does not, because their
+ * `clear` is a no-op by design (ADR-0044) and their `latestBlock` only moves
+ * when a read SUCCEEDS -- so the refusal recurs identically for ever rather than
+ * resolving when the chain moves on. It cost two rounds of debugging in two
+ * packages before both fixtures were given a lead to dodge it
+ * (`work/notes/observations/a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
+ *
+ * Clamping UP cannot skip a block, because there is no block below the floor to
+ * skip: `defaultFromBlockOf` is the lowest `startBlock` any contract in the
+ * source declares, every block the unconfirmed window can hold was fetched from
+ * at or above it, and a keeper already filters what it serves to
+ * `blockNumber >= fromBlock`. The unconfirmed-window property is therefore
+ * preserved exactly -- a level fold still re-reads every block a reorg can reach
+ * -- and `packages/core/test/utils.test.ts` asserts both halves.
+ *
+ * ## Why the SOURCE's earliest block and not the STREAM's own start
+ *
+ * They are not the same number and the difference is deliberate. This function
+ * is computed on BOTH halves of the wire from the source alone -- it is what
+ * `StreamBuilder.expectedFromBlock` answers and what `generateStreamToAppend`
+ * refuses a batch against (`UnexpectedFromBlockError`, the resumption protocol
+ * of ADR-0004) -- and the side holding no keeper cannot know where a stored
+ * stream begins. A floor derived from the stream would make the two halves
+ * disagree about the same cursor.
+ *
+ * It is also SUFFICIENT, which was worth checking rather than assuming, since a
+ * seed-installed stream opens where the seed's coverage does. `installStreamSeed`
+ * REFUSES a seed whose `coverage.fromBlock` is above `reachBackTo`, which
+ * defaults to exactly this number, so an installed stream opens at or BELOW the
+ * floor -- and lower is always served. A stream opening ABOVE it is one no fold
+ * over this source can be whole on (a subtree whose first save began
+ * mid-history), which is what `does-not-reach-back` is left meaning: not "wait a
+ * few blocks", but "this stream cannot serve this source".
+ */
 export function getFromBlock<ABI extends Abi>(
 	lastSync: LastSync<ABI>,
 	defaultFromBlock: number,
@@ -682,7 +738,7 @@ export function getFromBlock<ABI extends Abi>(
 ): number {
 	return lastSync.latestBlock === 0
 		? defaultFromBlock
-		: Math.max(Math.min(lastSync.lastToBlock + 1, lastSync.latestBlock - finality), 0);
+		: Math.max(Math.min(lastSync.lastToBlock + 1, lastSync.latestBlock - finality), defaultFromBlock);
 }
 
 /**
@@ -691,9 +747,11 @@ export function getFromBlock<ABI extends Abi>(
  *
  * Extracted so the two things that need it -- the single-process
  * `IndexerGeneration` and the receive-only `StreamBuilder` -- read the same
- * answer. It is the floor `getFromBlock` returns before anything has been
- * indexed, so two implementations of it would put the two deployment shapes on
- * two different first batches.
+ * answer. It is the FLOOR `getFromBlock` never reads below, on EITHER of its
+ * branches: what it returns before anything has been indexed, and what a level
+ * fold's reach back over the unconfirmed window is clamped to. So two
+ * implementations of it would put the two deployment shapes on two different
+ * first batches AND on two different resume points.
  */
 export function defaultFromBlockOf<ABI extends Abi>(source: IndexingSource<ABI>): number {
 	let fromBlockFromContracts: undefined | number;

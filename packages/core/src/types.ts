@@ -583,6 +583,16 @@ export type StreamRead =
 	 * Deliberately not folded into `inconsistent`: nothing is wrong with it, and a
 	 * caller asking from a higher block would be served. It is separate because the
 	 * whole point of this type is to stop conflating answers that differ.
+	 *
+	 * What it does NOT cover, since `getFromBlock` was floored at the source's own
+	 * earliest block: a fold LEVEL with the block its stream opens at, reaching back
+	 * over the reorg window and asking from under it. That is a fact about the
+	 * fold's AGE rather than about the stream: an indexing generation answered it by
+	 * clearing and re-indexing, and a FOLLOWER could neither repair it (its `clear`
+	 * is a no-op, ADR-0044) nor outlast it, because its `latestBlock` comes from the
+	 * very read that was refused. So a caller telling "wait" from "intervene" now gets
+	 * the right answer from the verdict alone: `absent` is the writer not having
+	 * appended yet, and this one is a stream that cannot serve this source at all.
 	 */
 	| {readonly status: 'does-not-reach-back'; readonly startBlock: number};
 

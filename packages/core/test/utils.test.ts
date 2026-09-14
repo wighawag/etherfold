@@ -75,6 +75,103 @@ describe('getFromBlock', () => {
 });
 
 // ---------------------------------------------------------------------------
+// A REPLAY NEVER ASKS BELOW THE BLOCK THE SOURCE STARTS AT
+// ---------------------------------------------------------------------------
+// The reach back over the unconfirmed window is what makes a reorg detectable,
+// and it is unconditional: a LEVEL fold asks from `latestBlock - finality`
+// whatever that lands on. Floored at 0, that landed BELOW the first block the
+// source can say anything about whenever the fold was within `finality` of it --
+// and a stored stream begins where its first batch was accepted from, so the
+// keeper honestly answered `does-not-reach-back` and a follower could not
+// advance at all (`work/notes/observations/
+// a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
+//
+// The floor is now `defaultFromBlock`, which is the SAME number the untouched
+// `latestBlock === 0` branch already returned, so the two branches agree about
+// where the bottom is. These cases pin both halves of that: the stall is gone,
+// and the window property the floor could quietly have broken is not.
+// ---------------------------------------------------------------------------
+
+describe('the read start is floored at the source own start block', () => {
+	const finality = 3;
+	const startBlock = 100;
+
+	it('does not ask below the start block when the fold is LEVEL with it', () => {
+		// The exact shape a fixture sits in and a fresh deployment passes through: the
+		// chain tip IS the block just folded, and the source starts there.
+		const ls = lastSync({latestBlock: startBlock, lastToBlock: startBlock});
+		// min(101, 97) = 97, which is below the stream and was asked for anyway
+		expect(getFromBlock(ls, startBlock, finality)).toBe(startBlock);
+	});
+
+	it('is the same floor the never-synced branch already returned', () => {
+		// The two branches of one function must agree about the bottom, or a fold's
+		// FIRST read and its later ones ask a keeper two different questions.
+		const fresh = lastSync({latestBlock: 0, lastToBlock: 0});
+		const level = lastSync({latestBlock: startBlock + 1, lastToBlock: startBlock + 1});
+		expect(getFromBlock(fresh, startBlock, finality)).toBe(startBlock);
+		expect(getFromBlock(level, startBlock, finality)).toBe(startBlock);
+	});
+
+	it('still reaches back over the WHOLE unconfirmed window once the fold is clear of the start', () => {
+		// The floor must not become a second cap: as soon as the window fits above the
+		// start block, the read start is exactly where it always was.
+		const ls = lastSync({latestBlock: 200, lastToBlock: 200});
+		expect(getFromBlock(ls, startBlock, finality)).toBe(197);
+	});
+
+	it('never clamps PAST the block the fold stopped at, so no block is skipped', () => {
+		// The direction that would be a silent, permanent loss. Clamping UP is safe
+		// only while the floor stays at or below `lastToBlock + 1`, which it does
+		// because every range this fold ever fetched started at or above the floor.
+		for (let lastToBlock = startBlock; lastToBlock <= startBlock + 10; lastToBlock++) {
+			for (let latestBlock = lastToBlock; latestBlock <= lastToBlock + 10; latestBlock++) {
+				const from = getFromBlock(lastSync({latestBlock, lastToBlock}), startBlock, finality);
+				expect(from).toBeGreaterThanOrEqual(startBlock);
+				expect(from).toBeLessThanOrEqual(lastToBlock + 1);
+			}
+		}
+	});
+
+	it('re-reads a block inside the window that a reorg reaches, with the floor in force', () => {
+		// The property the floor change could break, asserted through the engine and
+		// not through arithmetic: a fold LEVEL at the start block, a window holding the
+		// block just applied, and a re-fetch that contradicts it. The clamped range
+		// still covers the window, so the retraction is concluded exactly as before.
+		const ls = lastSync({
+			latestBlock: startBlock + 1,
+			lastFromBlock: startBlock,
+			lastToBlock: startBlock + 1,
+			unconfirmedBlocks: [
+				block(startBlock, '0xa100', [makeEvent(startBlock, '0xa100')]),
+				block(startBlock + 1, '0xa101', [makeEvent(startBlock + 1, '0xa101')]),
+			],
+		});
+		const from = getFromBlock(ls, startBlock, finality);
+		expect(from).toBe(startBlock);
+		// every block the window holds is INSIDE the clamped range, which is the whole
+		// of "clamping upwards cannot skip a block that exists"
+		expect(ls.unconfirmedBlocks.every((held) => held.number >= from)).toBe(true);
+
+		const {eventStream, reorg} = generateStreamToAppend(
+			ls,
+			startBlock,
+			[makeEvent(startBlock, '0xa100'), makeEvent(startBlock + 1, '0xb101')],
+			{
+				newLatestBlock: startBlock + 2,
+				newLastFromBlock: from,
+				newLastToBlock: startBlock + 2,
+				finality,
+			},
+		);
+
+		expect(reorg).toEqual({cause: 'contradiction', blockNumber: startBlock + 1, blockHash: '0xa101'});
+		expect(eventStream.filter((e) => e.removed).map((e) => `${e.blockNumber}:${e.blockHash}`)).toEqual(['101:0xa101']);
+		expect(eventStream.filter((e) => !e.removed).map((e) => `${e.blockNumber}:${e.blockHash}`)).toEqual(['101:0xb101']);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // AN EXPLICIT `undefined` IS AN ABSENT KEY
 // ---------------------------------------------------------------------------
 // Every field of a `ProvidedStreamConfig` is optional, so `{finality: undefined}`

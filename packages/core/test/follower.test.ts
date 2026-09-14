@@ -81,7 +81,13 @@ function addressOf(source: IndexingSource<Abi>): string {
  * which is what "the two streams never share entries" is asserted against.
  */
 function keyedStream() {
-	type Stored = {lastSync: StoredLastSync; eventStream: StoredLogEvent[]};
+	// `startBlock` is the `lastFromBlock` of the FIRST save into a subtree, written
+	// once and never updated, exactly as both shipped keepers record it
+	// (`createSegmentedStream`, `storedEmissionStream`). A double that served every
+	// block it held regardless of what was ASKED for could not express
+	// `does-not-reach-back` at all, which is why nothing in this suite met the stall
+	// a follower level with its own stream's start block used to take.
+	type Stored = {lastSync: StoredLastSync; eventStream: StoredLogEvent[]; startBlock: number};
 	const stored = new Map<string, Stored>();
 	const writes: {digest: string; events: StoredLogEvent[]}[] = [];
 	let clears = 0;
@@ -95,13 +101,15 @@ function keyedStream() {
 		},
 		fetchFrom: async (source, fromBlock) => {
 			const held = stored.get(digestOf(source));
-			return held
-				? {
-						status: 'stream' as const,
-						eventStream: held.eventStream.filter((event) => event.blockNumber >= fromBlock),
-						lastSync: clone(held.lastSync),
-					}
-				: {status: 'absent' as const};
+			if (!held) return {status: 'absent' as const};
+			if (held.startBlock > fromBlock) {
+				return {status: 'does-not-reach-back' as const, startBlock: held.startBlock};
+			}
+			return {
+				status: 'stream' as const,
+				eventStream: held.eventStream.filter((event) => event.blockNumber >= fromBlock),
+				lastSync: clone(held.lastSync),
+			};
 		},
 		saveNewEvents: async (source, {eventStream, lastSync}) => {
 			const digest = digestOf(source);
@@ -109,6 +117,7 @@ function keyedStream() {
 			const held = stored.get(digest);
 			stored.set(digest, {
 				lastSync: clone(lastSync),
+				startBlock: held ? held.startBlock : lastSync.lastFromBlock,
 				eventStream: [...(held?.eventStream ?? []), ...eventStream.map((event) => ({...event}))],
 			});
 		},
@@ -126,6 +135,8 @@ function keyedStream() {
 			return clears;
 		},
 		digests: () => [...stored.keys()].sort(),
+		/** Where the subtree OPENS: the `lastFromBlock` of the first save into it. */
+		startBlockOf: (source: IndexingSource<Abi>) => stored.get(digestOf(source))?.startBlock,
 		eventsOf: (source: IndexingSource<Abi>) => stored.get(digestOf(source))?.eventStream ?? [],
 		/** The stream's OWN cursor, which is the summary a follower must not trust. */
 		cursorOf: (source: IndexingSource<Abi>) => stored.get(digestOf(source))?.lastSync,
@@ -351,6 +362,41 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		expect(world.stream.writes.length).toBe(before);
 		expect(world.stream.clears).toBe(0);
 		expect(world.stream.eventsOf(SOURCE).map(idOf)).toEqual(BRANCH_A.map(idOf));
+	});
+
+	it('KEEPS FOLLOWING while it is level with its own stream START BLOCK', async () => {
+		// A YOUNG stream, which is the condition this covers: the chain tip IS the
+		// block the source starts at, so the fold is level with the block the stored
+		// stream opens at.
+		//
+		// A follower re-reads from `getFromBlock`, which at the tip reaches BACK over
+		// the unconfirmed window. Floored at 0 that landed BELOW the stream's own start,
+		// the keeper honestly answered `does-not-reach-back`, and the follower's
+		// `clear` is a no-op by design (ADR-0044) -- so it could neither repair nor
+		// progress. And it never resolved on its own: a follower's `latestBlock` comes
+		// from the stream it could not read, so the chain moving on changed nothing and
+		// the refusal recurred identically for ever.
+		const world = await openWorld([{name: 'A'}, {name: 'B'}]);
+		const AT_100 = makeLog(START_BLOCK, '0xa100');
+		world.serve(ADDRESS, [AT_100], START_BLOCK);
+
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+
+		// the stream opens exactly where the fold sits, which is the shape under test
+		expect(world.stream.startBlockOf(SOURCE)).toBe(START_BLOCK);
+		expect(world.stream.cursorOf(SOURCE)?.lastToBlock).toBe(START_BLOCK);
+		expect(world.stateOf('B')).toEqual([idOf(AT_100)]);
+
+		// the writer appends the next block; the FOLLOWER has to see it
+		const AT_101 = makeLog(START_BLOCK + 1, '0xa101');
+		await world.round([AT_100, AT_101]);
+
+		expect(world.stateOf('A')).toEqual([idOf(AT_100), idOf(AT_101)]);
+		expect(world.stateOf('B')).toEqual(world.stateOf('A'));
+		// and it is still a follower doing it: no fetch, no write, no clear
+		expect(world.fetchesBy('B')).toEqual([]);
+		expect(world.stream.clears).toBe(0);
 	});
 
 	it('is DETERMINED by the shared stream and never configured', async () => {
