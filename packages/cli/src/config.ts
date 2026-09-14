@@ -1,4 +1,10 @@
-import type {Abi} from '@etherfold/core';
+import {
+	DEFAULT_PROMOTION_POLICY,
+	PROMOTION_POLICIES,
+	type Abi,
+	type PromotionConfig,
+	type PromotionPolicy,
+} from '@etherfold/core';
 import {parseIndexingSource, type EnvRecord} from '@etherfold/fetcher-host';
 import type {RetentionSetting} from '@etherfold/processor-entities';
 import type {
@@ -61,7 +67,9 @@ export type ConfigInput =
 	| 'autoSetup'
 	| 'indexer'
 	| 'ingestEndpoint'
-	| 'ingestToken';
+	| 'ingestToken'
+	| 'promotion'
+	| 'dropOnPromotion';
 
 /**
  * What ONE command does with ONE input.
@@ -125,14 +133,16 @@ export const DEFAULT_INDEXER_NAME = 'default';
 /**
  * The name of every input, once.
  *
- * Six inputs have an environment variable and six do not, and the line between
+ * Some inputs have an environment variable and some do not, and the line between
  * them is not an accident: **the environment carries what varies between
- * deployments of one image** (the chain, the source, the database, the wire and
- * the port), while a flag carries what the image IS (which processor module,
- * which store, which retention window, which interface). That is why the six
- * variables are exactly the fetcher host's four plus the Node adapter's two: they
- * are already the published contract of a deployable, and inventing a seventh
- * name here would be inventing a second way to say something.
+ * deployments of one image** (the chain, the source, the database, the wire, the
+ * port, the cadence a host prunes on, WHEN a successor takes over), while a flag
+ * carries what the image IS (which processor module, which store, which retention
+ * window, which interface). The variables started as exactly the fetcher host's
+ * four plus the Node adapter's two -- already the published contract of a
+ * deployable -- and a new one is added only where the rule above puts it and no
+ * existing name already says the thing, because a second name for one input is
+ * how two deployments of one image end up meaning different things (ADR-0048).
  */
 export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 	processor: {
@@ -199,6 +209,25 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'the shared secret of the ingest wire, the same name on both sides. Prefer INGEST_TOKEN: a ' +
 			'secret on a command line is visible to every process on the host',
 	},
+	promotion: {
+		flag: `--promotion <${PROMOTION_POLICIES.join('|')}>`,
+		variable: 'PROMOTION_POLICY',
+		describe:
+			`WHEN a successor takes over answering reads, without anyone asking. ` +
+			`'on-catch-up' (the default, everywhere) moves the pointer when the successor reaches the cursor the ` +
+			`canonical generation had, which is what an app shipping to users wants; 'immediate' makes it canonical ` +
+			`the moment it is created, before it has caught up, which is what a developer iterating on a handler ` +
+			`wants; 'manual' moves only when asked, so an operator can inspect first. It is a FLAG and never ` +
+			`inferred: nothing in a runtime can tell a development deployment from a production one`,
+	},
+	dropOnPromotion: {
+		flag: '--drop-on-promotion',
+		describe:
+			'discard the superseded generation at the promotion, instead of retaining it. OFF by default, ' +
+			'because a retained generation is what the canonical pointer moves BACK to and that revert is the ' +
+			'whole reason non-canonical generations are kept. A deployment that would rather bound its storage ' +
+			'than keep a way back opts in',
+	},
 };
 
 /**
@@ -256,6 +285,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		indexer: 'optional',
 		ingestEndpoint: 'refused',
 		ingestToken: 'refused',
+		promotion: 'optional',
+		dropOnPromotion: 'optional',
 	},
 	build: {
 		processor: 'required',
@@ -272,6 +303,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		indexer: 'optional',
 		ingestEndpoint: 'refused',
 		ingestToken: 'refused',
+		promotion: 'refused',
+		dropOnPromotion: 'refused',
 	},
 	fetch: {
 		processor: 'refused',
@@ -288,6 +321,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		indexer: 'required',
 		ingestEndpoint: 'required',
 		ingestToken: 'required',
+		promotion: 'refused',
+		dropOnPromotion: 'refused',
 	},
 	index: {
 		processor: 'required',
@@ -304,6 +339,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		indexer: 'required',
 		ingestEndpoint: 'refused',
 		ingestToken: 'required',
+		promotion: 'refused',
+		dropOnPromotion: 'refused',
 	},
 	serve: {
 		processor: 'refused',
@@ -320,6 +357,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		indexer: 'refused',
 		ingestEndpoint: 'refused',
 		ingestToken: 'refused',
+		promotion: 'refused',
+		dropOnPromotion: 'refused',
 	},
 };
 
@@ -403,6 +442,45 @@ const NOTHING_TO_PRUNE_SERVE =
 	'a read tier folds nothing and enforces no retention, so it prunes nothing: it reads a database ' +
 	'something else wrote, and that writer is what schedules the prune.';
 
+// ---------------------------------------------------------------------------------------------------
+// WHY ONLY ONE COMMAND SELECTS A PROMOTION POLICY
+// ---------------------------------------------------------------------------------------------------
+// The policy governs the move a CONTAINER makes ON ITS OWN when a successor is
+// added BESIDE a live fold (`generation/promotion.ts`, ADR-0046). So the question
+// a command has to answer to own this input is not "do I hold generations" but
+// "can a successor appear here while I am running", and today exactly one command
+// can say yes: `run` re-reads its own configuration on
+// `POST /{indexer}/admin/reconfigure` and advances the successor with a bounded
+// rebuild between fetch cycles.
+//
+// The other three that hold state cannot, each for its own structural reason, so
+// the flag is REFUSED there rather than accepted and ignored -- which is the rule
+// this whole module is built on, and the direction ADR-0048 says to be wrong in:
+// turning a refusal into an optional input later is additive, and taking an
+// accepted flag away is breaking.
+// ---------------------------------------------------------------------------------------------------
+
+const NEVER_PROMOTES_BUILD =
+	'the one-shot holds exactly ONE generation and exits -- no reconfigure, no successor beside a live fold, ' +
+	'and so it never promotes and never moves the canonical pointer on its own. A policy here would be ' +
+	'accepted and never applied. The shape that promotes is `run`, which re-reads its configuration on ' +
+	'POST /{indexer}/admin/reconfigure and carries the successor to level between fetch cycles.';
+
+const NEVER_PROMOTES_FETCH =
+	'a fetcher holds no generations at all -- no processor, no state and no canonical pointer (ADR-0003) -- so ' +
+	'there is no pointer here for a policy to move. It belongs to whatever folds what this pushes: `index`, ' +
+	'or `run` in one process.';
+
+const NEVER_PROMOTES_INDEX =
+	'the receiving half registers no successor while it runs: it holds no reconfigure route and schedules no ' +
+	'rebuild, so nothing is ever added beside its live fold and the policy would have nothing to act on. ' +
+	'A policy value accepted here would be accepted and never applied. The shape that promotes on its own ' +
+	'is `run`.';
+
+const NEVER_PROMOTES_SERVE =
+	'a read tier folds nothing and promotes nothing: it READS the canonical pointer that whatever wrote the ' +
+	'database moves. When that pointer moves is the writer\u2019s configuration, which is `run`.';
+
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
 	run: {pruneInterval: PRUNES_PER_CYCLE, ingestEndpoint: NO_WIRE_COMBINED, ingestToken: NO_WIRE_COMBINED},
 	build: {
@@ -412,6 +490,8 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		autoSetup: ALWAYS_MIGRATES_BUILD,
 		ingestEndpoint: NO_WIRE_COMBINED,
 		ingestToken: NO_WIRE_COMBINED,
+		promotion: NEVER_PROMOTES_BUILD,
+		dropOnPromotion: NEVER_PROMOTES_BUILD,
 	},
 	fetch: {
 		processor: NO_PROCESSOR_FETCH,
@@ -422,8 +502,16 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		port: NOT_SERVING_FETCH,
 		host: NOT_SERVING_FETCH,
 		autoSetup: NOT_SERVING_FETCH,
+		promotion: NEVER_PROMOTES_FETCH,
+		dropOnPromotion: NEVER_PROMOTES_FETCH,
 	},
-	index: {nodeUrl: NO_CHAIN_INDEX, rps: NO_CHAIN_INDEX, ingestEndpoint: INDEX_RECEIVES},
+	index: {
+		nodeUrl: NO_CHAIN_INDEX,
+		rps: NO_CHAIN_INDEX,
+		ingestEndpoint: INDEX_RECEIVES,
+		promotion: NEVER_PROMOTES_INDEX,
+		dropOnPromotion: NEVER_PROMOTES_INDEX,
+	},
 	serve: {
 		processor: NO_PROCESSOR_SERVE,
 		source: NO_SOURCE_SERVE,
@@ -435,6 +523,8 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		indexer: NO_NAME_SERVE,
 		ingestEndpoint: NO_WIRE_SERVE,
 		ingestToken: NO_WIRE_SERVE,
+		promotion: NEVER_PROMOTES_SERVE,
+		dropOnPromotion: NEVER_PROMOTES_SERVE,
 	},
 };
 
@@ -494,6 +584,13 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			return options.ingestEndpoint;
 		case 'ingestToken':
 			return options.ingestToken;
+		case 'promotion':
+			return options.promotion;
+		case 'dropOnPromotion':
+			// a plain BOOLEAN flag, the mirror image of `--no-auto-setup` above: commander
+			// materialises nothing unless it was typed, so only `true` is something a user
+			// passed
+			return options.dropOnPromotion === true ? 'true' : undefined;
 	}
 }
 
@@ -706,6 +803,69 @@ export function parseRetention(value: string | undefined): RetentionSetting {
 }
 
 /**
+ * WHEN THE CANONICAL POINTER MOVES ON ITS OWN, as this deployment says it.
+ *
+ * Both halves of `@etherfold/core`'s `PromotionConfig` come out of one function,
+ * through the same flag-then-variable path every other input uses, and the answer
+ * is `undefined` when the operator said NOTHING at all -- deliberately, and this
+ * is the one thing about it worth reading twice.
+ *
+ * ## Why nothing given resolves to nothing, and not to `on-catch-up`
+ *
+ * The default is written in exactly one place (`resolvePromotionConfig`,
+ * `@etherfold/core`), and that module says why: the axis that would select
+ * between these values is DEVELOPMENT-versus-PRODUCTION, which is not detectable,
+ * so the SAFE value is the default in every runtime and the unsafe one is a
+ * deliberate opt-in. Restating `on-catch-up` here would be a second runtime
+ * forking that default -- which for this particular default is the point rather
+ * than tidiness -- and an `import.meta.env.DEV` check or a `process.env` sniff
+ * would be the very mistake that shape exists to prevent. A FLAG is how an
+ * operator says "I am iterating"; inferring it is not on offer.
+ *
+ * So this resolves what was SAID and nothing else, and a deployment that said
+ * nothing passes no promotion config at all.
+ *
+ * ## The one combination refused HERE rather than later
+ *
+ * `immediate` with drop-on-promotion is refused by the container too
+ * (`refuseImmediateDrop`, ADR-0046: `immediate` promotes a successor that has
+ * caught up to nothing, so the previous generation must be RETAINED until it
+ * does, and that deferral is not built on this runtime). It is refused again in
+ * this pure resolver because that is where every other configuration refusal
+ * lives: before a module is imported, before a database is opened and before the
+ * chain is dialled, in a message naming the FLAGS an operator typed rather than
+ * the fields a container resolved.
+ */
+export function resolvePromotion(command: CommandName, options: Options, env: EnvRecord): PromotionConfig | undefined {
+	const policy = parsePromotionPolicy(given('promotion', options, env));
+	const dropOnPromotion = given('dropOnPromotion', options, env) !== undefined;
+	if (policy === 'immediate' && dropOnPromotion) {
+		throw new Error(
+			`--promotion immediate with --drop-on-promotion is not available on this runtime, so ` +
+				`\`etherfold ${command}\` refuses it rather than discarding a complete state for an empty one. ` +
+				`'immediate' makes a successor canonical BEFORE it has caught up, so the previous generation must be ` +
+				`RETAINED until the successor reaches the cursor it had at the promotion (ADR-0046), and that deferral ` +
+				`is not built here. Use --promotion on-catch-up (the default) with --drop-on-promotion, or ` +
+				`--promotion immediate while retaining.`,
+		);
+	}
+	if (policy === undefined && !dropOnPromotion) return undefined;
+	return {...(policy === undefined ? {} : {policy}), ...(dropOnPromotion ? {dropOnPromotion} : {})};
+}
+
+/** One of the three, or nothing. A value nobody recognises is REFUSED and never rounded to the default. */
+function parsePromotionPolicy(value: string | undefined): PromotionPolicy | undefined {
+	if (value === undefined) return undefined;
+	if ((PROMOTION_POLICIES as readonly string[]).includes(value)) return value as PromotionPolicy;
+	throw new Error(
+		`${nameOf('promotion')} ${JSON.stringify(value)} is not a promotion policy. It is one of ` +
+			`${PROMOTION_POLICIES.map((one) => `'${one}'`).join(', ')}, and it defaults to ` +
+			`'${DEFAULT_PROMOTION_POLICY}' in every runtime -- the value an app shipping to users wants, which is ` +
+			`why the others are a deliberate opt-in rather than something a deployment can land in by accident.`,
+	);
+}
+
+/**
  * The seconds between scheduled prune passes, for the one command that needs a
  * clock.
  *
@@ -760,6 +920,7 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 		switch (command) {
 			case 'run': {
 				const rps = resolveRequestsPerSecond(options, env);
+				const promotion = resolvePromotion('run', options, env);
 				return {
 					command: 'run',
 					processor: requireProcessor('run', options, env),
@@ -773,6 +934,11 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// read-only, and routes no BATCH by it, which is the use ADR-0036 forbids
 					// defaulting and the reason defaulting this one is allowed
 					indexer: resolveIndexerName(options, env),
+					// WHEN the pointer moves onto a successor this process registers while it
+					// runs -- the one command that can register one. ABSENT where the operator
+					// said nothing, so the default stays written in one place (see
+					// `resolvePromotion`).
+					...(promotion === undefined ? {} : {promotion}),
 				};
 			}
 			case 'build': {

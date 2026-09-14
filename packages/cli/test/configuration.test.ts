@@ -1,3 +1,4 @@
+import {PROMOTION_POLICIES} from '@etherfold/core';
 import {describe, expect, it} from 'vitest';
 import {DEFAULT_INDEXER_NAME, INPUTS, OWNERSHIP, resolveCommandConfig, type ConfigInput} from '../src/config.js';
 import type {CommandName, Options} from '../src/types.js';
@@ -358,9 +359,125 @@ describe('the two asymmetries the table exists for', () => {
 /** One options object carrying exactly the input under test, so the refusal has to be about that one. */
 function valueFor(input: ConfigInput): Options {
 	if (input === 'autoSetup') return {autoSetup: false};
+	// a plain BOOLEAN flag: commander materialises `true` only where it was typed, so
+	// a string here would read as "not given" and the refusal would never be reached
+	if (input === 'dropOnPromotion') return {dropOnPromotion: true};
 	const key = input === 'source' ? 'deployments' : input;
 	return {[key]: 'x'} as Options;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// WHEN THE CANONICAL POINTER MOVES, AS A CONFIGURATION INPUT
+// ---------------------------------------------------------------------------------------------------
+// The three policies were built, argued for and unreachable from the shape most
+// people run: no command passed a promotion config, so every CLI deployment
+// silently took `on-catch-up`. This is that input, and it obeys every rule the
+// others do -- one name, a flag that beats the variable, a REFUSAL rather than an
+// invented default for a value nobody recognises, and an ownership row per
+// command.
+// ---------------------------------------------------------------------------------------------------
+
+describe('an operator selects WHEN a successor takes over', () => {
+	it('takes each of the three policies on the shape that promotes', () => {
+		for (const policy of PROMOTION_POLICIES) {
+			expect(resolveCommandConfig('run', {...FOLDING, promotion: policy}, {}).promotion).toEqual({policy});
+		}
+	});
+
+	it('says NOTHING when nothing was given, so the default stays the one place it is written', () => {
+		// deliberately NOT `{policy: 'on-catch-up'}`: the default lives with the type it
+		// belongs to (`resolvePromotionConfig`, `@etherfold/core`), and a second runtime
+		// restating it is what that module exists to prevent
+		expect(resolveCommandConfig('run', FOLDING, {}).promotion).toBeUndefined();
+	});
+
+	it('lets PROMOTION_POLICY stand behind the flag, and the flag win', () => {
+		expect(resolveCommandConfig('run', FOLDING, {PROMOTION_POLICY: 'manual'}).promotion).toEqual({policy: 'manual'});
+		expect(
+			resolveCommandConfig('run', {...FOLDING, promotion: 'immediate'}, {PROMOTION_POLICY: 'manual'}).promotion,
+		).toEqual({policy: 'immediate'});
+	});
+
+	it('reads a BLANK variable as unset rather than as an empty answer', () => {
+		expect(resolveCommandConfig('run', FOLDING, {PROMOTION_POLICY: '   '}).promotion).toBeUndefined();
+	});
+
+	it('REFUSES a value nobody recognises, naming the three that exist', () => {
+		expect(() => resolveCommandConfig('run', {...FOLDING, promotion: 'when-i-say-so'}, {})).toThrow(
+			/--promotion \(PROMOTION_POLICY\) "when-i-say-so" is not a promotion policy/,
+		);
+		for (const policy of PROMOTION_POLICIES) {
+			expect(() => resolveCommandConfig('run', {...FOLDING, promotion: 'when-i-say-so'}, {})).toThrow(
+				new RegExp(`'${policy}'`),
+			);
+		}
+		// ...and the variable is refused in exactly the same shape, rather than shrugged at
+		expect(() => resolveCommandConfig('run', FOLDING, {PROMOTION_POLICY: 'eventually'})).toThrow(
+			/is not a promotion policy/,
+		);
+	});
+
+	it('carries drop-on-promotion as the other half of ONE configuration', () => {
+		expect(resolveCommandConfig('run', {...FOLDING, dropOnPromotion: true}, {}).promotion).toEqual({
+			dropOnPromotion: true,
+		});
+		expect(resolveCommandConfig('run', {...FOLDING, promotion: 'manual', dropOnPromotion: true}, {}).promotion).toEqual(
+			{
+				policy: 'manual',
+				dropOnPromotion: true,
+			},
+		);
+	});
+
+	it('REFUSES the one combination this runtime cannot honour, naming what to use instead', () => {
+		// `immediate` makes a successor canonical BEFORE it has caught up, so the previous
+		// generation must be retained until it catches up -- and that deferral is not built
+		// on this runtime. Refused HERE, in the pure resolver, rather than from inside the
+		// container after a database has been opened and a module imported.
+		expect(() => resolveCommandConfig('run', {...FOLDING, promotion: 'immediate', dropOnPromotion: true}, {})).toThrow(
+			/--promotion immediate.*--drop-on-promotion/s,
+		);
+		expect(() => resolveCommandConfig('run', {...FOLDING, promotion: 'immediate', dropOnPromotion: true}, {})).toThrow(
+			/--promotion on-catch-up/,
+		);
+		// ...and through the variable too, since a deployment may say it either way
+		expect(() =>
+			resolveCommandConfig('run', {...FOLDING, dropOnPromotion: true}, {PROMOTION_POLICY: 'immediate'}),
+		).toThrow(/is not available on this runtime/);
+	});
+
+	it('is owned by the ONE command that can apply it, and refused by the four that cannot', () => {
+		expect(OWNERSHIP.run.promotion).toBe('optional');
+		for (const command of ['build', 'fetch', 'index', 'serve'] as const) {
+			expect(OWNERSHIP[command].promotion).toBe('refused');
+			expect(OWNERSHIP[command].dropOnPromotion).toBe('refused');
+		}
+		expect(() => resolveCommandConfig('build', {...FOLDING, promotion: 'immediate'}, {})).toThrow(
+			/--promotion \(PROMOTION_POLICY\) is not accepted by `etherfold build`.*never promotes/s,
+		);
+		expect(() => resolveCommandConfig('build', {...FOLDING, dropOnPromotion: true}, {})).toThrow(
+			/--drop-on-promotion is not accepted by `etherfold build`/,
+		);
+	});
+
+	it('IGNORES an ambient PROMOTION_POLICY on a command that does not own it', () => {
+		// the same asymmetry every other input has: a FLAG a command does not own is
+		// refused, an ambient VARIABLE is simply not read, because one host runs several
+		// of these side by side
+		expect(() => resolveCommandConfig('build', FOLDING, {PROMOTION_POLICY: 'immediate'})).not.toThrow();
+		expect(resolveCommandConfig('build', FOLDING, {PROMOTION_POLICY: 'immediate'})).not.toHaveProperty('promotion');
+	});
+
+	it('documents the values and the default where the flag is described, so --help says them', () => {
+		for (const policy of PROMOTION_POLICIES) {
+			expect(INPUTS.promotion.describe).toContain(policy);
+		}
+		expect(INPUTS.promotion.variable).toBe('PROMOTION_POLICY');
+		// a BOOLEAN, and the one boolean convention this module has: flag-only, like
+		// `--no-auto-setup`, rather than a truthiness spelling invented for one input
+		expect(INPUTS.dropOnPromotion.variable).toBeUndefined();
+	});
+});
 
 // ---------------------------------------------------------------------------------------------------
 // A SOURCE WITHOUT A CHAIN CALL
