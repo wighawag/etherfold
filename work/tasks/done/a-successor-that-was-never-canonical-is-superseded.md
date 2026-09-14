@@ -4,7 +4,6 @@ slug: a-successor-that-was-never-canonical-is-superseded
 spec: a-reconfigure-is-not-an-outage
 blockedBy: []
 covers: []
-needsAnswers: true
 ---
 
 ## What to build
