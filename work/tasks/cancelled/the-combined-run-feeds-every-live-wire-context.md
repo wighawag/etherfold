@@ -3,7 +3,18 @@ title: 'The combined run feeds EVERY live wire context, so a filter change does 
 slug: the-combined-run-feeds-every-live-wire-context
 blockedBy: []
 covers: []
+reason: 'the premise was withdrawn — on a source change the incumbent should probably NOT keep advancing, so the freeze this would have fixed is most likely correct behaviour'
 ---
+
+> **CANCELLED 2026-09-14, on a withdrawn premise rather than on a change of mind about priority.**
+>
+> This task was written to make the incumbent keep ADVANCING across a filter-change reconfigure, on the stated intent that "a reconfigure is not an outage" requires it. The author then reversed that intent, and the reversal is the better position: a source change usually means the old fold's answers are WRONG rather than merely stale, so keeping it current is keeping it wrongly-current, and it spends a second fetcher plus node budget on a generation about to be discarded.
+>
+> So the freeze this task would have removed is most likely CORRECT, and today's behaviour needs no change. Building this would have implemented a premise nobody holds.
+>
+> **What survives is not this.** If the incumbent is deliberately frozen, a developer should be able to SEE that it is frozen rather than infer it from a cursor that stopped moving. That is an honesty question and a much smaller piece of work, and it is carried by `a-deliberate-freeze-is-not-visible-on-a-filter-change` rather than by re-minting this.
+>
+> **What is worth keeping from the body below** is the mechanism, which stays true whatever is decided: `run` builds one log fetcher over one scalar source and never consults `liveIngestions()`, while the HTTP wire negotiates several contexts, which is why a split deployment can keep both generations advancing and a combined one cannot. If the WAIT path is ever wanted deliberately (a filter change that only ADDS a contract, where the old fold is right but incomplete), this is the shape it would take, and the shared-provider hook is the part not to reinvent.
 
 ## What to build
 

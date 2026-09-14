@@ -3,7 +3,7 @@ title: 'An endpoint triggers a reconfigure in a running process, so a watcher ca
 slug: an-endpoint-triggers-a-reconfigure-in-a-running-process
 spec: a-change-reaches-a-running-deployment
 blockedBy: [a-successor-that-was-never-canonical-is-superseded]
-covers: [1, 2, 3, 4, 6, 7, 8]
+covers: [1, 2, 3, 4, 5, 6, 7, 8]
 ---
 
 ## What to build
