@@ -50,8 +50,9 @@ const freshName = () => `pushed-progress-${counter++}-${Math.random().toString(3
  *
  * The width has to stay ABOVE the finality depth: a cycle rewinds by the
  * unconfirmed window before it fetches, so a range narrower than that window
- * re-asks for the blocks it already has and the cursor never moves (see
- * `work/notes/observations/a-fetch-narrower-than-finality-never-advances.md`).
+ * re-asks for the blocks it already has and the cursor never moves. That pair is
+ * now REFUSED at construction (`FetchRangeBelowFinalityError`, `@etherfold/core`),
+ * so this fixture states a width that is legal rather than one that used to wedge.
  */
 function gatedChain(failWith?: Error) {
 	const chain = fakeChain();

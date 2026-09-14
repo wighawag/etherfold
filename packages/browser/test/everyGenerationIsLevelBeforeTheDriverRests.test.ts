@@ -122,8 +122,8 @@ function hostOver(access: HostAccess, databaseName: string, chain: ReturnType<ty
 			// Narrow ranges, so catching up is several advances rather than one. Kept
 			// ABOVE the finality depth deliberately: a cycle rewinds by the unconfirmed
 			// window before it fetches, so a range narrower than that window re-asks for
-			// blocks it already has and the cursor never moves at all (see
-			// `work/notes/observations/a-fetch-narrower-than-finality-never-advances.md`).
+			// blocks it already has and the cursor never moves at all. That pair is now
+			// REFUSED at construction (`FetchRangeBelowFinalityError`, `@etherfold/core`).
 			config: {stream: {finality: FINALITY}, fetch: {numBlocksToFetchAtStart: 4, maxBlocksPerFetch: 4}},
 			tipIntervalInSeconds: tipInterval,
 		},
