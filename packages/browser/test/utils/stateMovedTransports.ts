@@ -145,7 +145,7 @@ const addressTopic = (address: string) => `0x${address.slice(2).toLowerCase().pa
  * stream OPENS at, the keeper honestly answered that it does not reach back, and
  * the follower stopped advancing for ever -- a world running level with its own
  * start block, and a defect in the engine after all
- * (`work/notes/observations/a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
+ * (`work/tasks/done/a-replay-never-asks-below-a-streams-start-block.md`).
  * The read start is floored at the source's earliest block now, so this world
  * runs without a lead, and running WITHOUT one is what keeps the fix asserted
  * from here: restore it and the promotion case stops meeting the condition at

@@ -702,7 +702,7 @@ export function cursorSyncedThrough<ABI extends Abi>(lastSync: LastSync<ABI>, bl
  * when a read SUCCEEDS -- so the refusal recurs identically for ever rather than
  * resolving when the chain moves on. It cost two rounds of debugging in two
  * packages before both fixtures were given a lead to dodge it
- * (`work/notes/observations/a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
+ * (`work/tasks/done/a-replay-never-asks-below-a-streams-start-block.md`).
  *
  * Clamping UP cannot skip a block, because there is no block below the floor to
  * skip: `defaultFromBlockOf` is the lowest `startBlock` any contract in the
