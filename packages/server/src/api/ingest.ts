@@ -54,6 +54,17 @@ function authorized(c: Context<{Bindings: Env}>): {ok: true} | {ok: false; messa
  * same `400` a single receiver has always answered, still deliberately not
  * resumable.
  *
+ * ## A NAME MAY ACCEPT NO PUSHES AT ALL, and says so before the body is read
+ *
+ * An entry holding no `liveIngestions` at all states that this named indexer is
+ * READ-ONLY on the wire (`IndexerRegistryEntry`), which is what the COMBINED
+ * deployment registers: it fetches the chain for itself, so a remote sender would
+ * be a second writer, while its feed and its pointer surface answer normally.
+ * Both routes here refuse it with `501 ingestion-not-accepted` (`acceptsNoIngestion`),
+ * which is a fact about the DEPLOYMENT rather than about the payload -- so it is
+ * decided before a body is buffered, and it is never confused with the `400` an
+ * entry that HOLDS no live receiver right now answers.
+ *
  * ## What this layer decides, and what it only reports
  *
  * Every RULE lives in the stream-builder (`@etherfold/core`), which is where the
@@ -188,9 +199,14 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 			.post('/:indexer/ingest/expected-from-block', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'ingest');
 				if (!resolved.ok) return resolved.response;
+				const live = resolved.entry.liveIngestions;
+				// A NAME THAT TAKES NO PUSHES answers here too, and not only on the push
+				// itself: telling a sender where to start is telling it this is a place to send
+				// to, and the honest answer is the same refusal one batch earlier.
+				if (!live) return acceptsNoIngestion(c as never, resolved.name);
 
 				const contexts: {context: WireContext; expectedFromBlock: number}[] = [];
-				for (const ingestion of await resolved.entry.liveIngestions()) {
+				for (const ingestion of await live.call(resolved.entry)) {
 					contexts.push({context: ingestion.context, expectedFromBlock: await ingestion.expectedFromBlock()});
 				}
 
@@ -199,6 +215,12 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 			.post('/:indexer/ingest', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'ingest');
 				if (!resolved.ok) return resolved.response;
+				const live = resolved.entry.liveIngestions;
+				// BEFORE THE BODY IS READ, let alone parsed: this refusal is permanent, so
+				// buffering a batch to decide it would be paying for an answer this host
+				// already knows. It is also what keeps the refusal a fact about the DEPLOYMENT
+				// rather than about the payload -- nothing in the batch could have changed it.
+				if (!live) return acceptsNoIngestion(c as never, resolved.name);
 
 				// The BYTE ceiling, stated rather than discovered, and only when this host
 				// knows one (`maxIngestBytes`; absent means unbounded, as it always was). The
@@ -258,9 +280,9 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 				// `{source, config}` chooses within it. The comparison is `@etherfold/core`'s
 				// own (`sameWireContext`), which is the rule the receiver would apply to refuse
 				// it -- a copy here could select a receiver that then refused the batch.
-				const live = await resolved.entry.liveIngestions();
-				const ingestion = live.find((receiver) => sameWireContext(receiver.context, batch.context));
-				if (!ingestion) return noReceiverFor(c as never, live, batch.context);
+				const receivers = await live.call(resolved.entry);
+				const ingestion = receivers.find((receiver) => sameWireContext(receiver.context, batch.context));
+				if (!ingestion) return noReceiverFor(c as never, receivers, batch.context);
 
 				try {
 					// ONE call, and everything a batch costs durably happens inside it: the
@@ -286,6 +308,49 @@ export function getIngestAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 					return refusal(c as never, err);
 				}
 			})
+	);
+}
+
+/**
+ * THIS NAMED INDEXER ACCEPTS NO INGESTION, and the entry said so by holding no
+ * `liveIngestions` at all.
+ *
+ * `501`, the answer every other CAPABILITY refusal on this server gives -- a host
+ * with no registry at all (`ingestion-not-configured`), a name whose entry holds
+ * no generation registry (`generations-not-held`), a name that publishes no
+ * state-moved signal (`state-moved-not-published`) -- because all of them say
+ * "this deployment does not do that" and none of them is fixed by retrying or by
+ * sending something else.
+ *
+ * It is deliberately NOT the `400` a foreign `{source, config}` gets: that one is
+ * a fact about the PAYLOAD and its sibling refusal names the contexts that WOULD
+ * be accepted, while nothing is wrong with this batch and no context would be
+ * accepted here. It is deliberately not `ingestion-not-configured` either, which
+ * is the host-level absence of a registry: this host HAS one, this name resolves,
+ * and what it lacks is the one capability that takes writes -- so an operator can
+ * tell "this deployment does not accept pushes" from "this host has no registry
+ * at all" and from "no such indexer here" (`404`).
+ *
+ * It names the COMMAND that receives pushes, because the caller who meets this is
+ * ordinarily a fetcher pointed at the wrong half of a deployment.
+ */
+function acceptsNoIngestion(c: Context<{Bindings: Env}>, name: string) {
+	logger.info(
+		`ingest: ${JSON.stringify(name)} accepts no ingestion, so a batch was refused rather than taken and dropped`,
+	);
+	return c.json(
+		{
+			success: false,
+			error: 'ingestion-not-accepted',
+			indexer: name,
+			message:
+				`this named indexer accepts no ingestion: it is READ-ONLY on the wire, and says so rather than taking a ` +
+				`batch it would never apply. It is the COMBINED shape (\`etherfold run\`), which fetches the chain for ` +
+				`itself and folds through an in-process wire, so a remote sender pushing into it would be a second writer. ` +
+				`Its reads answer normally (\`/${name}/feed\`, \`/${name}/canonical\`, \`/${name}/state-moved\`); the ` +
+				`command that RECEIVES pushes is \`etherfold index\`.`,
+		} as const,
+		501,
 	);
 }
 

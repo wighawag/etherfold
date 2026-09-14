@@ -951,10 +951,12 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 //
 // So this is a host built the way a deployment would build one: the server, over
 // the handle `run` folded into, with the combined process's own stream-builder
-// registered under the name it folded as. `etherfold run` itself still registers
-// no named indexer (its ingestion is the in-process direct wire, and a remote
-// sender pushing into it would be a second writer), which is why this is a test
-// host rather than a change to that command.
+// registered under the name it folded as. `etherfold run` REGISTERS that name
+// itself now, as a READ-ONLY entry that accepts no ingestion
+// (`runServesTheIndexerItFolds.test.ts` asserts its own routes); this host stays
+// a hand-built one because what is under test here is the TABLE -- that a
+// combined fold stored a stream any host can serve -- and building it here keeps
+// that claim independent of how one command happens to register.
 // ---------------------------------------------------------------------------------------------------
 
 describe('both feed views answer over a database `run` folded', () => {

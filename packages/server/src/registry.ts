@@ -99,8 +99,34 @@ export type IndexerRegistryEntry = {
 	 * that generation is deleted (and its stream reaped with it, if it was the last
 	 * on it). A superseded generation is RETAINED under the caps, so being no longer
 	 * canonical is not by itself a reason to drop out of this list.
+	 *
+	 * ## OPTIONAL: absent means THIS NAME ACCEPTS NO INGESTION AT ALL
+	 *
+	 * A CAPABILITY statement about the deployment, exactly as an absent
+	 * `generations` / `promote` / `onStateMoved` is, and the ingest routes say so
+	 * with a `501 ingestion-not-accepted` rather than taking a batch they would not
+	 * apply. The COMBINED shape is what states it (`etherfold run`): that process
+	 * fetches the chain for itself and folds through an in-process direct wire, so a
+	 * remote sender pushing into it would be a second writer nobody asked for --
+	 * while it holds everything the READ routes need, which is why it registers a
+	 * name at all instead of the nothing it used to register.
+	 *
+	 * It is PER ENTRY and therefore per NAME: a host may accept ingestion for one
+	 * name and refuse it for another, and each answers for itself.
+	 *
+	 * ## ABSENT is NOT an EMPTY list, and the two must never be conflated
+	 *
+	 * `[]` means "no live wire contexts RIGHT NOW" -- every generation deleted, its
+	 * streams reaped -- which is a legitimate TRANSIENT state on a host that DOES
+	 * accept ingestion, and which the ingest route already answers for: a batch is
+	 * refused as a foreign context (`400`, naming the empty `expected`) and the
+	 * cursor question answers with an empty list. Expressing a permanent refusal as
+	 * an empty list would make the two indistinguishable to a sender, and would have
+	 * this host answer as though a batch might land here once something came back.
+	 * The absence has to be a statement about the DEPLOYMENT rather than a value
+	 * that happens to be empty.
 	 */
-	liveIngestions(): Promise<readonly LogIngestion[]>;
+	liveIngestions?(): Promise<readonly LogIngestion[]>;
 	/**
 	 * WHICH GENERATION ANSWERS READS: the canonical one, both halves in ONE read.
 	 *
@@ -253,13 +279,18 @@ export function singleContextEntry(db: RemoteSQL, ingestion: LogIngestion): Inde
  *
  * The questions are FORWARDED rather than spread, because they are methods on an
  * object that reads its own state: copying them off a class instance would
- * unbind them. The two OPTIONAL ones are forwarded only where what was handed
- * over answers them, so an entry never claims a capability its holder lacks.
+ * unbind them. The OPTIONAL ones are forwarded only where what was handed over
+ * answers them, so an entry never claims a capability its holder lacks -- and
+ * `liveIngestions` is one of them, so a host registering a container that accepts
+ * no pushes hands over what it wants answered WITHOUT that question and gets an
+ * entry that refuses ingestion (see the field).
  */
 export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 'db'>): IndexerRegistryEntry {
 	return {
 		db,
-		liveIngestions: () => holds.liveIngestions(),
+		...(holds.liveIngestions
+			? {liveIngestions: () => (holds.liveIngestions as () => Promise<readonly LogIngestion[]>)()}
+			: {}),
 		canonicalGeneration: () => holds.canonicalGeneration(),
 		...(holds.generations
 			? {generations: () => (holds.generations as () => Promise<readonly GenerationRecord[]>)()}

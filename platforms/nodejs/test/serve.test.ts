@@ -38,9 +38,14 @@ const INDEXER = 'alpha';
  * Spelled through `StartOptions` rather than imported from `@etherfold/core`,
  * because this package depends on no engine and no store and the test must not
  * be the thing that adds one.
+ *
+ * `liveIngestions` is OPTIONAL on an entry -- absent states that the name accepts
+ * no ingestion at all, which is what the combined `etherfold run` registers -- so
+ * this walks through a `NonNullable` to the shape a host that DOES accept pushes
+ * answers with.
  */
 type Ingestion = Awaited<
-	ReturnType<NonNullable<ReturnType<NonNullable<StartOptions['getIndexer']>>>['liveIngestions']>
+	ReturnType<NonNullable<NonNullable<ReturnType<NonNullable<StartOptions['getIndexer']>>>['liveIngestions']>>
 >[number];
 
 /** A stand-in for a stream-builder: it records what reached it and nothing else. */

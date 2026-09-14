@@ -31,14 +31,22 @@ const logger = logs('etherfold');
 //     cursor reporter that reads that store, so `/status` reports a cursor that
 //     ADVANCES while the process runs.
 //
-// And one thing it deliberately does NOT do: it injects no registry of named
-// indexers into its server. A remote sender pushing into a process that is
-// already fetching for itself would be a second writer nobody asked for, so the
-// namespaced ingestion routes
-// answer `501` to an authenticated caller exactly as the read tier's do (`401`
-// to an unauthenticated one: the token guard sits on the PATH, ahead of the
-// capability lookup, so the absence of a processor is not something an anonymous
-// caller can probe). The command for receiving pushes is `index`.
+// And one thing it deliberately does NOT do: it accepts no INGESTION. A remote
+// sender pushing into a process that is already fetching for itself would be a
+// second writer nobody asked for, so the namespaced ingestion routes answer
+// `501 ingestion-not-accepted` to an authenticated caller (`401` to an
+// unauthenticated one: the token guard sits on the PATH, ahead of the capability
+// lookup, so what this deployment does is not something an anonymous caller can
+// probe). The command for receiving pushes is `index`.
+//
+// That refusal covers the WRITE path and nothing else. It used to be expressed
+// by registering NO named indexer at all, which took the FEED, the canonical
+// pointer, the state-moved signal and the operator's own promote/revert route
+// down with it -- every one of them dark on the shape most apps point at, and
+// none of that was ever decided. So this process registers the one name it folds
+// under as a READ-ONLY entry: `liveIngestions` is left OFF, which the registry
+// seam reads as "this name accepts no ingestion" (`IndexerRegistryEntry`,
+// `@etherfold/server`), and everything else that name holds answers.
 //
 // ## It HOLDS GENERATIONS, and it is the shape that may add one and promote one
 //
@@ -145,7 +153,7 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			...deps,
 			signal: controller.signal,
 		});
-		const {serving, destination} = prepared.config;
+		const {serving, destination, indexer} = prepared.config;
 
 		// The Node fetcher adapter's own handler, reused rather than written again:
 		// which signals a container sends, and what happens to the cycle in flight, is
@@ -161,16 +169,54 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			port: serving.port,
 			...(serving.hostname === undefined ? {} : {hostname: serving.hostname}),
 			autoSetup: serving.autoSetup,
-			// No `getIndexer`: this process fetches for itself, so its ingestion is the
-			// in-process direct wire and its HTTP ingestion routes are a capability it
-			// does not have. It registers NO named indexer either, which is why they
-			// answer `501` under every name rather than `404` under all but one. That is
-			// unchanged by this process now HOLDING generations: registering the
-			// container here would open the write path to a remote sender, which is the
-			// second writer this command exists without. The operator's affordance over
-			// the pointer (ADR-0057) therefore belongs to `index`, the shape that is fed
-			// over HTTP in the first place.
+			// THE ONE NAME THIS PROCESS FOLDS UNDER, registered READ-ONLY: every row of
+			// its stored stream and every row of its generation registry is already keyed
+			// on this value (ADR-0036), so the routes that read them resolve to what this
+			// process already holds, and every other name is a `404` rather than this
+			// one's answers served under a name an app guessed.
 			//
+			// `liveIngestions` is ABSENT, and that absence is the whole write-path
+			// refusal: the seam reads it as "this name accepts no ingestion"
+			// (`IndexerRegistryEntry`, `@etherfold/server`) and the ingest routes answer
+			// `501 ingestion-not-accepted`. It is deliberately NOT an empty list, which
+			// means "no live wire contexts right now" on a host that DOES accept pushes
+			// -- a transient state, not this permanent one -- and it is deliberately not
+			// left to `INGEST_TOKEN` being unset, which is a door an operator opens by
+			// setting a variable for an unrelated reason.
+			//
+			// Written out rather than built with `indexerRegistry` / `indexerEntryOn`
+			// (`@etherfold/server`) for the same reason the server is imported LAZILY
+			// below: this module's assembly must not pull hono into a process that only
+			// folds (`etherfold build` shares it). The questions are FORWARDED rather
+			// than spread, because they are methods on an object that reads its own
+			// durable state: copying them off the container would unbind them.
+			getIndexer: (_c, name) =>
+				name === indexer
+					? {
+							// THE DATABASE THIS NAME OWNS (ADR-0053): the one handle the store folds
+							// into and this server answers over, which is what makes the feed a read of
+							// the rows this process is writing rather than of somebody else's.
+							db: prepared.db,
+							// WHICH generation answers reads, read from the durable pointer on every
+							// question -- not the fold this process happens to run, which is not the
+							// same thing while a successor is catching up.
+							canonicalGeneration: () => prepared.container.canonicalGeneration(),
+							// ...and what there is to point AT, plus the move itself (ADR-0057). This
+							// is the shape that HOLDS generations and may add one, so it is a shape an
+							// operator may need to revert: a bad upgrade here is reverted over HTTP
+							// exactly as it is on `index`, rather than by restarting the process.
+							generations: () => prepared.container.generations(),
+							promote: (id) => prepared.container.promote(id),
+							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
+							// with the token it is publishing under. A combined process APPLIES the
+							// blocks, so it is a shape that can tell a reader the state moved; the two
+							// are forwarded together because a stream that could deliver notifications
+							// but not say which token is in force could not answer a reconnecting
+							// client.
+							onStateMoved: (handler) => prepared.container.onStateMoved(handler),
+							coherenceNow: () => prepared.container.coherenceNow(),
+						}
+					: undefined,
 			// ONE entry per generation held, which is one until something adds a
 			// successor and two while it catches up: the shape of `/status` does not
 			// depend on how many a deployment happens to hold.
@@ -201,6 +247,12 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 
 		log(`etherfold run: following the chain into ${destination.db}, answering on ${server.url}`);
 		log(`  status: ${server.url}/status`);
+		// WHERE THE READS ARE, named because the route segment is the one thing an app
+		// pointed at this process has to know and the one thing it cannot guess: this
+		// name may have been defaulted. `index` prints its ingest URL for the same
+		// reason -- the surface a deployment exists to be reached on belongs on the line
+		// an operator already reads.
+		log(`  feed:   ${server.url}/${indexer}/feed`);
 		logger.info(`run: listening on ${server.url}, folding into ${destination.db}`);
 
 		return {

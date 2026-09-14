@@ -17,10 +17,13 @@ const logger = logs('@etherfold/server');
  * TWO refusals, and keeping them apart is the point of doing this here:
  *
  * - **`501`, no registry at all.** This host was built with no named indexers --
- *   a read tier, or a combined process whose ingestion is the in-process direct
- *   wire -- so there is no name it could answer under, in either direction. It is
- *   a CAPABILITY statement, and it is what the ingest routes have always said
- *   when nothing was injected.
+ *   a read tier (`etherfold serve`), which answers over a database somebody else
+ *   wrote and learns the name from the rows rather than registering one -- so
+ *   there is no name it could answer under, in either direction. It is a
+ *   CAPABILITY statement, and it is what the ingest routes have always said when
+ *   nothing was injected. It is deliberately NOT what a host that registers a
+ *   name it accepts no PUSHES for answers: that one resolves, serves its reads,
+ *   and refuses ingestion alone (`ingestion-not-accepted`, `api/ingest.ts`).
  * - **`404`, a name this host was not built with.** A ROUTING refusal, matching
  *   what the name IS: a route segment. It is deliberately not a `400`, because
  *   ADR-0004's `400` family is about the PAYLOAD (a foreign `{source, config}`,
