@@ -181,10 +181,11 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 		variable: 'INDEXER_NAME',
 		describe:
 			'the NAMED INDEXER this process holds: one indexed answer set over one chain, and the ' +
-			'discriminator every row of the stored emission stream carries. On the WIRE it is also the first ' +
-			'segment of every ingest route (/{indexer}/ingest), where it is required and never defaulted, ' +
-			`because a receiving host registers the names it was built with. A combined run routes no batch ` +
-			`by name, so there it is optional and defaults to '${DEFAULT_INDEXER_NAME}'`,
+			'discriminator every row of the stored emission stream carries. It is the first segment of every ' +
+			'route that acts on one (/{indexer}/feed, /{indexer}/ingest), and on the WIRE it is required and ' +
+			`never defaulted, because a receiving host registers the names it was built with. A combined run ` +
+			`routes no batch by name -- it serves reads under this name and accepts no pushes -- so there it is ` +
+			`optional and defaults to '${DEFAULT_INDEXER_NAME}'`,
 	},
 	ingestEndpoint: {
 		flag: '--ingest-endpoint <url>',
@@ -767,8 +768,10 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					...(rps === undefined ? {} : {rps}),
 					destination: resolveStoreTarget('run', options, env),
 					serving: resolveServing(options, env),
-					// the name its stored emissions are keyed on, not a route it answers
-					// under: this process registers no named indexer at all
+					// the name its stored emissions and generation records are keyed on, and
+					// the segment its READS answer under: this process registers that one name
+					// read-only, and routes no BATCH by it, which is the use ADR-0036 forbids
+					// defaulting and the reason defaulting this one is allowed
 					indexer: resolveIndexerName(options, env),
 				};
 			}

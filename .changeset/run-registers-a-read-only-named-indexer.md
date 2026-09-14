@@ -1,0 +1,17 @@
+---
+'etherfold': minor
+'@etherfold/server': minor
+'@etherfold/platform-nodejs': patch
+---
+
+The COMBINED `etherfold run` serves the named indexer it folds, and refuses ingestion because it SAYS it accepts none.
+
+`run` answered `/status` and nothing else. Every data route is namespaced (`/{indexer}/...`) and resolves through one shared lookup, that lookup answers `501` on a host that supplies no registry of named indexers, and `run` supplied none -- so the FEED, the CANONICAL view, the STATE-MOVED signal and the operator's own promote/revert route were all dark on the shape `CONTEXT.md` calls the milestone. That was never decided. What `run` deliberately withholds is INGESTION (it fetches the chain for itself, so a remote sender pushing into it would be a second writer nobody asked for), and that argument covers the write path and says nothing about reads: they went dark as a SIDE EFFECT, because registration was ALL OR NOTHING.
+
+**`IndexerRegistryEntry.liveIngestions` is now OPTIONAL, and its ABSENCE states that a name accepts no ingestion** (`@etherfold/server`). It is a CAPABILITY statement, exactly as an absent `generations` / `promote` / `onStateMoved` is, and the ingest routes answer it with **`501 ingestion-not-accepted`** -- distinct from `501 ingestion-not-configured` (this host has no registry at all) and from `404 unknown-indexer` (a tenant it was not built with), so an operator can tell the three apart. It is decided BEFORE the body is read, since no payload could change it, and it is PER ENTRY, so a host may accept pushes for one name and refuse them for another.
+
+**ABSENT is deliberately not an EMPTY list.** `[]` means "no live wire contexts right now" -- every generation deleted, its streams reaped -- which is a legitimate transient state on a host that DOES accept ingestion, and which still answers exactly what it always did (`400 context-mismatch` naming the empty `expected`, and an empty `contexts` list from the cursor question). Expressing a permanent refusal that way would make the two indistinguishable to a sender and would have the route accept a batch it silently dropped. `indexerEntryOn` forwards `liveIngestions` only where what it was handed answers it, as it already does for the other optional questions.
+
+**`etherfold run` registers the one name it folds under, READ-ONLY.** Every row of its stored stream and its generation registry is already keyed on that name (`--indexer` / `INDEXER_NAME`, defaulting to `default`), so `/{indexer}/feed`, `/{indexer}/canonical`, `/{indexer}/state-moved` and `/{indexer}/admin/canonical-generation` now answer over the database that process is writing -- the same read surface a split deployment has -- while a push answers `501 ingestion-not-accepted` with a valid `INGEST_TOKEN` presented, and a name it was not started with answers `404`. The refusal rests on the declared capability and never on a credential being unset, which is a door an operator opens by setting a variable for an unrelated reason.
+
+**`etherfold index` is untouched**, and so is every host that accepts ingestion: `index` registers exactly as it did, and no existing refusal changes shape. ADR-0057's note that "`run` registers no named indexer at all, so every namespaced route stays `501` there" is amended in place: the reason `run` refuses PUSHES is unchanged, and the operator's pointer surface now answers on every shape that HOLDS generations rather than only on the one fed over HTTP.

@@ -3,6 +3,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {run, runMain, type RunDependencies, type RunningIndexer} from '../src/index.js';
+import {DEFAULT_INDEXER_NAME} from '../src/config.js';
 import type {StoreCursorReport} from '../src/cursorReport.js';
 import type {Options} from '../src/types.js';
 import {canonicalStoreIn} from './utils/reads.js';
@@ -287,14 +288,13 @@ describe('the range the fetcher learned is readable, and configurable back in', 
 // ---------------------------------------------------------------------------------------------------
 // A `run` PROCESS HOSTS NO REMOTE WRITER
 // ---------------------------------------------------------------------------------------------------
-// Its ingestion is the in-process direct wire, so no ingestion capability is
-// injected into its server and the ingestion routes are a CAPABILITY it does not
-// have rather than a route table it lacks. Two things are asserted together,
-// because either alone would mislead: an AUTHENTICATED caller gets `501`, and an
-// unauthenticated one still gets `401` -- the token guard is registered on the
-// PATH ahead of the capability lookup and fails closed, and moving the capability
-// check in front of it would tell an anonymous caller whether a server hosts a
-// processor.
+// Its ingestion is the in-process direct wire, so the ingestion routes are a
+// CAPABILITY it does not have rather than a route table it lacks. Two things are
+// asserted together, because either alone would mislead: an AUTHENTICATED caller
+// gets `501`, and an unauthenticated one still gets `401` -- the token guard is
+// registered on the PATH ahead of the capability lookup and fails closed, and
+// moving the capability check in front of it would tell an anonymous caller what
+// a deployment holds.
 //
 // The token reaches the server through the ENVIRONMENT, not through a flag:
 // `--ingest-token` is refused by `run` (there is no wire to configure), while an
@@ -302,17 +302,18 @@ describe('the range the fetcher learned is readable, and configurable back in', 
 // Node adapter reads `INGEST_TOKEN` for the app it starts, which is how a
 // deployment configures the guard on a process that receives no pushes.
 //
-// The routes are NAMESPACED on the indexer name now (`/{indexer}/ingest`), and
-// this process registers no name at all -- `--indexer` is refused by `run` for
-// the same reason `--ingest-token` is. So the `501` is answered under EVERY name,
-// which is the honest answer: the capability is missing, rather than one
-// particular tenant.
+// WHICH `501` it is says what is missing, and that changed when this process
+// started registering the name it folds under: the refusal is now the ENTRY's
+// own (`ingestion-not-accepted`, "this named indexer takes no pushes") rather
+// than the host-level absence of a registry (`ingestion-not-configured`), and a
+// name this process was not started with is a `404`. What the read routes under
+// that name now answer is `runServesTheIndexerItFolds.test.ts`.
 // ---------------------------------------------------------------------------------------------------
 
 const TOKEN = 'a-shared-secret';
 const AUTHENTICATED = {Authorization: `Bearer ${TOKEN}`};
-/** Any name at all: this process registered none, so every one of them answers the same. */
-const SOME_NAME = 'whatever';
+/** What `RUN` above folds under, since it names no indexer: the combined shape's default (ADR-0052). */
+const NAME = DEFAULT_INDEXER_NAME;
 
 describe('a run process refuses to be written to', () => {
 	afterEach(() => {
@@ -323,24 +324,24 @@ describe('a run process refuses to be written to', () => {
 		process.env.INGEST_TOKEN = TOKEN;
 		running = await run(RUN, depsFor(fakeChain().serve(SPREAD, TIP), oneDatabase()));
 
-		const asked = await fetch(`${running.url}/${SOME_NAME}/ingest/expected-from-block`, {
+		const asked = await fetch(`${running.url}/${NAME}/ingest/expected-from-block`, {
 			method: 'POST',
 			headers: AUTHENTICATED,
 		});
 		expect(asked.status).toBe(501);
-		expect(((await asked.json()) as {error: string}).error).toBe('ingestion-not-configured');
+		expect(((await asked.json()) as {error: string}).error).toBe('ingestion-not-accepted');
 
-		const pushed = await fetch(`${running.url}/${SOME_NAME}/ingest`, {
+		const pushed = await fetch(`${running.url}/${NAME}/ingest`, {
 			method: 'POST',
 			headers: {...AUTHENTICATED, 'Content-Type': 'application/json'},
 			body: JSON.stringify({fromBlock: START_BLOCK, toBlock: START_BLOCK + 1, latestBlock: TIP, logs: []}),
 		});
 		expect(pushed.status).toBe(501);
-		expect(((await pushed.json()) as {error: string}).error).toBe('ingestion-not-configured');
+		expect(((await pushed.json()) as {error: string}).error).toBe('ingestion-not-accepted');
 
-		// the absence of a processor is not something an anonymous caller can probe
-		expect((await fetch(`${running.url}/${SOME_NAME}/ingest`, {method: 'POST', body: '{}'})).status).toBe(401);
-		expect((await fetch(`${running.url}/${SOME_NAME}/ingest/expected-from-block`, {method: 'POST'})).status).toBe(401);
+		// what this deployment does is not something an anonymous caller can probe
+		expect((await fetch(`${running.url}/${NAME}/ingest`, {method: 'POST', body: '{}'})).status).toBe(401);
+		expect((await fetch(`${running.url}/${NAME}/ingest/expected-from-block`, {method: 'POST'})).status).toBe(401);
 
 		// the read half is untouched by the refusal of the write half
 		const status = await fetch(`${running.url}/status`);
