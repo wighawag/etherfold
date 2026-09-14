@@ -59,6 +59,18 @@ const logger = logs('etherfold');
 // moves when it catches up. Nothing about the state a reader sees moves while it
 // does: the successor folds into its own table namespace and the pointer moves
 // once, at the end.
+//
+// ## ...and it is the shape a RECONFIGURE can reach
+//
+// A successor used to arrive exactly one way -- by restarting this process, so
+// that the container registered a new generation as it OPENED -- because nothing
+// watched a file and no route added one. `POST /{indexer}/admin/reconfigure`
+// (`@etherfold/server`) is the trigger that removes the restart, and this process
+// answers it: it RE-READS its own configuration, re-imports the processor module
+// and registers whatever generation that names beside the live fold
+// (`reconfigure.ts`). Whatever noticed the file changed stays OUTSIDE, so one
+// mechanism serves a dev watcher, a deploy hook and a CI step, and this process
+// never grows an opinion about how anybody's editor saves files.
 // ---------------------------------------------------------------------------------------------------
 
 /** Starts the HTTP surface. Defaults to the Node platform adapter's `startServer`, imported lazily. */
@@ -207,6 +219,13 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// exactly as it is on `index`, rather than by restarting the process.
 							generations: () => prepared.container.generations(),
 							promote: (id) => prepared.container.promote(id),
+							// ...and the TRIGGER that gives an operator something to point AT: this
+							// process RE-READS its own configuration and registers whatever generation
+							// that now names, beside the live fold (`reconfigure.ts`). `run` is the shape
+							// that can answer it -- it holds the module path, the source and the container
+							// at once -- so a changed processor reaches a RUNNING deployment instead of
+							// waiting for a restart, and nothing stops answering while it does.
+							reconfigure: () => prepared.reconfigure(),
 							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
 							// with the token it is publishing under. A combined process APPLIES the
 							// blocks, so it is a shape that can tell a reader the state moved; the two

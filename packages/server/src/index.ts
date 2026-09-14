@@ -31,7 +31,7 @@ import {getAdminAPI} from './api/admin.js';
 export type {Env, ServerOptions};
 export type {CursorReporter, FetcherLimitsReporter} from './types.js';
 export {indexerEntryOn, indexerRegistry, singleContextEntry} from './registry.js';
-export type {IndexerRegistryEntry, IndexerResolver} from './registry.js';
+export type {IndexerRegistryEntry, IndexerResolver, ReconfigureReport} from './registry.js';
 /**
  * THE `/status` CURSOR ENVELOPE and what a host's reporter fills it with
  * (ADR-0047): the value the server carries VERBATIM, and the per-generation
