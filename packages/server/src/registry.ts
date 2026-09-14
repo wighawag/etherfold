@@ -4,6 +4,61 @@ import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
 
 /**
+ * WHAT ONE RE-READ DID, in the three answers a caller has to be able to tell
+ * apart (`POST /{indexer}/admin/reconfigure`).
+ *
+ * A watcher calls that route after every build, so "I saved the file and nothing
+ * happened" must not be one shape with three causes: a generation was
+ * REGISTERED, the configuration named the generation this deployment already
+ * holds (`unchanged`), or the re-read could not be completed at all (`failed`)
+ * and the deployment is exactly as it was.
+ *
+ * `unchanged` is a SUCCESS and is deliberately not folded into `registered` with
+ * a flag: it is the ordinary answer to an edit that did not move the processor's
+ * DECLARED identity, which `getVersionHash()` is (the code fingerprint is
+ * advisory and stays out of it, `@etherfold/core`'s `utils/fingerprint.ts`), so
+ * a developer reading it learns something true rather than watching a no-op
+ * report success.
+ *
+ * It is DATA rather than an exception on the failure arm, because the failure is
+ * EXPECTED: a processor that does not compile is the normal state between the
+ * two halves of one change, the next build repairs it, and a route that had to
+ * distinguish "the module is broken" from "this host threw" by inspecting an
+ * error would be guessing.
+ *
+ * ## Why it is not called `ReconfigureOutcome`
+ *
+ * Because that name is TAKEN, by a different question's answer:
+ * `@etherfold/core`'s `ReconfigureOutcome` rides out of `updateIndexer`, the
+ * IN-PLACE verb, and says whether the fold it reconfigured was DISCARDED and
+ * what the source comparison decided. Nothing is discarded here -- that is the
+ * whole of what "a reconfigure is not an outage" means -- so there is no reset
+ * verdict to carry. `@etherfold/browser` met the same collision first and
+ * answered it the same way (`HostReconfigure`, "what a reconfigure did, as the
+ * TAB is told"); this is its sibling one transport out, "what a re-read did, as
+ * the CALLER of the admin route is told", with one arm the in-process one does
+ * not need.
+ */
+export type ReconfigureReport =
+	| {
+			readonly outcome: 'registered';
+			/** The generation that was registered BESIDE the incumbent, which is what the caller asked to learn. */
+			readonly generation: GenerationId;
+	  }
+	| {
+			readonly outcome: 'unchanged';
+			/** The generation the re-read named, which this deployment was already holding a fold for. */
+			readonly generation: GenerationId;
+			/** WHY nothing was registered, in terms an author can act on. */
+			readonly message: string;
+	  }
+	| {
+			readonly outcome: 'failed';
+			/** What went wrong, as the caller's watcher will print it. */
+			readonly message: string;
+	  };
+
+/**
  * ONE named indexer this host was built with, as the routes see it.
  *
  * A NAMED INDEXER is the server's multi-tenancy unit: one indexed answer set
@@ -176,6 +231,33 @@ export type IndexerRegistryEntry = {
 	 */
 	promote?(id: GenerationId): Promise<GenerationRecord>;
 	/**
+	 * RE-READ THIS DEPLOYMENT'S OWN CONFIGURATION and register whatever generation
+	 * it now names, BESIDE the incumbent -- the trigger a watcher pulls after a
+	 * rebuild.
+	 *
+	 * RE-READ and never RECEIVE: a processor is CODE and cannot cross HTTP, so
+	 * nothing is handed in. The watcher owns WHEN and the process owns WHAT, which
+	 * is why whatever notices a file changed lives OUTSIDE the process and this is
+	 * an endpoint rather than a file watcher: a dev watcher, a deploy hook and a CI
+	 * step all call one mechanism.
+	 *
+	 * OPTIONAL, and on its own rather than paired with `generations`/`promote`: a
+	 * host holding a registry can still have nothing to re-read from. The server
+	 * package resolves no module and reads no configuration -- it names no runtime
+	 * (a test asserts it) and could not import a processor if it wanted to -- so
+	 * this is answered by the HOST that assembled the fold, which is the CLI's `run`
+	 * today. Absent is a CAPABILITY statement and the admin surface says so with a
+	 * `501`, exactly as it does for a host with no pointer to move.
+	 *
+	 * It must REGISTER BESIDE and never restart or re-open: the incumbent answering
+	 * every read throughout is the property the whole affordance exists to preserve,
+	 * and a reload that briefly stops answering is worse than the restart it
+	 * replaces. It must also leave the deployment exactly as it was when it cannot
+	 * be completed, failing BEFORE anything is registered rather than unwinding
+	 * afterwards, and say so through `ReconfigureReport` rather than by throwing.
+	 */
+	reconfigure?(): Promise<ReconfigureReport>;
+	/**
 	 * BE TOLD THE STATE MOVED, for this name: the state-moved SIGNAL the fold that
 	 * answers reads publishes as it applies each block (ADR-0083). Returns the detach.
 	 *
@@ -298,6 +380,7 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 		...(holds.promote
 			? {promote: (id: GenerationId) => (holds.promote as (id: GenerationId) => Promise<GenerationRecord>)(id)}
 			: {}),
+		...(holds.reconfigure ? {reconfigure: () => (holds.reconfigure as () => Promise<ReconfigureReport>)()} : {}),
 		...(holds.onStateMoved
 			? {
 					onStateMoved: (handler: StateMovedHandler) =>

@@ -19,26 +19,32 @@ import {
 	type Sleep,
 } from '@etherfold/fetcher-host';
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
-import {instantiateProcessor, loadProcessorModule, resolveSource, type ProcessorModule} from '@etherfold/utils';
+import type {ReconfigureReport} from '@etherfold/server';
+import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {openFolding, openFoldingDatabase, openExplicitSource, streamConfigFor} from './folding.js';
-import type {BuildConfig, ConfigFor, Options, RunConfig, SourceOrigin} from './types.js';
+import {openFolding, openFoldingDatabase, openIndexingSource, streamConfigFor} from './folding.js';
+import {reconfigurerFor} from './reconfigure.js';
+import type {BuildConfig, ConfigFor, Options, RunConfig} from './types.js';
 
 export * from './config.js';
 export * from './types.js';
 export {readCursorReport, readStatusReport, type ReportedFold, type StoreCursorReport} from './cursorReport.js';
 export {
+	foldPartsFor,
 	foldingStatusReport,
 	openFolding,
 	openFoldingDatabase,
 	openExplicitSource,
+	openIndexingSource,
 	streamConfigFor,
+	type FoldParts,
 	type FoldingAssembly,
 } from './folding.js';
+export {reconfigurerFor, type ReconfigureContext} from './reconfigure.js';
 export {canonicalGenerationIn, canonicalStateNamespaceIn, heldGenerationsIn, type ReadTierOptions} from './readTier.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
 export {
@@ -126,6 +132,23 @@ export type PreparedIndexing<
 	 * of it -- against `:memory:` they would not even be the same database.
 	 */
 	db: RemoteSQL;
+	/**
+	 * RE-READ this deployment's own configuration and register whatever generation
+	 * it now names, beside the incumbent -- what `POST /{indexer}/admin/reconfigure`
+	 * does on this process (`reconfigure.ts`).
+	 *
+	 * It is built HERE, by the assembly, because re-reading is redoing exactly the
+	 * two resolutions above -- the processor module and the source -- and a second
+	 * place that knew how to do that would be a second answer to what this process
+	 * folds.
+	 *
+	 * `run` is the shape that EXPOSES it, and `build` deliberately does not: a
+	 * one-shot has no reconfigure, holds exactly ONE generation and exits, so it
+	 * never registers a successor and never promotes. It is handed back for both
+	 * because the assembly is shared verbatim and a conditional field would be a
+	 * type for a distinction the commands already draw.
+	 */
+	reconfigure(): Promise<ReconfigureReport>;
 	/**
 	 * Drive the assembled pipeline, and return what the run did. Throws on a
 	 * `fatal` report.
@@ -224,16 +247,11 @@ export async function prepareIndexing<
 		...(deps.createDB ? {createDB: deps.createDB} : {}),
 	});
 
-	const source: IndexingSource<ABI> | undefined = await openSource<ABI, ProcessResultType>(
+	const source: IndexingSource<ABI> = await openIndexingSource<ABI, ProcessResultType>(
 		resolved.source,
 		processorModule,
 		provider,
 	);
-	if (!source || !source.contracts) {
-		throw new Error(
-			`contracts data not found in the processor module, it needs to be provided either as exported field named "contractsData" or as field "contractsDataPerChain" indexed by chainID`,
-		);
-	}
 
 	// The GENERATION CONTAINER, and inside it the receiving half of ADR-0004:
 	// authoritative about the cursor, deriving every reorg, making no chain call. It
@@ -286,30 +304,18 @@ export async function prepareIndexing<
 		host,
 		store,
 		db,
+		reconfigure: reconfigurerFor<ABI, ProcessResultType>({
+			options,
+			env,
+			provider,
+			db,
+			dbUrl: resolved.destination.db,
+			indexer: resolved.indexer,
+			container,
+			...(deps.importModule ? {importModule: deps.importModule} : {}),
+		}),
 		index: () => driveCycles(command, host, container, deps),
 	};
-}
-
-/**
- * Turn a resolved source ORIGIN into the source itself.
- *
- * The origin was decided from the flags and the environment alone; this is where
- * the side effect it names actually happens, and the three arms are deliberately
- * not equivalent. Both explicit arms are CHAIN-FREE, which is what lets `index`
- * -- the receiving half, which makes no chain call at all -- resolve a source as
- * a first-class case rather than as a special case bolted on. The module arm is
- * the only one that may cost an `eth_chainId` call, and it is the only one a
- * chain-free caller is refused (`requireExplicitSource`).
- */
-async function openSource<ABI extends Abi, ProcessResultType>(
-	origin: SourceOrigin<ABI>,
-	processorModule: ProcessorModule<ABI, ProcessResultType>,
-	provider: EIP1193ProviderWithoutEvents,
-): Promise<IndexingSource<ABI> | undefined> {
-	if (origin.from === 'processor-module') {
-		return resolveSource<ABI, ProcessResultType>(processorModule, provider as never);
-	}
-	return openExplicitSource<ABI>(origin);
 }
 
 /**
@@ -357,17 +363,20 @@ async function openSource<ABI extends Abi, ProcessResultType>(
  * exactly ONE generation and exits, so there is never a second fold to advance,
  * and never a promotion.
  *
- * WHERE THE SUCCESSOR COMES FROM, since "a reconfigure can reach a long-running
- * host" reads like it arrives at RUNTIME and it does not: a generation is
- * registered when the container OPENS, from config, so a changed processor or
- * source reaches this process by RESTARTING it. What makes that survivable is not
- * the process being long-lived but the registry and the state being ROWS: the new
- * process finds the incumbent already there, still canonical, still answering, and
- * registers the successor beside it. Nothing watches a file and no route adds a
- * generation (`work/notes/observations/a-reconfigure-cannot-reach-a-running-run.md`
- * records the gap and the decided fix shape, an endpoint a separate watcher calls).
- * What the long-running shape buys is the half described above: somewhere to put
- * the bounded rebuild that carries the successor to level once it exists.
+ * WHERE THE SUCCESSOR COMES FROM, in the two ways it can arrive. A generation is
+ * registered when the container OPENS, from config, so a RESTART is one of them
+ * -- and what makes a restart survivable is not the process being long-lived but
+ * the registry and the state being ROWS: the new process finds the incumbent
+ * already there, still canonical, still answering, and registers the successor
+ * beside it. The other way needs no restart at all, and is the one "a reconfigure
+ * can reach a long-running host" was always read as meaning: this process RE-READS
+ * its own configuration when asked to, over HTTP
+ * (`POST /{indexer}/admin/reconfigure`, `reconfigure.ts`), and registers whatever
+ * generation that names beside the live fold while it goes on answering. Nothing
+ * inside this process watches a file: whatever notices a rebuild stays outside and
+ * pulls that trigger. What the long-running shape buys is the half described
+ * above: somewhere to put the bounded rebuild that carries the successor to level
+ * once it exists.
  *
  * The loop sleeps only where it decided to WAIT, so a process still catching the
  * chain up flat out (`CATCH_UP_DELAY_MS=0`) advances its followers once it

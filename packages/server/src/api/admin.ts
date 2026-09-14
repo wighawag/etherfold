@@ -3,7 +3,7 @@ import {Hono} from 'hono';
 import type {Context} from 'hono';
 import {logs} from 'named-logs';
 import type {Env} from '../env.js';
-import type {IndexerRegistryEntry} from '../registry.js';
+import type {IndexerRegistryEntry, ReconfigureReport} from '../registry.js';
 import {authorizedWith} from './auth.js';
 import {resolveIndexer} from './resolve.js';
 import {setup} from '../setup.js';
@@ -13,7 +13,16 @@ const logger = logs('@etherfold/server');
 
 /**
  * THE OPERATOR'S SURFACE ON ONE NAMED INDEXER: which generation answers reads,
- * and moving that pointer -- forwards to promote, BACK to revert.
+ * moving that pointer -- forwards to promote, BACK to revert -- and the TRIGGER
+ * that introduces a generation to move to in the first place.
+ *
+ * The two belong together and arrived in that order for a reason. Everything
+ * downstream of "a successor exists" was built and careful before anything could
+ * introduce one to a RUNNING process: a generation was registered when a
+ * container OPENED, from configuration, so a changed processor reached a
+ * deployment by restarting it. `reconfigure` is the missing half, and it sits
+ * here rather than anywhere else because it is the same operator, the same
+ * segment and the same credential as the move.
  *
  * ## Why this is an HTTP route and not a command
  *
@@ -194,6 +203,143 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 					// undo back to.
 					previous: previous ? reported(previous) : undefined,
 					canonical: reported(moved),
+				} as const);
+			})
+			/**
+			 * THE TRIGGER: make this deployment RE-READ its own configuration and register
+			 * whatever generation that now names, beside the incumbent.
+			 *
+			 * ## Why an endpoint, and why it takes NOTHING
+			 *
+			 * Whatever notices a file changed lives OUTSIDE the process. A file watcher
+			 * inside the indexer would be development tooling by construction, which is what
+			 * makes it tempting to gate behind a development flag and then need a second
+			 * mechanism for production; an endpoint is called by a dev watcher, a deploy hook
+			 * or a CI step equally. And it is RE-READ rather than RECEIVE because a processor
+			 * is CODE and cannot cross HTTP: the watcher owns WHEN, the process owns WHAT. So
+			 * there is no body, and a body would be a format for shipping code that nobody
+			 * should invent.
+			 *
+			 * It sits under the SAME `/{indexer}/admin/` segment as the pointer move and
+			 * therefore under the same `ADMIN_TOKEN` guard: handing a remote caller the
+			 * ability to START a fold reuses the existing authorisation story rather than
+			 * opening a second one, and it is deliberately never the ingest credential.
+			 *
+			 * ## This route DECIDES nothing about the reload
+			 *
+			 * Exactly as the pointer move above decides nothing about the move. This package
+			 * names no runtime, so it resolves no module and reads no configuration; what a
+			 * re-read MEANS belongs to the host that assembled the fold, behind
+			 * `IndexerRegistryEntry.reconfigure`. What this adds is the transport's own two
+			 * decisions: who may call it, and which status each answer is.
+			 *
+			 * ## THE THREE ANSWERS, and why they are three
+			 *
+			 * Because "I saved the file and nothing happened" otherwise has three
+			 * indistinguishable causes. `registered` NAMES the generation (`200`);
+			 * `unchanged` is a SUCCESS that says the configuration named the generation this
+			 * deployment already holds (`200`, with the reason); `failed` refuses (`409`),
+			 * names what went wrong, and promises the deployment is exactly as it was.
+			 *
+			 * `409` and none of this surface's other refusals: nothing about the REQUEST is
+			 * wrong so it is not the `400` family, the name resolved so it is not the `404`,
+			 * and the capability is present so it is not the `501` beside it. What is true is
+			 * that the deployment's CURRENT state conflicts with performing this, and that a
+			 * caller which fixes that state and re-sends the identical request will be
+			 * served -- which is what this repo already spends `409` on, as the ONE resumable
+			 * refusal on the wire (ADR-0004). A broken processor is the normal state between
+			 * the two halves of one change, so a watcher meeting this is expected to build
+			 * again and call again seconds later.
+			 *
+			 * A host that THREW is reported as the same failure rather than as a `500`: the
+			 * caller's situation is identical (the re-read did not happen, the deployment is
+			 * untouched, try again after fixing it), and making a watcher distinguish an
+			 * exception from a refusal would be asking it to guess.
+			 */
+			.post('/:indexer/admin/reconfigure', async (c) => {
+				const resolved = resolveIndexer(options, c as never, 'admin');
+				if (!resolved.ok) return resolved.response;
+				const {entry, name} = resolved;
+
+				const reconfigure = entry.reconfigure;
+				if (!reconfigure) {
+					// A CAPABILITY this deployment lacks and NOT a route that is missing, which
+					// is the same `501` an absent pointer or an absent ingestion answers. It is
+					// deliberately independent of `generations`/`promote`: a read tier holds a
+					// database somebody else writes and no processor at all, and a host may hold
+					// a registry it can move a pointer in with nothing to re-read FROM.
+					logger.error(`admin: ${JSON.stringify(name)} cannot re-read its configuration, so a reconfigure was refused`);
+					return c.json(
+						{
+							success: false,
+							error: 'reconfigure-not-held',
+							indexer: name,
+							message:
+								`this named indexer cannot re-read its own configuration, so there is nothing here to trigger: it ` +
+								`was registered by a host that resolves no processor module of its own -- a read tier answers over a ` +
+								`database written elsewhere, and a receiving host is handed its fold rather than reading one. A ` +
+								`deployment that serves this registers a re-read alongside what it holds (\`etherfold run\`).`,
+						} as const,
+						501,
+					);
+				}
+
+				let report: ReconfigureReport;
+				try {
+					report = await reconfigure.call(entry);
+				} catch (err) {
+					// SAME ANSWER as a reported failure, because the caller's situation is the
+					// same one. A host is expected to report its own failure as data (the load
+					// that did not compile is the EXPECTED case, not an exception), and this is
+					// what keeps a host that did not still honest to the watcher.
+					report = {outcome: 'failed', message: err instanceof Error ? err.message : String(err)};
+				}
+
+				if (report.outcome === 'failed') {
+					logger.error(
+						`admin: ${JSON.stringify(name)} could not re-read its configuration (${report.message}). Nothing was ` +
+							`registered and the deployment is as it was.`,
+					);
+					return c.json(
+						{
+							success: false,
+							error: 'reconfigure-failed',
+							indexer: name,
+							outcome: 'failed',
+							message: report.message,
+						} as const,
+						409,
+					);
+				}
+
+				if (report.outcome === 'unchanged') {
+					logger.info(
+						`admin: ${JSON.stringify(name)} re-read its configuration and it named {stream: ` +
+							`${report.generation.stream}, processor: ${report.generation.processor}}, which it already holds, so ` +
+							`NOTHING was registered`,
+					);
+					return c.json({
+						success: true,
+						indexer: name,
+						outcome: 'unchanged',
+						generation: reported(report.generation),
+						message: report.message,
+					} as const);
+				}
+
+				logger.info(
+					`admin: ${JSON.stringify(name)} re-read its configuration and REGISTERED {stream: ` +
+						`${report.generation.stream}, processor: ${report.generation.processor}} beside what answers reads`,
+				);
+				return c.json({
+					success: true,
+					indexer: name,
+					outcome: 'registered',
+					// the generation it registered, in the two fields the pointer move takes and
+					// the opaque digest a feed response advertises it by -- so the value this
+					// answers with is the value an operator matches or promotes, with nothing to
+					// reconstruct.
+					generation: reported(report.generation),
 				} as const);
 			})
 	);

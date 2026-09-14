@@ -7,9 +7,11 @@ import {
 	type GenerationId,
 	type IndexingSource,
 	type ProvidedStreamConfig,
+	type ReceivedGenerationSpec,
 	type ReceivingIndexer,
 	type StreamBuilder,
 } from '@etherfold/core';
+import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
 import {
 	openForWriting,
@@ -21,11 +23,11 @@ import type {StatusReport} from '@etherfold/server';
 // TYPE ONLY, so that naming the store this module builds costs no eager import of
 // libSQL: the value arrives through the dynamic import below.
 import type {VersionedStateStore as SQLiteStateStore} from '@etherfold/state-store-sqlite';
-import {loadContracts} from '@etherfold/utils';
+import {loadContracts, resolveSource, type ProcessorModule} from '@etherfold/utils';
 import type {RemoteSQL} from 'remote-sql';
 import {readStatusReport} from './cursorReport.js';
 import {reorgRecorderFor} from './reorgCounters.js';
-import type {ExplicitSource, StoreTarget} from './types.js';
+import type {ExplicitSource, SourceOrigin, StoreTarget} from './types.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE FOLDING ASSEMBLY EVERY COMMAND THAT OWNS A DATABASE SHARES
@@ -119,6 +121,42 @@ export async function openExplicitSource<ABI extends Abi>(origin: ExplicitSource
 }
 
 /**
+ * Turn a resolved source ORIGIN into the source itself, all three arms.
+ *
+ * The origin was decided from the flags and the environment alone; this is where
+ * the side effect it names actually happens, and the three arms are deliberately
+ * not equivalent. Both explicit arms are CHAIN-FREE, which is what lets `index`
+ * -- the receiving half, which makes no chain call at all -- resolve a source as
+ * a first-class case rather than as a special case bolted on. The module arm is
+ * the only one that may cost an `eth_chainId` call, and it is the only one a
+ * chain-free caller is refused (`requireExplicitSource`).
+ *
+ * It lives HERE, beside the fold it feeds, because it is run TWICE against one
+ * deployment: once when the process assembles (`prepareIndexing`), and again
+ * whenever that process is asked to RE-READ its configuration
+ * (`reconfigure.ts`). A source change and a processor change arrive together, so
+ * a re-read that reloaded the module and kept the old source would half-apply
+ * the author's intent.
+ */
+export async function openIndexingSource<ABI extends Abi, ProcessResultType>(
+	origin: SourceOrigin<ABI>,
+	processorModule: ProcessorModule<ABI, ProcessResultType>,
+	provider: EIP1193ProviderWithoutEvents,
+): Promise<IndexingSource<ABI>> {
+	const source =
+		origin.from === 'processor-module'
+			? await resolveSource<ABI, ProcessResultType>(processorModule, provider as never)
+			: await openExplicitSource<ABI>(origin);
+	if (!source || !source.contracts) {
+		throw new Error(
+			`contracts data not found in the processor module, it needs to be provided either as exported field named ` +
+				`"contractsData" or as field "contractsDataPerChain" indexed by chainID`,
+		);
+	}
+	return source;
+}
+
+/**
  * A fold against a database that carries none of the fixed tables, where the
  * operator has said something else migrates it.
  *
@@ -196,6 +234,121 @@ export async function openFoldingDatabase(
 	return handle;
 }
 
+/**
+ * ONE DECLARED PROCESSOR, as this deployment's database folds it: the state its
+ * generations land in, the identity it is FILED under, and the two factories a
+ * container builds a fold from.
+ *
+ * Built by `foldPartsFor` and named as a type because it is assembled TWICE over
+ * one running deployment: once by `openFolding` for the fold a process comes up
+ * with, and again by a RE-READ for the processor that has just been rebuilt
+ * (`reconfigure.ts`). The successor has to land in the same database, under the
+ * same namespacing convention and with the same retention and finality, or it
+ * would not be the same deployment reconfigured -- so the assembly exists once
+ * and both callers ask for it rather than each spelling it out.
+ */
+export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
+	/**
+	 * ONE generation's state, by identity: its entity tables, `_blocks` and
+	 * `_cursor` under the namespace that identity names (ADR-0053). NOT claimed --
+	 * the claim is taken by `generation.createState`, and this bare form is what a
+	 * DROP is performed through.
+	 */
+	stateFor(id: GenerationId): SQLiteStateStore;
+	/**
+	 * The processor half of the generation identity this declaration WILL have,
+	 * computable before the processor exists (ADR-0053) and the very value
+	 * `EntityEventProcessor.getVersionHash()` answers with.
+	 *
+	 * It is author-DECLARED (`version` plus a hash of the entity declarations and
+	 * the config) and deliberately not a hash of the handler source: the code
+	 * fingerprint is ADVISORY and stays out of the identity, because a minifier that
+	 * re-emitted the same behaviour differently would otherwise invalidate every
+	 * deployment's state (`@etherfold/core`, `utils/fingerprint.ts`). A re-read is
+	 * therefore a no-op for an edit that did not move it, which is what makes
+	 * reporting the outcome load-bearing rather than decorative.
+	 */
+	versionHash: string;
+	/** The two factories, in ADR-0043's order: state FIRST, then the fold over it. */
+	generation: Pick<
+		ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>,
+		'createState' | 'createProcessor'
+	>;
+};
+
+/**
+ * Build the fold parts above for ONE declared processor over ONE database.
+ *
+ * ## Why the state factory can name its namespace up front
+ *
+ * A generation is `{stream digest, processor version hash}`, the digest is a
+ * function of the source and the stream config, and `entityProcessorVersionHash`
+ * is the very function `EntityEventProcessor.getVersionHash()` answers with -- so
+ * the namespace is computable BEFORE the processor exists (ADR-0053) and the
+ * state-then-processor build order (ADR-0043) still holds. The identity the
+ * container OBSERVES afterwards, from the processor's own hash, is therefore the
+ * one the tables were named from and the two cannot disagree.
+ *
+ * The imports are dynamic so that a command which never opens a database does not
+ * pay for libSQL, matching how `serve` keeps the server's dependency tree off
+ * `build`.
+ */
+export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
+	declared: EntityProcessor<ABI, any>,
+	target: StoreTarget,
+	db: RemoteSQL,
+	/** The stream's own resolved finality, which the retention window is validated against. */
+	finalityDepth: number,
+): Promise<FoldParts<ABI, ProcessResultType>> {
+	const [{EntityEventProcessor, entityProcessorVersionHash}, {VersionedStateStore}] = await Promise.all([
+		import('@etherfold/processor-entities'),
+		import('@etherfold/state-store-sqlite'),
+	]);
+
+	/**
+	 * ONE generation's state: the entity tables, `_blocks` and `_cursor` under the
+	 * namespace that generation's identity names, in the database every other
+	 * generation of this name also lives in (ADR-0053).
+	 *
+	 * The finality depth is the stream's own, resolved by the caller from
+	 * `streamConfigFor`: a retention window is validated against the depth a reorg
+	 * can actually reach, and a number written here instead would be a second
+	 * opinion about it. It is also the FLOOR a `revert-only` store prunes at
+	 * (`retentionFloor`), which is why stating it matters to a deployment that set no
+	 * window at all.
+	 *
+	 * Nothing here prunes, and nothing on the fold's path does: pruning is a call a
+	 * host SCHEDULES (ADR-0022), and one inside the index loop would stall whichever
+	 * block crossed the threshold. This command set schedules it between cycles and,
+	 * on the one-shot, before it exits -- see `pruning.ts`.
+	 */
+	const stateFor = (id: GenerationId): SQLiteStateStore =>
+		new VersionedStateStore(db, declared.entities, {
+			tableNamespace: generationDigestOf(id),
+			retention: target.retention,
+			finalityDepth,
+		});
+	const versionHash = entityProcessorVersionHash(declared);
+
+	return {
+		stateFor,
+		versionHash,
+		generation: {
+			// CLAIMED here, which is the ONE place this process takes the store: folding is
+			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A
+			// second process pointed at this database takes the claim and this one's next
+			// mutation is refused whole rather than half-applied (ADR-0075).
+			createState: (generation) => openForWriting(stateFor({stream: generation.stream, processor: versionHash})),
+			// The CLI intentionally constructs the processor with NO factory argument (the
+			// server passes its folder); see MEDIUM-3.
+			createProcessor: (state) =>
+				new EntityEventProcessor<ABI, any>(state, declared, {
+					finalityDepth,
+				}) as unknown as EventProcessor<ABI, ProcessResultType>,
+		},
+	};
+}
+
 /** Everything a folding command holds over its one database handle. */
 export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
 	/**
@@ -222,15 +375,9 @@ export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
  * this database, the fold it comes up holding, and the two ports that put what a
  * fold concluded into the same database.
  *
- * ## Why the state factory can name its namespace up front
- *
- * A generation is `{stream digest, processor version hash}`, the digest is a
- * function of the source and the stream config, and `entityProcessorVersionHash`
- * is the very function `EntityEventProcessor.getVersionHash()` answers with -- so
- * the namespace is computable BEFORE the processor exists (ADR-0053) and the
- * state-then-processor build order (ADR-0043) still holds. The identity the
- * container OBSERVES afterwards, from the processor's own hash, is therefore the
- * one the tables were named from and the two cannot disagree.
+ * The STATE and the two factories come from `foldPartsFor` above, which is where
+ * the namespacing convention and the claim live; this function is what pairs
+ * them with the registry substrate and the stream's two ends.
  *
  * ## Why both ports are built HERE
  *
@@ -275,40 +422,19 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		indexer: string;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
-	const [{EntityEventProcessor, entityProcessorVersionHash}, {VersionedStateStore}, server] = await Promise.all([
-		import('@etherfold/processor-entities'),
-		import('@etherfold/state-store-sqlite'),
+	const [server, parts] = await Promise.all([
 		// the stream's two ends and the registry substrate are the TABLE OWNER's:
 		// `@etherfold/server` ships the DDL, both of ADR-0006's views and the seq
 		// allocation the writer and the reader have to agree about, so a second copy of
 		// any of them here would be a second definition of what a position in that
 		// stream means. What this module owns is which DATABASE and which NAME.
 		import('@etherfold/server'),
+		// the state, the identity and the two factories, built the ONE way this
+		// deployment builds them -- so a fold added later by a RE-READ lands in the same
+		// database under the same convention (`foldPartsFor`).
+		foldPartsFor<ABI, ProcessResultType>(declared, target, db, context.finalityDepth),
 	]);
-
-	/**
-	 * ONE generation's state: the entity tables, `_blocks` and `_cursor` under the
-	 * namespace that generation's identity names, in the database every other
-	 * generation of this name also lives in (ADR-0053).
-	 *
-	 * The finality depth is the stream's own, resolved by the caller from
-	 * `streamConfigFor`: a retention window is validated against the depth a reorg
-	 * can actually reach, and a number written here instead would be a second
-	 * opinion about it. It is also the FLOOR a `revert-only` store prunes at
-	 * (`retentionFloor`), which is why stating it matters to a deployment that set no
-	 * window at all.
-	 *
-	 * Nothing here prunes, and nothing on the fold's path does: pruning is a call a
-	 * host SCHEDULES (ADR-0022), and one inside the index loop would stall whichever
-	 * block crossed the threshold. This command set schedules it between cycles and,
-	 * on the one-shot, before it exits -- see `pruning.ts`.
-	 */
-	const stateFor = (id: GenerationId): SQLiteStateStore =>
-		new VersionedStateStore(db, declared.entities, {
-			tableNamespace: generationDigestOf(id),
-			retention: target.retention,
-			finalityDepth: context.finalityDepth,
-		});
+	const {stateFor} = parts;
 
 	const container = await openReceivingIndexer<ABI, ProcessResultType, WritableStateStore>({
 		port: server.generationRegistryPortOnSQL(db, context.indexer, {
@@ -332,20 +458,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		recordReorg: reorgRecorderFor(db),
 		appendEmissions: server.emissionAppenderFor(db, context.indexer),
 		replay: server.storedEmissionReplaySource<ABI>(db, context.indexer),
-		generation: {
-			// CLAIMED here, which is the ONE place this process takes the store: folding is
-			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A
-			// second process pointed at this database takes the claim and this one's next
-			// mutation is refused whole rather than half-applied (ADR-0075).
-			createState: (generation) =>
-				openForWriting(stateFor({stream: generation.stream, processor: entityProcessorVersionHash(declared)})),
-			// The CLI intentionally constructs the processor with NO factory argument (the
-			// server passes its folder); see MEDIUM-3.
-			createProcessor: (state) =>
-				new EntityEventProcessor<ABI, any>(state, declared, {
-					finalityDepth: context.finalityDepth,
-				}) as unknown as EventProcessor<ABI, ProcessResultType>,
-		},
+		generation: parts.generation,
 	});
 
 	return {
