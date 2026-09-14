@@ -378,8 +378,14 @@ describe('two named indexers on one host, identical in everything but their name
 
 	it('hold their generations in their OWN registry, and a cap refuses in that one only', async () => {
 		// alpha reaches its bound: a filter-change successor beside the incumbent is
-		// two generations on two streams, which is exactly `CAPS`
-		await deployment.alpha.indexer.add({source: RECONFIGURED_SOURCE, ...foldBeside()});
+		// two generations on two streams, which is exactly `CAPS`. It is PROMOTED, so
+		// that both generations are ones the pointer has named -- a successor the pointer
+		// never named is ABANDONED when a newer one takes its role, and would be dropped
+		// to make room instead of pushing against the bound. What is under test here is
+		// WHOSE registry the bound is counted over, so the two generations have to be
+		// ones nothing may reclaim.
+		const successor = await deployment.alpha.indexer.add({source: RECONFIGURED_SOURCE, ...foldBeside()});
+		await deployment.alpha.indexer.promote(successor.record);
 		expect((await deployment.alpha.indexer.generations()).length).toBe(2);
 		// beta counted none of that: its registry is rows in its own database
 		expect((await deployment.beta.indexer.generations()).length).toBe(1);
