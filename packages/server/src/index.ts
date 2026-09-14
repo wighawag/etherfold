@@ -29,7 +29,7 @@ import {getStateMovedAPI} from './api/stateMoved.js';
 import {getAdminAPI} from './api/admin.js';
 
 export type {Env, ServerOptions};
-export type {CursorReporter, FetcherLimitsReporter} from './types.js';
+export type {CursorReporter, FetcherLimitsReporter, PromotionReporter} from './types.js';
 export {indexerEntryOn, indexerRegistry, singleContextEntry} from './registry.js';
 export type {IndexerRegistryEntry, IndexerResolver, ReconfigureReport} from './registry.js';
 /**
@@ -48,6 +48,16 @@ export type {CursorReport, GenerationReport, ReportedGeneration, StatusCursor, S
  * Absent on every host that holds no fetcher, which is every RECEIVING one.
  */
 export type {StatusFetcher} from './fetcherLimits.js';
+/**
+ * THE `/status` PROMOTION FIELD: WHEN this deployment moves the canonical pointer
+ * on its own, and what happens to the generation left behind.
+ *
+ * Reported so an operator can CONFIRM what a running process will do rather than
+ * infer it from whether a successor took over, and RESOLVED rather than
+ * as-configured, so what is read back is what will actually happen. Absent on
+ * every host that holds no generation container, which is every read tier.
+ */
+export type {StatusPromotion} from './promotion.js';
 export {SCHEMA_VERSION, applySchema, readSchemaState} from './schema.js';
 export type {SchemaState} from './schema.js';
 export type {Config} from './setup.js';

@@ -7,6 +7,7 @@ import {applySchema, readSchemaState, SCHEMA_VERSION} from '../schema.js';
 import {readReorgCounters, type ReorgCounters} from '../reorgs.js';
 import {reportCursor, type StatusCursor} from '../cursor.js';
 import {reportFetcherLimits, type StatusFetcher} from '../fetcherLimits.js';
+import {reportPromotion, type StatusPromotion} from '../promotion.js';
 
 const logger = logs('@etherfold/server');
 
@@ -102,6 +103,18 @@ export function getStatusAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 				? await reportFetcherLimits(() => limits(c as never))
 				: undefined;
 
+			// WHEN the canonical pointer moves on its own, which is the one thing about a
+			// running deployment that is otherwise only readable as BEHAVIOUR: an operator
+			// watching a successor catch up on this page would have to WAIT to find out
+			// whether it is going to take over by itself. Injected for the reason the two
+			// above are -- a policy belongs to a generation container and this package holds
+			// none -- and absent on every host that holds no container, which is every read
+			// tier.
+			const promotionOf = options.getPromotionPolicy;
+			const promotion: StatusPromotion | undefined = promotionOf
+				? await reportPromotion(() => promotionOf(c as never))
+				: undefined;
+
 			return c.json(
 				{
 					healthy,
@@ -109,6 +122,7 @@ export function getStatusAPI<CustomEnv extends Env>(options: ServerOptions<Custo
 					reorgs,
 					cursor,
 					fetcher,
+					promotion,
 					schema: schema.applied
 						? {applied: true, version: schema.version, expected: schema.expected, matches: schema.matches}
 						: {applied: false, expected: SCHEMA_VERSION, reason: schema.reason},

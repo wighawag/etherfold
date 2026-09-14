@@ -249,6 +249,12 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// start. Nothing here persists it: the fetcher holds no state worth losing, and
 			// this is what moves the memory to whoever is already durable.
 			getFetcherLimits: () => prepared.host.fetcher.limits,
+			// WHEN THIS PROCESS TAKES A SUCCESSOR OVER, on the page an operator already
+			// watches. `run` is the shape that decides it at all -- it is the one command
+			// that registers a successor beside a live fold -- and this is the CONTAINER's
+			// resolved answer rather than the CLI's parsed flag, so what is read back is
+			// what the thing that moves the pointer will actually do, default included.
+			getPromotionPolicy: () => prepared.container.promotion,
 		});
 
 		const close = async () => {

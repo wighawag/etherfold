@@ -1,4 +1,4 @@
-import type {FetcherLimits} from '@etherfold/core';
+import type {FetcherLimits, UsedPromotionConfig} from '@etherfold/core';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
@@ -26,6 +26,18 @@ export type CursorReporter<Env extends Bindings = Bindings> = (
 export type FetcherLimitsReporter<Env extends Bindings = Bindings> = (
 	c: Context<{Bindings: Env}>,
 ) => FetcherLimits | undefined | Promise<FetcherLimits | undefined>;
+
+/**
+ * How a host tells `/status` WHEN its canonical pointer moves on its own.
+ *
+ * The RESOLVED configuration (`UsedPromotionConfig`, `@etherfold/core`) and never
+ * what was configured, so an operator reads what will actually happen rather than
+ * what somebody typed. Allowed to be async for `FetcherLimitsReporter`'s reason:
+ * a host is not forced to be synchronous, though a container holds this in memory.
+ */
+export type PromotionReporter<Env extends Bindings = Bindings> = (
+	c: Context<{Bindings: Env}>,
+) => UsedPromotionConfig | undefined | Promise<UsedPromotionConfig | undefined>;
 
 export type ServerOptions<Env extends Bindings = Bindings> = {
 	/**
@@ -183,4 +195,24 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 * request and never an unhealthy server.
 	 */
 	getFetcherLimits?: FetcherLimitsReporter<Env>;
+	/**
+	 * WHEN this deployment's canonical pointer moves on its own, if this deployment
+	 * decides that at all.
+	 *
+	 * Injected like every other capability this package does not construct. A
+	 * promotion policy belongs to a GENERATION CONTAINER (`@etherfold/core`), and
+	 * this package holds none: a route holds a registry entry, and a read tier holds
+	 * neither -- so `serve` and the Workers host inject none and their `/status`
+	 * carries no `promotion` field rather than an invented claim.
+	 *
+	 * It is reported because the value is otherwise only observable as BEHAVIOUR:
+	 * whether a successor takes over as soon as it exists, when it has caught up, or
+	 * only when asked. An operator watching a rebuild on this page can see the
+	 * successor; this is what says what is going to happen to it.
+	 *
+	 * Failing is safe, exactly as it is for the two reporters above: throwing,
+	 * rejecting or having nothing to report yields an absent-with-a-reason field,
+	 * never a failed request and never an unhealthy server.
+	 */
+	getPromotionPolicy?: PromotionReporter<Env>;
 };

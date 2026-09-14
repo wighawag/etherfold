@@ -275,6 +275,11 @@ export async function prepareIndexing<
 			// which is the whole reason this shape can store a stream at all: the emission
 			// table's key is `NOT NULL` and there was no fold-side value to put in it.
 			indexer: resolved.indexer,
+			// WHEN a successor takes over, on the one command that can register one while it
+			// runs. Only `run` resolves the input (`OWNERSHIP`, `config.ts`): the one-shot
+			// holds exactly ONE generation and exits, so a policy there would be accepted
+			// and never applied, and it is refused rather than carried.
+			...(resolved.command === 'run' && resolved.promotion !== undefined ? {promotion: resolved.promotion} : {}),
 		},
 	);
 

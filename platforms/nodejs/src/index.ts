@@ -87,6 +87,16 @@ export type StartOptions = {
 	 * `fetcher` field rather than an invented one (ADR-0074).
 	 */
 	getFetcherLimits?: ServerOptions<NodeEnv>['getFetcherLimits'];
+	/**
+	 * WHEN this process moves its canonical pointer onto a successor, if this process
+	 * decides that at all, handed to the app unchanged.
+	 *
+	 * Passthrough for the fourth time, and absent on every host that holds no
+	 * generation container: a read tier reads a pointer something else moves, so it
+	 * injects none and `/status` carries no `promotion` field rather than an invented
+	 * one.
+	 */
+	getPromotionPolicy?: ServerOptions<NodeEnv>['getPromotionPolicy'];
 };
 
 export type RunningServer = {
@@ -132,8 +142,8 @@ export async function ensureFixedSchema(db: RemoteSQL, describedAs?: string): Pr
  * Start the indexer-server on Node.
  *
  * This is the whole adapter: it decides what `getDB`, `getEnv`, `getIndexer`,
- * `getCursorReport` and `getFetcherLimits` return and hands them to the
- * platform-agnostic app. No route, no chain logic and no storage decision lives
+ * `getCursorReport`, `getFetcherLimits` and `getPromotionPolicy` return and hands
+ * them to the platform-agnostic app. No route, no chain logic and no storage decision lives
  * here, and the capabilities are carried through untouched because only a HOST
  * can build them and only this file can reach the app on Node.
  */
@@ -174,6 +184,7 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		getIndexer: options.getIndexer,
 		getCursorReport: options.getCursorReport,
 		getFetcherLimits: options.getFetcherLimits,
+		getPromotionPolicy: options.getPromotionPolicy,
 	});
 
 	const server = serve({fetch: app.fetch, port, hostname});

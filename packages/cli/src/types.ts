@@ -1,4 +1,4 @@
-import type {Abi, IndexingSource} from '@etherfold/core';
+import type {Abi, IndexingSource, PromotionConfig} from '@etherfold/core';
 import type {RetentionSetting} from '@etherfold/processor-entities';
 
 /**
@@ -58,6 +58,14 @@ export type Options = {
 	ingestEndpoint?: string;
 	/** `--ingest-token <token>`, behind it `INGEST_TOKEN`. */
 	ingestToken?: string;
+	/** `--promotion <on-catch-up|immediate|manual>`, behind it `PROMOTION_POLICY`. */
+	promotion?: string;
+	/**
+	 * `--drop-on-promotion`: the second non-string, and a plain boolean rather than a
+	 * negated one -- commander materialises nothing for it unless it was typed, so
+	 * `true` is the only thing a user can have passed.
+	 */
+	dropOnPromotion?: boolean;
 };
 
 /**
@@ -149,6 +157,18 @@ export type RunConfig<ABI extends Abi = Abi> = {
 	readonly destination: StoreTarget;
 	readonly serving: Serving;
 	readonly indexer: string;
+	/**
+	 * WHEN the canonical pointer moves onto a successor this process registers while
+	 * it runs, and what happens to the generation left behind.
+	 *
+	 * ABSENT where the operator said nothing, which is not the same as `on-catch-up`
+	 * spelled out: the default is written in ONE place (`resolvePromotionConfig`,
+	 * `@etherfold/core`) precisely so that a second runtime cannot fork it, so a
+	 * deployment that configured nothing passes nothing. `run` is the only command
+	 * that carries this, because it is the only one that can register a successor
+	 * beside a live fold -- see `resolvePromotion` and the ownership table.
+	 */
+	readonly promotion?: PromotionConfig;
 };
 
 /** `build`: the same, without the serving, stopping at the tip. */

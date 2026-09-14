@@ -6,6 +6,7 @@ import {
 	type EventProcessor,
 	type GenerationId,
 	type IndexingSource,
+	type PromotionConfig,
 	type ProvidedStreamConfig,
 	type ReceivedGenerationSpec,
 	type ReceivingIndexer,
@@ -420,6 +421,20 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 * fallback here would be a third answer neither of them could see.
 		 */
 		indexer: string;
+		/**
+		 * WHEN the canonical pointer moves onto a successor added beside the live fold,
+		 * exactly as this deployment's configuration said it (`resolvePromotion`,
+		 * `config.ts`).
+		 *
+		 * OPTIONAL, and absent means the operator said nothing rather than that they
+		 * said `on-catch-up`: the default is filled in ONE place
+		 * (`resolvePromotionConfig`, `@etherfold/core`), and handing a value down from
+		 * here when none was given would be this module forking a default whose whole
+		 * point is that it cannot be forked. Passed through untouched for the same
+		 * reason `indexer` is required here: WHETHER a command may take this input is a
+		 * question about the command, answered by the resolver.
+		 */
+		promotion?: PromotionConfig;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([
@@ -453,6 +468,10 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		// there is deliberately no flag for it, since no command in the set takes one and
 		// the number a deployment wants is the one this constant already argues for.
 		caps: SERVER_GENERATION_CAPS,
+		// WHEN the pointer moves onto a successor, and what happens to the generation
+		// left behind. Absent is a real answer and the common one, and the container
+		// resolves the default from it.
+		...(context.promotion === undefined ? {} : {promotion: context.promotion}),
 		source: context.source,
 		stream: context.stream,
 		recordReorg: reorgRecorderFor(db),
