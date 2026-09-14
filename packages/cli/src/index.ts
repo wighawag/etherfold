@@ -347,8 +347,8 @@ async function openSource<ABI extends Abi, ProcessResultType>(
  *
  * ## The second difference, and it is the SAME one: who advances a SUCCESSOR
  *
- * A `run` is a long-running host, so a reconfigure can reach it: a fold added
- * beside the live one is a FOLLOWER, and a follower is advanced by a bounded
+ * A `run` is a long-running host, so it has TIME to advance a successor: a fold
+ * added beside the live one is a FOLLOWER, and a follower is advanced by a bounded
  * REBUILD its host SCHEDULES (ADR-0022) rather than by the wire. The gap the loop
  * already waits between cycles is that host's own clock, so one chunk is taken
  * there -- bounded by construction, on the same thread as the fold, so it can
@@ -356,6 +356,18 @@ async function openSource<ABI extends Abi, ProcessResultType>(
  * while it folds. A `build` schedules none: a one-shot has no reconfigure, holds
  * exactly ONE generation and exits, so there is never a second fold to advance,
  * and never a promotion.
+ *
+ * WHERE THE SUCCESSOR COMES FROM, since "a reconfigure can reach a long-running
+ * host" reads like it arrives at RUNTIME and it does not: a generation is
+ * registered when the container OPENS, from config, so a changed processor or
+ * source reaches this process by RESTARTING it. What makes that survivable is not
+ * the process being long-lived but the registry and the state being ROWS: the new
+ * process finds the incumbent already there, still canonical, still answering, and
+ * registers the successor beside it. Nothing watches a file and no route adds a
+ * generation (`work/notes/observations/a-reconfigure-cannot-reach-a-running-run.md`
+ * records the gap and the decided fix shape, an endpoint a separate watcher calls).
+ * What the long-running shape buys is the half described above: somewhere to put
+ * the bounded rebuild that carries the successor to level once it exists.
  *
  * The loop sleeps only where it decided to WAIT, so a process still catching the
  * chain up flat out (`CATCH_UP_DELAY_MS=0`) advances its followers once it
