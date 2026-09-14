@@ -25,7 +25,6 @@ import {
 	ALICE,
 	BOB,
 	CONTRACT,
-	FINALITY,
 	SOURCE,
 	START_BLOCK,
 	STREAM_CONFIG,
@@ -68,20 +67,22 @@ import {openSignalStream, type SignalStream} from './signalStream.js';
 const NAME = 'alpha';
 
 /**
- * THE FIRST BLOCK THIS WORLD PUTS AN EVENT IN, and it is deliberately `finality`
- * blocks above the source's own start block.
+ * THE FIRST BLOCK THIS WORLD PUTS AN EVENT IN: the source's own start block, with
+ * no lead.
  *
- * A SUCCESSOR generation catches up by REPLAYING the stored emission stream from
- * `cursor - finality`, and the stream's own `startBlock` is where the first
- * batch was accepted from -- which is the source's start block. So a fold whose
- * cursor is still inside the first `finality` blocks asks the stream for a range
- * it honestly does not reach back to (`does-not-reach-back`), and the rebuild
- * cannot begin. It is a fixture running level with its own start block rather
- * than a defect: a real deployment leaves that window in one block time. Stated
- * here because the same lead is needed, for the same reason, in the browser
- * transports' fixture (`work/notes/observations/a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
+ * It CARRIED one, `START_BLOCK + FINALITY + 1`, and the lead was not a property
+ * of this fixture at all -- it was working around a defect in the engine. A
+ * SUCCESSOR catches up by REPLAYING the stored emission stream from
+ * `cursor - finality`, the stream's own `startBlock` is where its first batch was
+ * accepted from, and the read start used to be floored at 0 -- so a fold still
+ * inside the first `finality` blocks asked for a range the stream honestly did
+ * not reach back to and the rebuild could not begin. `getFromBlock` now floors at
+ * the source's earliest block, so a world level with its own start block is
+ * served, which is exactly what this fixture is. Removing the lead is therefore
+ * also what keeps the fix asserted from THIS side: put it back and the world
+ * stops exercising the condition at all.
  */
-const FIRST_EVENT_BLOCK = START_BLOCK + FINALITY + 1;
+const FIRST_EVENT_BLOCK = START_BLOCK;
 
 /** One block of the chain as this world told the server about it. */
 type Told = {block: number; hash: string; id: bigint; to: string};

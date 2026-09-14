@@ -258,6 +258,49 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		);
 	});
 
+	it('KEEPS ADVANCING a fold that is level with its own stream START BLOCK', async () => {
+		// The shape the case above must stay distinguishable FROM, and what makes it
+		// distinguishable is that this one is now SERVED rather than reported. Nothing
+		// here opens too high: the stream starts exactly where the source does, and the
+		// fold has caught up with it. What used to stall it was its OWN resume point --
+		// `getFromBlock` reaches BACK over the reorg window once a fold is level, and
+		// floored at 0 that landed below the block the stream opens at.
+		//
+		// It was permanent, not momentary: a rebuild's `latestBlock` comes from the
+		// chunk it could not read, so no amount of chain movement changed the
+		// comparison, and `retryCanAdvance` correctly reported a condition needing a
+		// human for a stream with nothing whatever wrong with it.
+		const w = world();
+		const incumbent = await w.open('v1', 1);
+		const AT_100 = transfer(START_BLOCK, '0xa100', 1n);
+		const fromBlock = await incumbent.ingestion.expectedFromBlock();
+		await incumbent.ingestion.receive(
+			batch(incumbent, {toBlock: START_BLOCK, latestBlock: START_BLOCK, logs: [AT_100]}, fromBlock),
+		);
+		await incumbent.add(w.specFor('v2', 10));
+
+		const followerIn = (reports: RebuildReport[]) =>
+			reports.find((report) => report.generation.processor !== incumbent.generation.processor);
+
+		// the first chunk resumes from a FRESH checkpoint, which already floored at the
+		// source's own start block, so it was never the call that stalled
+		const first = followerIn(await incumbent.rebuildMore());
+		expect(first).toMatchObject({fromBlock: START_BLOCK, complete: true, stopped: {reason: 'stream-consumed'}});
+		expect(w.rowsIn('v2', incumbent.streamDigest)).toEqual([`${idOf(AT_100)}x10`]);
+
+		// the SECOND one resumes from the checkpoint the first committed, which is
+		// level with the stream, and it must still be served
+		const second = followerIn(await incumbent.rebuildMore()) as RebuildReport;
+		expect(second.fromBlock).toBe(START_BLOCK);
+		expect(second.stopped).toEqual({reason: 'stream-consumed'});
+		expect(second.complete).toBe(true);
+		expect(retryCanAdvance(second.stopped)).toBe(true);
+		// and the re-read is a re-read: the window de-duplicates what is already folded
+		expect(second.scanned).toBe(1);
+		expect(second.replayed).toBe(0);
+		expect(w.rowsIn('v2', incumbent.streamDigest)).toEqual([`${idOf(AT_100)}x10`]);
+	});
+
 	it('refuses a budget of zero rather than reading it as "do nothing"', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();
 		await incumbent.add(w.specFor('v2', 10));

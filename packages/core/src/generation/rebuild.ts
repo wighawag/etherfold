@@ -212,6 +212,12 @@ export type ReplayRead<ABI extends Abi> =
 	 * why it is its own verdict and not damage, exactly as in `StreamRead`. For THIS
 	 * fold it is terminal: a partial history replayed as though it were whole leaves
 	 * the blocks under it simply absent from the rebuilt state, silently.
+	 *
+	 * A fold LEVEL with its own stream's start block no longer reaches this: the
+	 * resume point is floored at the source's earliest block (`getFromBlock`), which
+	 * is the lowest block any fold over this source ever asks from. So this and
+	 * `absent` are the two answers a scheduler tells apart -- wait for the writer,
+	 * or fetch a human -- and neither is a condition about the stream's AGE.
 	 */
 	| {readonly status: 'does-not-reach-back'; readonly startBlock: number}
 	/**
@@ -305,9 +311,20 @@ export type RebuildStop =
 	 * The stored stream starts above where this fold resumes.
 	 *
 	 * RECURS FOR EVER: the resume point is derived from this fold's own durable
-	 * checkpoint, so nothing about calling again changes the comparison. A seeded
-	 * generation is the shape that produces it. It needs a seed reaching further
-	 * back, a lower resume point, or a re-index -- never another poll.
+	 * checkpoint, so nothing about calling again changes the comparison -- and a
+	 * rebuild's `latestBlock` comes from the chunk it could not read, so the chain
+	 * moving on does not change it either. It needs a stream reaching further back,
+	 * a lower resume point, or a re-index -- never another poll.
+	 *
+	 * It means ONE thing, and used to mean two. A fold LEVEL with the block its own
+	 * stream opens at reached back over the reorg window and asked from below it,
+	 * which is a condition about the fold's AGE and not about the stream -- reported
+	 * here as needing a human, for a stream with nothing whatever wrong with it.
+	 * `getFromBlock` is now floored at the source's own earliest block, so that
+	 * shape is SERVED and what is left is a stream no fold over this source can be
+	 * whole on: a subtree whose first save began mid-history, or a seed installed
+	 * from above where this client asks (which `installStreamSeed` refuses by
+	 * default, `reachBackTo`).
 	 */
 	| {readonly reason: 'does-not-reach-back'; readonly startBlock: number}
 	/**
