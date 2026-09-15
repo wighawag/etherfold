@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/state-moved-conformance",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "The conformance suite a state-moved TRANSPORT must pass to be an adapter rather than a second semantics: one parameterised case list, run over a worker's port, the cross-tab channel and a server's stream, asserting the app-visible outcome of an append, a retraction, a promotion and a dropped notification is identical on all of them.",
 	"publishConfig": {
 		"access": "public"
