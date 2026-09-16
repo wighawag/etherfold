@@ -228,6 +228,16 @@ export type GenerationDeletion = {
 	readonly generation: GenerationRecord;
 	/** The stream that was reaped with it, if this was its last generation. */
 	readonly reaped: string | undefined;
+	/**
+	 * How many substrate records the reaped subtree held, and `undefined` where no
+	 * stream was reaped.
+	 *
+	 * REPORTED rather than counted by a caller, for the reason `StreamDeletion`
+	 * already reports it: only the port that dropped the subtree knows what was in
+	 * it, and an operator reclaiming disk is asking exactly that question. It is a
+	 * COUNT OF RECORDS and never a size in bytes, which no substrate here can answer.
+	 */
+	readonly records: number | undefined;
 };
 
 /** What `deleteStream` did. */
@@ -378,6 +388,32 @@ export function slotHolding(slots: GenerationSlots, id: GenerationId): SlotName 
 		const held = slots[name];
 		return !!held && sameGeneration(held, id);
 	});
+}
+
+/**
+ * EVERY GENERATION NO SLOT NAMES: the collection rule of ADR-0084, in one place.
+ *
+ * A generation some slot names is what a deployment is USING -- `canonical`
+ * answers every read, `successor` is being built beside it, `predecessor` is what
+ * a revert moves back to -- and one that NO slot names is dead work: nothing can
+ * promote to it without being asked, nothing reverts to it, and nothing re-folds
+ * it for an answer anybody will read. That is a REFCOUNT, which is why it is far
+ * easier to prove safe than the three-way in-memory predicate it replaced.
+ *
+ * `canonical` needs no separate clause, because it IS a slot: "not canonical and
+ * no slot names it" would be one rule written twice, and the second copy is what
+ * drifts.
+ *
+ * It says nothing about whether such a generation may be deleted RIGHT NOW: one
+ * that WRITES a stream another held fold follows is kept, because dropping it
+ * would leave that fold folding a stream nothing appends to (ADR-0044). That is a
+ * fact about held FOLDS and so belongs to the container, not here.
+ */
+export function unslottedGenerations(
+	generations: readonly GenerationRecord[],
+	slots: GenerationSlots,
+): GenerationRecord[] {
+	return generations.filter((record) => !slotHolding(slots, record));
 }
 
 /**
@@ -809,10 +845,11 @@ export async function openGenerationRegistry(
 			});
 
 			await port.dropState(identityOf(removed as GenerationRecord));
-			if (reaped) {
-				await port.dropStreamSubtree(reaped);
-			}
-			return {generation: removed as GenerationRecord, reaped};
+			// ...and what came back with it, reported rather than discarded: an operator
+			// reclaiming disk asked how much, and only the port that dropped the subtree can
+			// say.
+			const records = reaped === undefined ? undefined : await port.dropStreamSubtree(reaped);
+			return {generation: removed as GenerationRecord, reaped, records};
 		},
 
 		/**

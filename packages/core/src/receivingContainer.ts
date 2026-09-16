@@ -16,8 +16,11 @@ import {
 	openGenerationRegistry,
 	sameGeneration,
 	slotHolding,
+	SLOT_NAMES,
+	unslottedGenerations,
 	writerOf,
 	type GenerationCaps,
+	type GenerationDeletion,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
@@ -452,6 +455,79 @@ export async function openReceivingIndexer<ABI extends Abi, ProcessResultType = 
 	return indexer;
 }
 
+/**
+ * ONE GENERATION RECLAIMED: what went, and what came back with it.
+ *
+ * NAMED rather than counted, which is the whole point of the report: an operator
+ * runs the verb because a cap refused or because a disk is full, so "three
+ * generations were reclaimed" leaves them exactly as uncertain as they were. The
+ * IDENTITY is what they match against a listing, and the stream is the expensive
+ * thing -- the raw logs, which a public node may not serve again -- so whether one
+ * was reaped is the fact worth reading twice.
+ */
+export type ReclaimedGeneration = {
+	/** The generation whose row and state namespace are gone (ADR-0053 makes that a `DROP`). */
+	readonly generation: GenerationRecord;
+	/** The stream reaped with it, present exactly when no registered generation was left folding it. */
+	readonly reaped?: string;
+	/** How many substrate records that reaped subtree held. Absent where no stream was reaped. */
+	readonly records?: number;
+};
+
+/**
+ * ONE GENERATION NOT RECLAIMED, and WHY -- because a verb that quietly did less
+ * than it was asked to is worse than one that refused.
+ *
+ * Two reasons, and they are different situations for the operator. A generation
+ * that WRITES a stream another held fold follows is kept on purpose (ADR-0044):
+ * dropping it would leave that fold folding a stream nothing appends to, so it
+ * goes once nothing follows its stream, and the answer is "ask again later". A
+ * deletion that FAILED is the substrate saying no, and the generation is still
+ * named by no slot, so the next call tries again.
+ */
+export type DeclinedReclaim = {
+	/** The generation that was left alone. Its state and its stream are exactly where they were. */
+	readonly generation: GenerationRecord;
+	/** WHICH of the two situations this is. */
+	readonly reason: 'writes-a-followed-stream' | 'deletion-failed';
+	/** What to do about it, in words an operator can act on. */
+	readonly message: string;
+};
+
+/**
+ * WHAT ONE RECLAIM DID, in three outcomes that are deliberately not one shape
+ * with a count in it.
+ *
+ * The three answers exist because "nothing happened" has three causes an operator
+ * must be able to tell apart, exactly as `ReconfigureReport`'s do one surface out:
+ *
+ * - **`reclaimed`** -- at least one generation went, and `reclaimed` names each of
+ *   them with what came back.
+ * - **`declined`** -- something was reclaimABLE and none of it could go yet, with
+ *   the reason per generation. Reporting this as "nothing to reclaim" would be a
+ *   lie of exactly the kind the verb exists to end.
+ * - **`nothing-to-reclaim`** -- every generation this indexer holds is named by a
+ *   slot. A SUCCESS that says so, and distinguishable from having done work.
+ *
+ * `slots` carries what was NOT reclaimable and never could be: the generation that
+ * answers reads, the pending successor and the revert target. It is in the report
+ * because the operator asking "what did you free" is also asking "what is left",
+ * and answering both from one read of the registry is what stops the two being
+ * paired across somebody else's write.
+ */
+export type ReclaimReport = {
+	/** WHICH of the three answers this is. */
+	readonly outcome: 'reclaimed' | 'declined' | 'nothing-to-reclaim';
+	/** Every generation that went, oldest last: the order they were dropped in. */
+	readonly reclaimed: readonly ReclaimedGeneration[];
+	/** Every generation no slot names that was NOT dropped, with the reason. */
+	readonly declined: readonly DeclinedReclaim[];
+	/** What each slot names, which is what a reclaim never touches. */
+	readonly slots: SlottedGenerations;
+	/** The whole of the above in one sentence, so a log line and a response say the same thing. */
+	readonly message: string;
+};
+
 /** Say out loud that a generation was registered BESIDE the one that answers reads. */
 function noteSuccessor(canonicalBefore: GenerationRecord | undefined, record: GenerationRecord): void {
 	if (!canonicalBefore || sameGeneration(canonicalBefore, record)) {
@@ -796,6 +872,25 @@ export class ReceivingIndexer<
 	/** The generation reads resolve through, which is NOT necessarily one folding here. */
 	async canonical(): Promise<GenerationRecord | undefined> {
 		return this.noteCanonical(await this.registry.canonical());
+	}
+
+	/**
+	 * WHAT EACH SLOT NAMES, resolved against the records, in ONE read (ADR-0084).
+	 *
+	 * The operator's SEE half, and the registry's own answer forwarded rather than
+	 * re-derived: which generation answers reads, which one is pending beside it, and
+	 * which one a revert would move back to. Everything registered and named by NONE
+	 * of them is what `reclaim` takes, so the two are read from the same place and
+	 * cannot disagree about what a slot holds.
+	 *
+	 * ONE read rather than three, for the reason the registry gives: the three answers
+	 * are used together, and three reads could answer from either side of another
+	 * process's write.
+	 */
+	async slots(): Promise<SlottedGenerations> {
+		const held = await this.registry.slots();
+		this.noteCanonical(held.canonical);
+		return held;
 	}
 
 	/**
@@ -1550,15 +1645,19 @@ export class ReceivingIndexer<
 	 * It reads the RECORDS rather than a held fold's `writesStream`, because the
 	 * generation the slot names may be one this process holds no fold for at all --
 	 * which is exactly the restart case, and the case the durable slot exists for.
+	 *
+	 * `arrivingStream` is ABSENT where nothing is arriving, which is the operator's
+	 * `reclaim`: there the followers to protect are the ones already held, and there
+	 * is no fold about to become one.
 	 */
 	private wouldStrandAFollower(
 		record: GenerationRecord,
 		registered: readonly GenerationRecord[],
-		arrivingStream: string,
+		arrivingStream: string | undefined,
 	): boolean {
 		const writer = writerOf(registered, record.stream);
 		if (!writer || !sameGeneration(writer, record)) return false;
-		if (record.stream === arrivingStream) return true;
+		if (arrivingStream !== undefined && record.stream === arrivingStream) return true;
 		return this.folds.some(
 			(held) => !sameGeneration(held.record, record) && held.follows && held.streamDigest === record.stream,
 		);
@@ -1606,18 +1705,7 @@ export class ReceivingIndexer<
 			);
 			return false;
 		}
-		const fold = this.folds.find((held) => sameGeneration(held.record, record));
-		if (fold) {
-			this.folds.splice(this.folds.indexOf(fold), 1);
-			this.candidates.delete(fold);
-			// Nothing relays what it did: this container no longer drives it, and a dropped
-			// fold that went on reporting would be a channel into a publisher nothing can
-			// reach it through any more.
-			fold.processor.setFoldReporter?.(undefined);
-		}
-		// ...and out of the memo too, or a later fold on the same identity would be
-		// RESOLVED from a record that no longer exists instead of being registered again.
-		this.records.delete(keyOf(record));
+		this.stopDriving(record);
 		namedLogger.info(
 			`the generation {stream: ${record.stream}, processor: ${record.processor}} was what the \`successor\` slot ` +
 				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
@@ -1628,6 +1716,151 @@ export class ReceivingIndexer<
 				`The canonical generation and the revert target are untouched.`,
 		);
 		return true;
+	}
+
+	/**
+	 * STOP DRIVING a generation whose record has gone: out of the held folds, out of
+	 * the armed candidates, out of the memo, and off the reporter.
+	 *
+	 * One function rather than the same four lines wherever a generation is deleted,
+	 * because the fourth is the one that is easy to forget and the worst to omit: a
+	 * dropped fold that went on REPORTING would be a channel into a publisher nothing
+	 * can reach it through any more. The memo matters for the opposite reason -- a
+	 * later fold on the same identity must be REGISTERED again rather than resolved
+	 * from a record that no longer exists.
+	 *
+	 * A generation this container holds no fold for is the ordinary case (a restart
+	 * holds only its own), and then there is simply nothing to stop driving.
+	 */
+	private stopDriving(record: GenerationId): void {
+		const fold = this.folds.find((held) => sameGeneration(held.record, record));
+		if (fold) {
+			this.folds.splice(this.folds.indexOf(fold), 1);
+			this.candidates.delete(fold);
+			fold.processor.setFoldReporter?.(undefined);
+		}
+		this.records.delete(keyOf(record));
+	}
+
+	// ------------------------------------------------------------------------------------------------------------------
+	// THE OPERATOR'S VERB: RECLAIM every generation no slot names
+	// ------------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * RECLAIM WHAT NOTHING NAMES: drop every registered generation no slot holds, and
+	 * report what came back.
+	 *
+	 * ## Why this exists at all
+	 *
+	 * A cap REFUSES at its bound and never evicts, which is sound and was the ONLY
+	 * instrument an operator had: when it fires they are told what they COULD delete
+	 * and given nothing to delete it with, so the remedy was hand-written SQL or a
+	 * deleted database. Slots make the missing verb expressible for the first time --
+	 * a generation no slot names is garbage BY DEFINITION rather than by an operator's
+	 * judgement about digests and timestamps (ADR-0084) -- and the deletion itself is
+	 * not new: it is the registry's `deleteGeneration`, which drops the row, drops the
+	 * state namespace (ADR-0053 makes that a `DROP`) and REAPS the stream where no
+	 * registered generation is left folding it.
+	 *
+	 * ## It is a VERB an operator runs, and deliberately NOT a garbage COLLECTOR
+	 *
+	 * Nothing calls it on a timer and nothing calls it at `open`. An automatic reclaim
+	 * is a different decision with a different risk profile -- it deletes with nobody
+	 * present -- and ADR-0084 does not make it. The one deletion that DOES happen
+	 * without being asked is bounded to what a registration itself displaced
+	 * (`replaceTheSuccessor`), which is a generation this process just replaced rather
+	 * than rows it never touched.
+	 *
+	 * The CAPS are untouched by it. This gives an operator an instrument; it does not
+	 * raise a bound or make a refusal less likely.
+	 *
+	 * ## What it will NEVER take, which is the property that makes it safe
+	 *
+	 * A generation ANY slot names -- and `predecessor` is the one worth saying out
+	 * loud, because it is not canonical right now and is exactly the way back from a
+	 * bad upgrade. The rule is read as a REFCOUNT over the slot rows
+	 * (`unslottedGenerations`) and never as "not canonical", which would delete the
+	 * revert target and the pending successor both.
+	 *
+	 * It also DECLINES, rather than refusing the whole call, where dropping would
+	 * leave a fold folding a stream nothing appends to: the writer of a stream another
+	 * held fold follows is kept (ADR-0044), exactly as the existing drops decline it.
+	 * NEWEST FIRST, so a replaced follower goes before the writer it strands, and one
+	 * pass frees both.
+	 */
+	async reclaim(): Promise<ReclaimReport> {
+		// ONE read of the records and ONE of the slots, before anything is dropped: the
+		// rule is a comparison between the two, and reading them twice could pair a
+		// listing with slot assignments from either side of another process's write.
+		const registered = await this.registry.list();
+		const slots = await this.registry.slots();
+		this.noteCanonical(slots.canonical);
+
+		const garbage = unslottedGenerations(registered, slots).sort((a, b) => b.createdAt - a.createdAt);
+		const reclaimed: ReclaimedGeneration[] = [];
+		const declined: DeclinedReclaim[] = [];
+		const surviving = [...registered];
+
+		for (const record of garbage) {
+			if (this.wouldStrandAFollower(record, surviving, undefined)) {
+				const message =
+					`it WRITES the stream ${record.stream}, which another fold held here FOLLOWS, and dropping it would ` +
+					`leave that one folding a stream nothing appends to (ADR-0044). It is retained with its state and its ` +
+					`stream exactly where they were; no slot names it, so it goes on the next reclaim once nothing follows ` +
+					`its stream.`;
+				namedLogger.info(`reclaim DECLINED for {stream: ${record.stream}, processor: ${record.processor}}: ${message}`);
+				declined.push({generation: record, reason: 'writes-a-followed-stream', message});
+				continue;
+			}
+			let deletion: GenerationDeletion;
+			try {
+				deletion = await this.registry.deleteGeneration(record);
+			} catch (err) {
+				const message =
+					`it could not be deleted (${err instanceof Error ? err.message : String(err)}). It is still ` +
+					`registered and still named by no slot, so nothing reads it and the next reclaim tries again.`;
+				namedLogger.error(
+					`reclaim FAILED for {stream: ${record.stream}, processor: ${record.processor}}: ${message}`,
+					err,
+				);
+				declined.push({generation: record, reason: 'deletion-failed', message});
+				continue;
+			}
+			// ...and this container stops driving it, for the reason a replaced successor
+			// does: its state has been dropped, so folding into it would be writing into
+			// nothing.
+			this.stopDriving(record);
+			surviving.splice(
+				surviving.findIndex((held) => sameGeneration(held, record)),
+				1,
+			);
+			reclaimed.push({
+				generation: record,
+				...(deletion.reaped === undefined ? {} : {reaped: deletion.reaped}),
+				...(deletion.records === undefined ? {} : {records: deletion.records}),
+			});
+			namedLogger.info(
+				`RECLAIMED the generation {stream: ${record.stream}, processor: ${record.processor}}: no slot named it, ` +
+					`so nothing answered reads from it, nothing could revert to it and nothing was waiting for it to catch ` +
+					`up. Its registry row and its state namespace are gone` +
+					`${
+						deletion.reaped
+							? `, and the stream ${deletion.reaped} was reaped with it (${deletion.records ?? 0} record(s)), no ` +
+								`registered generation being left folding it`
+							: ''
+					}.`,
+			);
+		}
+
+		const report: ReclaimReport = {
+			outcome: reclaimed.length > 0 ? 'reclaimed' : declined.length > 0 ? 'declined' : 'nothing-to-reclaim',
+			reclaimed,
+			declined,
+			slots,
+			message: reclaimMessage(reclaimed, declined, slots),
+		};
+		namedLogger.info(`reclaim: ${report.message}`);
+		return report;
 	}
 
 	/**
@@ -1750,4 +1983,51 @@ export class ReceivingIndexer<
  */
 function keyOf(id: GenerationId): string {
 	return `${id.stream}\u0000${id.processor}`;
+}
+
+/**
+ * WHAT A RECLAIM DID, in one sentence that NAMES things.
+ *
+ * An operator runs the verb because something refused or because a disk is full,
+ * so a count on its own -- "reclaimed three generations" -- leaves them exactly as
+ * uncertain as they were: which three, and did anything actually come back? So the
+ * sentence names each generation, says which streams were reaped and how many
+ * records went with them, and says what is still held and why nothing else could
+ * go.
+ *
+ * It is built ONCE and carried on the report, rather than rendered again by every
+ * surface that reports one, so a log line and an HTTP response say the same thing.
+ */
+function reclaimMessage(
+	reclaimed: readonly ReclaimedGeneration[],
+	declined: readonly DeclinedReclaim[],
+	slots: SlottedGenerations,
+): string {
+	const named = (id: GenerationId) => `{stream: ${id.stream}, processor: ${id.processor}}`;
+	const holding = SLOT_NAMES.filter((name) => !!slots[name])
+		.map((name) => `${name} ${named(slots[name] as GenerationRecord)}`)
+		.join(', ');
+	const held = holding.length > 0 ? `What the slots hold is untouched: ${holding}.` : `No slot holds anything.`;
+
+	if (reclaimed.length === 0 && declined.length === 0) {
+		return `NOTHING was reclaimed, because every generation this indexer holds is named by a slot. ${held}`;
+	}
+	const went =
+		reclaimed.length === 0
+			? `NOTHING was reclaimed.`
+			: `RECLAIMED ${reclaimed.length} generation(s) no slot named: ${reclaimed
+					.map(
+						(one) =>
+							`${named(one.generation)}${
+								one.reaped ? ` (its stream ${one.reaped} was reaped with it, ${one.records ?? 0} record(s))` : ''
+							}`,
+					)
+					.join(', ')}. Each one's state namespace is gone.`;
+	const kept =
+		declined.length === 0
+			? ''
+			: ` ${declined.length} was/were named by no slot and NOT taken: ${declined
+					.map((one) => `${named(one.generation)} -- ${one.message}`)
+					.join(' ')}`;
+	return `${went}${kept} ${held}`;
 }

@@ -219,6 +219,13 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// exactly as it is on `index`, rather than by restarting the process.
 							generations: () => prepared.container.generations(),
 							promote: (id) => prepared.container.promote(id),
+							// ...and WHAT EACH SLOT NAMES, plus the verb that takes what NONE of them
+							// does (ADR-0084). This is the shape that ACCUMULATES generations -- every
+							// reconfigure registers one beside the live fold -- so it is the shape whose
+							// operator most needs the disk back, and a cap that refuses here names what
+							// could be deleted and would otherwise hand over nothing to delete it with.
+							slots: () => prepared.container.slots(),
+							reclaim: () => prepared.container.reclaim(),
 							// ...and the TRIGGER that gives an operator something to point AT: this
 							// process RE-READS its own configuration and registers whatever generation
 							// that now names, beside the live fold (`reconfigure.ts`). `run` is the shape

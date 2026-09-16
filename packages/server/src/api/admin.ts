@@ -1,4 +1,12 @@
-import {generationDigestOf, type GenerationId, type GenerationRecord} from '@etherfold/core';
+import {
+	generationDigestOf,
+	slotHolding,
+	SLOT_NAMES,
+	unslottedGenerations,
+	type GenerationId,
+	type GenerationRecord,
+	type SlottedGenerations,
+} from '@etherfold/core';
 import {Hono} from 'hono';
 import type {Context} from 'hono';
 import {logs} from 'named-logs';
@@ -13,8 +21,15 @@ const logger = logs('@etherfold/server');
 
 /**
  * THE OPERATOR'S SURFACE ON ONE NAMED INDEXER: which generation answers reads,
- * moving that pointer -- forwards to promote, BACK to revert -- and the TRIGGER
- * that introduces a generation to move to in the first place.
+ * moving that pointer -- forwards to promote, BACK to revert -- the TRIGGER that
+ * introduces a generation to move to in the first place, and RECLAIMING the ones
+ * no slot names.
+ *
+ * The last of those is the only one here that DELETES state, and it is the
+ * operator half of ADR-0084: the durable slots make "what is this generation FOR"
+ * a row, so "nothing is using this" stops being a judgement about digests and
+ * timestamps and becomes a refcount. Until it existed, a cap that refused named
+ * what could be deleted and offered nothing to delete it with.
  *
  * The two belong together and arrived in that order for a reason. Everything
  * downstream of "a successor exists" was built and careful before anything could
@@ -104,14 +119,31 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 
 				const generations = await held.generations();
 				const canonical = await held.entry.canonicalGeneration();
+				// WHAT EACH GENERATION IS FOR, where the host can say: a listing plus a
+				// canonical flag answers WHAT is held and never WHY any of it is kept, which is
+				// the question an operator has to answer before deleting anything.
+				const slots = held.entry.slots ? await held.entry.slots() : undefined;
+				const unslotted = slots ? unslottedGenerations(generations, slots) : undefined;
 				return c.json({
 					success: true,
 					indexer: held.name,
 					canonical: canonical ? reported(canonical) : undefined,
+					// THE THREE SLOTS, where this host holds them: `canonical` is merely the first
+					// one (ADR-0084), so it is reported here beside the other two as well as in the
+					// field above, which is the pointer's own answer and predates slots.
+					...(slots ? {slots: reportedSlots(slots)} : {}),
+					// ...and what NO slot names, which is what `POST /{indexer}/admin/reclaim-generations`
+					// takes. Named rather than left to be derived by eye from the two lists, because
+					// deriving it by matching digests is exactly the work this surface exists to remove.
+					...(unslotted ? {unslotted: unslotted.map(reported)} : {}),
 					generations: generations.map((record) => ({
 						...reported(record),
 						createdAt: record.createdAt,
 						canonical: !!canonical && record.stream === canonical.stream && record.processor === canonical.processor,
+						// WHICH slot holds it, or ABSENT where none does. Absent is the fact a reclaim
+						// acts on, so it is never rendered as a string that could be mistaken for a
+						// fourth slot name.
+						...(slots && slotHolding(slots, record) ? {slot: slotHolding(slots, record)} : {}),
 					})),
 				} as const);
 			})
@@ -203,6 +235,103 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 					// undo back to.
 					previous: previous ? reported(previous) : undefined,
 					canonical: reported(moved),
+				} as const);
+			})
+			/**
+			 * RECLAIM WHAT NO SLOT NAMES: the operator's verb for getting the disk back,
+			 * and the thing a cap has never had beside it.
+			 *
+			 * A cap REFUSES at its bound and never evicts, which is sound and was the ONLY
+			 * instrument an operator had: it names what could be deleted and hands over
+			 * nothing to delete it with, so the remedy was hand-written SQL or a deleted
+			 * database. Slots make the verb expressible for the first time -- a generation no
+			 * slot names is garbage BY DEFINITION rather than by a judgement about digests and
+			 * timestamps (ADR-0084) -- and `GET /{indexer}/admin/canonical-generation` is the
+			 * SEE half: it reports each slot, what it names, and everything no slot names.
+			 *
+			 * ## Why it is HERE and not a sixth CLI verb
+			 *
+			 * The same argument that put the pointer move here (ADR-0057), which this does not
+			 * re-litigate: a Worker is reachable only over HTTP, the command set is pinned at
+			 * five names, and an operator affordance that exists on one deployment shape is not
+			 * an affordance. It takes NO BODY, for the reason `reconfigure` takes none: the
+			 * rule decides which generations go, so there is nothing for a caller to name and no
+			 * input that could be got wrong.
+			 *
+			 * ## It is a VERB and never a COLLECTOR
+			 *
+			 * Nothing calls it on a timer and nothing calls it at startup. An automatic reclaim
+			 * deletes with nobody present, which is a different decision with a different risk
+			 * profile and one ADR-0084 does not make. The caps are untouched by it either: this
+			 * gives an operator an instrument, it does not raise a bound.
+			 *
+			 * ## THE ANSWERS, and why the two that reclaimed nothing are not one
+			 *
+			 * `200` for all three, because the verb RAN: `reclaimed` (something went, each one
+			 * named with the stream reaped and the records that came back with it), `declined`
+			 * (something was reclaimable and could not go yet, per generation and with the
+			 * reason -- the writer of a stream another fold still follows is kept, ADR-0044),
+			 * and `nothing-to-reclaim` (every generation this indexer holds is named by a
+			 * slot). Collapsing the last two would tell an operator whose disk is full that
+			 * there was nothing to free, which is the false answer this verb exists to end.
+			 *
+			 * The refusals are the ones this surface already has: `401` with no ADMIN_TOKEN or
+			 * the wrong one (it is deliberately never the ingest credential -- a log shipper
+			 * must not be able to DELETE state), `404` for a name this host was not built with,
+			 * and `501` where this deployment holds no generations to reclaim.
+			 */
+			.post('/:indexer/admin/reclaim-generations', async (c) => {
+				const resolved = resolveIndexer(options, c as never, 'admin');
+				if (!resolved.ok) return resolved.response;
+				const {entry, name} = resolved;
+
+				const reclaim = entry.reclaim;
+				if (!reclaim) {
+					// A CAPABILITY this deployment lacks and NOT a missing route, which is the same
+					// `501` an absent pointer, an absent re-read and an absent ingestion answer.
+					logger.error(`admin: ${JSON.stringify(name)} holds no generations to reclaim, so a reclaim was refused`);
+					return c.json(
+						{
+							success: false,
+							error: 'reclaim-not-held',
+							indexer: name,
+							message:
+								`this named indexer holds no generation registry, so there is nothing here to reclaim: it runs ONE ` +
+								`fold, and what answers reads is that fold. A deployment that holds generations registers a ` +
+								`container that says which slot holds each of them, and reclaiming is what takes the ones no slot ` +
+								`names (\`etherfold run\`, \`etherfold index\`).`,
+						} as const,
+						501,
+					);
+				}
+
+				const report = await reclaim.call(entry);
+				logger.info(`admin: ${JSON.stringify(name)} reclaimed what no slot names -- ${report.message}`);
+				return c.json({
+					success: true,
+					indexer: name,
+					outcome: report.outcome,
+					// NAMED and not counted: an operator ran this because something refused or a
+					// disk is full, and "reclaimed three generations" leaves them exactly as
+					// uncertain as they were.
+					reclaimed: report.reclaimed.map((one) => ({
+						...reported(one.generation),
+						createdAt: one.generation.createdAt,
+						// the STREAM is the expensive thing -- raw logs a public node may never serve
+						// again -- so whether one was reaped, and how much came back with it, is the
+						// fact worth reading twice
+						...(one.reaped === undefined ? {} : {reaped: one.reaped}),
+						...(one.records === undefined ? {} : {records: one.records}),
+					})),
+					declined: report.declined.map((one) => ({
+						...reported(one.generation),
+						reason: one.reason,
+						message: one.message,
+					})),
+					// ...and what is still held, from the SAME read the rule was decided on, so an
+					// operator does not have to ask a second time what survived.
+					slots: reportedSlots(report.slots),
+					message: report.message,
 				} as const);
 			})
 			/**
@@ -355,6 +484,24 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 /** A generation as this surface reports one: the two fields that KEY it, and the digest it is ADVERTISED by. */
 function reported(id: GenerationId): {stream: string; processor: string; digest: string} {
 	return {stream: id.stream, processor: id.processor, digest: generationDigestOf(id)};
+}
+
+/**
+ * WHAT EACH SLOT NAMES, as this surface reports it: the slot name to the
+ * generation it holds, with an EMPTY slot simply absent.
+ *
+ * Absent rather than `null`, so that "this slot holds nothing" and "this slot
+ * holds a generation whose record has gone" cannot be told apart by a caller --
+ * because they are the same thing: every slot read RESOLVES against the records,
+ * so a slot naming a record that is gone answers nothing at all.
+ */
+function reportedSlots(slots: SlottedGenerations): Partial<Record<string, ReturnType<typeof reported>>> {
+	const held: Record<string, ReturnType<typeof reported>> = {};
+	for (const name of SLOT_NAMES) {
+		const record = slots[name];
+		if (record) held[name] = reported(record);
+	}
+	return held;
 }
 
 /** The `{stream, processor}` a request named, or nothing if it named no generation. */
