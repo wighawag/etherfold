@@ -38,6 +38,7 @@ import {
 	wait,
 } from './internal/engine/utils.js';
 import {sourceHashesOf} from './internal/engine/eventRanges.js';
+import {announceProcessorDrift, processorDriftReport} from './processorDrift.js';
 import {CancellablePromiseCancelled, CancelOperations, createAction} from './internal/utils/promises.js';
 import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
 import {
@@ -1903,39 +1904,28 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	 * Compare the fingerprint of the code that computed the persisted state with
 	 * the code loaded now, and report if they differ.
 	 *
-	 * Either side missing means "unknown", never "drifted": a cursor written
-	 * before this field existed, or a processor that cannot fingerprint itself,
-	 * must not report on every boot. The stored fingerprint is deliberately NOT
-	 * refreshed afterwards, because it describes the code that produced the state, so the
-	 * report repeats every boot until the author bumps `version` (which discards
-	 * the state) rather than going quiet after being seen once.
+	 * This is the BOOT question (`persisted-state`), and the comparison, the
+	 * message and the two "unknown" rules are `processorDrift.ts`'s, so that this
+	 * side and the receiving side say ONE thing. What is local to this class is what
+	 * happens NEXT: the stored fingerprint is deliberately NOT refreshed afterwards,
+	 * because it describes the code that produced the state, so the report repeats
+	 * every boot until the author bumps `version` (which discards the state) rather
+	 * than going quiet after being seen once -- and `strictProcessorDrift` turns the
+	 * report into a refusal to start, which is this container's own opt-in fail-stop.
 	 */
 	protected reportProcessorDriftIfAny(context: ContextIdentifier, processorHash: string): void {
-		const storedFingerprint = context.processorFingerprint;
-		const currentFingerprint = this.processor.getCodeFingerprint();
-		if (!storedFingerprint || !currentFingerprint || storedFingerprint === currentFingerprint) {
+		const report = processorDriftReport({
+			processorHash,
+			compared: 'persisted-state',
+			previousFingerprint: context.processorFingerprint,
+			currentFingerprint: this.processor.getCodeFingerprint(),
+		});
+		if (!report) {
 			return;
 		}
-
-		const message =
-			`PROCESSOR DRIFT: the processor's version hash is unchanged (${processorHash}) but its handler code is not ` +
-			`(state was computed by ${storedFingerprint}, running ${currentFingerprint}). ` +
-			`The persisted state was computed by DIFFERENT logic and is being reused as if it were current. ` +
-			`Bump the processor's \`version\` to discard and recompute it. ` +
-			`If no logic changed, this is a re-minification or a transpiler change and can be ignored ` +
-			`(the fingerprint is advisory and never discards state on its own).`;
-		const report: ProcessorDriftReport = {processorHash, storedFingerprint, currentFingerprint, message};
-
-		namedLogger.error(message);
-		if (this.onProcessorDrift) {
-			try {
-				this.onProcessorDrift(report);
-			} catch (err) {
-				namedLogger.error(`onProcessorDrift listener threw`, err);
-			}
-		}
+		announceProcessorDrift(report, this.onProcessorDrift);
 		if (this.config.strictProcessorDrift) {
-			throw new Error(message);
+			throw new Error(report.message);
 		}
 	}
 

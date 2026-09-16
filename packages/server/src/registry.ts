@@ -1,4 +1,11 @@
-import type {GenerationId, GenerationRecord, LogIngestion, StateMovedDetach, StateMovedHandler} from '@etherfold/core';
+import type {
+	GenerationId,
+	GenerationRecord,
+	LogIngestion,
+	ProcessorDriftReport,
+	StateMovedDetach,
+	StateMovedHandler,
+} from '@etherfold/core';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
@@ -19,6 +26,20 @@ import type {RemoteSQL} from 'remote-sql';
  * advisory and stays out of it, `@etherfold/core`'s `utils/fingerprint.ts`), so
  * a developer reading it learns something true rather than watching a no-op
  * report success.
+ *
+ * ## `unchanged` READS TWO WAYS, and they stay ONE OUTCOME
+ *
+ * "Nothing changed" is truthful and, alone, useless: an edited handler body and a
+ * save that changed nothing produce the same answer, because neither moves the
+ * DECLARED identity. So an `unchanged` carries the second opinion when there is
+ * one (`drift`), and an operator can tell "your `version` has not moved since the
+ * day you wrote it" from "this really was a no-op".
+ *
+ * It is deliberately NOT a fourth outcome. Nothing was registered and nothing
+ * changed, which is exactly what `unchanged` means; drift is a FACT ABOUT THE
+ * ANSWER and not a different thing to have done -- and making it an outcome would
+ * be the first step towards acting on it, which is the one thing an advisory
+ * fingerprint may never cause (`@etherfold/core`, `utils/fingerprint.ts`).
  *
  * It is DATA rather than an exception on the failure arm, because the failure is
  * EXPECTED: a processor that does not compile is the normal state between the
@@ -51,6 +72,16 @@ export type ReconfigureReport =
 			readonly generation: GenerationId;
 			/** WHY nothing was registered, in terms an author can act on. */
 			readonly message: string;
+			/**
+			 * The SECOND OPINION, present exactly when the module that was re-read differs
+			 * from the fold this deployment is running (`compared: 'reloaded-module'`).
+			 *
+			 * ABSENT means "nothing to say", which covers both "the code is identical" and
+			 * "one of the two sides cannot be fingerprinted at all" -- absence is never
+			 * reported as drift, because a report that fired on every deployment that cannot
+			 * answer is one nobody would believe.
+			 */
+			readonly drift?: ProcessorDriftReport;
 	  }
 	| {
 			readonly outcome: 'failed';

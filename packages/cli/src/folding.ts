@@ -2,6 +2,7 @@ import {
 	SERVER_GENERATION_CAPS,
 	generationDigestOf,
 	openReceivingIndexer,
+	processorCodeFingerprint,
 	type Abi,
 	type EventProcessor,
 	type GenerationId,
@@ -270,6 +271,21 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
 	 * reporting the outcome load-bearing rather than decorative.
 	 */
 	versionHash: string;
+	/**
+	 * The ADVISORY second opinion this declaration answers with: a digest of the
+	 * HANDLER SOURCE, and the very value `EntityEventProcessor.getCodeFingerprint()`
+	 * returns -- taken here, from the same declared object, for the reason
+	 * `versionHash` is (one formula, one spelling).
+	 *
+	 * `undefined` is a real answer and means "cannot tell", never "unchanged": a
+	 * processor whose handlers are all bound or proxied has no readable source.
+	 *
+	 * It is NOT part of any identity and nothing branches on it. It exists so that a
+	 * RE-READ can say whether the module it just imported differs from the fold this
+	 * process is running (`reconfigure.ts`), which is the question a developer who
+	 * saved a file is actually asking and the one the version hash cannot answer.
+	 */
+	codeFingerprint: string | undefined;
 	/** The two factories, in ADR-0043's order: state FIRST, then the fold over it. */
 	generation: Pick<
 		ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>,
@@ -334,6 +350,11 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 	return {
 		stateFor,
 		versionHash,
+		// The AUTHOR'S OWN OBJECT is fingerprinted, exactly as `EntityEventProcessor`
+		// fingerprints it: its `on<Event>` handlers and `handleUnparsedEvent` ARE the
+		// logic, and the wrapper around them is this package's code, which no author edit
+		// moves.
+		codeFingerprint: processorCodeFingerprint(declared),
 		generation: {
 			// CLAIMED here, which is the ONE place this process takes the store: folding is
 			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A

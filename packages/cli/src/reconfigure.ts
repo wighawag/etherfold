@@ -1,4 +1,11 @@
-import {resolveStreamConfig, streamDigestOf, type Abi, type GenerationId, type ReceivingIndexer} from '@etherfold/core';
+import {
+	processorDriftReport,
+	resolveStreamConfig,
+	streamDigestOf,
+	type Abi,
+	type GenerationId,
+	type ReceivingIndexer,
+} from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport} from '@etherfold/server';
@@ -58,6 +65,33 @@ const logger = logs('etherfold');
 // declarations, or the source) when they mean "this is a different fold", and the
 // message this returns says exactly that, so "I saved the file and nothing
 // happened" has an answer rather than three indistinguishable causes.
+//
+// ## AND `unchanged` SAYS WHETHER THE CODE MOVED -- WHICH TWO FINGERPRINTS, AND WHY THOSE TWO
+//
+// Truthful is not the same as useful: an edited handler and a save that changed
+// nothing produce the identical answer, and the developer is left concluding the
+// endpoint is broken. The second opinion already exists (`getCodeFingerprint()`),
+// and both halves of the comparison are in hand here, so an `unchanged` carries a
+// `ProcessorDriftReport` when the code moved -- the SAME shape and the same
+// `PROCESSOR DRIFT` phrase the containers log on adopting a cursor, so an operator
+// greps for one thing.
+//
+// The two fingerprints compared here are the INCUMBENT'S LOADED one and the
+// FRESHLY IMPORTED module's (`compared: 'reloaded-module'`), and deliberately not
+// the STORED one that `Indexer.reportProcessorDriftIfAny` uses. They answer
+// different questions and can disagree: the stored one answers "the persisted
+// state was computed by different logic", which is the BOOT question and is
+// already asked by the container this process folds through, while this one
+// answers "the module I have just re-read differs from the one I am running" --
+// which is what a developer who pressed save is asking, and the only one that is
+// true of an edit made minutes after a process that had no drift came up.
+//
+// The stored fingerprint is NOT refreshed by any of this, here or in the core:
+// it describes the code that PRODUCED the state, so the boot report has to
+// survive being seen. And nothing is registered because of drift. Registering
+// would be "what the developer meant" and would fold the fingerprint into the
+// identity through the back door, which is the full-replay-on-a-re-minification
+// failure `fingerprint.ts` rejects. It reports; the author acts.
 //
 // ## THE MODULE CACHE, AND WHAT DEFEATING IT COSTS
 //
@@ -191,8 +225,26 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 		// re-folding the stream into it beside the first. So the identity is computed
 		// first and compared against what is held, which is also exactly the question
 		// the caller asked ("did my change name a different generation").
-		const already = held.container.held().some((fold) => sameIdentity(fold.record, wanted));
-		if (already) {
+		// The FOLD and not merely whether there is one, because the fold is one half of
+		// the comparison below: it is the code this process is RUNNING for that identity.
+		const alreadyHeld = held.container.held().find((fold) => sameIdentity(fold.record, wanted));
+		if (alreadyHeld) {
+			// THE RELOAD QUESTION, asked of the two things this function is holding: the fold
+			// that is RUNNING, and the module that was just re-imported. Either side answering
+			// `undefined` reports NOTHING rather than drift -- a processor whose handlers are
+			// all bound or proxied cannot fingerprint itself, and "cannot tell" is not
+			// "changed".
+			const drift = processorDriftReport({
+				processorHash: wanted.processor,
+				compared: 'reloaded-module',
+				previousFingerprint: alreadyHeld.processor.getCodeFingerprint(),
+				currentFingerprint: parts.codeFingerprint,
+			});
+			if (drift) {
+				// at ERROR and in its own line, because it is the news: the call SUCCEEDED and
+				// the author's edit is not running
+				logger.error(drift.message);
+			}
 			logger.info(
 				`reconfigure: the configuration names {stream: ${wanted.stream}, processor: ${wanted.processor}}, which ` +
 					`this deployment already holds, so NOTHING was registered`,
@@ -200,12 +252,19 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 			return {
 				outcome: 'unchanged',
 				generation: wanted,
-				message:
-					`this deployment re-read its configuration and it named the generation it is already holding ` +
-					`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation is ` +
-					`identified by the processor's DECLARED version hash -- its \`version\` plus its entity declarations and ` +
-					`config -- and not by the source text of its handlers, so editing a handler body alone names the same ` +
-					`generation. Bump the processor's \`version\` to say that this is a different fold.`,
+				// ONE message or the other, and never both: the drift report already says that
+				// the identity did not move, that nothing was registered and what to do about it,
+				// so appending the generic explanation would repeat the only sentence that
+				// matters. The reading an operator gets is therefore the one that is true of
+				// their save.
+				message: drift
+					? drift.message
+					: `this deployment re-read its configuration and it named the generation it is already holding ` +
+						`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation is ` +
+						`identified by the processor's DECLARED version hash -- its \`version\` plus its entity declarations and ` +
+						`config -- and not by the source text of its handlers, so editing a handler body alone names the same ` +
+						`generation. Bump the processor's \`version\` to say that this is a different fold.`,
+				...(drift ? {drift} : {}),
 			};
 		}
 

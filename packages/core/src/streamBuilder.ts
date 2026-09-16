@@ -14,13 +14,16 @@ import {
 } from './internal/engine/utils.js';
 import type {EmissionAppender} from './emissionStream.js';
 import type {GenerationId, GenerationRecord} from './generation/registry.js';
+import {announceProcessorDrift, processorDriftReport} from './processorDrift.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {streamDigestOf} from './stream/identity.js';
 import type {
+	ContextIdentifier,
 	EmittedLog,
 	EventProcessor,
 	IndexingSource,
 	LastSync,
+	ProcessorDriftReport,
 	ProvidedIndexerConfig,
 	UntypedWireBatch,
 	UsedStreamConfig,
@@ -184,6 +187,21 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
 	 * on top of state that means something else. This is ADDITIVE.
 	 */
 	container?: GenerationContainer;
+	/**
+	 * BE TOLD that the cursor this receiver just adopted was computed by DIFFERENT
+	 * handler code at the same declared version (`reportProcessorDriftIfAny`).
+	 *
+	 * The twin of `IndexerGeneration.onProcessorDrift`, taken here as an option
+	 * rather than as a public field because a receiver is rebuilt underneath a
+	 * container when the wire is handed over (`handOverTheWire`) and a field set by a
+	 * caller would be dropped by that rebuild. A host reaches it through
+	 * `ReceivingIndexer.onProcessorDrift`.
+	 *
+	 * Absent is the ordinary case and costs nothing: the report is LOGGED whether or
+	 * not anyone listens, which is what makes "a deployment that never calls the
+	 * reconfigure endpoint still learns from its logs" true.
+	 */
+	onProcessorDrift?: (report: ProcessorDriftReport) => void;
 };
 
 /**
@@ -273,6 +291,20 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	private readonly recordReorg: ReorgRecorder | undefined;
 	private readonly appendEmissions: EmissionAppender | undefined;
 	private readonly container: GenerationContainer | undefined;
+	private readonly onProcessorDrift: ((report: ProcessorDriftReport) => void) | undefined;
+	/**
+	 * Whether this receiver has already said it, which is what keeps a per-BOOT
+	 * report from becoming a per-BATCH one.
+	 *
+	 * The cursor is read on every call here (see the class JSDoc on why it is never
+	 * cached), so the unguarded shape would log the same line for every batch a
+	 * sender pushes -- and a line that repeats every few seconds is one an operator
+	 * filters out, which is the same silence this exists to remove. Nothing PERSISTED
+	 * is touched by it: the stored fingerprint still describes the code that produced
+	 * the state, so the next process reports again, and it goes on being reported
+	 * until the author bumps `version`.
+	 */
+	private driftReported = false;
 
 	constructor(
 		private readonly processor: EventProcessor<ABI, ProcessResultType>,
@@ -282,6 +314,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 		this.recordReorg = config.recordReorg;
 		this.appendEmissions = config.appendEmissions;
 		this.container = config.container;
+		this.onProcessorDrift = config.onProcessorDrift;
 		// The defaults MUST match `IndexerGeneration`'s and the sending `LogFetcher`'s,
 		// because the hash of the resolved config is half the wire identity: a
 		// receiver that defaulted `finality` differently would refuse every batch a
@@ -507,6 +540,11 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 				processorHash === lastSync.context.processor &&
 				stateMatches(this.context.source, this.context.config, lastSync.lastToBlock, lastSync.context)
 			) {
+				// The state is about to be ADOPTED, which is the only branch where drift can
+				// matter, exactly as it is on the chain-facing side: a differing version hash
+				// is an upgrade and never a drift, and a cursor that is somebody else's is not
+				// resumed on top of at all.
+				this.reportProcessorDriftIfAny(lastSync.context, processorHash);
 				return lastSync;
 			}
 			if (this.container) {
@@ -536,6 +574,42 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 			latestBlock: 0,
 			unconfirmedBlocks: [],
 		};
+	}
+
+	/**
+	 * THE SECOND OPINION ON AN ADOPTED CURSOR: the fingerprint of the code that
+	 * computed this state against the code loaded now, reported if they differ.
+	 *
+	 * The receiving side WROTE this fingerprint into every cursor it opened and
+	 * compared none of them, so a deployment folding through here served state
+	 * computed by logic that no longer exists and said nothing about it. This is the
+	 * same comparison `IndexerGeneration.reportProcessorDriftIfAny` makes, through the
+	 * same builder, so both halves of the system use ONE phrase and ONE shape
+	 * (`processorDrift.ts`) -- it is the BOOT question (`persisted-state`), and
+	 * deliberately not the RELOAD question the reconfigure endpoint answers.
+	 *
+	 * Two things it does NOT do, both load-bearing. It does not refresh the stored
+	 * fingerprint: that value describes the code that PRODUCED the state, so the
+	 * report has to survive being seen. And it does not refuse the batch -- there is
+	 * no receiving twin of `strictProcessorDrift`, because a receiver that threw here
+	 * would answer a sender with a failure for a condition the sender cannot fix and
+	 * cannot even see (`context.processor` is the receiver's own business, ADR-0004).
+	 */
+	private reportProcessorDriftIfAny(context: ContextIdentifier, processorHash: string): void {
+		if (this.driftReported) {
+			return;
+		}
+		const report = processorDriftReport({
+			processorHash,
+			compared: 'persisted-state',
+			previousFingerprint: context.processorFingerprint,
+			currentFingerprint: this.processor.getCodeFingerprint(),
+		});
+		if (!report) {
+			return;
+		}
+		this.driftReported = true;
+		announceProcessorDrift(report, this.onProcessorDrift);
 	}
 }
 

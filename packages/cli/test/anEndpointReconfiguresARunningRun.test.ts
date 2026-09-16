@@ -190,6 +190,14 @@ type Reconfigured = {
 		message?: string;
 		indexer?: string;
 		generation?: {stream: string; processor: string; digest: string};
+		/** The SECOND OPINION on an `unchanged`: present only when the handler code moved. */
+		drift?: {
+			processorHash: string;
+			compared: string;
+			previousFingerprint: string;
+			currentFingerprint: string;
+			message: string;
+		};
 	};
 };
 
@@ -383,5 +391,83 @@ describe('the trigger is the operator\u2019s, on the operator\u2019s credential'
 		expect((await reconfigure(indexer, {token: INGEST_TOKEN})).status).toBe(401);
 
 		expect(await generationsOf(indexer)).toHaveLength(1);
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// `unchanged` IS TRUTHFUL AND, ON ITS OWN, USELESS
+// ---------------------------------------------------------------------------------------------------
+// A generation is identified by `getVersionHash()` -- the DECLARED version plus
+// the entity declarations and the config -- and never by the text of the
+// handlers, so a developer who edits a handler body, saves and calls this
+// endpoint is told that nothing changed. That answer is correct and reads
+// exactly like a save that genuinely changed nothing, which is how "I saved and
+// nothing happened" becomes an afternoon.
+//
+// The system already knows better: `getCodeFingerprint()` is the second opinion,
+// and the module this endpoint has just re-imported carries one. So an
+// `unchanged` SAYS whether the code moved, in the `PROCESSOR DRIFT` vocabulary
+// the chain-facing indexer already uses, and names the one thing that would make
+// it a different fold.
+//
+// What it must NOT do is act on it. The fingerprint is ADVISORY (`@etherfold/core`,
+// `utils/fingerprint.ts`): registering a generation because the code drifted
+// would fold it into the identity through the back door and force a full replay
+// on a re-minification that changed no logic. So these cases assert the report
+// AND that nothing was registered.
+// ---------------------------------------------------------------------------------------------------
+
+describe('a reload that changed nothing says whether the CODE changed', () => {
+	it('reports PROCESSOR DRIFT for a handler edit at a static version, and still registers nothing', async () => {
+		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const {indexer} = await aRunServing(path);
+		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
+		const before = await generationsOf(indexer);
+
+		// THE EDIT A DEVELOPER ACTUALLY MAKES: a handler body, and a `version` they did
+		// not think to touch
+		await edit(path, processorModuleSource({version: '1.0.0', credit: 'from'}));
+
+		const answer = await reconfigure(indexer);
+		expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+		// STILL a successful no-op, and still the generation this deployment holds
+		expect(answer.body.outcome).toBe('unchanged');
+		expect(answer.body.generation?.digest).toBe(incumbent);
+
+		// ...but it no longer reads like a save that changed nothing
+		expect(answer.body.drift?.compared).toBe('reloaded-module');
+		expect(answer.body.drift?.previousFingerprint).not.toBe(answer.body.drift?.currentFingerprint);
+		expect(answer.body.drift?.processorHash).toBe(indexer.streamBuilder.generation.processor);
+		expect(answer.body.message).toContain('PROCESSOR DRIFT');
+		// and it names what to do about it rather than only reporting two hashes
+		expect(answer.body.message).toContain('version');
+
+		// ADVISORY, end to end: no generation was registered because the code drifted,
+		// and the deployment goes on answering from the fold it came up with
+		expect(await generationsOf(indexer)).toEqual(before);
+		expect((await feedOf(indexer, LOGS.length)).generation).toBe(incumbent);
+
+		// the condition LASTS until the author acts, so a second call says it again
+		const again = await reconfigure(indexer);
+		expect(again.body.outcome).toBe('unchanged');
+		expect(again.body.drift?.currentFingerprint).toBe(answer.body.drift?.currentFingerprint);
+
+		// ...and bumping `version` is what makes it a different fold
+		await edit(path, processorModuleSource({version: '2.0.0', credit: 'from'}));
+		const registered = await reconfigure(indexer);
+		expect(registered.body.outcome).toBe('registered');
+		expect(registered.body.drift).toBeUndefined();
+	});
+
+	it('says nothing about drift when the reload really was a no-op', async () => {
+		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const {indexer} = await aRunServing(path);
+
+		// no edit at all: the same bytes, re-imported behind the cache breaker
+		const answer = await reconfigure(indexer);
+
+		expect(answer.body.outcome).toBe('unchanged');
+		expect(answer.body.drift).toBeUndefined();
+		expect(answer.body.message).not.toContain('PROCESSOR DRIFT');
 	});
 });
