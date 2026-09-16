@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted, not yet implemented
 ---
 
 # A generation is held by NAMED DURABLE SLOTS, and `canonical` is merely the first one
@@ -36,7 +36,9 @@ The working name through the design discussion was `staging`, and it is rejected
 
 `next` was considered and rejected because "the next generation" is unavoidable in this domain's prose and reads as "the following one in a listing", so the slot name would be ambiguous in every sentence it appears in. `candidate` was considered and rejected because it is taken by the in-memory armed set that this replaces, and one word meaning both a thing and its replacement is the collision `a-successor-that-was-never-canonical-is-superseded` refused when it declined to reuse `superseded` and `retired`.
 
-`successor` and `predecessor` are chosen because they are ALREADY the words the prose and the ADRs use for exactly these two roles ("a successor is registered beside the incumbent"; "the incumbent becomes the predecessor and is RETAINED, because the pointer must be able to move back to it"). The three slots therefore introduce no new vocabulary at all: they promote three existing nouns to durable names. The residual to watch is a host using hash-named slots for several coexisting successors, where a generation can be conceptually a successor while not being in the `successor` slot; those are named by their slot rather than called successors.
+`successor` and `predecessor` are chosen because they are ALREADY the words the prose and the ADRs use for exactly these two roles ("a successor is registered beside the incumbent"; "the incumbent becomes the predecessor and is RETAINED, because the pointer must be able to move back to it"). The three slots therefore introduce no new vocabulary at all: they promote three existing nouns to durable names.
+
+**The slots are exactly three, and arbitrary named slots are NOT built.** An earlier draft kept hash-named slots as an opt-in for several coexisting successors. Dropped: nothing wants it, it is API surface with no consumer, and it was the sole source of ambiguity in the naming above, since a generation could then be conceptually a successor while not being in the `successor` slot. With three fixed slots the words mean one thing each. Adding a fourth, or arbitrary ones, stays cheap if something ever needs it.
 
 ## Considered options
 
@@ -56,7 +58,9 @@ The working name through the design discussion was `staging`, and it is rejected
 
 **The in-memory `candidates` set collapses into the slot**, since the candidate for promotion IS what `successor` names, subject to the policy. Together with the abandoned-successor predicate, three in-memory structures reduce to one durable fact.
 
-**The default must be the `successor` slot, not a slot per identity.** A default of "each identity gets its own slot" reproduces today's unbounded accumulation exactly. Hash-named slots are the deliberate opt-in, which is also the honest answer to the cross-stream question that `a-successor-that-was-never-canonical-is-superseded` answered by fiat.
+**One pending successor, whatever stream it sits on.** With exactly three slots there is no per-identity alternative to weigh, so the cross-stream question that `a-successor-that-was-never-canonical-is-superseded` answered by fiat is answered structurally instead: a newer successor replaces the pending one wherever either sits, because there is only one place for a pending successor to be.
+
+**BOTH containers get slots, and the chain-facing one is where it matters most.** `a-successor-that-was-never-canonical-is-superseded` scoped itself to the RECEIVING container and left `Indexer` (`container.ts`, chain-facing, what a browser tab runs) unchanged, which is defensible for an in-memory rule and wrong for a durable one. A browser tab is the shape that restarts most (a page reload is a fresh process with empty memory), runs against the tightest caps (`BROWSER_GENERATION_CAPS`, two of each), and is the one an HMR loop reconfigures on every save. So the in-memory rule protects the case that needs it least. The two twins differ in shape (`everCanonical` is a boolean on the entry there, a set here) and in cap arithmetic, so this is two pieces of work and not one, and the receiving container goes first because it owns the endpoint and the tests.
 
 **The safety obligation moves and gets easier.** It becomes: replacing what `successor` holds must be provably unable to touch `canonical` or `predecessor`. That is a statement about one slot, assertable directly, rather than a conjunction of three in-memory facts.
 

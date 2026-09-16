@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted, not yet implemented
 ---
 
 # A processor may be PUSHED as a content-addressed artifact, and the artifact's hash IS its version
@@ -47,6 +47,8 @@ That is worth recording rather than treating as a special case, because it says 
 **`version` stops being something an author must remember.** On this path the deployment computes it. `assertProcessorVersion` keeps its job for the filesystem path, where a declared version is still the only identity available.
 
 **A size bound and a content type are part of the route**, since this is the first endpoint that accepts a payload whose size is not a function of chain data.
+
+**The HMR arrival is built; the PUSHED-BYTES route is decided but deferred.** The shape above is accepted in full, and only one arrival is built now. The browser handover has an immediate consumer and needs none of the machinery (no route, no credential, no bytes, no size bound, no bundling refusal), while the upload route has no deployment today that cannot see its own build, and it is the half that carries every cost: explicit remote code execution on the admin credential, a payload bound, a content type, and a refusal for a bundle that is not self-contained. Build it when a deployment exists that the developer's build cannot write to. Recording it now is what keeps the seam shaped for three arrivals rather than two.
 
 **The identity claim is sequenced separately from the mechanism.** That a pushed artifact's hash may serve as its version is available the moment bytes are received, but ADOPTING it as the identity trades a dependency on author discipline (failing as a false negative, silently ignoring a change) for one on build determinism (failing as a false positive, re-folding an identical commit). The false positive is the better failure only once it is cheap, which needs the bounded-count work in ADR-0084: before it, a spurious identity consumes a cap slot and a few of them stop the process starting. So the push may land first and the identity switch waits.
 
