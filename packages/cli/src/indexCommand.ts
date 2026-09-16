@@ -301,6 +301,13 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// -- promote forwards, revert BACK -- answer here instead of `501`.
 							generations: () => container.generations(),
 							promote: (id) => container.promote(id),
+							// ...and WHAT EACH SLOT NAMES, plus the verb that takes what NONE of them does
+							// (ADR-0084), forwarded together for the same reason: a surface reporting what
+							// may be reclaimed on a host that cannot reclaim it would be telling an operator
+							// about an instrument they do not have. This half owns the database, so it is
+							// the half whose disk fills up.
+							slots: () => container.slots(),
+							reclaim: () => container.reclaim(),
 							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
 							// reached the same way and for the same reason: this command is the half of
 							// a split deployment that APPLIES the blocks, so it is the only half that

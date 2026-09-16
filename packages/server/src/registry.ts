@@ -3,6 +3,8 @@ import type {
 	GenerationRecord,
 	LogIngestion,
 	ProcessorDriftReport,
+	ReclaimReport,
+	SlottedGenerations,
 	StateMovedDetach,
 	StateMovedHandler,
 } from '@etherfold/core';
@@ -262,6 +264,42 @@ export type IndexerRegistryEntry = {
 	 */
 	promote?(id: GenerationId): Promise<GenerationRecord>;
 	/**
+	 * WHAT EACH DURABLE SLOT NAMES: the generation that answers reads, the one being
+	 * built beside it, and the one a revert moves back to (ADR-0084).
+	 *
+	 * The half of the operator's picture `generations` alone cannot give. That list
+	 * says WHAT is held; this says what each of them is FOR -- and the difference is
+	 * the whole of what makes a generation reclaimable, since one no slot names is
+	 * garbage by definition rather than by an operator's judgement about digests and
+	 * timestamps.
+	 *
+	 * PAIRED with `reclaim` rather than optional on its own account: both are answered
+	 * by a container over a durable registry (`ReceivingIndexer`), so an entry has both
+	 * or neither, and a surface that found one without the other would be reporting
+	 * what may be reclaimed on a host that cannot reclaim it. Absent is a CAPABILITY
+	 * statement, exactly as an absent `generations` / `promote` is.
+	 */
+	slots?(): Promise<SlottedGenerations>;
+	/**
+	 * RECLAIM EVERY GENERATION NO SLOT NAMES, and report what came back.
+	 *
+	 * The operator's answer to a cap that refused, or to a disk that is full. A cap
+	 * REFUSES at its bound and never evicts, which is sound and was the only
+	 * instrument there was: it names what COULD be deleted and gives nothing to delete
+	 * it with. This is that missing verb, and it deletes nothing a slot names -- the
+	 * generation answering reads, the pending successor, and `predecessor`, which is
+	 * not canonical right now and is precisely the way back from a bad upgrade.
+	 *
+	 * It is a VERB an operator runs and never a sweep on a timer: an automatic reclaim
+	 * deletes with nobody present, which is a different decision with a different risk
+	 * profile and one ADR-0084 does not make.
+	 *
+	 * OPTIONAL and paired with `slots` (see above). It is deliberately not paired with
+	 * `promote`: a pointer move is REVERSIBLE and this DELETES state, so a host may
+	 * one day answer one and not the other, and the two refusals say different things.
+	 */
+	reclaim?(): Promise<ReclaimReport>;
+	/**
 	 * RE-READ THIS DEPLOYMENT'S OWN CONFIGURATION and register whatever generation
 	 * it now names, BESIDE the incumbent -- the trigger a watcher pulls after a
 	 * rebuild.
@@ -411,6 +449,8 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 		...(holds.promote
 			? {promote: (id: GenerationId) => (holds.promote as (id: GenerationId) => Promise<GenerationRecord>)(id)}
 			: {}),
+		...(holds.slots ? {slots: () => (holds.slots as () => Promise<SlottedGenerations>)()} : {}),
+		...(holds.reclaim ? {reclaim: () => (holds.reclaim as () => Promise<ReclaimReport>)()} : {}),
 		...(holds.reconfigure ? {reconfigure: () => (holds.reconfigure as () => Promise<ReconfigureReport>)()} : {}),
 		...(holds.onStateMoved
 			? {
