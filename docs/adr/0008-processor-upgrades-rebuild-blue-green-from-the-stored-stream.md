@@ -1,4 +1,10 @@
+---
+status: superseded in part by ADR-0086
+---
+
 # Processor upgrades rebuild blue-green from the stored stream
+
+> **SUPERSEDED IN PART 2026-09-16 by ADR-0086, on WHAT IDENTIFIES a processor and on the code fingerprint beside it.** This ADR's identity is author-declared (`getVersionHash()`, the `version` field plus the declarations) and its 2026-08-21 amendment added a code fingerprint BESIDE that hash to make a missed bump loud, while stating plainly that the residual remained: "a missed bump still means the rebuild does not trigger". ADR-0086 removes the residual instead of reporting it, by requiring a self-contained bundle and making the hash of its bytes the identity, so `version`, the fingerprint and the drift report are all deleted. Everything else here is UNTOUCHED, and the blue-green rebuild is strengthened rather than weakened: what triggers it is now a fact about the code rather than a claim about it, and retention since ADR-0084 covers the code as well as the state.
 
 When the processor's logic changes but the stream does not (same contracts, same events), the state must be discarded and recomputed, and the old state must keep being served until the new one is ready. The rebuild replays the **locally stored** emission stream into a **new state namespace** keyed by the processor version hash, chunk by chunk, while live indexing continues to write and serve the old namespace. Once the rebuild reaches the stream head, both namespaces are fed for a short window, then a single `current_version` pointer row is flipped atomically and the old namespace is dropped. We chose blue-green because a rebuild takes arbitrarily long and readers must never see partial state.
 
