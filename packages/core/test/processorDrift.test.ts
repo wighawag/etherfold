@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest';
 import type {Abi} from 'abitype';
 import {IndexerGeneration} from '../src/indexer.js';
+import {processorDriftReport} from '../src/processorDrift.js';
 import {simple_hash} from '../src/utils/hash.js';
 import type {ContextIdentifier, EventProcessor, IndexingSource, LastSync, ProcessorDriftReport} from '../src/types.js';
 
@@ -91,8 +92,12 @@ describe('processor drift detection', () => {
 		await indexer.load();
 
 		expect(reports).toHaveLength(1);
-		expect(reports[0].storedFingerprint).toBe('fingerprint-A');
+		expect(reports[0].previousFingerprint).toBe('fingerprint-A');
 		expect(reports[0].currentFingerprint).toBe('fingerprint-B');
+		// WHICH question this answers: the BOOT one, "the persisted state was computed by
+		// different logic" -- and never the reload one, which compares a re-imported
+		// module with the fold that is running and can disagree with this
+		expect(reports[0].compared).toBe('persisted-state');
 		// the report NAMES which processor drifted, by the version hash both sides agree on
 		expect(reports[0].processorHash).toBe('v1');
 		expect(reports[0].message).toContain('v1');
@@ -231,5 +236,75 @@ describe('processor drift detection', () => {
 		} finally {
 			spy.mockRestore();
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// THE COMPARISON ITSELF, WHICH FOUR SURFACES SHARE
+// ---------------------------------------------------------------------------------------------------
+// Two of them are in this package (both engines that adopt a cursor) and one is
+// not: the RELOAD question can only be asked where a module is re-imported, which
+// is the CLI's reconfigure endpoint. So the builder is published, and these are
+// the rules it holds every caller to -- one phrase to grep for, one shape to
+// route, and absence that is never read as drift.
+// ---------------------------------------------------------------------------------------------------
+
+describe('processorDriftReport', () => {
+	it('answers the RELOAD question in the same vocabulary, naming both fingerprints and the action', () => {
+		const report = processorDriftReport({
+			processorHash: 'v1',
+			compared: 'reloaded-module',
+			previousFingerprint: 'fp-running',
+			currentFingerprint: 'fp-on-disk',
+		});
+
+		expect(report?.compared).toBe('reloaded-module');
+		expect(report?.previousFingerprint).toBe('fp-running');
+		expect(report?.currentFingerprint).toBe('fp-on-disk');
+		// ONE phrase for an operator to grep, whichever question was asked
+		expect(report?.message).toContain('PROCESSOR DRIFT');
+		expect(report?.message).toContain('fp-running');
+		expect(report?.message).toContain('fp-on-disk');
+		expect(report?.message).toContain('version');
+		// phrased as a QUESTION for the author rather than a verdict, because the
+		// fingerprint does not survive a minifier, a transpiler change or a comment edit
+		expect(report?.message).toContain('advisory');
+	});
+
+	it('says which question was asked, because the two are not interchangeable', () => {
+		const boot = processorDriftReport({
+			processorHash: 'v1',
+			compared: 'persisted-state',
+			previousFingerprint: 'fp-A',
+			currentFingerprint: 'fp-B',
+		});
+		const reload = processorDriftReport({
+			processorHash: 'v1',
+			compared: 'reloaded-module',
+			previousFingerprint: 'fp-A',
+			currentFingerprint: 'fp-B',
+		});
+
+		// the same pair of values, two different things to tell an operator: one is
+		// about the STATE being served, the other about the MODULE just read
+		expect(boot?.message).not.toBe(reload?.message);
+		expect(boot?.message).toContain('persisted state');
+		expect(reload?.message).toContain('re-read');
+	});
+
+	it('is silent when the two agree, and silent when either side cannot answer', () => {
+		const same = {processorHash: 'v1', compared: 'reloaded-module'} as const;
+		expect(processorDriftReport({...same, previousFingerprint: 'fp-A', currentFingerprint: 'fp-A'})).toBeUndefined();
+		// "cannot tell" is not "changed", on either side and on either question
+		expect(processorDriftReport({...same, previousFingerprint: undefined, currentFingerprint: 'fp-B'})).toBeUndefined();
+		expect(processorDriftReport({...same, previousFingerprint: 'fp-A', currentFingerprint: undefined})).toBeUndefined();
+		expect(
+			processorDriftReport({
+				processorHash: 'v1',
+				compared: 'persisted-state',
+				previousFingerprint: undefined,
+				currentFingerprint: undefined,
+			}),
+		).toBeUndefined();
 	});
 });

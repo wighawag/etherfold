@@ -357,17 +357,57 @@ export type ContextIdentifier = {
  * What the core reports when a processor's declared version says "unchanged"
  * and its code says otherwise. Advisory: the state is still adopted, unless
  * `strictProcessorDrift` is set.
+ *
+ * ONE SHAPE FOR TWO QUESTIONS, and `compared` says which was asked. Both are
+ * "the version hash did not move and the handler source did", and they differ in
+ * WHICH pair of fingerprints was put side by side -- see
+ * `ProcessorDriftComparison`. A second shape per question would give an operator
+ * two things to grep for and a host two payloads to route, which is the opposite
+ * of what a report exists for.
  */
 export type ProcessorDriftReport = {
 	/** The version hash both sides agree on, which is what makes this drift rather than an upgrade. */
 	processorHash: string;
-	/** The fingerprint of the code that computed the persisted state. */
-	storedFingerprint: string;
-	/** The fingerprint of the code loaded now. */
+	/** WHICH two fingerprints were compared, and therefore which question this answers. */
+	compared: ProcessorDriftComparison;
+	/**
+	 * The fingerprint of the code BEHIND WHAT THIS DEPLOYMENT ALREADY HAS: the code
+	 * that computed the persisted state (`persisted-state`), or the code the fold
+	 * being run right now is made of (`reloaded-module`).
+	 *
+	 * Deliberately not called `storedFingerprint`, which it was while only the boot
+	 * question existed: on the reload question nothing about it is stored -- the
+	 * running fold's cursor may carry a THIRD value, written by whatever computed the
+	 * state before this process came up -- and a field name that meant the cursor in
+	 * one report and a loaded module in another would be a name meaning two things.
+	 */
+	previousFingerprint: string;
+	/** The fingerprint of the code AS IT IS NOW: loaded at boot, or just re-read from disk. */
 	currentFingerprint: string;
 	/** The same thing in words, as logged. */
 	message: string;
 };
+
+/**
+ * WHICH pair of fingerprints a drift report compared, because the two pairs
+ * answer different questions and a surface must not silently use one where the
+ * other is meant.
+ *
+ * - `persisted-state` -- the STORED cursor's fingerprint against the code loaded
+ *   now: "the state I am about to serve was computed by different logic". This is
+ *   the BOOT question, and it is the one both containers ask as they adopt a
+ *   cursor.
+ * - `reloaded-module` -- the RUNNING fold's fingerprint against the module just
+ *   re-imported: "the code I have just read differs from the code I am running".
+ *   This is the RELOAD question, which is what a developer who saved a file is
+ *   actually asking, and it is what `POST /{indexer}/admin/reconfigure` answers.
+ *
+ * They can DISAGREE, which is why neither stands in for the other: a process that
+ * has been running since before an unbumped edit holds a loaded fingerprint
+ * matching its stored one (nothing drifted at boot) while a freshly imported
+ * module differs from both.
+ */
+export type ProcessorDriftComparison = 'persisted-state' | 'reloaded-module';
 
 export type LastSync<ABI extends Abi> = {
 	context: ContextIdentifier;
