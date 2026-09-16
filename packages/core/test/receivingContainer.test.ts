@@ -427,7 +427,9 @@ describe('one container, SEVERAL live wire contexts', () => {
 			...world.port,
 			read: async () => {
 				const state = await world.port.read();
-				return detachPointer ? {...state, canonical: {stream: 'gone', processor: 'gone'}} : state;
+				return detachPointer
+					? {...state, slots: {...state.slots, canonical: {stream: 'gone', processor: 'gone'}}}
+					: state;
 			},
 		};
 		const incumbent = await openReceivingIndexer({

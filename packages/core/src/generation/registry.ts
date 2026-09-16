@@ -3,8 +3,8 @@ import {logs} from 'named-logs';
 const namedLogger = logs('@etherfold/core');
 
 /**
- * THE GENERATION REGISTRY: which generations an indexer holds, which one is
- * CANONICAL, what a cap refuses, and what is swept because nothing claims it.
+ * THE GENERATION REGISTRY: which generations an indexer holds, which SLOT holds
+ * each of them, what a cap refuses, and what is swept because nothing claims it.
  *
  * A **generation** is a stream plus a fold over it. An indexer holds any number
  * of them; ONE is canonical and answers every read. Reconfiguring builds a new
@@ -82,6 +82,61 @@ export type GenerationRecord = GenerationId & {
 	readonly createdAt: number;
 };
 
+/**
+ * THE THREE DURABLE NAMED SLOTS a generation can be held by (ADR-0084).
+ *
+ * A slot is an ASSIGNMENT: a durable name POINTING AT a generation, exactly as
+ * `canonical` already was before there were three of them. It is deliberately
+ * NOT part of `GenerationId`: identity is content-addressed (ADR-0053,
+ * ADR-0036), so a slot inside the identity would make the same content under two
+ * slots into TWO generations, two state namespaces and two folds of one stream.
+ *
+ * - **`canonical`** -- what answers every read. Unchanged by slots existing: it
+ *   is simply the first slot, and the one a registry takes for the first
+ *   generation registered.
+ * - **`successor`** -- the generation being built beside the incumbent. It holds
+ *   AT MOST ONE, so registering into an occupied `successor` REPLACES its
+ *   occupant, whatever stream either sits on. That is the whole of "a second save
+ *   replaces the first pending successor", and because the fact is a ROW it
+ *   survives a restart, which no in-memory rule can.
+ * - **`predecessor`** -- what a revert moves back to: the generation the pointer
+ *   was last moved OFF. It is ASSIGNED by the move that creates one and is never
+ *   INFERRED, because it cannot be: with the pointer at C and a newer generation
+ *   N, "N was never canonical" and "N was canonical and the pointer was reverted
+ *   away from it" are indistinguishable from the rows (ADR-0084).
+ *
+ * There are EXACTLY three and arbitrary named slots are deliberately not built:
+ * with three fixed names each word means one thing, and a generation is a
+ * successor exactly when the `successor` slot names it. A generation no slot
+ * names, and that is not canonical, is GARBAGE -- which is a refcount, and far
+ * easier to prove safe than the three-way in-memory predicate it replaced.
+ */
+export const SLOT_NAMES = ['canonical', 'successor', 'predecessor'] as const;
+
+/** WHICH slot: one of exactly three. See `SLOT_NAMES`. */
+export type SlotName = (typeof SLOT_NAMES)[number];
+
+/** What each slot NAMES, as identities: the registry's durable assignments. */
+export type GenerationSlots = {readonly [Name in SlotName]?: GenerationId};
+
+/** What each slot names, RESOLVED against the records. See `GenerationRegistry.slots`. */
+export type SlottedGenerations = {readonly [Name in SlotName]?: GenerationRecord};
+
+/**
+ * A SLOT ASSIGNMENT as a WRITE: an identity ASSIGNS, `null` CLEARS, and an absent
+ * name leaves that slot exactly where it is.
+ *
+ * The three cases are distinct on purpose. "Leave it" is what a write that is not
+ * about slots says (a registration that resolves, a cap-free put), `null` is what
+ * a deletion says about the slots naming what it removed, and only an identity
+ * moves one. `canonical` is never written as `null` by anything here: a registry
+ * that holds generations and points at none of them answers nothing.
+ */
+export type SlotAssignment = {readonly [Name in SlotName]?: GenerationId | null};
+
+/** The same, writable, for building one up. */
+type SlotAssignmentDraft = {-readonly [Name in SlotName]?: GenerationId | null};
+
 /** A COUNT of generations or streams an indexer may hold. Never *retention*. */
 export type GenerationCaps = {
 	/**
@@ -104,20 +159,22 @@ export type GenerationCaps = {
 /** Everything the registry holds, as one consistent read. */
 export type GenerationRegistryState = {
 	readonly generations: readonly GenerationRecord[];
-	readonly canonical: GenerationId | undefined;
+	/** WHICH generation each of the three slots names, or nothing where a slot is empty. */
+	readonly slots: GenerationSlots;
 };
 
 /**
  * What ONE commit writes.
  *
- * `remove` runs before `put`, and an absent `canonical` means LEAVE IT WHERE IT
- * IS rather than clear it: the pointer is never unset once set, because a
- * registry that holds generations and points at none of them answers nothing.
+ * `remove` runs before `put`, and `slots` is applied last: a write may remove a
+ * generation and clear the slots that named it in the same commit, which is what
+ * keeps a slot from ever naming a record that has gone. An absent slot name means
+ * LEAVE IT WHERE IT IS rather than clear it; see `SlotAssignment`.
  */
 export type GenerationRegistryWrite = {
 	readonly remove?: readonly GenerationId[];
 	readonly put?: GenerationRecord;
-	readonly canonical?: GenerationId;
+	readonly slots?: SlotAssignment;
 };
 
 /**
@@ -142,7 +199,7 @@ export type GenerationRegistryWrite = {
  * registry must not fork a naming convention it does not own.
  */
 export type GenerationRegistryPort = {
-	/** Every registered generation and the canonical pointer, as one read. */
+	/** Every registered generation and every slot assignment, as one read. */
 	read(): Promise<GenerationRegistryState>;
 	/**
 	 * Read, decide and write in ONE transaction.
@@ -284,11 +341,13 @@ export type GenerationRegistry = {
 	 */
 	readonly swept: readonly string[];
 	/** Register a generation over a stream, or resolve the one already registered. */
-	create(id: GenerationId): Promise<GenerationRecord>;
+	create(id: GenerationId, options?: {slot?: SlotName}): Promise<GenerationRecord>;
 	/** Every registered generation, oldest first. */
 	list(): Promise<GenerationRecord[]>;
 	/** Every stream at least one registered generation folds. */
 	streams(): Promise<string[]>;
+	/** WHAT EACH SLOT HOLDS, resolved against the records, as one read. */
+	slots(): Promise<SlottedGenerations>;
 	/** The generation that answers reads, or nothing if none has been created. */
 	canonical(): Promise<GenerationRecord | undefined>;
 	/** The generation that WRITES this stream: the oldest surviving one on it. */
@@ -304,6 +363,21 @@ export type GenerationRegistry = {
 /** Whether two identities name the SAME generation. */
 export function sameGeneration(a: GenerationId, b: GenerationId): boolean {
 	return a.stream === b.stream && a.processor === b.processor;
+}
+
+/**
+ * WHICH SLOT names this generation, if any.
+ *
+ * The question a replacement, a collection and a promotion all ask, answered in
+ * one place: a generation no slot names is dead work, and one ANY slot names is
+ * not a replacement's to touch. No generation is ever named by two slots, so the
+ * first match is the answer.
+ */
+export function slotHolding(slots: GenerationSlots, id: GenerationId): SlotName | undefined {
+	return SLOT_NAMES.find((name) => {
+		const held = slots[name];
+		return !!held && sameGeneration(held, id);
+	});
 }
 
 /**
@@ -349,6 +423,39 @@ function byAge(a: GenerationRecord, b: GenerationRecord): number {
 	return a.createdAt - b.createdAt || a.stream.localeCompare(b.stream) || a.processor.localeCompare(b.processor);
 }
 
+/**
+ * CLEAR every slot that names one of these generations.
+ *
+ * Written in the SAME commit as the removal it accompanies, so no crash can land
+ * between a record going and the slot that named it: a slot naming a record that
+ * does not exist would answer `undefined` anyway (every slot read RESOLVES
+ * against the records), but it would also be a row claiming something untrue,
+ * and "a generation no slot names" is the rule collection is decided by.
+ */
+function clearSlotsNaming(slots: GenerationSlots, removed: readonly GenerationId[]): SlotAssignment | undefined {
+	const cleared: SlotAssignmentDraft = {};
+	for (const name of SLOT_NAMES) {
+		const held = slots[name];
+		if (held && removed.some((id) => sameGeneration(id, held))) {
+			cleared[name] = null;
+		}
+	}
+	return Object.keys(cleared).length > 0 ? cleared : undefined;
+}
+
+/** The slot assignments, resolved against the records that survive. */
+function resolveSlots(current: GenerationRegistryState): SlottedGenerations {
+	const held: {-readonly [Name in SlotName]?: GenerationRecord} = {};
+	for (const name of SLOT_NAMES) {
+		const id = current.slots[name];
+		const record = id ? current.generations.find((candidate) => sameGeneration(candidate, id)) : undefined;
+		if (record) {
+			held[name] = record;
+		}
+	}
+	return held;
+}
+
 function assertIdentity(id: GenerationId): GenerationId {
 	if (typeof id?.stream !== 'string' || id.stream.length === 0) {
 		throw new TypeError(`a generation's stream digest must be a non-empty string, got ${JSON.stringify(id?.stream)}`);
@@ -359,6 +466,20 @@ function assertIdentity(id: GenerationId): GenerationId {
 		);
 	}
 	return identityOf(id);
+}
+
+/** A slot name, or nothing. Refused rather than ignored: a misspelt slot is a silent no-op otherwise. */
+function assertSlot(slot: SlotName | undefined): SlotName | undefined {
+	if (slot === undefined) {
+		return undefined;
+	}
+	if (!SLOT_NAMES.includes(slot)) {
+		throw new TypeError(
+			`a generation slot is one of ${SLOT_NAMES.join(', ')}, got ${JSON.stringify(slot)}. There are exactly three ` +
+				`and arbitrary named slots are deliberately not built (ADR-0084).`,
+		);
+	}
+	return slot;
 }
 
 function assertCaps(caps: GenerationCaps): GenerationCaps {
@@ -379,7 +500,7 @@ function deletable(current: GenerationRegistryState): {
 	candidates: GenerationId[];
 	candidateStreams: string[];
 } {
-	const canonical = current.canonical;
+	const canonical = current.slots.canonical;
 	const candidates = current.generations
 		.filter((record) => !canonical || !sameGeneration(record, canonical))
 		.map(identityOf);
@@ -453,14 +574,37 @@ export async function openGenerationRegistry(
 		 * its own generation on every start must not accumulate duplicates, and must
 		 * not be refused by a cap it does not push against.
 		 *
+		 * ## The SLOT it lands in, which is the durable half of "what is this FOR"
+		 *
+		 * A caller names the slot it is registering INTO (`{slot: 'successor'}` for
+		 * every fold added beside a live one). Three rules decide what is written, and
+		 * each of them exists to protect a case:
+		 *
+		 * 1. **An empty registry's first generation takes `canonical`**, whatever slot
+		 *    was asked for, because a registry holding generations and pointing at none
+		 *    of them answers nothing. That rule predates slots and is unchanged.
+		 * 2. **A generation ALREADY IN A SLOT stays where it is.** A host redeployed
+		 *    with the processor the pointer already names must not have it yanked into
+		 *    `successor`, and one redeployed with what `predecessor` names -- the
+		 *    generation an operator deliberately reverted TO or FROM -- must not be
+		 *    re-armed by the act of starting up (ADR-0084's third symptom).
+		 * 3. **Otherwise the named slot is ASSIGNED to it**, replacing whatever that
+		 *    slot held. `successor` therefore holds AT MOST ONE by construction rather
+		 *    than by a rule somebody has to remember, and the generation displaced is
+		 *    left named by no slot -- which is precisely what makes it collectable.
+		 *    Dropping it is the CALLER's, and is done BEFORE this call so that the cap
+		 *    is decided with the room the replacement frees (see the receiving
+		 *    container's `replaceTheSuccessor`).
+		 *
 		 * **Create the generation BEFORE anything writes its stream.** A stream no
 		 * registered generation claims is what the sweep collects, so a subtree
 		 * written ahead of its registration is one another tab's open may take. The
 		 * cost is a re-fetch rather than a hole -- the keeper rebuilds a subtree that
 		 * is not there -- but it is a cost nothing pays by registering first.
 		 */
-		async create(id: GenerationId): Promise<GenerationRecord> {
+		async create(id: GenerationId, options?: {slot?: SlotName}): Promise<GenerationRecord> {
 			const wanted = assertIdentity(id);
+			const into = assertSlot(options?.slot);
 			let resolved: GenerationRecord | undefined;
 			await port.commit((current) => {
 				const found = current.generations.find((record) => sameGeneration(record, wanted));
@@ -468,7 +612,16 @@ export async function openGenerationRegistry(
 					resolved = found;
 					// A registry holding generations and pointing at none answers nothing,
 					// so a pointer that was never set takes this one even here.
-					return current.canonical ? undefined : {canonical: identityOf(found)};
+					if (!current.slots.canonical) {
+						return {slots: {canonical: identityOf(found)}};
+					}
+					// ...and a generation some slot already names stays where it is: a restart
+					// that re-registers the canonical generation, or the one a revert returned
+					// to, is not asking for it to become a pending successor.
+					if (!into || slotHolding(current.slots, found)) {
+						return undefined;
+					}
+					return {slots: {[into]: identityOf(found)}};
 				}
 
 				if (current.generations.length + 1 > bounds.maxGenerations) {
@@ -516,7 +669,13 @@ export async function openGenerationRegistry(
 				 * answer, so taking the first one costs the policy nothing and spares
 				 * every caller a special case.
 				 */
-				return {put: resolved, canonical: current.canonical ? undefined : identityOf(resolved)};
+				const slots: SlotAssignmentDraft = {};
+				if (!current.slots.canonical) {
+					slots.canonical = identityOf(resolved);
+				} else if (into) {
+					slots[into] = identityOf(resolved);
+				}
+				return {put: resolved, ...(Object.keys(slots).length > 0 ? {slots} : {})};
 			});
 			return resolved as GenerationRecord;
 		},
@@ -529,11 +688,23 @@ export async function openGenerationRegistry(
 			return [...new Set((await port.read()).generations.map((record) => record.stream))].sort();
 		},
 
+		/**
+		 * WHAT EACH SLOT HOLDS, resolved against the records, in ONE read.
+		 *
+		 * One read rather than three, because the three answers are read together
+		 * wherever they are used: a replacement has to know that what it is about to
+		 * displace is not what `canonical` or `predecessor` names, and three reads
+		 * could answer from either side of another process's write.
+		 *
+		 * A slot naming a generation whose record has GONE resolves to nothing rather
+		 * than to a dangling identity, exactly as `canonical` already did.
+		 */
+		async slots(): Promise<SlottedGenerations> {
+			return resolveSlots(await port.read());
+		},
+
 		async canonical(): Promise<GenerationRecord | undefined> {
-			const current = await port.read();
-			return current.canonical
-				? current.generations.find((record) => sameGeneration(record, current.canonical as GenerationId))
-				: undefined;
+			return resolveSlots(await port.read()).canonical;
 		},
 
 		/**
@@ -556,6 +727,25 @@ export async function openGenerationRegistry(
 		 * store and its cursor are where they were, so nothing is re-indexed and
 		 * nothing is fetched. That is why non-canonical generations are kept rather
 		 * than evicted.
+		 *
+		 * ## It also ASSIGNS `predecessor`, in the SAME commit, and that is the point
+		 *
+		 * `predecessor` is what a revert moves back to, and WHICH generation that is
+		 * is exactly the fact the rows never held: it cannot be derived afterwards,
+		 * because "the pointer was moved off this one" and "this one was never named"
+		 * look identical (ADR-0084). So it is ASSIGNED by the move that creates one,
+		 * and never inferred: after any move, `predecessor` names the generation the
+		 * pointer just came OFF. A second move back is therefore expressible as a move
+		 * to what `predecessor` names, by any process, after any restart.
+		 *
+		 * It is ONE COMMIT with the pointer write for the reason writer succession is
+		 * stored nowhere: a crash between two writes would leave a pointer that had
+		 * moved and no record of what it moved off, which is the missing fact again.
+		 *
+		 * And a target the `successor` slot named LEAVES that slot, because it is the
+		 * incumbent now and no longer something being built beside one. Nothing else
+		 * is touched: a pending successor stays pending across a revert, which is what
+		 * lets a developer keep iterating while an operator moves the pointer.
 		 */
 		async moveCanonicalTo(id: GenerationId): Promise<GenerationRecord> {
 			const wanted = assertIdentity(id);
@@ -566,7 +756,20 @@ export async function openGenerationRegistry(
 					throw new UnknownGenerationError(wanted);
 				}
 				target = found;
-				return {canonical: identityOf(found)};
+				const movedOff = current.slots.canonical;
+				if (movedOff && sameGeneration(movedOff, found)) {
+					// already there: a move that moves nothing assigns nothing either, or it
+					// would make a generation its own predecessor
+					return undefined;
+				}
+				const slots: SlotAssignmentDraft = {canonical: identityOf(found)};
+				if (movedOff) {
+					slots.predecessor = identityOf(movedOff);
+				}
+				if (slotHolding(current.slots, found) === 'successor') {
+					slots.successor = null;
+				}
+				return {slots};
 			});
 			return target as GenerationRecord;
 		},
@@ -591,7 +794,7 @@ export async function openGenerationRegistry(
 				if (!found) {
 					throw new UnknownGenerationError(wanted);
 				}
-				if (current.canonical && sameGeneration(found, current.canonical)) {
+				if (current.slots.canonical && sameGeneration(found, current.slots.canonical)) {
 					throw new GenerationIsCanonicalError(wanted);
 				}
 				removed = found;
@@ -599,7 +802,10 @@ export async function openGenerationRegistry(
 					current.generations.filter((record) => record.stream === found.stream).length === 1
 						? found.stream
 						: undefined;
-				return {remove: [identityOf(found)]};
+				// ...and the slot that named it is cleared WITH it, so no slot survives the
+				// generation it pointed at
+				const cleared = clearSlotsNaming(current.slots, [found]);
+				return {remove: [identityOf(found)], ...(cleared ? {slots: cleared} : {})};
 			});
 
 			await port.dropState(identityOf(removed as GenerationRecord));
@@ -623,11 +829,12 @@ export async function openGenerationRegistry(
 				if (on.length === 0) {
 					throw new UnknownStreamError(digest);
 				}
-				if (current.canonical && current.canonical.stream === digest) {
-					throw new GenerationIsCanonicalError(current.canonical);
+				if (current.slots.canonical && current.slots.canonical.stream === digest) {
+					throw new GenerationIsCanonicalError(current.slots.canonical);
 				}
 				removed = on;
-				return {remove: on.map(identityOf)};
+				const cleared = clearSlotsNaming(current.slots, on);
+				return {remove: on.map(identityOf), ...(cleared ? {slots: cleared} : {})};
 			});
 
 			for (const record of removed) {

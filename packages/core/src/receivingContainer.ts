@@ -15,12 +15,14 @@ import {GenerationRebuild, type RebuildReport, type ReplaySource} from './genera
 import {
 	openGenerationRegistry,
 	sameGeneration,
+	slotHolding,
 	writerOf,
 	type GenerationCaps,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
 	type GenerationRegistryPort,
+	type SlottedGenerations,
 } from './generation/registry.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
 import type {ReorgRecorder} from './reorgCounters.js';
@@ -68,6 +70,23 @@ const namedLogger = logs('@etherfold/core');
  * rather than a second copy of any of them. The two factories are `GenerationSpec`'s,
  * reached through a `Pick` (`ReceivedGenerationSpec`) so that this container
  * inherits the ORDER and the keying rule instead of restating them.
+ *
+ * ## A GENERATION IS HELD BY A DURABLE NAMED SLOT (ADR-0084)
+ *
+ * The registry holds three assignments and `canonical` is merely the first:
+ * `successor` is the generation being built beside the incumbent and holds AT
+ * MOST ONE, and `predecessor` is what a revert moves back to. `add` registers
+ * into `successor`, so a second registration REPLACES the first pending one --
+ * and because the slot is a ROW, a FRESH PROCESS replaces what it finds there
+ * having registered nothing and remembered nothing, which is the property no
+ * in-memory rule could have. What that replaced is DROPPED, exactly as this
+ * container already dropped a superseded generation: the registry row, the state
+ * namespace (ADR-0053) and the stream where nothing is left folding it.
+ *
+ * `predecessor` is ASSIGNED by the pointer move that creates one, in the same
+ * commit, and is never inferred -- which generation a revert wants is precisely
+ * the fact the rows never held, and the reason two in-memory sets used to stand
+ * here (see where they were declared, below).
  *
  * ## ONE ENTRY, SEVERAL LIVE WIRE CONTEXTS -- and exactly ONE PER STREAM
  *
@@ -555,66 +574,25 @@ export class ReceivingIndexer<
 	 */
 	private readonly candidates = new Set<HeldFold<ABI, ProcessResultType, unknown>>();
 
-	/**
-	 * WHICH GENERATIONS the canonical pointer has EVER named, as far as THIS
-	 * container has seen -- which is how a REVERT is told from a PROMOTION, and the
-	 * only thing an ABANDONED SUCCESSOR may be recognised against.
+	/* ------------------------------------------------------------------------------
+	 * WHAT USED TO BE HERE, and what reads it now (ADR-0084)
 	 *
-	 * The chain-facing container's `everCanonical` flag, kept here as a set for the
-	 * same reason the candidates are: what a container is DOING with a generation is
-	 * not what the registry records it IS. A move to a generation the pointer has
-	 * named before is going BACK to it, and a backwards move must drop NOTHING --
-	 * dropping what it moved away from would delete the very generation a second
-	 * move forward wants (ADR-0046, and `Indexer.arrangeDrop` says the same).
+	 * Two in-memory sets stood here and both are DELETED rather than left beside the
+	 * slot agreeing with it most of the time:
 	 *
-	 * It is keyed on the generation IDENTITY and deliberately NOT on the fold object:
-	 * a container may hold a second fold for a generation it already registered (a
-	 * reconfigure back to a fold that is still in the registry resolves rather than
-	 * creates), and an object-keyed set would read that second fold as one the pointer
-	 * had never named -- which is exactly the mistake that would delete a predecessor
-	 * kept for a revert. It is deliberately not `createdAt` either: two generations
-	 * registered in the same millisecond compare equal, which is a fine total order
-	 * for a listing and no basis at all for deciding whether to DELETE one.
-	 *
-	 * It is filled in ONE place, `noteCanonical`, which is every point where this
-	 * container reads or writes the pointer -- so a move another process made is
-	 * recorded the moment this one sees it, and not only the moves this one makes.
-	 *
-	 * In memory, so it does not survive a restart -- and the direction that costs is
-	 * the safe one, because a fold this process has not seen the pointer on is
-	 * treated as a revert and nothing is dropped. That is the whole reason the
-	 * abandoned-successor rule below is narrowed to what this process registered
-	 * itself: across a restart this set is empty, so nothing is recognised as
-	 * abandoned and nothing is dropped.
-	 */
-	private readonly everCanonical = new Set<string>();
-
-	/**
-	 * WHICH GENERATIONS THIS CONTAINER REGISTERED AS A SUCCESSOR since it opened, and
-	 * therefore the only ones an ABANDONED-SUCCESSOR drop may ever reach.
-	 *
-	 * A generation is dead work only while it has NEVER been canonical, and "never"
-	 * is not a question the registry can answer: `GenerationRecord` is the identity
-	 * plus `createdAt`, and with the pointer at C and a newer generation N, "N was
-	 * never canonical" and "N was canonical and the pointer was reverted away from
-	 * it" are indistinguishable from the rows (ADR-0057 records why the ever-canonical
-	 * fact is in memory). So the predicate is NARROWED to what one process can
-	 * honestly answer: a fold THIS container registered, AFTER `open`, that was not
-	 * canonical when it was registered and that the pointer has not named since.
-	 *
-	 * A generation this process did not register is NEVER dropped -- including one it
-	 * merely RESOLVED (`create` resolves an identity already registered), because that
-	 * row is somebody else's and may be exactly the predecessor a revert wants.
-	 *
-	 * The residual is stated rather than hidden: across a RESTART this set is empty,
-	 * so a deployment that reconfigures by restarting still accumulates generations
-	 * until a cap refuses. That is correct rather than a gap -- a cap is the right
-	 * mechanism against slow accumulation and the wrong one against CHURN, and churn
-	 * is what arrives through `add` on a live container, while restart-paced
-	 * accumulation is deploy-paced and already refuses at start-up where an operator
-	 * reads it and is told what to delete.
-	 */
-	private readonly successorsAddedHere = new Set<string>();
+	 * - `everCanonical`, "which generations the pointer has ever named, as far as
+	 *   THIS container has seen", which is how a REVERT was told from a PROMOTION.
+	 *   The slots answer it durably and better: a promotion is a move onto what
+	 *   `successor` names, and every other move -- a revert to what `predecessor`
+	 *   names, or an operator naming any other generation -- drops nothing. What that
+	 *   set actually held was a record of the moves ONE PROCESS had seen, so after a
+	 *   restart it was empty and every move read as a revert.
+	 * - `successorsAddedHere`, "which generations this container registered as a
+	 *   successor since it opened", which was the only thing a drop could reach. Its
+	 *   whole purpose was to approximate "this generation is a pending successor"
+	 *   from what one process remembered, and that is exactly what the `successor`
+	 *   slot IS -- durably, for every process, across every restart.
+	 * ---------------------------------------------------------------------------- */
 
 	/**
 	 * What `resolveGeneration` has already answered, so a per-batch cursor read
@@ -638,9 +616,10 @@ export class ReceivingIndexer<
 	 * because a fold reports a block from inside `process()` and only the canonical
 	 * fold publishes.
 	 *
-	 * IN MEMORY, for the reason `candidates` and `everCanonical` above are: the
-	 * registry records what a generation IS, and this is what a container is DOING
-	 * with one. It is DERIVED and never set by a caller -- `noteCanonical` re-reads it
+	 * IN MEMORY, for the reason `candidates` above is: the registry records what a
+	 * generation IS, and this is which HELD FOLD OBJECT answers for it right now,
+	 * which is a fact about this process. It is DERIVED and never set by a caller --
+	 * `noteCanonical` re-reads it
 	 * from the records wherever this container already reads the pointer, which is
 	 * every path that precedes a fold (`liveIngestions` before a batch is routed,
 	 * `rebuildMore` before a chunk is replayed) as well as every move this process
@@ -1053,20 +1032,24 @@ export class ReceivingIndexer<
 		const processor = await spec.createProcessor(state, context);
 
 		const wanted: GenerationId = {stream: context.stream, processor: processor.getVersionHash()};
-		// READ ONCE, BEFORE anything is registered or dropped. The pointer decides
-		// whether this fold is a SUCCESSOR at all, and the records decide two things: which
-		// held folds are still registered, and whether THIS identity is already one of them
-		// (a `create` that RESOLVES registered nothing, so it may not be counted as a fold
-		// this container added).
+		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
+		// this fold is a successor at all and what it displaces; the records decide which
+		// held folds are still registered and which generation writes each stream.
 		const registeredBefore = await this.registry.list();
-		const canonicalBefore = this.noteCanonical(await this.registry.canonical());
-		// THE ABANDONED SUCCESSORS GO FIRST, so the slot this registration is about to need
-		// is already free when the CAP is decided. It is deliberately not cap-PRESSURE
-		// eviction: a superseded successor is dead the moment a newer one takes its role,
+		const slotsBefore = await this.registry.slots();
+		const canonicalBefore = this.noteCanonical(slotsBefore.canonical);
+		// WHAT THE SUCCESSOR SLOT HELD GOES FIRST, so the room this registration needs is
+		// already free when the CAP is decided. It is deliberately not cap-PRESSURE
+		// eviction: a replaced successor is dead the moment a newer one takes its place,
 		// whether the registry holds two generations or none to spare, and a rule that
 		// fired only near the bound would make a deterministic lifecycle a heuristic.
-		await this.dropAbandonedSuccessors(wanted, registeredBefore, canonicalBefore);
-		const record = await this.registry.create(wanted);
+		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream);
+		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
+		// that means for this identity: the first generation of an empty registry takes
+		// `canonical` instead, and a generation some slot ALREADY names stays where it is
+		// -- so a restart on the canonical processor stays canonical, and one on the
+		// generation a revert returned to is not re-armed by the act of starting up.
+		const record = await this.registry.create(wanted, {slot: 'successor'});
 		noteSuccessor(canonicalBefore, record);
 		this.records.set(keyOf(record), record);
 		// WHETHER THIS FOLD IS THE ONE THE POINTER NAMES, derived rather than re-read:
@@ -1140,15 +1123,6 @@ export class ReceivingIndexer<
 			provided,
 			level: !follows,
 		});
-		// WHETHER A NEWER SUCCESSOR MAY EVER DROP THIS ONE, recorded at the one moment the
-		// answer is known for certain. All three halves are required and each rules out a
-		// different generation: `opened` leaves out the fold this host was BUILT with,
-		// `canonicalOnAdd` leaves out one that took the pointer, and the records leave out
-		// one this container merely RESOLVED rather than registered -- which may be a
-		// predecessor another process is keeping so a revert stays free.
-		if (this.opened && !canonicalOnAdd && !registeredBefore.some((held) => sameGeneration(held, record))) {
-			this.successorsAddedHere.add(keyOf(record));
-		}
 		await this.applyPolicyTo(fold as HeldFold<ABI, ProcessResultType, unknown>);
 		return fold;
 	}
@@ -1334,24 +1308,32 @@ export class ReceivingIndexer<
 	 * that writer, so the drop is declined and said out loud.
 	 *
 	 * The FOLD is optional, and its absence is a case rather than a refusal. A held
-	 * fold is what the in-memory bookkeeping hangs off -- disarming it as a candidate,
-	 * and reading whether the pointer has EVER named it -- and there is none for a
-	 * generation this process was not built with, which is the ordinary
-	 * post-redeploy revert (see `promote`).
+	 * fold is what the in-memory bookkeeping hangs off -- disarming it as a candidate
+	 * -- and there is none for a generation this process was not built with, which is
+	 * the ordinary post-redeploy revert (see `promote`).
 	 */
 	private async movePointer(
 		id: GenerationId,
 		fold: HeldFold<ABI, ProcessResultType, unknown> | undefined,
 	): Promise<GenerationRecord> {
-		const supersededRecord = await this.registry.canonical();
+		const slotsBefore = await this.registry.slots();
+		const supersededRecord = slotsBefore.canonical;
 		/**
-		 * Read BEFORE the move applies, because that is what makes it readable at all:
-		 * a generation the pointer has named before is one this is going BACK to. A
-		 * target this container holds NO fold for is treated as a revert too, which is
-		 * the safe direction -- it is what an operator naming an older generation after
-		 * a redeploy is doing, and the only consequence is that nothing is dropped.
+		 * WHICH KIND OF MOVE THIS IS, read from the SLOTS before it applies rather than
+		 * from what this process happens to have seen.
+		 *
+		 * A PROMOTION is a move onto what `successor` names: that generation was built
+		 * beside the incumbent precisely to take over, so a promotion demonstrated
+		 * something and drop-on-promotion may discard what it superseded. EVERY OTHER
+		 * MOVE DROPS NOTHING -- a move back to what `predecessor` names is a revert, and
+		 * an operator naming any other generation is treated the same way, which is the
+		 * safe direction: the only consequence is that a generation is kept.
+		 *
+		 * This is what `everCanonical` used to approximate in memory, and it is strictly
+		 * better: that set was empty after a restart, so a restarted process read every
+		 * move as a revert and a genuine promotion dropped nothing.
 		 */
-		const wasRevert = !fold || this.everCanonical.has(keyOf(id));
+		const wasPromotion = !!slotsBefore.successor && sameGeneration(slotsBefore.successor, id);
 		const record = await this.registry.moveCanonicalTo(id);
 		if (!supersededRecord || !sameGeneration(supersededRecord, record)) {
 			// THE TOKEN ROTATES, because a DIFFERENT FOLD answers from here on and that is
@@ -1377,27 +1359,27 @@ export class ReceivingIndexer<
 		this.noteCanonical(record);
 		if (fold) {
 			// It is canonical: it is no longer waiting to become so, and a REVERT past it
-			// later must not re-promote it on the next chunk. That it has now BEEN canonical
-			// was recorded by the `noteCanonical` above, which is the one place that fact is
-			// written down, whoever moved the pointer.
+			// later must not re-promote it on the next chunk. The registry took it out of the
+			// `successor` slot in the same commit as the move, for the same reason.
 			this.candidates.delete(fold);
 		}
 		if (!supersededRecord || sameGeneration(supersededRecord, record)) {
 			return record;
 		}
 		namedLogger.info(
-			`the canonical pointer moved ${wasRevert ? 'BACK ' : ''}to {stream: ${record.stream}, processor: ` +
+			`the canonical pointer moved ${wasPromotion ? '' : 'BACK '}to {stream: ${record.stream}, processor: ` +
 				`${record.processor}}. The generation {stream: ${supersededRecord.stream}, processor: ` +
-				`${supersededRecord.processor}} is RETAINED: it keeps its own state, keeps folding, and is what the pointer ` +
-				`moves BACK to.`,
+				`${supersededRecord.processor}} is what \`predecessor\` names from here on: it keeps its own state, keeps ` +
+				`folding, and is what the pointer moves BACK to.`,
 		);
 		const superseded = this.folds.find((held) => sameGeneration(held.record, supersededRecord));
-		// A BACKWARDS MOVE DROPS NOTHING, which is the chain-facing container's rule
-		// (`arrangeDrop`) and ADR-0046's: drop-on-promotion discards a generation a
-		// promotion SUPERSEDED, and a revert supersedes nothing -- it moves away from a
-		// generation that is exactly what a second move forward would want back.
-		if (this.promotionConfig.dropOnPromotion && superseded && fold && !wasRevert) {
-			await this.dropSuperseded(superseded, fold);
+		// A MOVE THAT IS NOT A PROMOTION DROPS NOTHING, which is the chain-facing
+		// container's rule (`arrangeDrop`) and ADR-0046's: drop-on-promotion discards a
+		// generation a promotion SUPERSEDED, and a revert supersedes nothing -- it moves
+		// away from a generation that is exactly what a second move forward would want
+		// back.
+		if (this.promotionConfig.dropOnPromotion && superseded && wasPromotion) {
+			await this.dropSuperseded(superseded, record);
 		}
 		return record;
 	}
@@ -1413,7 +1395,7 @@ export class ReceivingIndexer<
 	 */
 	private async dropSuperseded(
 		superseded: HeldFold<ABI, ProcessResultType, unknown>,
-		successor: HeldFold<ABI, ProcessResultType, unknown>,
+		successor: GenerationRecord,
 	): Promise<void> {
 		const strands = this.folds.some(
 			(fold) => fold !== superseded && fold.follows && fold.streamDigest === superseded.streamDigest,
@@ -1439,8 +1421,8 @@ export class ReceivingIndexer<
 			const deletion = await this.registry.deleteGeneration(superseded.record);
 			namedLogger.info(
 				`dropped the superseded generation {stream: ${superseded.record.stream}, processor: ` +
-					`${superseded.record.processor}} on the promotion of {stream: ${successor.record.stream}, processor: ` +
-					`${successor.record.processor}}` +
+					`${superseded.record.processor}} on the promotion of {stream: ${successor.stream}, processor: ` +
+					`${successor.processor}}` +
 					`${deletion.reaped ? `, reaping the stream ${deletion.reaped} with it` : ''}.`,
 			);
 		} catch (err) {
@@ -1453,85 +1435,108 @@ export class ReceivingIndexer<
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------
-	// THE OTHER HALF OF THE LIFECYCLE: a successor a NEWER successor has made pointless
+	// THE OTHER HALF OF THE LIFECYCLE: the SUCCESSOR SLOT holds ONE, so a newer one REPLACES it
 	// ------------------------------------------------------------------------------------------------------------------
 
 	/**
-	 * DROP EVERY ABANDONED SUCCESSOR, because a newer one has just taken their role.
+	 * MAKE ROOM IN THE `successor` SLOT, because the registration about to happen is
+	 * what takes it.
 	 *
 	 * The container knew ONE kind of supersession and it is a PROMOTION: the incumbent
 	 * becomes the predecessor and is RETAINED, because the pointer must be able to
 	 * move back to it (`dropSuperseded`, above). This is the other half. A successor
-	 * that is still catching up and that a NEWER successor has just replaced is dead
-	 * work in every case and a WALL in the one that matters: it keeps its registry row,
-	 * keeps its state namespace and keeps being advanced by the scheduled rebuild, so a
-	 * developer whose source change lands first and whose processor follows a moment
-	 * later reaches `maxGenerations` within a few saves and has to delete generations by
+	 * that is still catching up and that a NEWER one has just replaced is dead work in
+	 * every case and a WALL in the one that matters: it keeps its registry row, keeps
+	 * its state namespace and keeps being advanced by the scheduled rebuild, so a
+	 * developer saving twice, or a deployment whose `version` is generated at build
+	 * time, reaches `maxGenerations` within a few tries and has to delete generations by
 	 * hand. A cap is the right mechanism against slow accumulation and the wrong one
 	 * against CHURN, so the count is bounded by dropping what is provably dead rather
 	 * than by raising a bound, which only moves the wall.
 	 *
-	 * ## The PREDICATE is the whole safety argument, and it is narrow on purpose
+	 * ## The PREDICATE is the whole safety argument, and it is now a ROW
 	 *
 	 * "Not canonical right now" is NOT the test: a predecessor kept for a revert is not
 	 * canonical right now either, and dropping it would silently destroy the way back.
-	 * The test is "has NEVER been canonical", answered IN MEMORY from what this
-	 * container has done and seen since it opened -- `successorsAddedHere` (this
-	 * container registered it, after `open`, and it was not canonical then) minus
-	 * `everCanonical` (the pointer has not named it since). Both are documented where
-	 * they are declared, including the restart residual.
+	 * Nor is it "has never been canonical", which is the question the rows cannot
+	 * answer and which the previous rule approximated IN MEMORY, from what one process
+	 * had registered and seen since it opened -- so a restart answered "nothing" and
+	 * dropped nothing. The test is now the SLOT: a generation `successor` names is a
+	 * pending successor, and one that `canonical` or `predecessor` names is not
+	 * reachable from here at all. That is a durable fact any process reads, which is
+	 * why a FRESH process replaces what it finds in the slot having remembered nothing
+	 * (ADR-0084).
 	 *
-	 * ## "THE SAME ROLE" MEANS SUCCESSOR TO THE INCUMBENT, REGARDLESS OF STREAM
+	 * Two kinds of generation are dropped and they are the same rule seen twice: what
+	 * the slot NAMES (whether or not a fold for it is held here -- after a restart it
+	 * is not), and every fold THIS CONTAINER HOLDS that no slot names, which is what a
+	 * declined drop leaves behind. A generation this container holds no fold for and no
+	 * slot names is left alone: reclaiming those is an operator's verb
+	 * (`a-generation-no-slot-names-is-reclaimed-on-request`), not something a
+	 * registration does to rows it never touched.
 	 *
-	 * A same-stream rule would not remove the wall, because the churn this exists for
-	 * OPENS with a source change and a source change makes a new STREAM: `maxStreams`
-	 * counts the distinct streams among registered generations, so two source edits
-	 * reach two of two and the next registration is refused with the generations still
-	 * well under their own bound. Dropping the previous never-canonical successor
-	 * whatever stream it sits on is what frees the stream slot as well.
+	 * ## "THE SAME ROLE" MEANS THE SLOT, REGARDLESS OF STREAM
 	 *
-	 * NEWEST FIRST, which is what lets a whole abandoned chain go in ONE pass: the
-	 * ordinary churn leaves an abandoned WRITER with an abandoned FOLLOWER on its
-	 * stream, and the writer is only droppable once the follower is gone (see
+	 * There is ONE `successor` slot, so the cross-stream question is answered
+	 * structurally rather than by fiat: a newer successor replaces the pending one
+	 * wherever either sits, because there is only one place for a pending successor to
+	 * be. That is also what frees a STREAM slot -- `maxStreams` counts the distinct
+	 * streams among registered generations, and the churn this exists for opens with a
+	 * source change.
+	 *
+	 * NEWEST FIRST, which is what lets a whole replaced chain go in ONE pass: the
+	 * ordinary churn leaves a replaced WRITER with a replaced FOLLOWER on its stream,
+	 * and the writer is only droppable once the follower is gone (see
 	 * `wouldStrandAFollower`). A follower is always the younger of the two, so walking
 	 * back to front drops them in the order that frees both.
 	 */
-	private async dropAbandonedSuccessors(
-		successor: GenerationId,
+	private async replaceTheSuccessor(
+		arriving: GenerationId,
 		registered: readonly GenerationRecord[],
-		canonicalNow: GenerationRecord | undefined,
+		slots: SlottedGenerations,
+		arrivingStream: string,
 	): Promise<void> {
-		// Nothing during `open` (see `opened`), and nothing where the fold being added is
-		// the canonical generation itself -- that is not a successor to anything, so
-		// nothing has been superseded by it. With no canonical generation at all there is
-		// no incumbent, so there is no role to take over.
-		if (!this.opened || !canonicalNow || sameGeneration(canonicalNow, successor)) return;
-		for (const fold of [...this.folds].reverse()) {
-			const key = keyOf(fold.record);
-			// The predicate itself, and then the two facts that make the canonical generation
-			// unreachable from here under any circumstances -- asserted rather than derived
-			// from `everCanonical` above, because this is the property the whole rule is safe on.
-			if (!this.successorsAddedHere.has(key) || this.everCanonical.has(key)) continue;
-			if (sameGeneration(fold.record, canonicalNow) || sameGeneration(fold.record, successor)) continue;
-			// ...and one that is not about safety but about honesty: a generation another
-			// process has already deleted is not dropped a second time.
-			if (!registered.some((held) => sameGeneration(held, fold.record))) continue;
-			if (this.wouldStrandAFollower(fold, successor.stream)) {
+		// A fold that IS the canonical generation, or one some slot already names, takes
+		// nobody's place: `create` leaves it where it is, so nothing is displaced and
+		// nothing may be dropped for it.
+		if (!slots.canonical || slotHolding(slots, arriving)) return;
+
+		const displaced = [...registered]
+			.filter((record) => {
+				if (sameGeneration(record, arriving)) return false;
+				const slot = slotHolding(slots, record);
+				// THE PROPERTY THE WHOLE RULE IS SAFE ON, asserted here rather than left to
+				// follow from the loop below: a generation ANY OTHER slot names is untouchable,
+				// which covers the incumbent and the revert target in ONE clause.
+				if (slot) return slot === 'successor';
+				// ...and what a declined drop left behind: a fold held here that no slot names.
+				return this.folds.some((fold) => sameGeneration(fold.record, record));
+			})
+			.sort((a, b) => b.createdAt - a.createdAt);
+
+		const surviving = [...registered];
+		for (const record of displaced) {
+			if (this.wouldStrandAFollower(record, surviving, arrivingStream)) {
 				namedLogger.info(
-					`the abandoned successor {stream: ${fold.record.stream}, processor: ${fold.record.processor}} is RETAINED ` +
-						`for now: it WRITES the stream ${fold.streamDigest}, which another fold here follows, and dropping it ` +
-						`would leave that one folding a stream nothing appends to (ADR-0044). It goes when nothing follows its ` +
-						`stream any more.`,
+					`the replaced successor {stream: ${record.stream}, processor: ${record.processor}} is RETAINED for now: ` +
+						`it WRITES the stream ${record.stream}, which another fold here follows, and dropping it would leave ` +
+						`that one folding a stream nothing appends to (ADR-0044). No slot names it any more, so it goes when ` +
+						`nothing follows its stream -- or when an operator reclaims what no slot names.`,
 				);
 				continue;
 			}
-			await this.dropAbandoned(fold, successor);
+			if (await this.dropReplaced(record, arriving)) {
+				surviving.splice(
+					surviving.findIndex((held) => sameGeneration(held, record)),
+					1,
+				);
+			}
 		}
 	}
 
 	/**
-	 * Whether dropping this fold would leave a stream being folded by something with
-	 * nothing appending to it.
+	 * Whether dropping this generation would leave a stream being folded by something
+	 * with nothing appending to it.
 	 *
 	 * `dropSuperseded`'s rule, applied one moment earlier and with one more follower in
 	 * view. Which generation WRITES a stream is the oldest SURVIVING one registered on
@@ -1542,18 +1547,25 @@ export class ReceivingIndexer<
 	 * also reap the stored stream out from under it and send it back to the chain for
 	 * a history it already has.
 	 *
-	 * Declining is not a leak: the retained writer is still abandoned, and the next add
-	 * that does not join its stream drops it -- by then its follower has been dropped in
-	 * the same pass, since this walks newest first.
+	 * It reads the RECORDS rather than a held fold's `writesStream`, because the
+	 * generation the slot names may be one this process holds no fold for at all --
+	 * which is exactly the restart case, and the case the durable slot exists for.
 	 */
-	private wouldStrandAFollower(fold: HeldFold<ABI, ProcessResultType, unknown>, successorStream: string): boolean {
-		if (!fold.writesStream) return false;
-		if (fold.streamDigest === successorStream) return true;
-		return this.folds.some((held) => held !== fold && held.follows && held.streamDigest === fold.streamDigest);
+	private wouldStrandAFollower(
+		record: GenerationRecord,
+		registered: readonly GenerationRecord[],
+		arrivingStream: string,
+	): boolean {
+		const writer = writerOf(registered, record.stream);
+		if (!writer || !sameGeneration(writer, record)) return false;
+		if (record.stream === arrivingStream) return true;
+		return this.folds.some(
+			(held) => !sameGeneration(held.record, record) && held.follows && held.streamDigest === record.stream,
+		);
 	}
 
 	/**
-	 * Drop ONE abandoned successor: its registry row, its state namespace, and every
+	 * Drop ONE replaced successor: its registry row, its state namespace, and every
 	 * trace of it in this container.
 	 *
 	 * Deleting a generation is already a `DROP` of its table namespace, injected by
@@ -1571,40 +1583,51 @@ export class ReceivingIndexer<
 	 * paths (`liveIngestions`, `rebuildMore`) skip a fold whose generation is no longer
 	 * registered.
 	 *
+	 * A FAILED DROP DOES NOT STOP THE REPLACEMENT, and the slot is what makes that
+	 * safe: the arriving generation takes `successor` regardless, so what failed to go
+	 * is left named by no slot -- which is the definition of collectable, and the next
+	 * registration (or the operator's reclaim verb) tries again. Refusing the
+	 * registration instead would make a stuck deletion an outage for the deployment
+	 * that is trying to move forward.
+	 *
 	 * It is REPORTED rather than silent, because an operator watching a development
 	 * loop must see bounded churn instead of generations quietly disappearing.
 	 */
-	private async dropAbandoned(fold: HeldFold<ABI, ProcessResultType, unknown>, successor: GenerationId): Promise<void> {
+	private async dropReplaced(record: GenerationRecord, arriving: GenerationId): Promise<boolean> {
 		let reaped: string | undefined;
 		try {
-			reaped = (await this.registry.deleteGeneration(fold.record)).reaped;
+			reaped = (await this.registry.deleteGeneration(record)).reaped;
 		} catch (err) {
 			namedLogger.error(
-				`failed to drop the abandoned successor {stream: ${fold.record.stream}, processor: ` +
-					`${fold.record.processor}}; it is still registered and still held`,
+				`failed to drop the replaced successor {stream: ${record.stream}, processor: ${record.processor}}; it is ` +
+					`still registered, and the arriving generation takes the \`successor\` slot anyway -- so nothing names it ` +
+					`and it can be reclaimed later`,
 				err,
 			);
-			return;
+			return false;
 		}
-		this.folds.splice(this.folds.indexOf(fold), 1);
-		this.candidates.delete(fold);
-		this.successorsAddedHere.delete(keyOf(fold.record));
+		const fold = this.folds.find((held) => sameGeneration(held.record, record));
+		if (fold) {
+			this.folds.splice(this.folds.indexOf(fold), 1);
+			this.candidates.delete(fold);
+			// Nothing relays what it did: this container no longer drives it, and a dropped
+			// fold that went on reporting would be a channel into a publisher nothing can
+			// reach it through any more.
+			fold.processor.setFoldReporter?.(undefined);
+		}
 		// ...and out of the memo too, or a later fold on the same identity would be
 		// RESOLVED from a record that no longer exists instead of being registered again.
-		this.records.delete(keyOf(fold.record));
-		// Nothing relays what it did: this container no longer drives it, and a dropped
-		// fold that went on reporting would be a channel into a publisher nothing can
-		// reach it through any more.
-		fold.processor.setFoldReporter?.(undefined);
+		this.records.delete(keyOf(record));
 		namedLogger.info(
-			`the fold {stream: ${fold.record.stream}, processor: ${fold.record.processor}} is an ABANDONED SUCCESSOR and ` +
-				`has been DROPPED: this container registered it as a successor after it opened, the canonical pointer has ` +
-				`never named it, and {stream: ${successor.stream}, processor: ${successor.processor}} now has that role. ` +
-				`Nothing can revert to a generation the pointer never named, so re-folding it would be work for a result ` +
-				`nobody will ever ask for. Its state namespace is gone` +
+			`the generation {stream: ${record.stream}, processor: ${record.processor}} was what the \`successor\` slot ` +
+				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
+				`AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was replaced -- it is ` +
+				`neither the canonical generation nor what \`predecessor\` holds, so nothing can revert to it and re-folding ` +
+				`it would be work for a result nobody will ever ask for. Its state namespace is gone` +
 				`${reaped ? `, and the stream ${reaped} was reaped with it, no registered generation being left on it` : ''}. ` +
-				`The canonical generation and every generation the pointer has named are untouched.`,
+				`The canonical generation and the revert target are untouched.`,
 		);
+		return true;
 	}
 
 	/**
@@ -1641,15 +1664,6 @@ export class ReceivingIndexer<
 	 * then publish nothing.
 	 */
 	private noteCanonical(record: GenerationRecord | undefined): GenerationRecord | undefined {
-		if (record) {
-			// THE ONE PLACE the ever-canonical fact is written down, which is what makes it a
-			// fact about the POINTER rather than about the moves this process happened to
-			// make: a generation this container merely SAW the pointer on -- moved there by
-			// another process, or before this fold was built -- is one a later move BACK to is
-			// a revert, and one no abandoned-successor drop may touch. Keyed on the identity,
-			// so it stands whether or not a fold for it is held here.
-			this.everCanonical.add(keyOf(record));
-		}
 		this.canonicalFold = record ? this.folds.find((fold) => sameGeneration(fold.record, record)) : undefined;
 		return record;
 	}

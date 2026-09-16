@@ -39,7 +39,7 @@ import {abi, CONTRACT, nftProcessor, SOURCE, START_BLOCK, timestampOf, ZERO, ALI
 // because `@etherfold/core` depends on no database:
 //
 //  - the generation is recorded DURABLY -- rows in `_generations` and
-//    `_generation_pointer` that a restart comes back holding (ADR-0054), and
+//    `_generation_slots` that a restart comes back holding (ADR-0054), and
 //  - its state lands in its OWN TABLE NAMESPACE (ADR-0053), so nothing is
 //    written into the tables or the cursor the canonical generation answers
 //    from.

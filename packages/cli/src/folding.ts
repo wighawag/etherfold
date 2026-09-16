@@ -53,7 +53,7 @@ import type {ExplicitSource, SourceOrigin, StoreTarget} from './types.js';
 // three things that container deliberately cannot have, because
 // `@etherfold/core` knows no database:
 //
-//   the REGISTRY SUBSTRATE  rows in `_generations` / `_generation_pointer`
+//   the REGISTRY SUBSTRATE  rows in `_generations` / `_generation_slots`
 //                           (`generationRegistryPortOnSQL`, ADR-0054), so a
 //                           restart comes back holding what it held and
 //                           pointing where it last pointed;

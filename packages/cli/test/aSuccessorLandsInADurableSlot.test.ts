@@ -19,6 +19,7 @@ import {
 	applySchema,
 	EMISSION_STREAM_TABLE,
 	emissionAppenderFor,
+	GENERATION_SLOT_TABLE,
 	GENERATION_TABLE,
 	generationRegistryPortOnSQL,
 	storedEmissionReplaySource,
@@ -29,42 +30,45 @@ import {createClient} from '@libsql/client';
 import type {IndexingSource} from '@etherfold/core';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, timestampOf, ZERO} from './utils/chain.js';
 
 // ---------------------------------------------------------------------------------------------------
-// A SUCCESSOR THAT WAS NEVER CANONICAL IS DROPPED WHEN A NEWER ONE TAKES ITS ROLE
+// A SUCCESSOR LANDS IN A DURABLE SLOT THAT HOLDS EXACTLY ONE (ADR-0084)
 // ---------------------------------------------------------------------------------------------------
-// The container knew ONE kind of supersession and it is a PROMOTION: the
-// incumbent becomes the predecessor and is RETAINED, because the pointer must be
-// able to move back to it. The other half was missing -- a successor that is
-// still catching up and that a NEWER successor has just made pointless kept its
-// registry row, its state namespace and its place in the scheduled rebuild -- so
-// a developer changing their mind a few times in a row reached the generation
-// cap and had to delete generations by hand. A cap is the right mechanism
-// against slow accumulation and the wrong one against CHURN.
+// A generation is held by a durable named SLOT, and `canonical` is merely the
+// first one. `successor` holds AT MOST ONE, so registering into it REPLACES
+// whatever it held; `predecessor` is what a revert moves back to, ASSIGNED by
+// the promotion that creates one and never inferred.
+//
+// It SUPERSEDES the in-memory rule that shipped before it (an "abandoned
+// successor" recognised from what one process had registered and seen since it
+// opened). That rule was correct and could not be otherwise -- the durable fact
+// did not exist, and cannot be derived, because with the pointer at C and a
+// newer generation N, "N was never canonical" and "N was canonical and the
+// pointer was reverted away from it" are the same rows. Its stated residual was
+// that a RESTART recognised nothing and dropped nothing, so a deployment whose
+// `version` is generated at build time accumulated one generation per deploy
+// until a cap REFUSED it at start-up -- a failure to START rather than a
+// degradation. That residual is what this closes, and the restart case below is
+// the reason the whole ADR exists.
 //
 // The seam asserted here is the one the behaviour actually lives at: ONE
-// container over a REAL database, `add`ed to several times in a row, with the
-// generation registry, the stored emission stream and every generation's state
-// namespace sharing the single libSQL handle a `run` / `index` deployment has.
-// What only this level can say:
+// container over a REAL database, with the generation registry, the stored
+// emission stream and every generation's state namespace sharing the single
+// libSQL handle a `run` / `index` deployment has -- and, for the restart, a
+// SECOND CONTAINER opened over the same substrate, which is how the durability
+// is asserted without a process boundary. What only this level can say:
 //
-//  - what the REGISTRY holds after a run of changes (rows, not objects);
-//  - that the DISK comes back -- the dropped generation's table namespace is
+//  - what the SLOT ROW holds after a run of changes (rows, not objects);
+//  - that a FRESH container, having registered nothing and remembered nothing,
+//    replaces what it finds in the slot;
+//  - that the DISK comes back -- the replaced generation's table namespace is
 //    really gone (ADR-0053 makes deleting a generation a `DROP`), and its stream
 //    is reaped when no registered generation is left folding it;
 //  - that a REVERT can still reach what it could reach before, which is the
 //    property that makes the whole thing safe;
-//  - that the caps are never REACHED by churn, on both axes -- `maxGenerations`
-//    under processor changes and `maxStreams` under source changes, which is the
-//    one the cross-stream rule exists for.
-//
-// The predicate under all of it is NOT "not canonical right now" -- a predecessor
-// kept for a revert is not canonical right now either. It is "has NEVER been
-// canonical", answered in memory from what THIS container has registered and
-// seen since it opened, which is why the last case here asserts that a restart
-// drops nothing at all.
+//  - that the caps are never REACHED by churn, on both axes.
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'alpha';
@@ -123,9 +127,8 @@ function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>, source?: 
  * THE HOST ASSEMBLY: one named indexer's database, the fold it opened with, and
  * the stream it can re-fold.
  *
- * `replay` is supplied because a processor-change successor is a FOLLOWER
- * (ADR-0044): it gets no receiver and catches up by re-folding the stored stream,
- * and a container given nowhere to read one REFUSES to create it at all.
+ * Called a SECOND time over the same database, this is what a RESTART is: a
+ * fresh container, an empty memory, the same rows.
  */
 async function openIndexer(
 	db: RemoteSQL,
@@ -192,6 +195,26 @@ async function registeredProcessors(db: RemoteSQL): Promise<string[]> {
 	return rows.results.map((row) => row.processor);
 }
 
+/**
+ * WHAT EACH SLOT HOLDS, read straight off the ROW rather than through the
+ * container, because the whole claim is that the fact is durable.
+ */
+async function slotProcessors(db: RemoteSQL): Promise<Record<string, string | null>> {
+	const rows = await db
+		.prepare(
+			`SELECT canonicalProcessor, successorProcessor, predecessorProcessor
+			 FROM ${GENERATION_SLOT_TABLE} WHERE indexer = ?1`,
+		)
+		.bind(INDEXER)
+		.all<{canonicalProcessor: string | null; successorProcessor: string | null; predecessorProcessor: string | null}>();
+	const row = rows.results[0];
+	return {
+		canonical: row?.canonicalProcessor ?? null,
+		successor: row?.successorProcessor ?? null,
+		predecessor: row?.predecessorProcessor ?? null,
+	};
+}
+
 /** Every table in this database, minus the ones SQLite made for itself. */
 async function tablesIn(db: RemoteSQL): Promise<string[]> {
 	const rows = await db
@@ -225,6 +248,8 @@ const idOf = (fold: {record: {stream: string; processor: string}}): GenerationId
 	processor: fold.record.processor,
 });
 
+const hashOf = (declared: EntityProcessor<typeof abi>) => entityProcessorVersionHash(declared);
+
 /** A deployment that has folded: the incumbent is canonical, and its stream is stored. */
 async function aDeploymentThatHasFolded(db: RemoteSQL) {
 	await applySchema(db);
@@ -233,26 +258,35 @@ async function aDeploymentThatHasFolded(db: RemoteSQL) {
 	return indexer;
 }
 
-describe('a run of changes leaves ONE successor catching up', () => {
-	it('drops the successor a newer successor replaced, so three changes in a row leave two generations', async () => {
+describe('the `successor` slot holds ONE, so a second registration replaces the first', () => {
+	it('leaves the incumbent plus ONE successor after a run of changes, whatever the run', async () => {
 		const db = oneDatabase();
 		const indexer = await aDeploymentThatHasFolded(db);
 
 		// three processor changes in a row, which is the ordinary save-and-rebuild loop
 		const second = await indexer.add(specFor(db, V2));
-		const secondNamespace = await namespaceTables(db, idOf(second));
-		expect(secondNamespace.length).toBeGreaterThan(0);
+		expect((await namespaceTables(db, idOf(second))).length).toBeGreaterThan(0);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: indexer.generation.processor,
+			successor: second.record.processor,
+			predecessor: null,
+		});
 
 		const third = await indexer.add(specFor(db, V3));
 		const fourth = await indexer.add(specFor(db, V4));
 
-		// ONE successor is left catching up, and it is the NEWEST one
+		// ONE successor is left catching up, it is the NEWEST one, and the SLOT ROW
+		// says so -- which is what a restart will read
 		expect(await registeredProcessors(db)).toEqual([indexer.generation.processor, fourth.record.processor]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: indexer.generation.processor,
+			successor: fourth.record.processor,
+			predecessor: null,
+		});
 		expect(indexer.held().map((fold) => fold.record.processor)).toEqual([
 			indexer.generation.processor,
 			fourth.record.processor,
 		]);
-		expect(third.record.processor).not.toBe(fourth.record.processor);
 
 		// and the DISK came back: a dropped generation's state is its table namespace,
 		// so dropping it is a `DROP` and not an unregistration (ADR-0053)
@@ -273,29 +307,128 @@ describe('a run of changes leaves ONE successor catching up', () => {
 		expect(await indexer.canonical()).toMatchObject(indexer.generation);
 		expect(await ownerOf(indexer.state, '1')).toBe(ALICE);
 		// the incumbent WRITES the stream both successors re-fold, so nothing dropped
-		// may touch it: retiring a follower never disturbs the generation that writes
+		// may touch it: replacing a successor never disturbs the generation that writes
 		// its stream (ADR-0044)
 		expect(indexer.writesStream).toBe(true);
 		expect(await emissionRows(db, indexer.streamDigest)).toBe(stored);
 		expect((await namespaceTables(db, indexer.generation)).length).toBeGreaterThan(0);
 	});
+
+	it('REPORTS the replacement, naming what went, what took its place and why it was safe', async () => {
+		const db = oneDatabase();
+		const indexer = await aDeploymentThatHasFolded(db);
+		const replaced = await indexer.add(specFor(db, V2));
+
+		const {logs} = await import('named-logs');
+		const namedLogger = logs('@etherfold/core');
+		const said: string[] = [];
+		const spy = vi.spyOn(namedLogger, 'info').mockImplementation((...args: unknown[]) => {
+			said.push(String(args[0]));
+		});
+		try {
+			const replacement = await indexer.add(specFor(db, V3));
+			// an operator watching a dev loop must see BOUNDED CHURN rather than
+			// generations quietly disappearing
+			const line = said.find((entry) => entry.includes('REPLACES it there'));
+			expect(line).toBeDefined();
+			expect(line).toContain(replaced.record.processor);
+			expect(line).toContain(replacement.record.processor);
+			expect(line).toContain('no slot named it');
+		} finally {
+			spy.mockRestore();
+		}
+	});
 });
 
-describe('a generation the pointer has NAMED is never dropped by this path', () => {
-	it('keeps the predecessor a revert needs, and the revert still reaches the state it left', async () => {
+describe('the slot is DURABLE, so a RESTART replaces rather than accumulates', () => {
+	it('replaces what it finds in the slot, having registered nothing itself and remembered nothing', async () => {
+		const db = oneDatabase();
+		const first = await aDeploymentThatHasFolded(db);
+		const pending = await first.add(specFor(db, V2));
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, pending.record.processor]);
+
+		// A RESTART is a fresh container over the same rows: it registered nothing, it
+		// saw no pointer move, and its memory is empty. Under the in-memory rule this
+		// superseded it therefore recognised NOTHING and dropped nothing, and a
+		// deployment whose version is generated per build accumulated one generation per
+		// deploy. The SLOT is a row, so this one reads what the last one left.
+		const restarted = await openIndexer(db, V3);
+
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, hashOf(V3)]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: first.generation.processor,
+			successor: hashOf(V3),
+			predecessor: null,
+		});
+		// the replaced generation's state really went, and the incumbent is untouched
+		expect(await namespaceTables(db, idOf(pending))).toEqual([]);
+		expect(await restarted.canonical()).toMatchObject(first.generation);
+		expect(await ownerOf(first.state, '1')).toBe(ALICE);
+		expect(await emissionRows(db, first.streamDigest)).toBe(1);
+	});
+
+	it('holds at ONE successor across a run of restarts, which is the redeploy-per-commit loop', async () => {
+		const db = oneDatabase();
+		const first = await aDeploymentThatHasFolded(db);
+		expect(first.caps).toEqual({maxGenerations: 4, maxStreams: 2});
+
+		// far more deploys than the bound, every one of them a fresh process, and not
+		// one of them is refused: the cap stops being reachable on this path without
+		// being raised
+		for (const declared of [V2, V3, V4, V5, V2, V3, V4, V5]) {
+			await openIndexer(db, declared);
+		}
+
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, hashOf(V5)]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: first.generation.processor,
+			successor: hashOf(V5),
+			predecessor: null,
+		});
+		expect(first.caps).toEqual({maxGenerations: 4, maxStreams: 2});
+	});
+
+	it('restarting on the CANONICAL generation registers nothing and displaces nothing', async () => {
+		const db = oneDatabase();
+		const first = await aDeploymentThatHasFolded(db);
+		const pending = await first.add(specFor(db, V2));
+
+		// the ordinary restart of an unchanged deployment: its fold is what `canonical`
+		// already names, so it is not a successor to anything and the pending one it
+		// finds is not its to replace
+		const restarted = await openIndexer(db, V1);
+
+		expect(restarted.generation.processor).toBe(first.generation.processor);
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, pending.record.processor]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: first.generation.processor,
+			successor: pending.record.processor,
+			predecessor: null,
+		});
+	});
+});
+
+describe('a generation a revert needs is never replaced', () => {
+	it('assigns `predecessor` on the promotion, and a replacement cannot reach it', async () => {
 		const db = oneDatabase();
 		const indexer = await aDeploymentThatHasFolded(db);
 		const incumbent = indexer.generation;
 
-		// the ordinary upgrade: a successor is promoted, and the generation it
-		// superseded is RETAINED so the pointer can move back to it
+		// the ordinary upgrade: a successor is promoted, the generation it superseded
+		// becomes the PREDECESSOR -- assigned by the move that created one, never
+		// inferred -- and the `successor` slot is emptied, because what it named is the
+		// incumbent now
 		const promoted = await indexer.add(specFor(db, V2));
 		await indexer.promote(idOf(promoted));
-		expect(await indexer.canonical()).toMatchObject(idOf(promoted));
+		expect(await slotProcessors(db)).toEqual({
+			canonical: promoted.record.processor,
+			successor: null,
+			predecessor: incumbent.processor,
+		});
 
 		// ...and then the developer changes their mind twice more. The predecessor is
-		// NOT canonical right now, which is exactly why "not canonical right now" is
-		// the wrong predicate: it is what story 4 promises.
+		// NOT canonical right now, which is exactly why "not canonical right now" is the
+		// wrong predicate: it is the way back.
 		await indexer.add(specFor(db, V3));
 		const fourth = await indexer.add(specFor(db, V4));
 
@@ -304,6 +437,11 @@ describe('a generation the pointer has NAMED is never dropped by this path', () 
 			promoted.record.processor,
 			fourth.record.processor,
 		]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: promoted.record.processor,
+			successor: fourth.record.processor,
+			predecessor: incumbent.processor,
+		});
 		expect((await namespaceTables(db, incumbent)).length).toBeGreaterThan(0);
 
 		// the way BACK is still real: one small write, and the state it named is where
@@ -313,25 +451,50 @@ describe('a generation the pointer has NAMED is never dropped by this path', () 
 		expect(await ownerOf(indexer.state, '1')).toBe(ALICE);
 	});
 
-	it('never drops a generation THIS container did not register, which is what a restart is', async () => {
+	it('does not replace the revert target when a RESTART registers into the slot', async () => {
 		const db = oneDatabase();
 		const first = await aDeploymentThatHasFolded(db);
-		const successor = await first.add(specFor(db, V2));
+		const incumbent = first.generation;
+		const promoted = await first.add(specFor(db, V2));
+		await first.promote(idOf(promoted));
 
-		// a RESTART is a new container over the same rows, and it has seen nothing: the
-		// ever-canonical fact is in memory (ADR-0057), so a fold it did not register is
-		// one it cannot know was never canonical. Nothing is dropped, and the cap stays
-		// the mechanism on that path -- refusing at start-up, where an operator reads it.
-		const restarted = await openIndexer(db, V1);
-		await restarted.add(specFor(db, V3));
-		await restarted.add(specFor(db, V4));
+		// a fresh process, a third processor, and the only thing it may displace is what
+		// `successor` holds -- which is nothing. The predecessor is named by a slot, so
+		// it is not reachable from a replacement under any circumstances.
+		await openIndexer(db, V3);
 
-		const held = await registeredProcessors(db);
-		expect(held).toContain(successor.record.processor);
-		expect((await namespaceTables(db, idOf(successor))).length).toBeGreaterThan(0);
-		// what it DOES bound is its own churn: of the two successors it registered
-		// itself, one is left
-		expect(held).toEqual([first.generation.processor, successor.record.processor, entityProcessorVersionHash(V4)]);
+		expect(await registeredProcessors(db)).toEqual([incumbent.processor, promoted.record.processor, hashOf(V3)]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: promoted.record.processor,
+			successor: hashOf(V3),
+			predecessor: incumbent.processor,
+		});
+		expect((await namespaceTables(db, incumbent)).length).toBeGreaterThan(0);
+	});
+
+	it('is an ASSIGNMENT and not an identity: naming what a slot already holds makes no second generation', async () => {
+		const db = oneDatabase();
+		const first = await aDeploymentThatHasFolded(db);
+		const incumbent = first.generation;
+		const promoted = await first.add(specFor(db, V2));
+		await first.promote(idOf(promoted));
+
+		// a deployment REVERTED by redeploying the previous processor: the content it
+		// names is exactly what `predecessor` holds, so it RESOLVES to that one
+		// generation rather than creating a second one under a second slot -- one
+		// identity, one state namespace, one fold of one stream
+		const rolledBack = await openIndexer(db, V1);
+
+		expect(rolledBack.generation).toMatchObject(incumbent);
+		expect(await registeredProcessors(db)).toEqual([incumbent.processor, promoted.record.processor]);
+		// and it stays where it is: a generation some slot already names is not yanked
+		// into `successor` by the act of starting up, or a restart would re-arm exactly
+		// what an operator reverted away from
+		expect(await slotProcessors(db)).toEqual({
+			canonical: promoted.record.processor,
+			successor: null,
+			predecessor: incumbent.processor,
+		});
 	});
 });
 
@@ -355,9 +518,9 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 		const indexer = await aDeploymentThatHasFolded(db);
 
 		// a SOURCE change makes a new stream, so two of them reach `maxStreams` of 2
-		// with the generations still well under their own bound. This is what the
-		// cross-stream rule exists for: the previous never-canonical successor is
-		// dropped whatever stream it sits on.
+		// with the generations still well under their own bound. There is ONE
+		// `successor` slot, so a newer successor replaces the pending one WHEREVER it
+		// sits -- which is what frees the stream slot as well.
 		const onB = await indexer.add(specFor(db, V2, sourceOn(OTHER_CONTRACT)));
 		await feed(onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
 		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
@@ -370,7 +533,7 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 		expect(await indexer.registry.streams()).toEqual(
 			[indexer.streamDigest, onD.streamDigest].sort((a, b) => a.localeCompare(b)),
 		);
-		// the dropped successor's own stream was reaped with it, no registered
+		// the replaced successor's own stream was reaped with it, no registered
 		// generation being left folding it
 		expect(await emissionRows(db, onB.streamDigest)).toBe(0);
 		expect(await namespaceTables(db, idOf(onB))).toEqual([]);
@@ -379,19 +542,20 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 		expect(await emissionRows(db, indexer.streamDigest)).toBe(1);
 	});
 
-	it('DECLINES the drop while another held fold follows the dropped one\u2019s stream, then takes it', async () => {
+	it('DECLINES the drop while another held fold follows the replaced one\u2019s stream, then takes it', async () => {
 		const db = oneDatabase();
 		const indexer = await aDeploymentThatHasFolded(db);
 
-		// the scenario the observation opens with: the SOURCE change lands first, and
-		// the processor follows a moment later on that same new stream
+		// the source change lands first, and the processor follows a moment later on
+		// that same new stream
 		const onB = await indexer.add(specFor(db, V2, sourceOn(OTHER_CONTRACT)));
 		await feed(onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
 		const alsoOnB = await indexer.add(specFor(db, V3, sourceOn(OTHER_CONTRACT)));
 
-		// the older one is abandoned, but it WRITES the stream the newer one follows,
+		// the older one lost the slot, but it WRITES the stream the newer one follows,
 		// and dropping it would leave that one folding a stream nothing appends to
-		// (ADR-0044). So it is RETAINED, and the one-writer rule is untouched.
+		// (ADR-0044). So it is RETAINED, named by no slot, and the one-writer rule is
+		// untouched.
 		expect(alsoOnB.follows).toBe(true);
 		expect(onB.writesStream).toBe(true);
 		expect(await registeredProcessors(db)).toEqual([
@@ -399,6 +563,11 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 			onB.record.processor,
 			alsoOnB.record.processor,
 		]);
+		expect(await slotProcessors(db)).toEqual({
+			canonical: indexer.generation.processor,
+			successor: alsoOnB.record.processor,
+			predecessor: null,
+		});
 		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
 
 		// ...and when the next change moves off that stream entirely, BOTH go in one

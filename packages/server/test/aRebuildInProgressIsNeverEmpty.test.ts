@@ -7,7 +7,7 @@ import {
 	applySchema,
 	createServer,
 	generationRegistryPortOnSQL,
-	GENERATION_POINTER_TABLE,
+	GENERATION_SLOT_TABLE,
 	type CursorReporter,
 	type IndexerRegistryEntry,
 } from '../src/index.js';
@@ -156,7 +156,7 @@ function readTierEntry(db: RemoteSQL, name: string): IndexerRegistryEntry {
 	return {
 		db,
 		liveIngestions: async () => [],
-		canonicalGeneration: async () => (await port.read()).canonical,
+		canonicalGeneration: async () => (await port.read()).slots.canonical,
 		generations: async () => (await port.read()).generations,
 	};
 }
@@ -203,13 +203,14 @@ describe('a read against an indexer with no canonical generation is REFUSED, nev
 		expect(registry.generations).toEqual([]);
 
 		// a generation registered, and a pointer that names NOTHING -- the shape the
-		// substrate models explicitly (`PointerRow` carries a nullable identity), and
-		// what a read tier sees when the writer holds generations none of which
-		// answers reads yet
+		// substrate models explicitly (every slot column is nullable), and what a read
+		// tier sees when the writer holds generations none of which answers reads yet
 		const building = generation('v1');
-		await port.commit(() => ({put: {...building, createdAt: Date.now()}, canonical: building}));
+		await port.commit(() => ({put: {...building, createdAt: Date.now()}, slots: {canonical: building}}));
 		await db
-			.prepare(`UPDATE ${GENERATION_POINTER_TABLE} SET stream = NULL, processor = NULL WHERE indexer = ?1`)
+			.prepare(
+				`UPDATE ${GENERATION_SLOT_TABLE} SET canonicalStream = NULL, canonicalProcessor = NULL WHERE indexer = ?1`,
+			)
 			.bind(NAME)
 			.all();
 
@@ -227,7 +228,7 @@ describe('a read against an indexer with no canonical generation is REFUSED, nev
 		await applySchema(db);
 		const port = generationRegistryPortOnSQL(db, NAME);
 		const canonical = generation('v1');
-		await port.commit(() => ({put: {...canonical, createdAt: Date.now()}, canonical}));
+		await port.commit(() => ({put: {...canonical, createdAt: Date.now()}, slots: {canonical}}));
 
 		const app = await readTier(db);
 		const res = await app.request(`/${NAME}/feed`);

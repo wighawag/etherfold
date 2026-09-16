@@ -3,6 +3,7 @@ import {
 	GenerationCapReachedError,
 	GenerationIsCanonicalError,
 	openGenerationRegistry,
+	SLOT_NAMES,
 	UnknownGenerationError,
 	UnknownStreamError,
 	writerOf,
@@ -10,6 +11,7 @@ import {
 	type GenerationRecord,
 	type GenerationRegistryPort,
 	type GenerationRegistryState,
+	type SlotName,
 } from '../src/generation/registry.js';
 
 // ---------------------------------------------------------------------------
@@ -51,13 +53,16 @@ type Call = {op: string; detail?: unknown};
  */
 function memoryPort() {
 	const generations = new Map<string, GenerationRecord>();
-	let canonical: GenerationId | undefined;
+	const slots = new Map<SlotName, GenerationId>();
 	const streams = new Set<string>();
 	const states = new Set<string>();
 	const calls: Call[] = [];
 	const keyOf = (id: GenerationId) => `${id.stream}\u0000${id.processor}`;
 
-	const snapshot = (): GenerationRegistryState => ({generations: [...generations.values()], canonical});
+	const snapshot = (): GenerationRegistryState => ({
+		generations: [...generations.values()],
+		slots: Object.fromEntries(slots),
+	});
 
 	const port: GenerationRegistryPort = {
 		async read() {
@@ -74,8 +79,15 @@ function memoryPort() {
 			if (write.put) {
 				generations.set(keyOf(write.put), write.put);
 			}
-			if (write.canonical) {
-				canonical = {stream: write.canonical.stream, processor: write.canonical.processor};
+			for (const name of SLOT_NAMES) {
+				const assigned = write.slots?.[name];
+				// ABSENT leaves it, `null` CLEARS it, an identity assigns it
+				if (assigned === undefined) continue;
+				if (assigned === null) {
+					slots.delete(name);
+				} else {
+					slots.set(name, {stream: assigned.stream, processor: assigned.processor});
+				}
 			}
 		},
 		async listStreamDigests() {
@@ -202,11 +214,19 @@ describe('one canonical pointer names the generation that answers reads', () => 
 		await registry.moveCanonicalTo(green);
 		expect(await registry.canonical()).toEqual(green);
 
-		// ONE write, and it carries no generation record with it: promotion is a
-		// pointer move and nothing else, which is why it has no meaningful cost
+		// ONE write, and it carries no generation record with it: promotion is a slot
+		// assignment and nothing else, which is why it has no meaningful cost. It moves
+		// TWO slots in that one write -- `canonical` forward, and what it moved off into
+		// `predecessor`, which is the fact a revert needs and the one the rows could never
+		// answer afterwards (ADR-0084).
 		const writes = world.calls.filter((call) => call.op === 'commit');
 		expect(writes).toHaveLength(1);
-		expect(writes[0].detail).toEqual({canonical: {stream: green.stream, processor: green.processor}});
+		expect(writes[0].detail).toEqual({
+			slots: {
+				canonical: {stream: green.stream, processor: green.processor},
+				predecessor: {stream: blue.stream, processor: blue.processor},
+			},
+		});
 
 		await registry.moveCanonicalTo(blue);
 		expect(await registry.canonical()).toEqual(blue);
@@ -244,6 +264,123 @@ describe('one canonical pointer names the generation that answers reads', () => 
 
 		await expect(registry.moveCanonicalTo(idOf(STREAM_B, PROC_A))).rejects.toThrow(UnknownGenerationError);
 		expect((await registry.canonical())?.processor).toBe(PROC_A);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// THE THREE DURABLE SLOTS (ADR-0084)
+// ---------------------------------------------------------------------------
+// A slot is an ASSIGNMENT pointing at a generation, exactly as the canonical
+// pointer already was, and `canonical` is merely the first of them. What is
+// asserted here is the RULES over the port -- who takes a slot, what a slot
+// displaces, and what a move and a deletion do to one -- because every substrate
+// inherits them.
+describe('a generation is held by a durable named SLOT', () => {
+	it('holds AT MOST ONE in `successor`, so registering into it REPLACES what it named', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+
+		const first = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+		expect(await registry.slots()).toEqual({canonical: incumbent, successor: first});
+
+		const second = await registry.create(idOf(STREAM_B, PROC_B), {slot: 'successor'});
+
+		// whatever stream either sits on: there is ONE place for a pending successor to
+		// be, so the cross-stream question is answered structurally
+		expect(await registry.slots()).toEqual({canonical: incumbent, successor: second});
+		// ...and the one it displaced is still REGISTERED, named by no slot. Deleting it
+		// is the caller's (it owns the state namespace); what the registry says is that
+		// nothing claims it any more.
+		expect(await registry.list()).toEqual([incumbent, first, second]);
+	});
+
+	it('leaves a generation some slot ALREADY names exactly where it is', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+		await registry.moveCanonicalTo(successor);
+
+		// a restart registering the generation a revert returned FROM, or to: it RESOLVES
+		// to the one record it already is, and is not re-armed as a pending successor by
+		// the act of starting up
+		expect(await registry.create(idOf(STREAM_A, PROC_A), {slot: 'successor'})).toEqual(incumbent);
+		expect(await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'})).toEqual(successor);
+
+		expect(await registry.list()).toEqual([incumbent, successor]);
+		expect(await registry.slots()).toEqual({canonical: successor, predecessor: incumbent});
+	});
+
+	it('is an ASSIGNMENT and never an identity: the same content under two slots is ONE generation', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+
+		await registry.moveCanonicalTo(successor);
+
+		// it was the successor and is now the canonical generation, and that is ONE row,
+		// one state namespace and one fold of one stream -- which is why a slot is never
+		// part of `GenerationId`
+		expect(await registry.list()).toEqual([incumbent, successor]);
+		expect((await registry.slots()).canonical).toEqual(successor);
+	});
+
+	it('ASSIGNS `predecessor` on the move, and empties `successor` when it promoted one', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+
+		await registry.moveCanonicalTo(successor);
+		// what the pointer moved OFF is the way back, and it is RECORDED rather than
+		// inferred: nothing in these rows could answer it afterwards
+		expect(await registry.slots()).toEqual({canonical: successor, predecessor: incumbent});
+
+		await registry.moveCanonicalTo(incumbent);
+		// ...and a move back is the same rule: `predecessor` names what this one came off
+		expect(await registry.slots()).toEqual({canonical: incumbent, predecessor: successor});
+	});
+
+	it('leaves a PENDING successor pending across a revert', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const promoted = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+		await registry.moveCanonicalTo(promoted);
+		const pending = await registry.create(idOf(STREAM_B, PROC_A), {slot: 'successor'});
+
+		await registry.moveCanonicalTo(incumbent);
+
+		// an operator moving the pointer and a developer iterating are two different
+		// people doing two different things, so a move touches only the slots it is about
+		expect(await registry.slots()).toEqual({canonical: incumbent, successor: pending, predecessor: promoted});
+	});
+
+	it('CLEARS the slot that named a generation in the same commit that removes it', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_B, PROC_B), {slot: 'successor'});
+
+		await registry.deleteGeneration(successor);
+
+		// no slot survives the generation it pointed at, so "a generation no slot names"
+		// stays the rule collection is decided by
+		expect(await registry.slots()).toEqual({canonical: incumbent});
+		expect(await registry.list()).toEqual([incumbent]);
+	});
+
+	it('refuses a slot it does not have, rather than ignoring it', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		await registry.create(idOf(STREAM_A, PROC_A));
+
+		// there are EXACTLY three and arbitrary named slots are deliberately not built; a
+		// misspelt one would otherwise be a silent no-op that leaves a generation unslotted
+		await expect(registry.create(idOf(STREAM_A, PROC_B), {slot: 'staging' as SlotName})).rejects.toThrow(TypeError);
+		expect(await registry.list()).toHaveLength(1);
 	});
 });
 

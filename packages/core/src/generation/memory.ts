@@ -1,11 +1,13 @@
 import {
 	openGenerationRegistry,
+	SLOT_NAMES,
 	type GenerationCaps,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
 	type GenerationRegistryPort,
 	type GenerationRegistryState,
+	type SlotName,
 } from './registry.js';
 
 /**
@@ -42,12 +44,18 @@ export function createMemoryGenerationRegistryPort(options?: {
 }): GenerationRegistryPort {
 	const generations = new Map<string, GenerationRecord>();
 	const streams = new Set<string>();
-	let canonical: GenerationId | undefined;
+	// THE THREE DURABLE SLOTS -- durable everywhere but here, which is this
+	// substrate's whole trade-off (see the JSDoc above): the rule is one and the
+	// place it is kept is the port's.
+	const slots = new Map<SlotName, GenerationId>();
 	// NUL is not producible by a digest or a version hash, so it cannot be read
 	// as part of either half. The map key is an implementation detail; the
 	// IDENTITY stays two fields, per the registry.
 	const keyOf = (id: GenerationId) => `${id.stream}\u0000${id.processor}`;
-	const snapshot = (): GenerationRegistryState => ({generations: [...generations.values()], canonical});
+	const snapshot = (): GenerationRegistryState => ({
+		generations: [...generations.values()],
+		slots: Object.fromEntries([...slots].map(([name, id]) => [name, {stream: id.stream, processor: id.processor}])),
+	});
 
 	return {
 		async read() {
@@ -65,8 +73,17 @@ export function createMemoryGenerationRegistryPort(options?: {
 			if (write.put) {
 				generations.set(keyOf(write.put), write.put);
 			}
-			if (write.canonical) {
-				canonical = {stream: write.canonical.stream, processor: write.canonical.processor};
+			for (const name of SLOT_NAMES) {
+				const assigned = write.slots?.[name];
+				// ABSENT leaves the slot where it is, `null` CLEARS it, an identity assigns
+				// it: the three cases of `SlotAssignment`, and the reason `undefined` may
+				// not be read as "clear".
+				if (assigned === undefined) continue;
+				if (assigned === null) {
+					slots.delete(name);
+				} else {
+					slots.set(name, {stream: assigned.stream, processor: assigned.processor});
+				}
 			}
 		},
 
