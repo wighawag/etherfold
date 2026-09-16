@@ -1,29 +1,10 @@
 ---
 title: 'A generation retains the CODE that folds it, so a predecessor can be resumed and not merely read'
 slug: a-generation-retains-the-code-that-folds-it
-needsAnswers: true
 taskedAfter: [a-processor-reaches-a-deployment-however-it-arrives]
 ---
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
-
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK, stripped by the apply rung on full resolution.
-  Four decisions ARE made and are recorded under Implementation Decisions (bundling is
-  REQUIRED, the bytes live in the database, a bundle dies with its generation, and the
-  browser cost is accepted). What remains open is how bundling reaches an author, which
-  is a developer-experience decision rather than a storage one.
--->
-
-## Open questions
-
-1. **Which bundler is documented, and what exactly is pinned?** DECIDED that the AUTHOR bundles and the CLI stays dumb (see Implementation Decisions). What remains is which tool the documentation leads with (`esbuild` for speed and a one-flag single-file ESM output, `rollup` where output stability matters more than speed, `tsup` as esbuild with ergonomics), and how forcefully to state the pinning requirement that ADR-0086 makes load-bearing.
-2. **What happens to a deployment that has not adopted bundling yet?** Under ADR-0086 a processor that is not a bundle has no identity at all, so this is no longer "register a frozen generation": there is nothing to register. Confirm that the refusal names the missing artifact and the command that produces it, rather than failing somewhere further in.
-3. **What does the bundle cost per generation in a browser tab?** Story 7's measurement, at `BROWSER_GENERATION_CAPS` of two. Accepted in principle; the number is not known.
-4. ~~**Is the artifact's hash the `version`, or beside it?**~~ **DECIDED by ADR-0086: the hash of the bundle IS the identity, and the declared `version` is DELETED**, along with `assertProcessorVersion`, `getCodeFingerprint()`, `utils/fingerprint.ts` and the `PROCESSOR DRIFT` report, which becomes unrepresentable because no declared identity is left to disagree with the code. Recorded here because it changes this spec's shape: bundling is now mandatory for IDENTITY and not only for retention, so delivery (ADR-0085), retention (this spec) and identity are one artifact.
-
-<!-- /open-questions -->
 
 ## Problem Statement
 
@@ -58,7 +39,7 @@ Note what cannot substitute for a bundle: retaining the author's source FILE. A 
 
 ### Autonomy notes
 
-`needsAnswers: true`, because the four questions above are genuine policy decisions about how bundling reaches an author, and tasking without them would cut tasks against a guessed developer experience. The storage half is decided and is recorded below. No `humanOnly`: once the questions are answered this is ordinarily taskable.
+Neither flag. The spec launched with four open questions about how bundling reaches an author; all four are now ANSWERED and recorded under Implementation Decisions, and the identity question they turned on is decided by ADR-0086. Nothing here needs a human to drive the tasking, so no `humanOnly` either.
 
 ## Implementation Decisions
 
@@ -68,9 +49,13 @@ Made at launch, in answer to the shape of the problem:
 - **The bytes live in the DATABASE, beside the generation's state.** One namespace then holds everything a generation is, which is the same grouping ADR-0053 already chose for state, and it means a generation's storage is reclaimed by one mechanism rather than two. It also keeps the artifact on the substrate the deployment already has, rather than introducing a filesystem dependency on a runtime (a Worker) that has none.
 - **A bundle dies with its generation.** `reclaim` (`a-generation-no-slot-names-is-reclaimed-on-request`) takes the artifact with the row and the state namespace, exactly as it already takes the state. Nothing retains an artifact whose generation no slot names.
 - **Retention is therefore bounded by the slots.** `canonical`, `successor` and `predecessor` pin at most three artifacts, so `predecessor` retention costs exactly one extra bundle rather than an unbounded history. That is the same bound ADR-0084 already established for state, which is the point: the code follows the generation, so it inherits the generation's lifecycle rather than needing one of its own.
-- **The browser cost is ACCEPTED**, subject to story 7's measurement. At `BROWSER_GENERATION_CAPS` of two this is at most two artifacts in a tab.
-
-Deliberately NOT decided here: the bundler, the module format, and whether the CLI or the author runs the build. Those are the open questions.
+- **The browser cost is ACCEPTED**, subject to story 7's measurement. At `BROWSER_GENERATION_CAPS` of two this is at most two artifacts in a tab. The number is a DELIVERABLE of the build rather than a question blocking it: only building it answers it, and nothing here turns on the answer.
+- **The AUTHOR bundles, and the CLI stays dumb.** No bundler in the CLI's dependency tree and no build step on its start path. It also keeps the identity a function of an artifact the author produced and can reproduce, rather than of whatever the CLI happened to bundle with.
+- **`esbuild` is the documented default**, as one command producing a single ESM file. `rollup` is named as the alternative where output stability matters more than speed. `tsup` is deliberately not recommended: it is esbuild with a wrapper and adds no determinism.
+- **The bundle is MINIFIED.** Minification strips comments, so a comment-only edit does not move the identity, which is exactly the spurious re-fold worth avoiding once the hash IS the identity (ADR-0086). The cost, that minified output shifts more between bundler versions, is bounded by the pinning rule below.
+- **What is pinned is the bundler VERSION AND ITS FLAGS**, not merely the tool. Output is a function of both, so a documented build command and a lockfile entry are together the reproducibility guarantee. ADR-0086 makes this load-bearing rather than advisory: a non-deterministic build means state is never reused.
+- **etherfold VERIFIES that a bundle is self-contained** and refuses one that is not. A bundle still importing a bare specifier is not a bundle, and it would otherwise fail later, at retention or at instantiation, far from the cause. A scan for unresolved bare imports at registration is cheap and turns a late mystery into an early refusal.
+- **A deployment with no bundle is REFUSED at configuration resolution**, before anything opens a database, naming the missing artifact and the command that produces it. Under ADR-0086 a processor that is not a bundle has no identity at all, so there is nothing to register rather than something to register in a degraded state. There is no transition period: nothing is published (`CONTEXT.md`), so a clean break costs nobody anything.
 
 ## Testing Decisions
 
@@ -81,6 +66,16 @@ The second is the bound: a run of reconfigurations leaves at most as many artifa
 The third is the upgrade window (story 3): during a restart-upgrade, the incumbent's cursor MOVES while the successor catches up, rather than sitting frozen.
 
 Prior art for the round trip is ADR-0085's own instantiation path, and for the storage shape the per-generation state namespace.
+
+### How the repo's own 41 declaration sites migrate, which is the part a tasker will get wrong
+
+Around 41 files in this repository construct a processor with a declared `version`, and ADR-0086 deletes that field. They must NOT each grow a bundler step, and they must NOT get a test-only escape hatch that becomes a production one.
+
+The answer falls out of the design rather than needing a mechanism. Identity is `hash(bytes)`, so **a test supplies BYTES, not a bundle**. Synthetic bytes give a stable, distinct identity, which is all the registry, slot, cap, promotion and reclaim suites ever needed from `version`: they assert on WHICH generation, never on what the code does. Those sites migrate by replacing a version string with a bytes literal, and nothing else changes.
+
+Exactly one class of test needs more: the resume round trip (a generation is retained, a process is restarted without that code in its build, and the retained bundle is instantiated and FOLDS). That needs bytes that really instantiate, so it needs one small real bundle fixture, built once and committed, in the manner of the committed stream fixture.
+
+Stating this here because a tasker who misses it has two failure modes, and both are expensive: cutting a task that puts a build step in 41 places, or inventing a way to declare an identity without bytes, which is the deleted `version` growing back under another name.
 
 ## Out of Scope
 
