@@ -4,6 +4,7 @@ slug: promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade
 spec: a-save-replaces-the-pending-successor
 blockedBy: [a-successor-lands-in-a-durable-slot-that-holds-one]
 covers: [4, 5]
+needsAnswers: true
 ---
 
 ## What to build
