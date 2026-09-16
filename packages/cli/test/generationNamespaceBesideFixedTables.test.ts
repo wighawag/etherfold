@@ -4,7 +4,7 @@ import {
 	openGenerationRegistryOnSQL,
 	readSchemaState,
 	EMISSION_STREAM_TABLE,
-	GENERATION_POINTER_TABLE,
+	GENERATION_SLOT_TABLE,
 	GENERATION_TABLE,
 } from '@etherfold/server';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
@@ -26,7 +26,7 @@ import {describe, expect, it} from 'vitest';
 // namespace covers what the STORE owns -- the entity tables, `_blocks`, `_cursor`
 // and the indexes derived from them -- and nothing the SERVER owns: `_meta`,
 // `_emissions` and the generation registry (`_generations`,
-// `_generation_pointer`) are per NAMED INDEXER and are deliberately SHARED across
+// `_generation_slots`) are per NAMED INDEXER and are deliberately SHARED across
 // its generations. That sharing is the point rather than an oversight: a
 // processor-only change re-folds the SAME stored stream, which is what makes it
 // free, and the registry has to name generations from OUTSIDE any of them.
@@ -91,7 +91,7 @@ describe('the server-owned fixed tables, in a database holding several generatio
 		const names = await namesIn(db);
 
 		expect(names).toEqual(
-			expect.arrayContaining(['_meta', EMISSION_STREAM_TABLE, GENERATION_TABLE, GENERATION_POINTER_TABLE]),
+			expect.arrayContaining(['_meta', EMISSION_STREAM_TABLE, GENERATION_TABLE, GENERATION_SLOT_TABLE]),
 		);
 		// and no generation grew a copy of one of them
 		expect(names.filter((name) => name.includes('genA') && !name.includes('token'))).toEqual(
@@ -109,7 +109,7 @@ describe('the server-owned fixed tables, in a database holding several generatio
 		// `_emissions`, written by whoever owns the store and read by both feed views
 		await appendEmissions(db, {indexer: INDEXER, stream: STREAM, coverage, emissions: [emission()]});
 
-		// `_generations` and `_generation_pointer`: the registry names generations
+		// `_generations` and `_generation_slots`: the registry names generations
 		// from OUTSIDE any of them, which is why they cannot be namespaced by one
 		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: {maxGenerations: 4, maxStreams: 2}});
 		await registry.create({stream: STREAM, processor: 'genA'});

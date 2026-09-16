@@ -251,12 +251,30 @@ CREATE TABLE IF NOT EXISTS _generations (
     PRIMARY KEY (indexer, stream, processor)
 );
 
--- THE CANONICAL POINTER: one small row per named indexer, and the whole of
--- promotion. Moving it forwards is promotion, moving it backwards is revert.
+-- THE THREE DURABLE SLOTS (ADR-0084): one small row per named indexer, naming
+-- the generation each slot holds.
 --
--- `stream` and `processor` are NULLABLE because a pointer that has never been
--- set is a real state (an indexer holding no generation yet), and they are only
--- ever written together.
+-- A slot is an ASSIGNMENT -- a durable name POINTING AT a generation -- and never
+-- part of a generation's identity, which is why they are columns HERE and not on
+-- `_generations`: the same content under two slots must stay ONE generation, one
+-- state namespace and one fold of one stream.
+--
+--   `canonical`    what answers every read. Moving it forwards is promotion,
+--                  moving it backwards is revert; it is the slot that already
+--                  existed, when this table was called `_generation_pointer`.
+--   `successor`    the generation being built beside the incumbent. It holds AT
+--                  MOST ONE, so registering into an occupied `successor`
+--                  REPLACES its occupant -- which is why a redeploy-per-commit
+--                  loop stops accumulating a generation per deploy.
+--   `predecessor`  what a revert moves back to: the generation the pointer was
+--                  last moved OFF. ASSIGNED by that move and never inferred,
+--                  because it cannot be inferred -- "never canonical" and
+--                  "canonical and reverted away from" are the same rows.
+--
+-- All six columns are NULLABLE because an empty slot is a real state, and each
+-- pair is only ever written together. They are on ONE ROW so that the promotion
+-- shuffle (`canonical` forward, what it moved off into `predecessor`) is a single
+-- write no crash can land inside.
 --
 -- `revision` is the CONCURRENCY GUARD every registry commit is conditional on
 -- (ADR-0054). `RemoteSQL` is `prepare` + `batch` and nothing else, so a
@@ -265,10 +283,14 @@ CREATE TABLE IF NOT EXISTS _generations (
 -- a fresh unique token in the same batch, and reads it back to learn whether it
 -- won. A loser's statements applied to nothing and it retries. It lives on THIS
 -- row rather than on one of its own because every commit already writes here.
-CREATE TABLE IF NOT EXISTS _generation_pointer (
+CREATE TABLE IF NOT EXISTS _generation_slots (
     indexer TEXT PRIMARY KEY,
-    stream TEXT,
-    processor TEXT,
+    canonicalStream TEXT,
+    canonicalProcessor TEXT,
+    successorStream TEXT,
+    successorProcessor TEXT,
+    predecessorStream TEXT,
+    predecessorProcessor TEXT,
     revision TEXT NOT NULL
 );
 

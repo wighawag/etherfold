@@ -1,5 +1,6 @@
 import {
 	openGenerationRegistry,
+	SLOT_NAMES,
 	type GenerationCaps,
 	type GenerationId,
 	type GenerationRecord,
@@ -7,6 +8,8 @@ import {
 	type GenerationRegistryPort,
 	type GenerationRegistryState,
 	type GenerationRegistryWrite,
+	type GenerationSlots,
+	type SlotName,
 } from '@etherfold/core';
 import {logs} from 'named-logs';
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
@@ -58,16 +61,30 @@ const logger = logs('@etherfold/server');
 export const GENERATION_TABLE = '_generations';
 
 /**
- * The CANONICAL POINTER: one small row per named indexer, naming the generation
- * that answers reads -- and carrying the REVISION every commit is guarded on.
+ * THE THREE DURABLE SLOTS: one small row per named indexer, naming the generation
+ * each slot holds -- and carrying the REVISION every commit is guarded on.
  *
- * The two live on one row because every commit already writes it: the pointer
- * move is one write and the guard is the same write, so atomicity costs no extra
- * row and no extra statement (ADR-0054). What ADR-0008 called `current_version`
- * becomes exactly this, keyed on the generation identity rather than on the
- * processor version hash alone.
+ * They live on ONE row because every commit already writes it: a slot move is one
+ * write and the guard is the same write, so atomicity costs no extra row and no
+ * extra statement (ADR-0054). It also makes the promotion shuffle -- `canonical`
+ * forward and what it moved off into `predecessor` -- a single row update rather
+ * than two writes a crash could land between. What ADR-0008 called
+ * `current_version` is the `canonical` pair here, keyed on the generation
+ * identity rather than on the processor version hash alone.
+ *
+ * The table was `_generation_pointer` while `canonical` was the only durable
+ * assignment there was. It is RENAMED rather than kept and widened, because a
+ * table called "pointer" holding three of them would make the name say the
+ * opposite of ADR-0084's decision. Nothing is published and nothing holds
+ * persisted state (`CONTEXT.md`), so the rename costs a changeset and no
+ * migration.
  */
-export const GENERATION_POINTER_TABLE = '_generation_pointer';
+export const GENERATION_SLOT_TABLE = '_generation_slots';
+
+/** The two columns one slot occupies. NULL in both means the slot is empty. */
+function slotColumns(slot: SlotName): {stream: string; processor: string} {
+	return {stream: `${slot}Stream`, processor: `${slot}Processor`};
+}
 
 /**
  * What the guard compares against before this indexer's pointer row exists.
@@ -145,10 +162,29 @@ export type HeldGenerations = {
 	generations: GenerationRecord[];
 	/** WHICH of them answers reads, or nothing where the pointer names none yet. */
 	canonical?: GenerationId;
+	/** What every slot holds, `canonical` included: the durable answer to what each generation is FOR. */
+	slots: GenerationSlots;
 };
 
-/** The pointer row: the canonical identity (or nothing yet) plus the guard. */
-type PointerRow = {stream: string | null; processor: string | null; revision: string};
+/** The slot row: each slot's identity (or nothing yet) plus the guard. */
+type SlotRow = {revision: string} & Record<string, string | null>;
+
+/** Every slot column, in the order the statements bind them. */
+const SLOT_COLUMNS = SLOT_NAMES.flatMap((slot) => [slotColumns(slot).stream, slotColumns(slot).processor]);
+
+/** What the row says each slot holds, as identities. Both columns NULL means empty. */
+function slotsFrom(row: SlotRow | undefined): GenerationSlots {
+	const slots: {-readonly [Name in SlotName]?: GenerationId} = {};
+	for (const slot of SLOT_NAMES) {
+		const columns = slotColumns(slot);
+		const stream = row?.[columns.stream];
+		const processor = row?.[columns.processor];
+		if (typeof stream === 'string' && typeof processor === 'string') {
+			slots[slot] = {stream, processor};
+		}
+	}
+	return slots;
+}
 
 /**
  * The five substrate operations, over one `RemoteSQL` handle and ONE named
@@ -311,16 +347,16 @@ export function generationRegistryPortOnSQL(
  * ANSWERS READS HERE YET (ADR-0058), never an empty page.
  */
 export async function readHeldGenerations(db: RemoteSQL): Promise<HeldGenerations[]> {
-	const [records, pointers] = await db.batch([
+	const [records, slotRows] = await db.batch([
 		db.prepare(`SELECT indexer, stream, processor, createdAt FROM ${GENERATION_TABLE}`),
-		db.prepare(`SELECT indexer, stream, processor FROM ${GENERATION_POINTER_TABLE}`),
+		db.prepare(`SELECT indexer, ${SLOT_COLUMNS.join(', ')} FROM ${GENERATION_SLOT_TABLE}`),
 	]);
 
 	const held = new Map<string, HeldGenerations>();
 	const under = (indexer: string): HeldGenerations => {
 		const existing = held.get(indexer);
 		if (existing) return existing;
-		const fresh: HeldGenerations = {indexer, generations: []};
+		const fresh: HeldGenerations = {indexer, generations: [], slots: {}};
 		held.set(indexer, fresh);
 		return fresh;
 	};
@@ -332,9 +368,12 @@ export async function readHeldGenerations(db: RemoteSQL): Promise<HeldGeneration
 			createdAt: Number(row.createdAt),
 		});
 	}
-	for (const row of (pointers?.results ?? []) as (PointerRow & {indexer: string})[]) {
-		if (row.stream === null || row.processor === null) continue;
-		under(row.indexer).canonical = {stream: row.stream, processor: row.processor};
+	for (const row of (slotRows?.results ?? []) as (SlotRow & {indexer: string})[]) {
+		const entry = under(row.indexer);
+		entry.slots = slotsFrom(row);
+		if (entry.slots.canonical) {
+			entry.canonical = entry.slots.canonical;
+		}
 	}
 
 	return [...held.values()]
@@ -370,7 +409,10 @@ export function openGenerationRegistryOnSQL(
 
 /** Whether a planned write has anything in it that would reach the database. */
 function writesAnything(write: GenerationRegistryWrite | undefined): write is GenerationRegistryWrite {
-	return !!write && ((write.remove?.length ?? 0) > 0 || !!write.put || !!write.canonical);
+	return (
+		!!write &&
+		((write.remove?.length ?? 0) > 0 || !!write.put || SLOT_NAMES.some((slot) => write.slots?.[slot] !== undefined))
+	);
 }
 
 /**
@@ -385,18 +427,18 @@ async function readGuarded(
 	db: RemoteSQL,
 	indexer: string,
 ): Promise<{state: GenerationRegistryState; revision: string}> {
-	const [records, pointer] = await db.batch([
+	const [records, slotRow] = await db.batch([
 		db.prepare(`SELECT stream, processor, createdAt FROM ${GENERATION_TABLE} WHERE indexer = ?1`).bind(indexer),
-		db.prepare(`SELECT stream, processor, revision FROM ${GENERATION_POINTER_TABLE} WHERE indexer = ?1`).bind(indexer),
+		db
+			.prepare(`SELECT ${SLOT_COLUMNS.join(', ')}, revision FROM ${GENERATION_SLOT_TABLE} WHERE indexer = ?1`)
+			.bind(indexer),
 	]);
 
 	const generations = ((records?.results ?? []) as GenerationRow[]).map(
 		(row): GenerationRecord => ({stream: row.stream, processor: row.processor, createdAt: Number(row.createdAt)}),
 	);
-	const row = (pointer?.results ?? [])[0] as PointerRow | undefined;
-	const canonical =
-		row && row.stream !== null && row.processor !== null ? {stream: row.stream, processor: row.processor} : undefined;
-	return {state: {generations, canonical}, revision: row?.revision ?? UNWRITTEN};
+	const row = (slotRow?.results ?? [])[0] as SlotRow | undefined;
+	return {state: {generations, slots: slotsFrom(row)}, revision: row?.revision ?? UNWRITTEN};
 }
 
 /**
@@ -415,7 +457,7 @@ function statementsFor(
 	revision: string,
 	next: string,
 ): SQLPreparedStatement[] {
-	const guard = `COALESCE((SELECT revision FROM ${GENERATION_POINTER_TABLE} WHERE indexer = ?1), '')`;
+	const guard = `COALESCE((SELECT revision FROM ${GENERATION_SLOT_TABLE} WHERE indexer = ?1), '')`;
 	const statements: SQLPreparedStatement[] = [];
 
 	// `remove` runs before `put`, as the registry's write contract says
@@ -443,29 +485,57 @@ function statementsFor(
 	}
 
 	/**
-	 * The pointer row, the revision swap and the guard, in ONE statement.
+	 * The slot row, the revision swap and the guard, in ONE statement.
 	 *
-	 * An ABSENT `canonical` means LEAVE IT WHERE IT IS rather than clear it -- a
-	 * registry holding generations and pointing at none of them answers nothing --
-	 * so the identity is bound as `NULL` and `COALESCE` keeps whatever the row
-	 * already said. On a first commit there is no row at all and the plain insert
-	 * takes it, which is the only case the `WHERE` on the upsert cannot cover.
+	 * Each slot carries a TOUCHED FLAG beside its two columns, because a slot write
+	 * has THREE cases and two of them would otherwise be the same NULL: an ABSENT
+	 * name means LEAVE IT WHERE IT IS (a registration that resolved, a put that is
+	 * not about slots), and an explicit `null` CLEARS it (the generation a slot
+	 * named has just been removed). `COALESCE` cannot tell those apart, so the flag
+	 * does: untouched keeps the stored value, touched takes what was bound, which
+	 * may be NULL.
+	 *
+	 * On a first commit there is no row at all and the plain insert takes it, which
+	 * is the only case the `WHERE` on the upsert cannot cover -- and an untouched
+	 * slot inserts NULL there, correctly, because there was nothing to keep.
 	 */
+	const bindings: (string | number | null)[] = [indexer];
+	const bind = (value: string | number | null): string => {
+		bindings.push(value);
+		return `?${bindings.length}`;
+	};
+	const columns: string[] = [];
+	const values: string[] = [];
+	const updates: string[] = [];
+	for (const slot of SLOT_NAMES) {
+		const assigned = write.slots?.[slot];
+		const names = slotColumns(slot);
+		columns.push(names.stream, names.processor);
+		values.push(bind(assigned?.stream ?? null), bind(assigned?.processor ?? null));
+		const touched = bind(assigned === undefined ? 0 : 1);
+		for (const column of [names.stream, names.processor] as const) {
+			updates.push(
+				`${column} = CASE WHEN ${touched} = 1 THEN excluded.${column} ELSE ${GENERATION_SLOT_TABLE}.${column} END`,
+			);
+		}
+	}
+	const nextToken = bind(next);
+	const guardToken = bind(revision);
+
 	statements.push(
 		db
 			.prepare(
-				`INSERT INTO ${GENERATION_POINTER_TABLE} (indexer, stream, processor, revision)
-				 VALUES (?1, ?2, ?3, ?4)
+				`INSERT INTO ${GENERATION_SLOT_TABLE} (indexer, ${columns.join(', ')}, revision)
+				 VALUES (?1, ${values.join(', ')}, ${nextToken})
 				 ON CONFLICT (indexer) DO UPDATE SET
-					stream = COALESCE(excluded.stream, ${GENERATION_POINTER_TABLE}.stream),
-					processor = COALESCE(excluded.processor, ${GENERATION_POINTER_TABLE}.processor),
+					${updates.join(',\n\t\t\t\t\t')},
 					revision = excluded.revision
-				 WHERE ${GENERATION_POINTER_TABLE}.revision = ?5`,
+				 WHERE ${GENERATION_SLOT_TABLE}.revision = ${guardToken}`,
 			)
-			.bind(indexer, write.canonical?.stream ?? null, write.canonical?.processor ?? null, next, revision),
+			.bind(...bindings),
 	);
 
-	statements.push(db.prepare(`SELECT revision FROM ${GENERATION_POINTER_TABLE} WHERE indexer = ?1`).bind(indexer));
+	statements.push(db.prepare(`SELECT revision FROM ${GENERATION_SLOT_TABLE} WHERE indexer = ?1`).bind(indexer));
 	return statements;
 }
 

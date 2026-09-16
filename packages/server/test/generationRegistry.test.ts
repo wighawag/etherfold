@@ -12,7 +12,7 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-	GENERATION_POINTER_TABLE,
+	GENERATION_SLOT_TABLE,
 	GENERATION_TABLE,
 	appendEmissions,
 	applySchema,
@@ -101,10 +101,12 @@ const generationRows = (db: RemoteSQL, indexer = INDEXER) =>
 		indexer,
 	);
 
+/** The SLOT row, projected onto the one slot these cases are about: `canonical`. */
 const pointerRows = (db: RemoteSQL) =>
 	rowsOf<{indexer: string; stream: string | null; processor: string | null; revision: string}>(
 		db,
-		`SELECT indexer, stream, processor, revision FROM ${GENERATION_POINTER_TABLE} ORDER BY indexer`,
+		`SELECT indexer, canonicalStream AS stream, canonicalProcessor AS processor, revision
+		 FROM ${GENERATION_SLOT_TABLE} ORDER BY indexer`,
 	);
 
 /** One emission row, so a stream has a SUBTREE the sweep and the reap can see. */

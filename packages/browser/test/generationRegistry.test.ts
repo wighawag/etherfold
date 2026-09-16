@@ -123,6 +123,30 @@ describe('the registry keeps its records beside the streams, hierarchically', ()
 		expect(await get(address.canonical)).toEqual({stream: DIGEST, processor: PROC_A});
 	});
 
+	it('puts each SLOT in its own small record BESIDE the entries, never inside one', async () => {
+		const name = freshName();
+		const registry = await registryOver(name).open();
+		const incumbent = await registry.create({stream: DIGEST, processor: PROC_A});
+		const successor = await registry.create({stream: DIGEST_V2, processor: PROC_B}, {slot: 'successor'});
+
+		const address = generationAddress(name);
+		expect(address.slot('successor')).toEqual(['generation', name, 'successor']);
+		expect(await get(address.slot('successor'))).toEqual({stream: DIGEST_V2, processor: PROC_B});
+		// a slot is an ASSIGNMENT, so the ENTRY it names is untouched by being named:
+		// the same content under two slots stays one entry, one keyspace, one fold
+		expect(await get(address.entry(successor))).toEqual(successor);
+
+		// ...and no slot record is inside the entry range, whichever way the names sort
+		const reopened = await registryOver(name).open();
+		expect(await reopened.list()).toEqual([incumbent, successor]);
+
+		await registry.moveCanonicalTo(successor);
+		expect(await get(address.slot('canonical'))).toEqual({stream: DIGEST_V2, processor: PROC_B});
+		expect(await get(address.slot('predecessor'))).toEqual({stream: DIGEST, processor: PROC_A});
+		// promoted OUT of `successor`: it is the incumbent now, not something pending
+		expect(await get(address.slot('successor'))).toBeUndefined();
+	});
+
 	it('holds two generations of one stream, and reads back exactly what it wrote', async () => {
 		const name = freshName();
 		const registry = await registryOver(name).open();

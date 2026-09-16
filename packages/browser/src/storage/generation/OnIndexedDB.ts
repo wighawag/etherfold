@@ -1,11 +1,14 @@
 import {
 	openGenerationRegistry,
+	SLOT_NAMES,
 	type GenerationCaps,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
 	type GenerationRegistryPort,
 	type GenerationRegistryState,
+	type GenerationSlots,
+	type SlotName,
 } from '@etherfold/core';
 import {promisifyRequest, type UseStore} from 'idb-keyval';
 import {keyvalStore} from '../keyval.js';
@@ -13,17 +16,17 @@ import {streamsUnder, streamSubtree} from '../stream/OnIndexedDB.js';
 
 /** The leading literal, so the registry keyspace cannot be a prefix of another. */
 const GENERATION = 'generation';
-/** The generation records' own level, beside the pointer. */
+/** The generation records' own level, beside the slots. */
 const ENTRY = 'entry';
-/** The canonical pointer's own key. One per indexer, by construction. */
-const CANONICAL = 'canonical';
 
 /**
  * The registry's address under one indexer name: HIERARCHICAL array keys, in the
  * same object store the streams live in.
  *
  * ```
- * ['generation', <indexer-name>, 'canonical']                        the pointer
+ * ['generation', <indexer-name>, 'canonical']                          a SLOT
+ * ['generation', <indexer-name>, 'successor']                          a SLOT
+ * ['generation', <indexer-name>, 'predecessor']                        a SLOT
  * ['generation', <indexer-name>, 'entry', <streamDigest>, <processor>]  a generation
  * ```
  *
@@ -33,15 +36,25 @@ const CANONICAL = 'canonical';
  * read as another's. It also makes "every generation on this stream" -- what
  * reaping asks -- a scoped range rather than a scan.
  *
- * `'canonical'` sorts BELOW `'entry'`, so the pointer sits outside the entry
- * range and a scoped read of the generations never picks it up. That is the same
- * trap the stream subtree's two ranges carry, and the same fix.
+ * A SLOT IS ONE SMALL RECORD BESIDE THE ENTRIES and never a field on one, which
+ * is ADR-0084's rule expressed as an address: a slot is an ASSIGNMENT pointing at
+ * a generation, so the same content under two slots stays ONE entry, one
+ * keyspace and one fold. `canonical` was the first of them and is unchanged;
+ * `successor` and `predecessor` sit at the same level under their own names.
+ *
+ * Each slot key sits OUTSIDE the entry range: the range's upper bound is
+ * `[..., 'entry', []]`, which is below every key whose third element is another
+ * literal, so a scoped read of the generations picks up none of them whichever
+ * way the names happen to sort. That is the same trap the stream subtree's two
+ * ranges carry, and the same fix.
  */
 export function generationAddress(name: string) {
 	const prefix: IDBValidKey[] = [GENERATION, name];
 	return {
 		prefix,
-		canonical: [...prefix, CANONICAL] as IDBValidKey,
+		/** WHERE one slot's assignment lives. One record per slot per indexer, by construction. */
+		slot: (slot: SlotName) => [...prefix, slot] as IDBValidKey,
+		canonical: [...prefix, 'canonical'] as IDBValidKey,
 		entry: (id: GenerationId) => [...prefix, ENTRY, id.stream, id.processor] as IDBValidKey,
 		/** Every generation record under this name, and nothing else. */
 		entries: IDBKeyRange.bound([...prefix, ENTRY], [...prefix, ENTRY, []], true, false),
@@ -67,19 +80,27 @@ export function generationRegistryPortOnIndexedDB(
 	const store = options.store ?? keyvalStore();
 	const address = generationAddress(name);
 
-	const stateOf = (records: unknown[], canonical: unknown): GenerationRegistryState => ({
-		generations: records as GenerationRecord[],
-		canonical: canonical as GenerationId | undefined,
-	});
+	const stateOf = (records: unknown[], assigned: unknown[]): GenerationRegistryState => {
+		const slots: {-readonly [Name in SlotName]?: GenerationId} = {};
+		SLOT_NAMES.forEach((name, index) => {
+			const held = assigned[index] as GenerationId | undefined;
+			if (held) {
+				slots[name] = held;
+			}
+		});
+		return {generations: records as GenerationRecord[], slots: slots as GenerationSlots};
+	};
+
+	/** The entries and every slot record, as the ONE read both `read` and `commit` make. */
+	const readState = (objectStore: IDBObjectStore): Promise<GenerationRegistryState> =>
+		Promise.all([
+			promisifyRequest<unknown[]>(objectStore.getAll(address.entries)),
+			...SLOT_NAMES.map((name) => promisifyRequest<unknown>(objectStore.get(address.slot(name)))),
+		]).then(([records, ...assigned]) => stateOf(records as unknown[], assigned));
 
 	return {
 		async read() {
-			return store('readonly', (objectStore) =>
-				Promise.all([
-					promisifyRequest<unknown[]>(objectStore.getAll(address.entries)),
-					promisifyRequest<unknown>(objectStore.get(address.canonical)),
-				]).then(([records, canonical]) => stateOf(records, canonical)),
-			);
+			return store('readonly', (objectStore) => readState(objectStore));
 		},
 
 		async commit(plan) {
@@ -87,12 +108,9 @@ export function generationRegistryPortOnIndexedDB(
 				'readwrite',
 				(objectStore) =>
 					new Promise<void>((resolve, reject) => {
-						Promise.all([
-							promisifyRequest<unknown[]>(objectStore.getAll(address.entries)),
-							promisifyRequest<unknown>(objectStore.get(address.canonical)),
-						]).then(([records, canonical]) => {
+						readState(objectStore).then((current) => {
 							try {
-								const write = plan(stateOf(records, canonical));
+								const write = plan(current);
 								if (!write) {
 									resolve();
 									return;
@@ -103,14 +121,18 @@ export function generationRegistryPortOnIndexedDB(
 								if (write.put) {
 									objectStore.put(write.put, address.entry(write.put));
 								}
-								if (write.canonical) {
-									// ONE small record, and the whole of promotion. It carries the
-									// identity alone: a copy of the record here would be a second
+								for (const name of SLOT_NAMES) {
+									const assigned = write.slots?.[name];
+									// ABSENT leaves it, `null` CLEARS it, an identity assigns it.
+									if (assigned === undefined) continue;
+									if (assigned === null) {
+										objectStore.delete(address.slot(name));
+										continue;
+									}
+									// ONE small record per slot, and the whole of promotion. It carries
+									// the identity alone: a copy of the record here would be a second
 									// opinion about a generation the entry level already holds.
-									objectStore.put(
-										{stream: write.canonical.stream, processor: write.canonical.processor},
-										address.canonical,
-									);
+									objectStore.put({stream: assigned.stream, processor: assigned.processor}, address.slot(name));
 								}
 								resolve(promisifyRequest(objectStore.transaction));
 							} catch (error) {

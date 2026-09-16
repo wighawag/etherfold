@@ -117,7 +117,7 @@ describe('the database those two things share', () => {
 				'_meta',
 				'_emissions',
 				'_generations',
-				'_generation_pointer',
+				'_generation_slots',
 				`_${namespace}_blocks`,
 				`_${namespace}_cursor`,
 				`${namespace}_nft`,

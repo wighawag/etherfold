@@ -137,7 +137,7 @@ export {
 	readHeldGenerations,
 	GenerationCommitContentionError,
 	GENERATION_TABLE,
-	GENERATION_POINTER_TABLE,
+	GENERATION_SLOT_TABLE,
 } from './generations.js';
 export type {HeldGenerations, SQLGenerationRegistryOptions} from './generations.js';
 /**
