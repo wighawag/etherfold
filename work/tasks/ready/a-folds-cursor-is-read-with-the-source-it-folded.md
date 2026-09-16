@@ -3,6 +3,7 @@ title: "A fold's cursor is read with the SOURCE it folded, so a filter-change su
 slug: a-folds-cursor-is-read-with-the-source-it-folded
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
