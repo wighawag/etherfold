@@ -1,0 +1,42 @@
+---
+title: 'A snapshot is labelled with the IDENTITY it was computed under, so the candidate rule keeps working'
+slug: a-snapshot-is-labelled-with-the-identity-it-was-computed-under
+spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
+blockedBy: [the-declared-version-and-the-drift-report-are-deleted]
+covers: [9]
+---
+
+## What to build
+
+A small change that a large promise rests on.
+
+A published snapshot carries a `processor` label, and the client-side rule is that a snapshot from another processor version IS NOT A CANDIDATE at all. That rule is what stops a client bootstrapping state computed by different logic, and it is unchanged. What changes is the VALUE in that field: it is now the identity ADR-0086 derives rather than a declared version hash.
+
+This matters more than its size suggests, because it is the thing that makes a browser app's upgrade path work under hash identity. An app's processor changes only when a new build is deployed, and that deploy already has to publish a matching snapshot; if the label were still computed the old way, every client would correctly refuse a snapshot that was actually for its own processor.
+
+## Acceptance criteria
+
+- [ ] A snapshot's `processor` label is the identity ADR-0086 derives, computed by the producer from the same artifact the deployment runs.
+- [ ] The candidate rule is UNCHANGED in meaning: a snapshot whose label differs from the client's generation is still not a candidate, and is still refused rather than translated.
+- [ ] A snapshot produced for a given bundle IS a candidate for a client running that bundle, asserted end to end rather than by comparing two strings.
+- [ ] The snapshot FORMAT number is considered deliberately: say whether this is a format change or a value change, and why.
+- [ ] Tests cover the new behaviour, mirroring the repo's existing test style.
+- [ ] A changeset accompanies the change (`pnpm changeset`).
+
+## Blocked by
+
+`the-declared-version-and-the-drift-report-are-deleted`. The value this writes does not exist in its final form until the declared version is gone.
+
+## Prompt
+
+The goal is that a browser app seeded from a published snapshot goes on working when identity becomes a hash.
+
+Read **ADR-0086**, then **ADR-0028** and the bootstrap path for what a snapshot carries and how a candidate is chosen, and `CONTEXT.md`'s `bootstrap` and `seeding` entries, which state the candidate rule and why a snapshot-seeded generation is a LEAF that cannot serve a later processor-only change. That leaf property is exactly why the label must be right: such a client has no stream to re-fold and cannot recover from a mislabelled snapshot by re-indexing.
+
+The decision most likely to be got wrong is treating this as a rename. The field keeps its name and its meaning; only the value's derivation moves. If you find yourself changing the candidate PREDICATE, stop -- the predicate is correct and is not this task's to touch.
+
+The second: the FORMAT number. A consumer reading a snapshot cannot tell a declared-version label from a hash label by looking, and this repo's habit is to REFUSE a document it cannot read rather than half-parse it. Decide explicitly whether the envelope number moves, and say why in your report; note that nothing is published (`CONTEXT.md`), so the honest answer may be that it does not need to.
+
+The seam to test at is the producer and the bootstrap path together: produce a snapshot for a known bundle, then bootstrap a client running that same bundle and assert it installs, plus the negative case.
+
+Done means: a snapshot says which processor computed it in the new vocabulary, and the rule that protects a client is exactly as strict as it was.

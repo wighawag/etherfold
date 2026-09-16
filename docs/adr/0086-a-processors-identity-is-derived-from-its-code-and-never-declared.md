@@ -2,7 +2,9 @@
 status: accepted, not yet implemented
 ---
 
-# A processor's identity IS the hash of its bundle, and the declared `version` is DELETED
+# A processor's identity is DERIVED FROM ITS CODE and never DECLARED by the author
+
+**The invariant is that an author cannot STATE their processor's identity; the engine is handed one and never asks where it came from.** How it is derived belongs to the ARRIVAL: bytes are hashed where bytes exist, and the browser's HMR arrival, which has no bytes because a dev server serves unbundled modules, derives one from the handler sources instead. The engine is unaffected by the difference, and that is checked rather than assumed: `GenerationId.processor` is a `string` that is compared for equality and rendered into messages, and NOTHING in the tree parses it.
 
 A processor's identity has always been author-declared: `getVersionHash()` is the `version` field plus the entity and config declarations, and the core discards persisted state when it changes. An author who edits a handler and forgets to bump `version` gets state computed by the previous logic, served for ever. ADR-0008 made that condition LOUD (a code fingerprint beside the hash, reported on load) rather than impossible, and was explicit that the residual remained. We propose that a processor is REQUIRED to be a self-contained bundle, that the hash of those bytes IS its identity, and that the declared `version` field, the fingerprint and everything built to reconcile the two are deleted.
 
@@ -49,6 +51,13 @@ The runtime that cannot absorb a spurious identity change cannot have one; the r
 **Have the CLI bundle on start**, so authors keep pointing at a module path. Rejected: it puts a bundler in the CLI's dependency tree and a build step on every start, and it makes the identity a function of whatever the CLI happened to bundle with rather than of an artifact the author produced and can reproduce. The CLI stays dumb; the author bundles.
 
 ## Consequences
+
+**Identity is DERIVED PER ARRIVAL, and the engine takes it as opaque.** A processor arriving as BYTES (pushed, or read from a bundle on disk) is identified by `sha256` over those bytes. A processor arriving as a MODULE OBJECT, which is the browser's HMR case and has no bytes at all because a dev server serves unbundled ESM, is identified by a derivation over its handler sources. That is the code fingerprint this ADR otherwise deletes, kept for this one arrival in a DIFFERENT ROLE: not a second opinion sitting beside a declared identity, but the identity itself, where no bytes exist to hash. The consequence worth stating plainly is that the SAME code has a different identity as a module than as a bundle, which is correct rather than unfortunate: a dev iteration and a deployed build are different generations anyway, and conflating them would be the lie this ADR exists to remove.
+
+It is what makes the `unchanged` outcome survive for HMR. A real handler edit moves the derived identity and registers a successor; a no-op hot update does not and is honestly reported as changing nothing. Under a declared `version` that outcome was common and misleading, which is what the drift report existed to explain; here it is rare and true.
+
+**A PATH on the filesystem is still how an ordinary deployment names its processor.** What changes is what the path must point AT: a self-contained bundle, which the runtime reads and hashes, rather than an unbundled entry point whose dependency closure is not captured. The CLI stays dumb either way, because reading a file and hashing it is not bundling.
+
 
 **A large deletion, including something shipped the same week.** `version`, `assertProcessorVersion`, `getCodeFingerprint()`, `utils/fingerprint.ts` and the `PROCESSOR DRIFT` report all go. Drift becomes UNREPRESENTABLE rather than merely unreported: there is no declared identity left to disagree with the code. Note plainly that `a-reload-that-changed-nothing-reports-processor-drift` landed that report on 2026-09-16 and this retires it. That is the correct end of its life rather than a reversal: it was the right fix for an author-declared identity, and it dies with the thing it was compensating for.
 

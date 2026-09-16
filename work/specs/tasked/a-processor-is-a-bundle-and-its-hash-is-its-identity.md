@@ -26,7 +26,7 @@ Identity moves OFF the processor object. A processor instantiated from bytes can
 1. As an author, I want my handler edit to never be silently ignored, so that identity comes from what my code IS rather than from a field I must remember to change.
 2. As an author, I want a comment or formatting edit NOT to create a new generation, so that a cosmetic change costs nothing.
 3. As an author, I want the same source to produce the same identity on my laptop and in CI, whatever directory either checks out into, so that two machines never disagree about which generation they are.
-4. As an author whose configuration names a module path, I want to be refused at startup with the exact command that produces a bundle, so that the migration is a five-minute change rather than a mystery.
+4. As an author, I want to go on naming a PATH in my configuration, and to be refused at startup with the exact command to run when that path names an unbundled entry point rather than a bundle, so that the migration is a five-minute change rather than a mystery.
 5. As an operator, I want a bundle that is not self-contained REFUSED at registration naming the unresolved import, so that a bare specifier fails there instead of at the first event it folds.
 6. As a developer reading the seam, I want identity to live on the artifact rather than on the processor object, so that a processor built from bytes is not asked a question it cannot answer.
 7. As a maintainer, I want `version`, `assertProcessorVersion`, `getCodeFingerprint()`, `utils/fingerprint.ts` and the `PROCESSOR DRIFT` report DELETED, so that the compensating machinery goes with the thing it was compensating for.
@@ -34,38 +34,14 @@ Identity moves OFF the processor object. A processor instantiated from bytes can
 9. As a publisher of snapshots, I want a snapshot's `processor` label to be the bundle hash, so that the existing "a snapshot from another processor version is not a candidate" rule keeps working unchanged.
 10. As a developer, I want ONE documented build command and a stated pinning rule, so that reproducibility is something I can follow rather than something I must discover.
 11. As a runtime, I want to INSTANTIATE a processor from bytes, because that is the capability both retention and the pushed arrival rest on.
+12. As a developer using HMR in a browser tab, I want to hand the running indexer a MODULE OBJECT and have it identified from its handler sources, because a dev server serves unbundled modules and there are no bytes to hash.
+13. As a developer using HMR, I want a hot update that changed nothing to still report `unchanged`, so that the outcome stays meaningful on the one arrival where no bytes exist.
 
 ### Autonomy notes
 
 Neither gate. ADR-0086 settles the direction, the bundler behaviour is MEASURED rather than assumed (see Implementation Decisions), and the migration path is known. Nothing here needs a human to drive the decomposition.
 
-## Implementation Decisions
-
-**The author bundles; the CLI stays dumb.** No bundler in the CLI's dependency tree and no build step on its start path. It also keeps the identity a function of an artifact the author produced and can reproduce, rather than of whatever the CLI happened to bundle with.
-
-**`esbuild` is the documented default**, producing a single minified ESM file. `rollup` is the named alternative. `tsup` is deliberately not recommended: esbuild with a wrapper, no determinism gain.
-
-**`--minify` is MANDATORY, and the reason is identity rather than size.** Measured on esbuild 0.25.0: without minification esbuild emits a `// <path>` banner per module, so the BUILDING MACHINE'S DIRECTORY LAYOUT is baked into the bytes. The same source built from two different directory layouts hashed differently un-minified and IDENTICALLY minified. Without this rule a developer and CI disagree about which generation they are. Minification also strips comments, so a comment-only edit does not move the identity, which was the original reason and is the lesser one.
-
-**What was measured, so nobody re-derives it:** five separate invocations produce identical bytes; two unrelated directory layouts produce identical bytes when minified and different bytes when not; a comment-only edit does not move the minified hash; CRLF and LF sources produce identical bytes (esbuild re-prints from the AST, so line endings need no `.gitattributes` rule); and esbuild 0.21.5 and 0.25.0 produced identical output for the same input, which is reassuring about version drift without being a guarantee.
-
-**What is pinned is the bundler VERSION AND ITS FLAGS**, not merely the tool, because output is a function of both. A documented build command plus a lockfile entry is the reproducibility guarantee, and ADR-0086 makes it load-bearing rather than advisory: a non-deterministic build means state is never reused.
-
-**The hash is SHA-256 over the bundle's octets, rendered `sha256:<hex>`**, reusing the convention the stream-seed path already established so that a literal pasted into a build says which function produced it.
-
-**Identity lives on the ARTIFACT and its loader, not on `EventProcessor`.** `getVersionHash()` leaves the seam. This is what makes story 8 work: a test registers bytes, rather than implementing a method that lies.
-
-**A non-self-contained bundle is refused at REGISTRATION**, by scanning for unresolved bare imports, and a missing bundle is refused at CONFIGURATION RESOLUTION, before anything opens a database. Two different failures at two different moments, both before the first write.
-
-**Source maps are a separate file and do not enter the hash**, which is what keeps minification affordable: a stack trace is still readable for anyone who ships the map beside the bundle.
-
-## Testing Decisions
-
-The claim worth asserting is that identity now tracks the code: a handler edit produces a new identity with no author action, and a comment edit does not. Both are assertable directly over the bundler, and the second is the one that would silently regress if the minify flag were ever dropped.
-
-**How the repo's own 41 declaration sites migrate, which is the part a tasker will get wrong.** Around 41 files construct a processor with a declared `version` that this spec deletes. They must NOT each grow a bundler step, and they must NOT get a test-only escape hatch that becomes a production one. The answer falls out of the design: identity is `hash(bytes)`, so a test supplies BYTES, not a bundle. Synthetic bytes give a stable, distinct identity, which is all the registry, slot, cap, promotion and reclaim suites ever needed from `version` (they assert on WHICH generation, never on what the code does). Exactly one class of test needs more, the instantiate-from-bytes round trip, and that needs one small real bundle fixture built once and committed, in the manner of the committed stream fixture.
-
-The deletion half is its own assertion: after this lands, `PROCESSOR DRIFT` should not appear anywhere in the tree, because the state it described cannot occur.
+> **TASKED 2026-09-16.** The Implementation and Testing Decisions that stood here have moved into the eleven tasks this spec fanned out, and the durable rationale lives in ADR-0086. The measured esbuild behaviour that decided `--minify` is carried in `the-build-command-and-its-pinning-rule-are-documented`, and the 41-site migration strategy in the four `*-takes-its-identity-from-the-arrival` batches.
 
 ## Out of Scope
 
