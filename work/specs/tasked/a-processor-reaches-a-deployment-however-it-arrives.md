@@ -6,6 +6,15 @@ taskedAfter: [a-save-replaces-the-pending-successor]
 
 > Launch snapshot -- records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
 
+> **PARTIALLY TASKED, THEN CARVED (2026-09-16).** This spec was moved to `work/specs/tasked/` after only its BROWSER arrival (stories 1-3) had been tasked, as `an-hmr-update-reconfigures-the-tab-it-is-running-in`. Stories 4-11 were never tasked, so this folder was claiming something untrue about them. They have been carved out rather than re-tasked here:
+>
+> - **Stories 4-8 and 10, the PUSHED arrival**, are now `work/specs/ready/a-processor-artifact-is-pushed-to-a-running-deployment.md`.
+> - **Story 11, a processor's identity coming from its bytes**, is GENERALISED by ADR-0086 from the pushed arrival to EVERY arrival, and is built by `work/specs/ready/a-processor-is-a-bundle-and-its-hash-is-its-identity.md`.
+> - **Story 9, "the re-read arrival unchanged, so that this is an addition rather than a migration", is WITHDRAWN.** ADR-0086 makes a bundle mandatory for every arrival, so the re-read path takes a bundle and this IS a migration. It is a cheap one (nothing is published) but the story as written is no longer true and is not carried forward.
+> - The **Out of Scope** item below reading "changing what an identity means for the other two arrivals" is likewise superseded by ADR-0086, which changes it deliberately.
+>
+> Nothing in the body below is edited; this note records where each untasked story went.
+
 ## Problem Statement
 
 `an-endpoint-triggers-a-reconfigure-in-a-running-process` built ONE way for a changed processor to reach a running deployment: the endpoint RE-READS it from the filesystem, behind a cache-busting URL query because a dynamic import of an unchanged path returns the cached module. That is the right shape for a Node process with a disk, and it is the only shape there is.

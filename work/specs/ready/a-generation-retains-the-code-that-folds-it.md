@@ -1,7 +1,7 @@
 ---
 title: 'A generation retains the CODE that folds it, so a predecessor can be resumed and not merely read'
 slug: a-generation-retains-the-code-that-folds-it
-taskedAfter: [a-processor-reaches-a-deployment-however-it-arrives]
+taskedAfter: [a-processor-is-a-bundle-and-its-hash-is-its-identity]
 ---
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
@@ -50,6 +50,7 @@ Made at launch, in answer to the shape of the problem:
 - **A bundle dies with its generation.** `reclaim` (`a-generation-no-slot-names-is-reclaimed-on-request`) takes the artifact with the row and the state namespace, exactly as it already takes the state. Nothing retains an artifact whose generation no slot names.
 - **Retention is therefore bounded by the slots.** `canonical`, `successor` and `predecessor` pin at most three artifacts, so `predecessor` retention costs exactly one extra bundle rather than an unbounded history. That is the same bound ADR-0084 already established for state, which is the point: the code follows the generation, so it inherits the generation's lifecycle rather than needing one of its own.
 - **The browser cost is ACCEPTED**, subject to story 7's measurement. At `BROWSER_GENERATION_CAPS` of two this is at most two artifacts in a tab. The number is a DELIVERABLE of the build rather than a question blocking it: only building it answers it, and nothing here turns on the answer.
+- **A retained bundle is instantiated ON DEMAND, not at open.** Loading every slotted generation at open would mean three live engines where there are three occupied slots, which in a browser tab is three times the memory for two generations nobody is currently reading. The `predecessor`'s bundle is instantiated when a revert actually moves the pointer onto it, which is the moment its answers start mattering and the only moment it needs to fold.
 - **The AUTHOR bundles, and the CLI stays dumb.** No bundler in the CLI's dependency tree and no build step on its start path. It also keeps the identity a function of an artifact the author produced and can reproduce, rather than of whatever the CLI happened to bundle with.
 - **`esbuild` is the documented default**, as one command producing a single ESM file. `rollup` is named as the alternative where output stability matters more than speed. `tsup` is deliberately not recommended: it is esbuild with a wrapper and adds no determinism.
 - **The bundle is MINIFIED.** Minification strips comments, so a comment-only edit does not move the identity, which is exactly the spurious re-fold worth avoiding once the hash IS the identity (ADR-0086). The cost, that minified output shifts more between bundler versions, is bounded by the pinning rule below.
