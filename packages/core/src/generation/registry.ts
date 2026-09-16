@@ -417,6 +417,70 @@ export function unslottedGenerations(
 }
 
 /**
+ * WHAT A REGISTRATION INTO `successor` DISPLACES -- the rule BOTH containers
+ * apply, with ONE home (ADR-0071).
+ *
+ * `successor` holds AT MOST ONE (ADR-0084), so registering into it replaces
+ * whatever it held, and the generation displaced is dead work: nothing promotes
+ * to it, nothing reverts to it, and re-folding it would be work for an answer
+ * nobody will ask for. This says WHICH records that covers; DROPPING them is the
+ * caller's, because dropping differs per container (one holds engines, the other
+ * receivers) while the rule does not.
+ *
+ * ## The safety property is this function, and it is ONE clause
+ *
+ * A generation ANY OTHER slot names is untouchable, which covers the incumbent
+ * (`canonical`) and the revert target (`predecessor`) together. Stated as one
+ * clause rather than left to follow from a loop, because it is the whole of what
+ * makes replacement safe and two copies of it in two containers is how a revert
+ * target gets deleted by the twin nobody was reading.
+ *
+ * Two kinds of record come back, and they are the same rule seen twice:
+ *
+ * 1. What `successor` NAMES, whether or not this process holds a fold for it --
+ *    after a restart it does not, and that is exactly the case the DURABLE slot
+ *    exists for.
+ * 2. Every generation this container HOLDS A FOLD FOR that no slot names, which
+ *    is what a DECLINED drop leaves behind.
+ *
+ * A generation this container holds no fold for and no slot names is deliberately
+ * LEFT ALONE: collecting those is an operator's verb (`ReceivingIndexer.reclaim`),
+ * not something a registration does to rows it never touched.
+ *
+ * Nothing is displaced at all when the registry has no canonical generation (the
+ * first registration takes `canonical` and supersedes nobody) or when some slot
+ * ALREADY names the arriving generation (a restart on the canonical fold, or on
+ * the one a revert returned to, takes nobody's place).
+ *
+ * NEWEST FIRST, which is what lets a whole replaced chain go in ONE pass: the
+ * ordinary churn leaves a replaced WRITER with a replaced FOLLOWER on its stream,
+ * and the writer is only droppable once the follower is gone, so walking back to
+ * front drops them in the order that frees both.
+ */
+export function displacedBySuccessor(
+	arriving: GenerationId,
+	generations: readonly GenerationRecord[],
+	slots: GenerationSlots,
+	heldHere: (record: GenerationRecord) => boolean,
+): GenerationRecord[] {
+	if (!slots.canonical || slotHolding(slots, arriving)) {
+		return [];
+	}
+	return generations
+		.filter((record) => {
+			if (sameGeneration(record, arriving)) return false;
+			const slot = slotHolding(slots, record);
+			// THE PROPERTY THE WHOLE RULE IS SAFE ON: a generation any OTHER slot names
+			// is untouchable, which covers the incumbent and the revert target in ONE
+			// clause.
+			if (slot) return slot === 'successor';
+			// ...and what a declined drop left behind: a fold held here that no slot names.
+			return heldHere(record);
+		})
+		.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
  * WHICH generation writes a stream: the OLDEST SURVIVING one registered on it.
  *
  * Only one generation may append to a stream (the **one-writer rule**), and

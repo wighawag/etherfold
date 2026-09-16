@@ -13,9 +13,9 @@ import {
 } from './generation/promotion.js';
 import {GenerationRebuild, type RebuildReport, type ReplaySource} from './generation/rebuild.js';
 import {
+	displacedBySuccessor,
 	openGenerationRegistry,
 	sameGeneration,
-	slotHolding,
 	SLOT_NAMES,
 	unslottedGenerations,
 	writerOf,
@@ -1579,11 +1579,10 @@ export class ReceivingIndexer<
 	 * streams among registered generations, and the churn this exists for opens with a
 	 * source change.
 	 *
-	 * NEWEST FIRST, which is what lets a whole replaced chain go in ONE pass: the
-	 * ordinary churn leaves a replaced WRITER with a replaced FOLLOWER on its stream,
-	 * and the writer is only droppable once the follower is gone (see
-	 * `wouldStrandAFollower`). A follower is always the younger of the two, so walking
-	 * back to front drops them in the order that frees both.
+	 * WHICH RECORDS THAT COVERS is `displacedBySuccessor`'s, shared with the
+	 * chain-facing twin so the safety clause has ONE home; what is HERE is the part
+	 * that is genuinely this container's -- whether a drop would strand a follower,
+	 * and what stopping a fold means on this runtime.
 	 */
 	private async replaceTheSuccessor(
 		arriving: GenerationId,
@@ -1591,23 +1590,9 @@ export class ReceivingIndexer<
 		slots: SlottedGenerations,
 		arrivingStream: string,
 	): Promise<void> {
-		// A fold that IS the canonical generation, or one some slot already names, takes
-		// nobody's place: `create` leaves it where it is, so nothing is displaced and
-		// nothing may be dropped for it.
-		if (!slots.canonical || slotHolding(slots, arriving)) return;
-
-		const displaced = [...registered]
-			.filter((record) => {
-				if (sameGeneration(record, arriving)) return false;
-				const slot = slotHolding(slots, record);
-				// THE PROPERTY THE WHOLE RULE IS SAFE ON, asserted here rather than left to
-				// follow from the loop below: a generation ANY OTHER slot names is untouchable,
-				// which covers the incumbent and the revert target in ONE clause.
-				if (slot) return slot === 'successor';
-				// ...and what a declined drop left behind: a fold held here that no slot names.
-				return this.folds.some((fold) => sameGeneration(fold.record, record));
-			})
-			.sort((a, b) => b.createdAt - a.createdAt);
+		const displaced = displacedBySuccessor(arriving, registered, slots, (record) =>
+			this.folds.some((fold) => sameGeneration(fold.record, record)),
+		);
 
 		const surviving = [...registered];
 		for (const record of displaced) {
