@@ -78,6 +78,10 @@ Exactly one class of test needs more: the resume round trip (a generation is ret
 
 Stating this here because a tasker who misses it has two failure modes, and both are expensive: cutting a task that puts a build step in 41 places, or inventing a way to declare an identity without bytes, which is the deleted `version` growing back under another name.
 
+## Open risk being spiked
+
+Whether a browser tab CAN instantiate retained bytes at all is not yet known, and it is the one thing that could invalidate this spec's browser half. A strict Content-Security-Policy can block `blob:` and `data:` script execution, and `script-src 'self'` alone is enough. `a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp` answers it before this spec is tasked; if the answer is no under realistic policies, the browser revert promise has to be met another way or withdrawn honestly, which is a needs-attention outcome rather than something to design around here. Nothing in the SERVER half depends on the answer.
+
 ## Out of Scope
 
 - **The promotion trigger's inability to read an unheld generation's cursor** (`work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`). It looks like the same missing-engine fact and it is not: the trigger needs a NUMBER, which is a row addressed by an identity the registry already holds. It is fixed by a cursor seam beside `dropState` and must NOT wait for this spec.

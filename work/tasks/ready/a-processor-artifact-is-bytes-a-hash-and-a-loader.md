@@ -2,18 +2,9 @@
 title: 'A processor ARTIFACT is bytes, a hash and a loader, and a bundle that is not self-contained is refused'
 slug: a-processor-artifact-is-bytes-a-hash-and-a-loader
 spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
-needsAnswers: true
 blockedBy: []
 covers: [5, 11]
 ---
-
-<!-- open-questions -->
-
-## Open questions
-
-1. **HOW is a bundle instantiated, per runtime, and does a Content-Security-Policy block it?** Node can `import()` a `data:text/javascript` URL; a browser generally needs a `blob:` URL. A strict CSP can forbid BOTH `blob:` and `data:` script execution, which would mean an in-browser app cannot instantiate a pushed or retained processor AT ALL. Establish what each runtime supports, whether one mechanism covers all of them, and what a CSP-blocked instantiation REPORTS. If the browser genuinely cannot instantiate under a realistic CSP, say so rather than shipping a path that fails in production: that is a needs-attention signal affecting `a-processor-artifact-is-pushed-to-a-running-deployment` and `a-generation-retains-the-code-that-folds-it` as much as this task.
-
-<!-- /open-questions -->
 
 ## What to build
 
@@ -22,6 +13,8 @@ The unit every later task rests on: a processor that is a thing rather than a pa
 A **processor artifact** is a self-contained ESM bundle plus the identity derived from it. Three capabilities, and nothing that consumes them yet: HASH some bytes into an identity, VALIDATE that those bytes are genuinely self-contained, and INSTANTIATE a processor from them without touching the filesystem.
 
 This is the EXPAND step of a wide refactor (`work/protocol/TASKING-PROTOCOL.md` 3a). Nothing is removed, no existing caller changes, and `getVersionHash()` goes on working exactly as it does today. The gate stays green because this is pure addition.
+
+**WHICH RUNTIME instantiates, and which deliberately does not.** This loader serves the runtimes that receive BYTES: a CLI or server reading a bundle from disk, and later a pushed artifact. Those instantiate by importing a `data:` URL, which needs no filesystem and no temporary file. The BROWSER does not need this and is not in scope here: a browser app hands the indexer a processor OBJECT that its own bundler already loaded (`IndexerState` takes `processor: EventProcessor<...>`, never bytes), so nothing in a tab evaluates bytes on this spec's paths. Whether a tab CAN evaluate bytes under a realistic Content-Security-Policy is a real question, and it belongs to `a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp`, which gates the RETENTION work rather than this one.
 
 The identity is SHA-256 over the bundle's octets, rendered `sha256:<hex>`, reusing the convention the stream-seed path already established so a literal pasted into a build says which function produced it.
 
@@ -52,7 +45,7 @@ The decision most likely to be got wrong is scope. This task adds a unit and wir
 
 The second: the self-contained check must be a real check against the bundle, not a promise in a docstring. A bundle that survived bundling with an unresolved `import 'viem'` in it is exactly the artifact that looks fine until it folds its first event in a process that has no `viem`.
 
-The third is the open question above, and it is load-bearing rather than incidental: settle the instantiation mechanism per runtime, and find out whether a realistic Content-Security-Policy blocks it in a browser, BEFORE building the browser half on an assumption. A `blob:`-or-`data:` eval that a deployed app's CSP forbids is a feature that works in every test and in no production tab.
+The third: do NOT build a browser instantiation path here on the assumption that it will be wanted. A tab is handed a processor object by its own bundler and never bytes, so there is nothing in this spec for it to load, and whether a tab could do so under a Content-Security-Policy is being spiked separately. Building it now would be speculative, and it would be the half most likely to be wrong.
 
 The seam to test at is the artifact unit itself plus the committed fixture: hash it, validate it, instantiate it, and assert the instantiated object behaves like the processor it was built from.
 

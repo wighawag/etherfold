@@ -44,6 +44,8 @@ The second: a processor that throws on evaluation is the NORMAL case in a dev lo
 
 The third: do not tear down and rebuild the indexer. The warm fold is the entire point, and an indexer that briefly answers nothing is worse in a tab than on a server, because a UI is attached to it. Register beside, as the container already supports.
 
+> **DRIFT NOTE, added 2026-09-16 by the conductor. This paragraph's premise has been overturned and is left in place so the change is visible.** ADR-0086 makes a processor's identity DERIVED FROM ITS CODE and never declared: the `version` field is deleted, and the browser's module arrival derives its identity from the handler sources (`a-module-handed-to-a-tab-is-identified-by-its-handler-sources`). So a handler-body edit DOES move the identity, `unchanged` becomes RARE and TRUE here rather than common and misleading, and the drift report this paragraph points at is DELETED by `the-declared-version-and-the-drift-report-are-deleted`. Whoever builds this must check which of those have landed first: built before them, the paragraph below is correct; built after, it is not. This is a sequencing question and a needs-attention signal if it is unclear, not something to resolve by guessing.
+
 Note also that an identity is unchanged by a handler-body edit unless the author's `version` is generated, so `unchanged` will be a COMMON answer here and must be legible rather than looking like a failure. The drift report task covers saying why.
 
 The seam to test at is the browser package's existing indexer tests, driving the handover directly rather than simulating a bundler: the claim worth asserting is "this running indexer held a warm fold, took a new processor, and answered throughout".
