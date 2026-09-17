@@ -196,9 +196,10 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 		// opens the registry AFRESH as a new page load does, so nothing but the
 		// IndexedDB under it is shared.
 		const reloaded = await durableRegistry(name);
+		const reloadedChain = fakeChain();
 		const afterReload = await openIndexer<TestABI, EntityStateView>({
 			registry: reloaded.registry,
-			provider: fakeChain().provider,
+			provider: reloadedChain.provider,
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
 			generations: [
@@ -214,6 +215,29 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 		expect(reloaded.dropped).toEqual([{stream: abandoned.record.stream, processor: abandoned.record.processor}]);
 		// ...and the generation that answers reads is untouched by any of it
 		expect(afterReload.canonical.record.processor).toBe(beforeReload.canonical.record.processor);
+
+		// AND IT STILL FETCHES, which is the half the slot contents cannot say.
+		//
+		// A reloaded tab that opens, reports healthy and answers a plausible-looking
+		// state while fetching NOTHING is the worst failure this container has, because
+		// there is a UI attached to it and nothing about it looks wrong. It is reachable
+		// only because slots made it reachable: before them a reload with a changed fold
+		// registered a THIRD generation and the cap REFUSED, loudly, so the container
+		// never opened. Replacing what `successor` holds is what lets it open -- so the
+		// test that the reload REPLACES has to be the test that the reload still WORKS,
+		// or this change trades a refusal for a silent stall.
+		//
+		// The canonical generation WRITES this stream (it is the oldest registered on
+		// it, ADR-0044) and must therefore go to the NODE. Asserted as behaviour --
+		// ranges asked of the chain, and the state that only a fetch can produce -- with
+		// `follows` beside it to name the mechanism when it breaks.
+		expect(afterReload.canonical.follows).toBe(false);
+		for (let round = 0; round < 20; round++) {
+			const lastSync = await afterReload.indexMore();
+			if (lastSync.lastToBlock >= lastSync.latestBlock) break;
+		}
+		expect(reloadedChain.ranges.length).toBeGreaterThan(0);
+		expect(await readState(afterReload.state)).toEqual(EXPECTED_A);
 	});
 
 	/**

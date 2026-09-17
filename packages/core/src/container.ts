@@ -752,32 +752,41 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		//
 		// Asked of the durable REGISTRY rather than of this process's `held` array,
 		// which is whatever order the caller passed its specs in and does not survive a
-		// restart. The question is "is any OTHER generation already registered on this
-		// stream", which is the container's form of the one-writer rule: it never
-		// REASSIGNS the duty, so the first generation registered on a stream keeps it.
+		// restart. And asked as `writerOf` -- the SAME expression the receiving twin
+		// uses and ADR-0044's rule itself -- so "which generation writes this stream"
+		// has ONE home and `follows` is simply "and it is not me". The duty is never
+		// REASSIGNED, so the first generation registered on a stream keeps it.
 		//
-		// Deliberately NOT `writerOf(...)`, and the reason has two halves.
+		// ADR-0071 REJECTED this form and that rejection has EXPIRED, twice over.
 		//
-		// It USED to be unsafe: `writerOf` is a function of the whole record SET at a
-		// moment, while `follows` is frozen per generation at ADD time -- `readOnlyStream`
-		// is baked into the engine's config, so it cannot be recomputed later the way
-		// `reconcileWriters` recomputes it on the receiving side. Evaluating a
-		// set-function per element at different moments let two generations added in one
-		// millisecond each see `writerOf` name THEMSELVES, and one stream got two
-		// writers (ADR-0071, measured).
+		// It rejected it because `createdAt` was a millisecond clock with a hash
+		// tie-break, so two generations added in the same millisecond could each see
+		// `writerOf` name THEMSELVES and one stream got two writers (measured, 20/20).
+		// ADR-0072 removed the tie: `createdAt` is strictly increasing within a
+		// registry, so records sort in REGISTRATION order and every reader of
+		// `writerOf` gets the same answer. That is exactly the precondition ADR-0071
+		// named as the open work, and it has landed.
 		//
-		// ADR-0072 removed that: `createdAt` is strictly increasing within a registry, so
-		// a record being added always sorts LAST and `writerOf` can never name it while
-		// others exist. The two questions now give the same answer here, always. This
-		// one is kept anyway because it is the one that does not DEPEND on that: "is
-		// anyone else already registered on this stream" is correct whatever the
-		// ordering, where the `writerOf` form is correct only while the ordering holds.
-		// Having just paid for that distinction once, the robust form is worth its two
-		// lines.
-		const alreadyOnThisStream = (await this.registry.list()).filter(
-			(other) => other.stream === record.stream && !sameGeneration(other, record),
-		);
-		const follows = alreadyOnThisStream.length > 0;
+		// What it fell back to -- "is any OTHER generation already registered on this
+		// stream" -- was then kept on the claim that the two forms "now give the same
+		// answer here, always", because a record being added always sorts LAST. That
+		// claim is FALSE, and exactly one case breaks it: a record that ALREADY EXISTS.
+		// `create` RESOLVES rather than duplicating, so a generation re-registered keeps
+		// its original `createdAt` and sorts FIRST -- and re-registering what is already
+		// there is precisely what a page RELOAD is. A tab re-opening on canonical A with
+		// a leftover successor B found B "already on this stream" and built its own
+		// CANONICAL generation as a FOLLOWER of a stream nothing writes: it stopped
+		// fetching while its state and its reported status both went on looking healthy.
+		// The set question is equivalent only for a record that is NEW. `writerOf` is
+		// right for both, so it is what is asked.
+		//
+		// This is still the INITIAL derivation and nothing recomputes it: `follows`
+		// freezes `readOnlyStream` into the engine's config at construction, where the
+		// receiving side can recompute through `reconcileWriters`. That asymmetry is
+		// untouched here and only matters if the writer CHANGES while a fold is held;
+		// what a reload needs is this one derivation being right at the start.
+		const writer = writerOf(await this.registry.list(), record.stream);
+		const follows = !!writer && !sameGeneration(writer, record);
 		const config: ProvidedIndexerConfig<ABI> =
 			follows && this.config.keepStream
 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}
