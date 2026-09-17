@@ -1,6 +1,6 @@
 # @etherfold/utils
 
-The Node-side glue between a **processor module on disk** and the runtime that drives it: load the module, get the processor out of it, and work out which contracts it is meant to index.
+The Node-side glue between a **processor an operator named** and the runtime that drives it: load it -- from a path on disk, or from the BYTES of a bundle -- get the processor out of it, and work out which contracts it is meant to index.
 
 This is host code, not engine code. It reads the filesystem (`node:fs`, `node:module`), so it belongs to a CLI or a server and not to a browser bundle.
 
@@ -25,6 +25,30 @@ That is the three steps composed. They are also separately available, because a 
 - **`loadProcessorModule(path, {cwd, importModule, requireResolve})`** imports the module. An absolute path is imported as-is; a relative one is joined against `cwd` and, failing that, resolved through `createRequire(cwd/node_modules)` so a bare package specifier still works.
 - **`instantiateProcessor(module, {processorPath, processorConfig})`** calls the module's `createProcessor` (or uses it as-is when it is already an object) and hands back **what it made, unread**: the AUTHORING object, declarations plus handlers. It deliberately does NOT build a runtime, because that would mean picking a store, and where the state lives is the HOST's decision -- which is exactly what lets one processor file run in a tab and on a server. The caller supplies the type it expects; a module still returning the retired `{kind, processor}` tag is REFUSED by name (ADR-0037) rather than unwrapped.
 - **`resolveSource(module, provider)`** reads `contractsDataPerChain[chainId]` (fetching `eth_chainId` only when that field exists) and falls back to `contractsData`.
+
+## Loading a processor from BYTES
+
+The other arrival: a processor that is a self-contained ESM bundle rather than a path, whose IDENTITY is the hash of its own octets (ADR-0086) because an author cannot be trusted to remember one and should not have to.
+
+```ts
+import {loadProcessorArtifact, processorArtifactIdentity} from '@etherfold/utils';
+
+const bundle = new Uint8Array(await readFile('./dist/processor.bundle.js'));
+const outcome = await loadProcessorArtifact<Abi, unknown, EntityProcessor<Abi>>(bundle);
+if (outcome.status === 'refused') {
+	console.error(`${outcome.identity} is not a processor artifact (${outcome.reason}): ${outcome.why}`);
+} else {
+	// outcome.identity names the generation this processor folds; nothing parses it.
+}
+```
+
+- **`processorArtifactIdentity(bytes)`** is SHA-256 over the octets, rendered `sha256:<hex>` so a value pasted into a build says which function produced it. Identical bytes always give an identical name, and one changed byte gives a different one, with no author action either way.
+- **`unresolvedImportsOf(bytes)`** is what SELF-CONTAINED means, checked rather than promised: every module the bundle still expects somebody else to resolve, bare (`viem`) and relative (`./abi.js`) alike, statically, including a specifier only a dynamic `import()` carries. A builtin (`node:crypto`, or `crypto`) is admitted because a `data:` URL really does resolve one -- [measured](https://github.com/wighawag/etherfold/tree/main/docs/spikes/a-processor-artifact-is-bytes-a-hash-and-a-loader).
+- **`loadProcessorArtifact(bytes, {processorConfig})`** hashes, admits and then instantiates, in that order, by importing a `data:` URL: no temporary file, no path, no cache-busting query. Every refusal comes back as DATA (`not-self-contained`, naming the specifiers; `unreadable-module`; `not-a-processor`) carrying the artifact's identity, because an artifact arrives from somewhere else and "these bytes are not a processor" is an ordinary thing to learn.
+
+A bundle is produced by the author and not by any host here (reading a file and hashing it is not bundling): `esbuild <entry> --bundle --format=esm --minify`, where `--minify` is mandatory for the identity to be stable across machines rather than for size.
+
+This arrival is for a CLI or a server. A browser is handed a processor OBJECT by its own bundler, and where a tab does hold bytes, `data:` and `blob:` imports are refused by every realistic Content-Security-Policy, so there is deliberately no browser path here.
 
 ## Loading contracts from a deployments folder
 
