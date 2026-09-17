@@ -30,6 +30,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {openSignalStream} from './utils/signalStream.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -67,7 +68,18 @@ const ADMIN_TOKEN = 'the-operators-own-secret';
 
 type TestEnv = {DEV?: string; INGEST_TOKEN?: string; ADMIN_TOKEN?: string};
 
+/**
+ * WHICH FOLD this deployment runs, as its ARRIVAL derived it (ADR-0086): a hash
+ * of the bytes a bundle would have arrived as, handed to the fold rather than
+ * asked of it.
+ */
+const PROCESSOR_IDENTITY = identityOf('alpha');
+
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: the construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
@@ -106,8 +118,9 @@ async function deployReadOnly(): Promise<Deployment> {
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
 		generation: {
-			createState: () => new VersionedStateEventProcessor<TestABI>(db, entityProcessor),
+			createState: () => new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {identity: PROCESSOR_IDENTITY}),
 			createProcessor: (state: VersionedStateEventProcessor<TestABI>) => state,
+			processorIdentity: PROCESSOR_IDENTITY,
 		},
 	})) as ReceivingIndexer<TestABI, unknown, VersionedStateEventProcessor<TestABI>>;
 

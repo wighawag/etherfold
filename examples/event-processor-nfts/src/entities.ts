@@ -41,10 +41,17 @@ export function readableTokenID(key: string): string {
 }
 
 export const NFTProcessor: EntityProcessor<typeof eip721> = {
-	// REQUIRED: the identity of this processor's LOGIC. State computed by a
-	// previous version is discarded by comparing it, so bump it whenever a handler
-	// changes. The entity declarations below are hashed in alongside it, so a
-	// SCHEMA change invalidates on its own; a handler change does not.
+	// REQUIRED, and on its way out (ADR-0086). WHICH FOLD this is comes from the
+	// ARRIVAL that delivered it: a deployment handed a self-contained BUNDLE is named
+	// by the SHA-256 of those octets, so an edited handler is a different fold with
+	// no author action at all. This field is what names the fold only on the arrival
+	// that has no bytes -- a path the module system resolves, which is what
+	// `dist/cli.js` is until this example ships a bundle -- and there the old rules
+	// still apply: state computed by a previous version is discarded by comparing
+	// `${version}-${hash({entities, config})}`, so bump it whenever a handler
+	// changes, since a handler change is invisible to it. The entity declarations are
+	// hashed in alongside it, so a SCHEMA change invalidates on its own.
+	// `the-declared-version-and-the-drift-report-are-deleted` removes the field.
 	version: '1.0.0',
 
 	/**

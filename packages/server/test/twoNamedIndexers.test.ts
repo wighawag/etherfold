@@ -40,6 +40,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // TWO NAMED INDEXERS ON ONE HOST NEVER TOUCH EACH OTHER'S DATA
@@ -90,8 +91,20 @@ const THIRD_SOURCE: IndexingSource<TestABI> = {
 	contracts: [{abi, address: THIRD_CONTRACT, startBlock: START_BLOCK}],
 };
 
+/**
+ * WHICH FOLD both named indexers run, as their ARRIVAL derived it (ADR-0086): a
+ * hash of the bytes a bundle would have arrived as, handed to the fold rather
+ * than asked of it. ONE value, because the fold IS the same byte for byte here
+ * and what separates the two tenants is the NAME and the database.
+ */
+const PROCESSOR_IDENTITY = identityOf('shared-fold');
+
 /** The fold BOTH named indexers run, byte for byte. */
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: the construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
@@ -118,8 +131,13 @@ function freshDatabase(): RemoteSQL {
  */
 function openingFoldIn(db: RemoteSQL) {
 	return {
-		createState: () => new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {finalityDepth: FINALITY}),
+		createState: () =>
+			new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {
+				finalityDepth: FINALITY,
+				identity: PROCESSOR_IDENTITY,
+			}),
 		createProcessor: (state: VersionedStateEventProcessor<TestABI>) => state,
+		processorIdentity: PROCESSOR_IDENTITY,
 	};
 }
 

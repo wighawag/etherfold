@@ -25,8 +25,25 @@ export const abi = [
 export type TokenABI = typeof abi;
 
 /**
- * The version is REQUIRED, and it is the single most consequential string in
- * this file.
+ * The version is REQUIRED, and on the arrival this example uses it is still the
+ * single most consequential string in this file.
+ *
+ * ## THIS IS THE DECLARED PATH, AND IT IS ON ITS WAY OUT (ADR-0086)
+ *
+ * An author cannot STATE their processor's identity: an engine is HANDED one and
+ * never asks where it came from. A deployment that reads a self-contained BUNDLE
+ * off disk -- a server, a CLI -- is named by the SHA-256 of those octets, so an
+ * edited handler is a different fold whether or not anybody remembered to say so,
+ * and `version` is deleted there. A TAB is the one arrival with no bytes to hash,
+ * because a dev server serves unbundled ESM modules and hands the page a module
+ * OBJECT; it will derive its identity from the HANDLER SOURCES instead
+ * (`a-module-handed-to-a-tab-is-identified-by-its-handler-sources`). Until that
+ * lands, this app is on the declared path, and this string is what names its
+ * generation. The app deliberately does NOT supply an identity of its own: that
+ * would be the author-declared identity re-entering through the one door left
+ * open.
+ *
+ * ## What that means for you TODAY
  *
  * `getVersionHash()` is `${version}-${hash({entities, config})}`. Handler code is
  * in NONE of those, so the core cannot see that you edited a handler. Editing

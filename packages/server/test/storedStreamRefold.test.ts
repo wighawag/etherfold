@@ -27,6 +27,7 @@ import {
 	EMISSION_STREAM_TABLE,
 	STREAM_COVERAGE_TABLE,
 } from '../src/index.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /** The stream a read was expected to hand back, or a failure that says what came instead (ADR-0069). */
 function streamOf(read: StreamRead): {lastSync: StoredLastSync; eventStream: StoredLogEvent[]} {
@@ -142,12 +143,18 @@ function idOf(event: {blockNumber: number; blockHash: string; logIndex: number})
  * emission ids says that directly. The revert is exact (a retraction removes the
  * emission it names), which is what makes "the re-fold reproduces it" a real
  * claim rather than one an approximate revert could pass by luck.
+ *
+ * The MARKER names the bytes this fold would have arrived as, and `identity` is
+ * what each construction site below hands the engine (ADR-0086). The
+ * `getVersionHash()` beside it is the DECLARED path, still a required member of
+ * `EventProcessor` until the contract task removes it and deliberately read by
+ * nobody here.
  */
-function foldingProcessor() {
+function foldingProcessor(marker = 'fold') {
 	let state: string[] = [];
 	let saved: {lastSync: LastSync<TestABI>; state: string[]} | undefined;
 	const processor: EventProcessor<TestABI, string[]> = {
-		getVersionHash: () => 'proc-v1',
+		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			if (!saved) return undefined;
@@ -177,6 +184,7 @@ function foldingProcessor() {
 	};
 	return {
 		processor,
+		identity: identityOf(marker),
 		get state() {
 			return state;
 		},
@@ -195,6 +203,7 @@ function receiverOn(db: RemoteSQL, indexer: string, source: IndexingSource<TestA
 	const builder = new StreamBuilder<TestABI, string[]>(fold.processor, source, {
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, indexer),
+		processorIdentity: fold.identity,
 	});
 	return {
 		builder,
@@ -288,10 +297,15 @@ async function refold(db: RemoteSQL, indexer: string, source: IndexingSource<Tes
 			throw new Error(`a re-fold must not reach the node: ${args.method}`);
 		},
 	} as never;
-	const generation = new IndexerGeneration<TestABI, string[]>(provider, fold.processor, source, {
-		stream: STREAM_CONFIG,
-		keepStream: storedEmissionStream<TestABI>(db, indexer),
-	});
+	const generation = new IndexerGeneration<TestABI, string[]>(
+		provider,
+		fold.processor,
+		source,
+		{stream: STREAM_CONFIG, keepStream: storedEmissionStream<TestABI>(db, indexer)},
+		// the identity the ARRIVAL supplied, which is a PER-GENERATION option and
+		// deliberately not part of the config a container shares across every fold
+		{processorIdentity: fold.identity},
+	);
 	// Only the FETCH is replaced; `reparse` stays the real one, because a replayed
 	// stream is re-decoded against the source running now (ADR-0034) and stubbing
 	// that would be testing a decode this path does not perform.

@@ -6,7 +6,6 @@ import {
 	type WireBatch,
 } from '@etherfold/core';
 import {
-	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
 	openForWriting,
@@ -38,6 +37,7 @@ import {
 	ZERO,
 	type RawLog,
 } from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN OPERATOR WATCHES A REBUILD ADVANCE, ON `/status`, WITH NO NEW ENDPOINT
@@ -71,47 +71,65 @@ import {
 const INDEXER = 'alpha';
 const FINALITY = 3;
 
-/** The incumbent fold. */
-const V1: EntityProcessor<typeof abi> = nftProcessor;
+/** The incumbent fold, as its ARRIVAL delivered it: bytes, and the identity of those bytes. */
+const V1 = {declared: nftProcessor as EntityProcessor<typeof abi>, identity: identityOf('the-incumbent-fold')};
 
-/** THE UPGRADE: the same logs, a different fold, so the two answer observably differently. */
-const V2: EntityProcessor<typeof abi> = {
-	version: '2.0.0',
-	entities: nftEntities,
-	async onTransfer(state, event) {
-		const tokenID = event.args.id.toString().padStart(78, '0');
-		const to = event.args.to.toLowerCase();
-		if (to === ZERO) {
-			state.delete('nft', {tokenID});
-		} else {
-			state.set('nft', {tokenID}, {owner: to});
-		}
-		const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
-		state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + 2});
-	},
+/**
+ * THE UPGRADE: the same logs, a different fold, so the two answer observably
+ * differently.
+ *
+ * Its identity is the hash of the bytes it arrived as (ADR-0086) and not the
+ * `version` below, which no longer moves for anybody.
+ */
+const V2 = {
+	declared: {
+		// STILL REQUIRED and deliberately NAMING NOTHING: `specFor` hands this fold the
+		// identity above. `the-declared-version-and-the-drift-report-are-deleted`
+		// removes the field.
+		version: '1.0.0',
+		entities: nftEntities,
+		async onTransfer(state, event) {
+			const tokenID = event.args.id.toString().padStart(78, '0');
+			const to = event.args.to.toLowerCase();
+			if (to === ZERO) {
+				state.delete('nft', {tokenID});
+			} else {
+				state.set('nft', {tokenID}, {owner: to});
+			}
+			const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
+			state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + 2});
+		},
+	} as EntityProcessor<typeof abi>,
+	identity: identityOf('the-successor-fold'),
 };
 
 function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-/** ONE FOLD, as the host builds it: its own state namespace, then the processor over it. */
-function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
+/**
+ * ONE FOLD, as the host builds it: its own state namespace, then the processor
+ * over it.
+ *
+ * The identity the ARRIVAL supplied goes to BOTH halves, so the namespace named
+ * before the processor exists (ADR-0053) and the fold that lands in it cannot
+ * answer to two different names.
+ */
+function specFor(db: RemoteSQL, fold: {declared: EntityProcessor<typeof abi>; identity: string}) {
+	const {declared, identity} = fold;
 	return {
 		// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
 		// claiming (ADR-0077), exactly as the CLI's own `buildFolding` does it.
 		createState: (context: {stream: string}) =>
 			openForWriting(
 				new VersionedStateStore(db, declared.entities, {
-					tableNamespace: generationDigestOf({
-						stream: context.stream,
-						processor: entityProcessorVersionHash(declared),
-					}),
+					tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 					finalityDepth: FINALITY,
 				}),
 			),
 		createProcessor: (state: WritableStateStore) =>
-			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
+			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY, identity}),
+		processorIdentity: identity,
 	};
 }
 

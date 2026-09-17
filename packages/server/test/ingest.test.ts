@@ -16,6 +16,7 @@ import {beforeAll, describe, expect, it} from 'vitest';
 import {createServer, indexerRegistry, singleContextEntry} from '../src/index.js';
 import {clearLastError} from '../src/api/status.js';
 import {hostRecorderFor} from './utils/hostRecorder.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE INGESTION ENDPOINT (ADR-0004), PER NAMED INDEXER (ADR-0036)
@@ -67,7 +68,19 @@ const SOURCE: IndexingSource<TestABI> = {
 	contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
 };
 
+/**
+ * WHICH FOLD every named indexer here runs, as its ARRIVAL derived it
+ * (ADR-0086): a hash of the bytes a bundle would have arrived as, handed to the
+ * fold rather than asked of it. One value, because what separates two named
+ * indexers is the NAME and the database, never the fold.
+ */
+const PROCESSOR_IDENTITY = identityOf('alpha');
+
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: every construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
@@ -143,12 +156,15 @@ async function deploy(
 		// the FIRST named indexer folds into the same database the app answers over,
 		// which is the ordinary single-indexer deployment; a second one gets its own
 		const indexerDB: RemoteSQL = order === 0 ? db : new RemoteLibSQL(createClient({url: ':memory:'}));
-		const processor = new VersionedStateEventProcessor<TestABI>(indexerDB, entityProcessor);
+		const processor = new VersionedStateEventProcessor<TestABI>(indexerDB, entityProcessor, {
+			identity: PROCESSOR_IDENTITY,
+		});
 		// the recorder is the HOST's, exactly as it is in a deployment: this package
 		// counts nothing itself any more (ADR-0050)
 		const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
 			stream: {finality: FINALITY},
 			recordReorg: hostRecorderFor(indexerDB),
+			processorIdentity: PROCESSOR_IDENTITY,
 		});
 		hosted[name] = {processor, builder};
 		ingestions[name] = singleContextEntry(indexerDB, builder);

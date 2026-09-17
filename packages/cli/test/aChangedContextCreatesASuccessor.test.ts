@@ -9,7 +9,6 @@ import {
 	type WireBatch,
 } from '@etherfold/core';
 import {
-	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
 	openForWriting,
@@ -30,6 +29,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
 import {abi, CONTRACT, nftProcessor, SOURCE, START_BLOCK, timestampOf, ZERO, ALICE, BOB} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE OUTAGE, REMOVED ON A REAL DATABASE: A CHANGED CONTEXT CREATES A SUCCESSOR
@@ -57,9 +57,17 @@ import {abi, CONTRACT, nftProcessor, SOURCE, START_BLOCK, timestampOf, ZERO, ALI
 const INDEXER = 'alpha';
 const FINALITY = 3;
 
-/** The same processor at two versions: the SAME logs, a DIFFERENT fold. */
-const V1: EntityProcessor<typeof abi> = nftProcessor;
-const V2: EntityProcessor<typeof abi> = {...nftProcessor, version: '2.0.0'};
+/**
+ * The same processor as two ARRIVALS: the SAME logs, a DIFFERENT fold.
+ *
+ * What makes them two folds is the identity their arrival derived (ADR-0086) --
+ * the hash of the bytes each was read as -- and not a field the author bumped.
+ * The declared object is shared between them precisely to say so: nothing about
+ * `nftProcessor` distinguishes the two, and the registry still files two
+ * generations.
+ */
+const V1 = {declared: nftProcessor as EntityProcessor<typeof abi>, identity: identityOf('the-incumbent-fold')};
+const V2 = {declared: nftProcessor as EntityProcessor<typeof abi>, identity: identityOf('the-successor-fold')};
 
 function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
@@ -71,16 +79,17 @@ function oneDatabase(): RemoteSQL {
  *
  * The state factory names its TABLE NAMESPACE from the generation identity, and
  * it can do so BEFORE the processor exists because both halves are computable up
- * front (ADR-0053): the stream digest is handed to the factory, and
- * `entityProcessorVersionHash` is the very function `getVersionHash()` answers
- * with -- so the namespace and the identity the container OBSERVES afterwards
- * cannot disagree.
+ * front (ADR-0053): the stream digest is handed to the factory, and the fold half
+ * is the identity the ARRIVAL supplied, which is a value this host already holds
+ * -- so the namespace, the registry record and the fold all answer to one string
+ * that no two of them could spell differently.
  */
 async function openIndexer(
 	db: RemoteSQL,
-	declared: EntityProcessor<typeof abi>,
+	fold: {declared: EntityProcessor<typeof abi>; identity: string},
 	options: {caps?: {maxGenerations: number; maxStreams: number}} = {},
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
+	const {declared, identity} = fold;
 	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
 		await new VersionedStateStore(db, declared.entities, {tableNamespace: generationDigestOf(id)}).drop();
 	};
@@ -96,17 +105,16 @@ async function openIndexer(
 			createState: (context) =>
 				openForWriting(
 					new VersionedStateStore(db, declared.entities, {
-						tableNamespace: generationDigestOf({
-							stream: context.stream,
-							processor: entityProcessorVersionHash(declared),
-						}),
+						tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 						finalityDepth: FINALITY,
 					}),
 				),
 			createProcessor: (state: WritableStateStore) =>
 				new EntityEventProcessor<typeof abi>(state, declared, {
 					finalityDepth: FINALITY,
+					identity,
 				}) as unknown as EntityEventProcessor<typeof abi>,
+			processorIdentity: identity,
 		},
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
@@ -334,7 +342,7 @@ describe('at the cap', () => {
 		const added = (await tablesIn(db)).filter((table) => !tablesBefore.includes(table));
 		const namespace = generationDigestOf({
 			stream: streamDigestOf(SOURCE, resolveStreamConfig({finality: FINALITY})),
-			processor: entityProcessorVersionHash(V2),
+			processor: V2.identity,
 		});
 		expect(added.length).toBeGreaterThan(0);
 		expect(added.every((table) => table.includes(namespace))).toBe(true);

@@ -11,7 +11,7 @@ import {
 	ALICE,
 	BOB,
 	IDENTICAL_SOURCE,
-	PROCESSOR_VERSION,
+	PROCESSOR_IDENTITY,
 	RECONFIGURED_SOURCE,
 	SOURCE,
 	STREAM_DIGEST,
@@ -231,7 +231,7 @@ describe('a PROCESSOR change moves it, and costs a consumer nothing else', () =>
 		const held = {seq: seqPage.body.cursor, gated: gatedPage.body.cursor};
 
 		// the same host, restarted with a NEW FOLD over the stream it already stored
-		const after = await deploy({alpha: SOURCE}, db, {processorVersion: '2.0.0'});
+		const after = await deploy({alpha: SOURCE}, db, {processorMarker: 'the-rebuilt-fold'});
 
 		const reread = await feed(after, 'alpha');
 		const rereadGated = await canonical(after, 'alpha', {gate: 110});
@@ -258,7 +258,7 @@ describe('a PROCESSOR change moves it, and costs a consumer nothing else', () =>
 		const before = await indexed(db);
 		const firstPage = await feed(before, 'alpha', {limit: 1});
 
-		const after = await deploy({alpha: SOURCE}, db, {processorVersion: '2.0.0'});
+		const after = await deploy({alpha: SOURCE}, db, {processorMarker: 'the-rebuilt-fold'});
 		const rest = await feed(after, 'alpha', {cursor: firstPage.body.cursor});
 
 		expect(rest.status, rest.text).toBe(200);
@@ -290,7 +290,7 @@ describe('the log table knows NOTHING about the fold', () => {
 		const before = await indexed(db);
 		const rowsBefore = (await before.db.prepare(`SELECT * FROM ${EMISSION_STREAM_TABLE} ORDER BY seq`).all()).results;
 
-		const after = await deploy({alpha: SOURCE}, db, {processorVersion: '2.0.0'});
+		const after = await deploy({alpha: SOURCE}, db, {processorMarker: 'the-rebuilt-fold'});
 		await feed(after, 'alpha');
 
 		const rowsAfter = (await after.db.prepare(`SELECT * FROM ${EMISSION_STREAM_TABLE} ORDER BY seq`).all()).results;
@@ -326,14 +326,15 @@ describe('the value is OPAQUE: compared, never parsed', () => {
 		expect(offending(/generation/i).filter((file) => file.startsWith('src/feed/cursor.ts'))).toEqual([]);
 	});
 
-	it('does not hand back its own parts: not the stream digest, not the processor version', async () => {
+	it('does not hand back its own parts: not the stream digest, not the processor identity', async () => {
 		const deployment = await indexed();
 
 		const generation = advertisedBy(await feed(deployment, 'alpha'));
 
 		expect(generation).not.toBe(STREAM_DIGEST);
 		expect(generation).not.toContain(STREAM_DIGEST);
-		expect(generation).not.toContain(PROCESSOR_VERSION);
+		expect(generation).not.toBe(PROCESSOR_IDENTITY);
+		expect(generation).not.toContain(PROCESSOR_IDENTITY);
 		expect(() => JSON.parse(generation)).toThrow();
 	});
 

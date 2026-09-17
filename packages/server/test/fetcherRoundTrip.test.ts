@@ -18,6 +18,7 @@ import {beforeAll, describe, expect, it} from 'vitest';
 import {createServer, indexerRegistry, singleContextEntry} from '../src/index.js';
 import {clearLastError} from '../src/api/status.js';
 import {hostRecorderFor} from './utils/hostRecorder.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE WHOLE WIRE, END TO END (ADR-0003, ADR-0004)
@@ -85,7 +86,19 @@ const SOURCE: IndexingSource<TestABI> = {
 	contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
 };
 
+/**
+ * WHICH FOLD both shapes here run, as their ARRIVAL derived it (ADR-0086): a
+ * hash of the bytes a bundle would have arrived as, handed to the fold rather
+ * than asked of it. ONE value on purpose -- the split deployment and the single
+ * process are asserted to land on the same state, so they are the same fold.
+ */
+const PROCESSOR_IDENTITY = identityOf('round-trip');
+
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: every construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
@@ -204,12 +217,13 @@ type TestEnv = {DEV?: string; INGEST_TOKEN?: string};
 
 async function deployReceiver(): Promise<Deployment> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor);
+	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {identity: PROCESSOR_IDENTITY});
 	// the recorder is the HOST's, exactly as it is in a deployment: this package
 	// counts nothing itself any more (ADR-0050)
 	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
 		stream: {finality: FINALITY},
 		recordReorg: hostRecorderFor(db),
+		processorIdentity: PROCESSOR_IDENTITY,
 	});
 	const app = createServer<TestEnv>({
 		getDB: () => db,
@@ -472,10 +486,16 @@ describe('the split deployment lands where a single process lands', () => {
 
 		const singleChain = fakeChain();
 		const singleDb: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-		const single = new VersionedStateEventProcessor<TestABI>(singleDb, entityProcessor);
-		const indexer = new IndexerGeneration<TestABI, unknown>(singleChain.provider, single, SOURCE, {
-			stream: {finality: FINALITY},
-		});
+		const single = new VersionedStateEventProcessor<TestABI>(singleDb, entityProcessor, {identity: PROCESSOR_IDENTITY});
+		const indexer = new IndexerGeneration<TestABI, unknown>(
+			singleChain.provider,
+			single,
+			SOURCE,
+			{stream: {finality: FINALITY}},
+			// the identity the ARRIVAL supplied, which is a PER-GENERATION option and
+			// deliberately not part of the config a container shares across every fold
+			{processorIdentity: PROCESSOR_IDENTITY},
+		);
 		await indexer.load();
 
 		// the same three chain states, in the same order, to both shapes

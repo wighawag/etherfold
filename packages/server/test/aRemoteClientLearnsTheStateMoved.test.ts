@@ -39,6 +39,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {openSignalStream} from './utils/signalStream.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -73,24 +74,31 @@ import {openSignalStream} from './utils/signalStream.js';
 const NAME = 'alpha';
 const pkgRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
-function entityProcessorAt(version: string): EntityProcessor<TestABI> {
-	return {
-		version,
-		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
-		async onTransfer(state, event) {
-			state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
-		},
-	};
-}
+/** The FOLD. WHICH fold it is comes from the arrival, not from anything in here. */
+const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: `foldAt` hands the fold the
+	// identity its ARRIVAL derived (ADR-0086), so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
+	version: '1.0.0',
+	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
+	async onTransfer(state, event) {
+		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
+	},
+};
 
 function freshDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-function foldAt(version: string) {
+/** A FOLD ARRIVING AS THE BYTES `marker` NAMES, identified by them rather than by a declaration. */
+function foldAt(marker: string) {
+	const identity = identityOf(marker);
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorAt(version)),
+		createProcessor: (state: RemoteSQL) =>
+			new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -124,7 +132,7 @@ async function deploy(
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
-		generation: foldAt('1.0.0'),
+		generation: foldAt('the-incumbent-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 
 	let attached = 0;
@@ -307,7 +315,7 @@ describe('a remote client is told the state moved', () => {
 
 		// a successor over the SAME stream (a processor change), caught up by
 		// re-folding the stored stream, which under the default policy MOVES the pointer
-		await deployment.indexer.add(foldAt('2.0.0'));
+		await deployment.indexer.add(foldAt('the-successor-fold'));
 		for (let guard = 0; guard < 50; guard++) {
 			const [report] = await deployment.indexer.rebuildMore();
 			if (report?.complete) break;

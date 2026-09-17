@@ -8,7 +8,6 @@ import {
 	type WireBatch,
 } from '@etherfold/core';
 import {
-	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
 	openForWriting,
@@ -32,6 +31,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it, vi} from 'vitest';
 import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, timestampOf, ZERO} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A SUCCESSOR LANDS IN A DURABLE SLOT THAT HOLDS EXACTLY ONE (ADR-0084)
@@ -74,15 +74,17 @@ import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, times
 const INDEXER = 'alpha';
 const FINALITY = 3;
 
-/** The same fold at several versions: the SAME logs, a different generation each time. */
-const versions = ['1.0.0', '2.0.0', '3.0.0', '4.0.0', '5.0.0'] as const;
-const [V1, V2, V3, V4, V5] = versions.map((version) => ({...nftProcessor, version}) as EntityProcessor<typeof abi>) as [
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
-];
+/**
+ * THE SAME FOLD AS SEVERAL ARRIVALS: the SAME logs, a different generation each
+ * time.
+ *
+ * Each is the identity of the bytes one build produced (ADR-0086), which is what
+ * a save-and-rebuild loop actually moves; the declared object below is shared
+ * between them, so nothing an author wrote distinguishes the five.
+ */
+const [V1, V2, V3, V4, V5] = (['first', 'second', 'third', 'fourth', 'fifth'] as const).map((marker) =>
+	identityOf(marker),
+) as [string, string, string, string, string];
 
 /** A DIFFERENT fetch filter is a different STREAM, which is what a SOURCE change makes. */
 const OTHER_CONTRACT = '0x0000000000000000000000000000000000000088' as const;
@@ -103,23 +105,26 @@ function oneDatabase(): RemoteSQL {
 }
 
 /** ONE FOLD, as the CLI's own `openFolding` builds one: its own state namespace, then the processor. */
-function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>, source?: IndexingSource<typeof abi>) {
+function specFor(db: RemoteSQL, identity: string, source?: IndexingSource<typeof abi>) {
+	const declared: EntityProcessor<typeof abi> = nftProcessor;
 	return {
 		...(source ? {source} : {}),
 		// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
 		// claiming (ADR-0077), exactly as `buildFolding` does it.
+		//
+		// The identity the ARRIVAL supplied goes to BOTH halves, so the namespace named
+		// before the processor exists (ADR-0053) and the fold that lands in it cannot
+		// answer to two different names.
 		createState: (context: {stream: string}) =>
 			openForWriting(
 				new VersionedStateStore(db, declared.entities, {
-					tableNamespace: generationDigestOf({
-						stream: context.stream,
-						processor: entityProcessorVersionHash(declared),
-					}),
+					tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 					finalityDepth: FINALITY,
 				}),
 			),
 		createProcessor: (state: WritableStateStore) =>
-			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
+			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY, identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -132,7 +137,7 @@ function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>, source?: 
  */
 async function openIndexer(
 	db: RemoteSQL,
-	declared: EntityProcessor<typeof abi> = V1,
+	identity: string = V1,
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
 		await new VersionedStateStore(db, nftEntities, {tableNamespace: generationDigestOf(id)}).drop();
@@ -143,7 +148,7 @@ async function openIndexer(
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
-		generation: specFor(db, declared),
+		generation: specFor(db, identity),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
 
@@ -247,8 +252,6 @@ const idOf = (fold: {record: {stream: string; processor: string}}): GenerationId
 	stream: fold.record.stream,
 	processor: fold.record.processor,
 });
-
-const hashOf = (declared: EntityProcessor<typeof abi>) => entityProcessorVersionHash(declared);
 
 /** A deployment that has folded: the incumbent is canonical, and its stream is stored. */
 async function aDeploymentThatHasFolded(db: RemoteSQL) {
@@ -354,10 +357,10 @@ describe('the slot is DURABLE, so a RESTART replaces rather than accumulates', (
 		// deploy. The SLOT is a row, so this one reads what the last one left.
 		const restarted = await openIndexer(db, V3);
 
-		expect(await registeredProcessors(db)).toEqual([first.generation.processor, hashOf(V3)]);
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, V3]);
 		expect(await slotProcessors(db)).toEqual({
 			canonical: first.generation.processor,
-			successor: hashOf(V3),
+			successor: V3,
 			predecessor: null,
 		});
 		// the replaced generation's state really went, and the incumbent is untouched
@@ -375,14 +378,14 @@ describe('the slot is DURABLE, so a RESTART replaces rather than accumulates', (
 		// far more deploys than the bound, every one of them a fresh process, and not
 		// one of them is refused: the cap stops being reachable on this path without
 		// being raised
-		for (const declared of [V2, V3, V4, V5, V2, V3, V4, V5]) {
-			await openIndexer(db, declared);
+		for (const identity of [V2, V3, V4, V5, V2, V3, V4, V5]) {
+			await openIndexer(db, identity);
 		}
 
-		expect(await registeredProcessors(db)).toEqual([first.generation.processor, hashOf(V5)]);
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, V5]);
 		expect(await slotProcessors(db)).toEqual({
 			canonical: first.generation.processor,
-			successor: hashOf(V5),
+			successor: V5,
 			predecessor: null,
 		});
 		expect(first.caps).toEqual({maxGenerations: 4, maxStreams: 2});
@@ -463,10 +466,10 @@ describe('a generation a revert needs is never replaced', () => {
 		// it is not reachable from a replacement under any circumstances.
 		await openIndexer(db, V3);
 
-		expect(await registeredProcessors(db)).toEqual([incumbent.processor, promoted.record.processor, hashOf(V3)]);
+		expect(await registeredProcessors(db)).toEqual([incumbent.processor, promoted.record.processor, V3]);
 		expect(await slotProcessors(db)).toEqual({
 			canonical: promoted.record.processor,
-			successor: hashOf(V3),
+			successor: V3,
 			predecessor: incumbent.processor,
 		});
 		expect((await namespaceTables(db, incumbent)).length).toBeGreaterThan(0);
@@ -505,8 +508,8 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 		expect(indexer.caps).toEqual({maxGenerations: 4, maxStreams: 2});
 
 		// far more saves than the bound, and not one of them is refused
-		for (const declared of [V2, V3, V4, V5, V2, V3, V4, V5]) {
-			await indexer.add(specFor(db, declared));
+		for (const identity of [V2, V3, V4, V5, V2, V3, V4, V5]) {
+			await indexer.add(specFor(db, identity));
 		}
 
 		expect((await registeredProcessors(db)).length).toBe(2);

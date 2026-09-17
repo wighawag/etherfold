@@ -10,7 +10,6 @@ import {
 	type WireBatch,
 } from '@etherfold/core';
 import {
-	entityProcessorVersionHash,
 	EntityEventProcessor,
 	openForWriting,
 	type EntityProcessor,
@@ -31,6 +30,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
 import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, timestampOf, ZERO} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A GENERATION NO SLOT NAMES IS RECLAIMED ON REQUEST (ADR-0084)
@@ -70,14 +70,19 @@ import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, times
 const INDEXER = 'alpha';
 const FINALITY = 3;
 
-/** The same fold at several versions: the SAME logs, a different generation each time. */
-const [V1, V2, V3, V4] = (['1.0.0', '2.0.0', '3.0.0', '4.0.0'] as const).map(
-	(version) => ({...nftProcessor, version}) as EntityProcessor<typeof abi>,
-) as [
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
-	EntityProcessor<typeof abi>,
+/**
+ * THE SAME FOLD AS SEVERAL ARRIVALS: the SAME logs, a different generation each
+ * time.
+ *
+ * What makes each one a different generation is the identity its arrival derived
+ * (ADR-0086) -- the hash of the bytes it was read as -- and never a field the
+ * author bumped. They share one declared object precisely to say so.
+ */
+const [V1, V2, V3, V4] = (['first', 'second', 'third', 'fourth'] as const).map((marker) => identityOf(marker)) as [
+	string,
+	string,
+	string,
+	string,
 ];
 
 /** A DIFFERENT fetch filter is a different STREAM, which is what a SOURCE change makes. */
@@ -96,22 +101,29 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-/** ONE FOLD, as the CLI's own `openFolding` builds one: its own state namespace, then the processor. */
-function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>, source?: IndexingSource<typeof abi>) {
+/**
+ * ONE FOLD, as the CLI's own `openFolding` builds one: its own state namespace,
+ * then the processor.
+ *
+ * `identity` is what the ARRIVAL supplied, and it is handed to BOTH halves --
+ * the namespace named before the processor exists (ADR-0053) and the fold itself
+ * -- so the registry record, the tables and the engine cannot answer to three
+ * different names.
+ */
+function specFor(db: RemoteSQL, identity: string, source?: IndexingSource<typeof abi>) {
+	const declared: EntityProcessor<typeof abi> = nftProcessor;
 	return {
 		...(source ? {source} : {}),
 		createState: (context: {stream: string}) =>
 			openForWriting(
 				new VersionedStateStore(db, declared.entities, {
-					tableNamespace: generationDigestOf({
-						stream: context.stream,
-						processor: entityProcessorVersionHash(declared),
-					}),
+					tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 					finalityDepth: FINALITY,
 				}),
 			),
 		createProcessor: (state: WritableStateStore) =>
-			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
+			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY, identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -124,7 +136,7 @@ function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>, source?: 
  */
 async function openIndexer(
 	db: RemoteSQL,
-	declared: EntityProcessor<typeof abi> = V1,
+	identity: string = V1,
 	source: IndexingSource<typeof abi> = SOURCE_A,
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
@@ -136,7 +148,7 @@ async function openIndexer(
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
-		generation: specFor(db, declared, source),
+		generation: specFor(db, identity, source),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
 

@@ -22,6 +22,7 @@ import {
 	type IndexerRegistryEntry,
 } from '../src/index.js';
 import {ALICE, CONTRACT, SOURCE, STREAM_CONFIG, TOKEN, ZERO, transfer, type TestABI} from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE OPERATOR MOVES THE CANONICAL POINTER BACK, OVER HTTP
@@ -55,17 +56,27 @@ const ADMIN_TOKEN = 'an-operator-secret';
 
 type TestEnv = {DEV?: string; INGEST_TOKEN?: string; ADMIN_TOKEN?: string};
 
-/** The fold, at a version the caller moves: the SAME stream, a different answer over it. */
-function entityProcessorAt(version: string): EntityProcessor<TestABI> {
+/**
+ * The fold the bytes `marker` names: the SAME stream, a different answer over it.
+ *
+ * The marker selects the HANDLER and, through `foldAt`, the IDENTITY -- which is
+ * ADR-0086's whole claim written out, since different bytes are a different fold
+ * with no author action. The declared `version` below moves for nobody.
+ */
+function entityProcessorFor(marker: string): EntityProcessor<TestABI> {
 	return {
-		version,
+		// STILL REQUIRED and deliberately NAMING NOTHING: `foldAt` hands the fold the
+		// identity its ARRIVAL derived, so this value is read by nobody.
+		// `assertProcessorVersion` still demands the field until
+		// `the-declared-version-and-the-drift-report-are-deleted` removes it.
+		version: '1.0.0',
 		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
-			// the RECIPIENT under `v1` and the SENDER under anything else: two folds that
-			// disagree over the very same logs, so "the old answers came back" is a real
-			// claim rather than two identical answers
+			// the RECIPIENT under the incumbent and the SENDER under anything else: two
+			// folds that disagree over the very same logs, so "the old answers came back" is
+			// a real claim rather than two identical answers
 			const args = event.args as {from: string; to: string; id: bigint};
-			state.set('token', {id: args.id.toString()}, {owner: version === 'v1' ? args.to : args.from});
+			state.set('token', {id: args.id.toString()}, {owner: marker === 'incumbent' ? args.to : args.from});
 		},
 	};
 }
@@ -83,10 +94,13 @@ function freshDatabase(): RemoteSQL {
  * what is under test here is the POINTER, and a fold that could reach another's
  * rows would make an assertion about the pointer mean nothing.
  */
-function foldAt(version: string) {
+function foldAt(marker: string) {
+	const identity = identityOf(marker);
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorAt(version)),
+		createProcessor: (state: RemoteSQL) =>
+			new VersionedStateEventProcessor<TestABI>(state, entityProcessorFor(marker), {identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -118,7 +132,7 @@ async function anUpgradeThatLanded(): Promise<Deployment> {
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
-		generation: foldAt('v1'),
+		generation: foldAt('incumbent'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 
 	let resolutions = 0;
@@ -158,7 +172,7 @@ async function anUpgradeThatLanded(): Promise<Deployment> {
 	await push({toBlock: 105, latestBlock: 105, logs: [transfer(101, '0xa101', ALICE, 1n, 0, CONTRACT)]});
 
 	const incumbentGeneration = indexer.generation;
-	const successor = await indexer.add(foldAt('v2'));
+	const successor = await indexer.add(foldAt('successor'));
 	for (let guard = 0; guard < 50; guard++) {
 		const [report] = await indexer.rebuildMore();
 		if (report?.complete) break;

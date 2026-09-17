@@ -57,6 +57,17 @@ const TIP = START_BLOCK + 50;
  * a static version reporting drift and registering nothing. So the module ships
  * its ABI the way a real one does, in a second file, and stays on the route these
  * cases are about. Do not inline it back.
+ *
+ * THIS FILE IS THE DECLARED ARRIVAL'S OWN END-TO-END SUITE, and it stays that way
+ * deliberately while every other caller migrates. The `PROCESSOR DRIFT` report
+ * and the `unchanged` message that names `version` exist ONLY on this route --
+ * they are the compensation for an identity an author had to remember -- so
+ * rewriting these cases onto a bundle would not migrate them, it would delete the
+ * coverage of a path that must go on working until the contract task removes it.
+ * The same endpoint on the BUNDLE arrival is asserted in
+ * `aDeploymentRunsFromABundle.test.ts`, and
+ * `the-declared-version-and-the-drift-report-are-deleted` is what retires this
+ * file along with the path it describes.
  */
 const abiModuleSource = `
 export const abi = [

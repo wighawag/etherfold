@@ -35,6 +35,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE OPERATOR RECLAIMS WHAT NO SLOT NAMES, OVER HTTP
@@ -70,19 +71,30 @@ function freshDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-/** The fold at a version, over a state database of its own. */
-function foldAt(version: string, source?: IndexingSource<TestABI>) {
+/**
+ * A FOLD ARRIVING AS THE BYTES `marker` NAMES, over a state database of its own.
+ *
+ * The identity is HANDED to the fold rather than asked of it (ADR-0086), so two
+ * markers are two generations with no author action -- which is what gives this
+ * file the several generations it reclaims from.
+ */
+function foldAt(marker: string, source?: IndexingSource<TestABI>) {
 	const declared: EntityProcessor<TestABI> = {
-		version,
+		// STILL REQUIRED and deliberately NAMING NOTHING: the identity below is what
+		// names this generation. `assertProcessorVersion` still demands the field until
+		// `the-declared-version-and-the-drift-report-are-deleted` removes it.
+		version: '1.0.0',
 		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
 			state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
 		},
 	};
+	const identity = identityOf(marker);
 	return {
 		...(source ? {source} : {}),
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, declared),
+		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, declared, {identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -134,20 +146,20 @@ async function aDeploymentUpgradedTwice(): Promise<Deployment> {
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
-		generation: foldAt('v1'),
+		generation: foldAt('the-first-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 	await feed(indexer.opening, {to: ALICE, id: 1n, address: CONTRACT});
 	const first = indexer.generation;
 
 	// a SOURCE change -- a stream of its own -- promoted, which makes the first
 	// generation the PREDECESSOR and retains it
-	const second = await indexer.add(foldAt('v2', RECONFIGURED_SOURCE));
+	const second = await indexer.add(foldAt('the-second-fold', RECONFIGURED_SOURCE));
 	await feed(second, {to: BOB, id: 2n, address: OTHER_CONTRACT});
 	await indexer.promote(idOf(second));
 
 	// ...and a PROCESSOR change over that stream, promoted in turn: `predecessor` holds
 	// exactly one, so the first generation is now named by nothing
-	const third = await indexer.add(foldAt('v3', RECONFIGURED_SOURCE));
+	const third = await indexer.add(foldAt('the-third-fold', RECONFIGURED_SOURCE));
 	await indexer.promote(idOf(third));
 
 	const app = createServer<TestEnv>({

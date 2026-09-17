@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS _stream_coverage (
 -- ---------------------------------------------------------------------------
 -- WHICH generations a named indexer holds, and WHICH ONE answers reads. A
 -- generation is a stream plus a fold over it, identified by the stream digest
--- plus the processor's version hash; an indexer holds several, one is canonical,
+-- plus the fold's identity; an indexer holds several, one is canonical,
 -- and reconfiguring builds a successor beside the live one and moves the pointer
 -- when it is ready -- which is why a reconfigure is not an outage, and why
 -- moving the pointer BACK is a revert that re-indexes nothing.
@@ -239,7 +239,10 @@ CREATE TABLE IF NOT EXISTS _generations (
     indexer TEXT NOT NULL,
     -- WHICH stream, as `streamDigestOf` renders it
     stream TEXT NOT NULL,
-    -- the processor's version hash, as `getVersionHash()` returns it
+    -- WHICH FOLD, as the deployment's ARRIVAL derived it (ADR-0086): the SHA-256
+    -- of a bundle's octets where a deployment read one off disk. Stored,
+    -- compared for equality and rendered; nothing here parses it, which is what
+    -- lets two arrivals derive one two different ways.
     processor TEXT NOT NULL,
     -- ms since the epoch, for ORDERING only and never identity: it is what puts
     -- "the previous generation" in a defined place in a listing an operator

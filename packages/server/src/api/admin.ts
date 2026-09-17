@@ -181,7 +181,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 							success: false,
 							error: 'invalid-generation',
 							message:
-								`name the generation to point at as {"stream": "<digest>", "processor": "<version hash>"}, both ` +
+								`name the generation to point at as {"stream": "<digest>", "processor": "<fold identity>"}, both ` +
 								`non-empty strings. GET this path for the generations this indexer holds, each with the digest a ` +
 								`feed response advertises it by.`,
 						} as const,
