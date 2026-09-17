@@ -2,7 +2,7 @@
 
 Evidence for [`work/notes/findings/a-tab-instantiates-retained-bytes-only-through-a-same-origin-url.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/a-tab-instantiates-retained-bytes-only-through-a-same-origin-url.md), which is where the conclusions live. This folder holds the server, the page, the fixture bundle and the raw output, so every row of that finding's matrix can be re-run rather than believed.
 
-Task: `work/tasks/ready/a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp.md`. Spec whose open risk this answers: `work/specs/ready/a-generation-retains-the-code-that-folds-it.md` (a `predecessor` is RESUMED rather than merely read, which in a tab means evaluating retained bytes). Identity of those bytes is ADR-0086; where the fold runs in a browser is ADR-0082.
+Task: `work/tasks/done/a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp.md`. Spec whose open risk this answers: `work/specs/ready/a-generation-retains-the-code-that-folds-it.md` (a `predecessor` is RESUMED rather than merely read, which in a tab means evaluating retained bytes). Identity of those bytes is ADR-0086; where the fold runs in a browser is ADR-0082.
 
 ## The one thing this spike exists to get right
 
