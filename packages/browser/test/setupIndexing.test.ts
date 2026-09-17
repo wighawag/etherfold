@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {Abi, IndexingSource, LastSync, LogEvent} from '@etherfold/core';
 import {createIndexerState, type EntityEventProcessorLike} from '../src/IndexerState.js';
 import {generationOf} from './utils/fakeGeneration.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // chainId '1' as the 0x-hex the provider returns
 const CHAIN_ID_HEX = '0x1';
@@ -31,7 +32,10 @@ type State = {count: number};
 
 function makeProcessor(): EntityEventProcessorLike<Abi, State, undefined> {
 	return {
-		getVersionHash: () => 'v1',
+		// The DECLARED path, still on the seam until the contract task removes it and
+		// deliberately NOT what names anything here: the spec below supplies the
+		// identity its arrival derived, so this value is read by nobody.
+		getVersionHash: () => 'declared-version-never-read',
 		// required on `EventProcessor`: a fake that omits it is a fake that would
 		// lose drift detection without anybody noticing
 		getCodeFingerprint: () => undefined,
@@ -52,7 +56,7 @@ const SOURCE: IndexingSource<Abi> = {
 
 describe('createIndexerState - setupIndexing error handling', () => {
 	it('does NOT set a FAILED_TO_LOAD error after a successful load', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 
 		// indexMore() calls setupIndexing() internally
@@ -64,7 +68,7 @@ describe('createIndexerState - setupIndexing error handling', () => {
 	});
 
 	it('reports an error when loading actually fails', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider({failChainId: true}), source: SOURCE});
 
 		await expect(indexer.indexMore()).rejects.toBeTruthy();

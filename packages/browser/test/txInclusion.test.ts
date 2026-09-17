@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {Abi, IndexingSource, LogEvent} from '@etherfold/core';
 import {createIndexerState, type EntityEventProcessorLike} from '../src/IndexerState.js';
 import {generationOf} from './utils/fakeGeneration.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * The app-facing half of tx reconciliation: after indexing, an app asks whether
@@ -27,7 +28,10 @@ type State = {count: number};
 function makeProcessor(): EntityEventProcessorLike<Abi, State, undefined> {
 	let count = 0;
 	return {
-		getVersionHash: () => 'v1',
+		// The DECLARED path, still on the seam until the contract task removes it and
+		// deliberately NOT what names anything here: the spec below supplies the
+		// identity its arrival derived, so this value is read by nobody.
+		getVersionHash: () => 'declared-version-never-read',
 		getCodeFingerprint: () => undefined,
 		state: {count: 0},
 		configure: () => {},
@@ -76,12 +80,12 @@ function makeProvider() {
 
 describe('checkTxInclusion through the browser hook', () => {
 	it('answers nothing before anything is indexed', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		expect(indexer.checkTxInclusion([{txHash: TX}])[TX]).toEqual({status: 'unknown', basis: 'not-synced'});
 	});
 
 	it('reports a transaction it has processed as included, and says where', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexToLatest();
 
@@ -95,7 +99,7 @@ describe('checkTxInclusion through the browser hook', () => {
 	});
 
 	it('reports a transaction it has never seen as absent, receipt or no receipt', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexToLatest();
 
@@ -104,7 +108,7 @@ describe('checkTxInclusion through the browser hook', () => {
 	});
 
 	it('answers a whole pending set in one call', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexToLatest();
 

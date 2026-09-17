@@ -26,6 +26,7 @@ import {
 	START_BLOCK,
 	type TestABI,
 } from '../browser/workload.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * A successor whose catch-up takes SEVERAL cycles.
@@ -117,6 +118,9 @@ function hostOver(access: HostAccess, databaseName: string, chain: ReturnType<ty
 					await createBrowserStateStore(processor.entities, {databaseName: `${databaseName}-${context.stream}`}),
 				),
 			createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
+			// what this app's ARRIVAL derived (ADR-0086): the host registers every
+			// generation it builds under it, and an author states nothing
+			processorIdentity: identityOf('the-hosted-app'),
 			provider: chain.provider,
 			source: SOURCE,
 			// Narrow ranges, so catching up is several advances rather than one. Kept
@@ -257,6 +261,7 @@ describe('the main-thread driver rests on the same rule', () => {
 			{
 				createState: () => memoryStore(processor.entities),
 				createProcessor: (state) => entityProcessorOver(state, processor),
+				processorIdentity: identityOf('the-app'),
 			},
 			{keepStream: keepStreamOnIndexedDB<TestABI>(freshName())},
 		);
@@ -267,10 +272,14 @@ describe('the main-thread driver rests on the same rule', () => {
 			// Ten minutes. Everything below happens inside one test, so nothing waited.
 			await indexer.startAutoIndexing(SLOW_REST);
 
-			const edited = processorVariant({version: '2.0.0', countBy: 2});
+			// A SAVE: the same declared version, different bytes, so a different
+			// generation -- which is ADR-0086's whole point, since an author cannot state
+			// an identity and cannot forget to.
+			const edited = processorVariant({countBy: 2});
 			const successor = await indexer.addGeneration({
 				createState: () => memoryStore(edited.entities),
 				createProcessor: (state) => entityProcessorOver(state, edited),
+				processorIdentity: identityOf('the-edited-app'),
 			});
 			// The same stream, so this one FOLLOWS rather than fetching.
 			expect(successor.follows).toBe(true);

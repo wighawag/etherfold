@@ -3,6 +3,7 @@ import type {Abi, IndexingSource, LogEvent} from '@etherfold/core';
 import {IndexerGeneration} from '@etherfold/core';
 import {createIndexerState, type EntityEventProcessorLike} from '../src/IndexerState.js';
 import {generationOf} from './utils/fakeGeneration.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // chainId '1' as the 0x-hex the provider returns
 const CHAIN_ID_HEX = '0x1';
@@ -28,7 +29,19 @@ function makeProvider(chainIdHex: string = CHAIN_ID_HEX) {
 
 type State = {count: number};
 
-function makeProcessor(versionHash = 'v1'): EntityEventProcessorLike<Abi, State, undefined> {
+/**
+ * A fake fold, and the VERSION it declares.
+ *
+ * The declared hash names nothing where a spec supplies an identity (ADR-0086:
+ * an author cannot state one). It is still what `updateProcessor` compares,
+ * because the arrival there is a MODULE a dev server handed the tab and the
+ * derivation for that one is
+ * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`; the cases
+ * below that swap a processor therefore still move this string to ask for a
+ * swap, and they are this package's witness that the declared path goes on
+ * working while the migration runs.
+ */
+function makeProcessor(versionHash = 'declared-version-v1'): EntityEventProcessorLike<Abi, State, undefined> {
 	return {
 		getVersionHash: () => versionHash,
 		// required on `EventProcessor`: a fake that omits it is a fake that would
@@ -59,7 +72,7 @@ const NEW_SOURCE: IndexingSource<Abi> = {
 
 describe('createIndexerState - live reload (HIGH #1: async + error routing)', () => {
 	it('updateIndexer returns an awaitable promise and routes core errors to $syncing.error', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 
 		// do an initial load so the indexer is in a stable state
@@ -82,7 +95,7 @@ describe('createIndexerState - live reload (HIGH #1: async + error routing)', ()
 
 describe('createIndexerState - live reload (HIGH #2: clear syncing state on reconfigure)', () => {
 	it('clears $syncing.lastSync on updateIndexer so setupIndexing re-runs for the new config', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 
 		// initial load -> $syncing.lastSync becomes populated
@@ -98,7 +111,7 @@ describe('createIndexerState - live reload (HIGH #2: clear syncing state on reco
 	});
 
 	it('does NOT clear $syncing.lastSync when the core reconfigure fails (option b)', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 
 		await indexer.indexMore();
@@ -119,9 +132,12 @@ describe('createIndexerState - live reload (MEDIUM #3: pause auto-indexing durin
 		let releaseReconfigure!: () => void;
 		const reconfigureGate = new Promise<void>((resolve) => (releaseReconfigure = resolve));
 
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {
-			createIndexer: (provider, processor, source, config) => {
-				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config);
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')), {
+			// The fifth argument is the identity this generation was REGISTERED under, and
+			// forwarding it is what keeps the engine answering to the name the registry
+			// filed (ADR-0086).
+			createIndexer: (provider, processor, source, config, processorIdentity) => {
+				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config, {processorIdentity});
 				const realUpdateIndexer = real.updateIndexer.bind(real);
 				real.updateIndexer = (async (update: any) => {
 					// stay in flight until the test releases the gate
@@ -206,7 +222,7 @@ function recordingIndexer() {
 describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure calls must serialize)', () => {
 	it('updateProcessor started while updateIndexer is in flight must NOT interleave (source then processor)', async () => {
 		const {createIndexer, trace, gate} = recordingIndexer();
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor('v1')), {createIndexer});
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {createIndexer});
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexMore();
 
@@ -216,7 +232,7 @@ describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure c
 		await Promise.resolve();
 
 		// while it is in flight, a processor change event arrives (user fixed handlers for new ABI)
-		const p2 = indexer.updateProcessor(makeProcessor('v2'));
+		const p2 = indexer.updateProcessor(makeProcessor('declared-version-v2'));
 		await Promise.resolve();
 
 		// release the first; let both settle
@@ -233,13 +249,13 @@ describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure c
 
 	it('updateIndexer started while updateProcessor is in flight must NOT interleave (processor then source)', async () => {
 		const {createIndexer, trace, gate} = recordingIndexer();
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor('v1')), {createIndexer});
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {createIndexer});
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexMore();
 
 		// keep the processor change in flight
 		const g = gate('updateProcessor');
-		const p1 = indexer.updateProcessor(makeProcessor('v2'));
+		const p1 = indexer.updateProcessor(makeProcessor('declared-version-v2'));
 		await Promise.resolve();
 
 		// while it is in flight, the (slow) deploy completes and a source change arrives
@@ -257,7 +273,7 @@ describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure c
 
 	it('two updateIndexer calls in quick succession must serialize (not interleave)', async () => {
 		const {createIndexer, trace, gate} = recordingIndexer();
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor('v1')), {createIndexer});
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {createIndexer});
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexMore();
 
@@ -284,7 +300,7 @@ describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure c
 describe('createIndexerState - live reload (#5: updateProcessor force option passthrough)', () => {
 	it('forwards the {force} option to the core updateProcessor', async () => {
 		let receivedOptions: any;
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor('v1')), {
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {
 			createIndexer: (provider, processor, source, config) => {
 				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config);
 				const realUpdateProcessor = real.updateProcessor.bind(real);
@@ -298,8 +314,11 @@ describe('createIndexerState - live reload (#5: updateProcessor force option pas
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexMore();
 
-		// same version hash + force:true should still be forwarded so the core performs the swap
-		await indexer.updateProcessor(makeProcessor('v1'), {force: true});
+		// same DECLARED hash + force:true should still be forwarded so the core performs
+		// the swap. This generation deliberately takes no arrival identity: what it is
+		// about is the swap comparison `updateProcessor` makes, which is the module
+		// arrival's and is `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`.
+		await indexer.updateProcessor(makeProcessor(), {force: true});
 
 		expect(receivedOptions).toEqual({force: true});
 	});

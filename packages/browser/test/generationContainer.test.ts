@@ -4,6 +4,7 @@ import {openIndexer, type GenerationContext, type GenerationSpec} from '@etherfo
 import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import type {EntityEventProcessor, EntityProcessor, EntityStateView} from '@etherfold/processor-entities';
 import {createIndexerState, openGenerationRegistryOnIndexedDB} from '../src/index.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {
 	BRANCH_A_TIP,
 	EXPECTED_A,
@@ -83,6 +84,50 @@ describe('createIndexerState takes the factories a generation is built from', ()
 		indexer.dispose();
 	});
 
+	/**
+	 * ADR-0086: an author cannot STATE a processor's identity, so the generation a
+	 * tab registers is named by what its ARRIVAL derived and by nothing the author
+	 * wrote.
+	 *
+	 * The two generations below are built from the SAME definition, so the declared
+	 * `version` -- and therefore `getVersionHash()` -- is identical for both. Under
+	 * the author-declared path they would have been ONE generation; here they are
+	 * two, because two bundles of bytes are two folds whatever anybody remembered to
+	 * write. That is the property the whole family exists for, and it is the only
+	 * assertion that can tell an identity that was TAKEN from one that was computed.
+	 */
+	it('names the generation by the identity the ARRIVAL supplied, not by what the processor declares', async () => {
+		const chain = fakeChain();
+		const indexer = createIndexerState<TestABI, EntityStateView>({
+			registry: await browserRegistry(),
+			createState: async () => openForWriting(new MemoryStateStore(processor.entities)),
+			createProcessor: (store) => entityProcessorOver(store, processor),
+			// what a tab handed a self-contained BUNDLE would name its fold: the hash of
+			// those octets, derived from something the processor cannot see
+			processorIdentity: identityOf('browser-bundle'),
+		});
+		await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
+		await indexToTip(indexer);
+
+		expect(indexer.canonical?.record.processor).toBe(identityOf('browser-bundle'));
+		// and it FOLDS under that name: the store the hook recorded for this generation
+		// is keyed by the identity the registry filed, so a read answers at all
+		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
+
+		// ...and it is the BYTES that name it. Same definition, same declared version,
+		// one edited handler somewhere in the bundle: a DIFFERENT generation, with no
+		// author action at all.
+		const successor = await indexer.addGeneration({
+			createState: async () => openForWriting(new MemoryStateStore(processor.entities)),
+			createProcessor: (store) => entityProcessorOver(store, processor),
+			processorIdentity: identityOf('browser-bundle-edited'),
+		});
+		expect(successor.record.processor).toBe(identityOf('browser-bundle-edited'));
+		expect(successor.record.processor).not.toBe(indexer.generations[0].record.processor);
+
+		indexer.dispose();
+	});
+
 	it('publishes a handle whose identity is stable, so a subscriber may keep it', async () => {
 		const chain = fakeChain();
 		const indexer = createIndexerState<TestABI, EntityStateView>({
@@ -115,12 +160,15 @@ describe('createIndexerState takes the factories a generation is built from', ()
 function generationOver(
 	store: WritableStateStore,
 	definition: EntityProcessor<TestABI>,
+	/** What the ARRIVAL that produced this fold derived: the identity it is registered under. */
+	processorIdentity: string,
 ): GenerationSpec<TestABI, EntityStateView, WritableStateStore> {
 	let fold: EntityEventProcessor<TestABI> | undefined;
 	return {
 		createState: () => store,
 		createProcessor: (state) => (fold = entityProcessorOver(state, definition)),
 		stateOf: () => (fold as EntityEventProcessor<TestABI>).state,
+		processorIdentity,
 	};
 }
 
@@ -137,13 +185,17 @@ describe('the entities-path handle is INDIRECT', () => {
 	 * not have told the two apart from "the promotion broke the read".
 	 */
 	it('keeps answering across a pointer move, from the newly canonical generation', async () => {
-		const definitionV2 = processorVariant({version: '2.0.0', countBy: 2});
+		// the same declared version as the fold beside it: these are two generations
+		// because two BUILDS are two generations (ADR-0086), not because anybody
+		// remembered to bump anything
+		const definitionV2 = processorVariant({countBy: 2});
 
 		// generation B's state, folded on its own: same events, different fold
 		const storeB = await openForWriting(new MemoryStateStore(definitionV2.entities));
 		const seeding = createIndexerState<TestABI, EntityStateView>({
 			createState: () => storeB,
 			createProcessor: (state) => entityProcessorOver(state, definitionV2),
+			processorIdentity: identityOf('generation-B'),
 		});
 		await seeding.init({provider: fakeChain().provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 		await indexToTip(seeding);
@@ -158,7 +210,10 @@ describe('the entities-path handle is INDIRECT', () => {
 			provider: chain.provider,
 			source: SOURCE,
 			config: {stream: {finality: FINALITY}},
-			generations: [generationOver(storeA, processor), generationOver(storeB, definitionV2)],
+			generations: [
+				generationOver(storeA, processor, identityOf('generation-A')),
+				generationOver(storeB, definitionV2, identityOf('generation-B')),
+			],
 		});
 
 		await container.load();

@@ -718,11 +718,26 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 			}
 			// Recorded HERE and not in `createState`, because this is the first moment
 			// both halves of a generation's identity exist: the stream is known up
-			// front, the fold's version hash only once the processor is built.
-			recordState({stream: context.stream, processor: built.getVersionHash()}, state as WritableStateStore);
+			// front, the fold's half only once the processor is built -- an
+			// ARRIVAL-supplied identity is known before either factory runs, but the
+			// DECLARED fallback under it is not.
+			//
+			// The identity is the one the ARRIVAL handed this host, and the processor's
+			// own declared hash only where no arrival derived one (ADR-0086). It is the
+			// same expression the container resolves the registry record with
+			// (`processorIdentityOf`, `@etherfold/core`), because a store recorded under a
+			// name the registry did not file is a read this host cannot answer.
+			recordState(
+				{stream: context.stream, processor: spec.processorIdentity ?? built.getVersionHash()},
+				state as WritableStateStore,
+			);
 			return built;
 		},
 		stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
 			(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
+		// Handed STRAIGHT to the container, which registers the generation under it and
+		// never asks where it came from. Omitted rather than passed as `undefined` so
+		// that "no arrival derived one" is the absence the core's own fallback reads.
+		...(spec.processorIdentity === undefined ? {} : {processorIdentity: spec.processorIdentity}),
 	};
 }

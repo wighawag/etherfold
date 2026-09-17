@@ -16,6 +16,7 @@ import {
 	SOURCE,
 	type TestABI,
 } from '../browser/workload.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * STORY 5: A NON-CANONICAL GENERATION REPORTS THAT IT EXISTS AND HOW FAR IT HAS
@@ -37,8 +38,16 @@ import {
 let counter = 0;
 const freshName = () => `progress-${counter++}-${Math.random().toString(36).slice(2, 8)}`;
 
-/** The edited fold: the same events counted by two, so a READ says which generation answered. */
-const EDITED = processorVariant({version: '2.0.0', countBy: 2});
+/**
+ * The edited fold: the same events, counted by two, so a READ says which
+ * generation answered.
+ *
+ * It declares the SAME version as the fold beside it, deliberately. What makes
+ * these two generations is the identity each ARRIVAL supplied (ADR-0086): an
+ * author cannot state one, so a handler edit is a different fold whether or not
+ * anybody remembered to write anything.
+ */
+const EDITED = processorVariant({countBy: 2});
 
 async function memoryStore(entities = processor.entities): Promise<WritableStateStore> {
 	const store = await openForWriting(new MemoryStateStore(entities));
@@ -97,6 +106,8 @@ async function anAppAtTheTip(promotion?: {policy?: 'on-catch-up' | 'immediate' |
 		{
 			createState: () => memoryStore(),
 			createProcessor: (state) => entityProcessorOver(state, processor),
+			// what this app's ARRIVAL derived: the hash of the bytes it was built from
+			processorIdentity: identityOf('the-app'),
 		},
 		{keepStream: stream.keeper, ...(promotion ? {promotion} : {})},
 	);
@@ -113,6 +124,8 @@ async function anAppAtTheTip(promotion?: {policy?: 'on-catch-up' | 'immediate' |
 			return indexer.addGeneration({
 				createState: () => next,
 				createProcessor: (state) => entityProcessorOver(state, EDITED),
+				// a NEW build arrived, so a new identity arrived with it
+				processorIdentity: identityOf('the-edited-app'),
 			});
 		},
 		async drive(rounds = 4) {

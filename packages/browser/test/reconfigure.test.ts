@@ -59,6 +59,16 @@ async function indexedWith(definition = processor, chain = fakeChain()) {
 // AXIS ONE: the developer edited the reducer, and Vite handed the tab a new
 // processor module.
 // ---------------------------------------------------------------------------
+//
+// THIS AXIS IS STILL ON THE AUTHOR-DECLARED IDENTITY, deliberately. ADR-0086
+// moves identity onto the ARRIVAL, and every OTHER path in this package now takes
+// the one it was handed (`BrowserGenerationSpec.processorIdentity`). What arrives
+// HERE is a module OBJECT from a dev server, which has no bytes to hash, so its
+// identity is derived from the handler sources instead -- and that derivation is
+// `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`, which is
+// blocked on this batch and owns `updateProcessor`. Until it lands these cases
+// declare versions and compare declared hashes, which is also what keeps this
+// package honest about the old form still WORKING while the migration runs.
 
 describe('axis one: swapping in an edited processor', () => {
 	/**
