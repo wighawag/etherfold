@@ -22,7 +22,7 @@ What it buys is the outcome that would otherwise be lost: a real handler edit mo
 
 - [ ] A module object handed to the indexer is identified by a derivation over its handler sources, with no declared field and nothing supplied by the app.
 - [ ] A handler EDIT produces a different identity, so a save registers a successor.
-- [ ] A hot update that changed nothing produces the SAME identity and is reported as `unchanged`, distinguishable from having registered and from having failed.
+- [ ] Handing the SAME module twice produces the same identity, so registering it again is a no-op. Assert this AT THE CONTAINER and not through an HMR API: `an-hmr-update-reconfigures-the-tab-it-is-running-in` is blocked on this task and builds the three-outcome surface on top of it, so asserting the outcome here would invert the dependency.
 - [ ] The derivation's LIMITS are stated where a reader will meet them, since they are real: it survives reformatting and handler re-ordering, and does not survive minification or a change of transpiler. In a dev server serving unbundled modules none of those apply, which is why this arrival can rest on it and a production one cannot.
 - [ ] The same code arriving as a MODULE and as a BUNDLE has different identities, and that is documented as correct rather than papered over: a dev iteration and a deployed build are different generations either way.
 - [ ] Nothing here reaches a non-browser runtime: the bytes arrivals keep hashing bytes.

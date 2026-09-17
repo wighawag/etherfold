@@ -2,7 +2,7 @@
 title: 'An HMR update reconfigures the tab it is running in, so a handler edit keeps the warm fold'
 slug: an-hmr-update-reconfigures-the-tab-it-is-running-in
 spec: a-processor-reaches-a-deployment-however-it-arrives
-blockedBy: [the-chain-facing-container-holds-its-generations-in-slots]
+blockedBy: [a-module-handed-to-a-tab-is-identified-by-its-handler-sources]
 covers: [1, 2, 3]
 ---
 
@@ -44,9 +44,11 @@ The second: a processor that throws on evaluation is the NORMAL case in a dev lo
 
 The third: do not tear down and rebuild the indexer. The warm fold is the entire point, and an indexer that briefly answers nothing is worse in a tab than on a server, because a UI is attached to it. Register beside, as the container already supports.
 
-> **DRIFT NOTE, added 2026-09-16 by the conductor. This paragraph's premise has been overturned and is left in place so the change is visible.** ADR-0086 makes a processor's identity DERIVED FROM ITS CODE and never declared: the `version` field is deleted, and the browser's module arrival derives its identity from the handler sources (`a-module-handed-to-a-tab-is-identified-by-its-handler-sources`). So a handler-body edit DOES move the identity, `unchanged` becomes RARE and TRUE here rather than common and misleading, and the drift report this paragraph points at is DELETED by `the-declared-version-and-the-drift-report-are-deleted`. Whoever builds this must check which of those have landed first: built before them, the paragraph below is correct; built after, it is not. This is a sequencing question and a needs-attention signal if it is unclear, not something to resolve by guessing.
+> **RE-ORDERED 2026-09-17 by the conductor, and the paragraph below is SUPERSEDED. Read this instead of it.** When this task was written a processor's identity was the author's declared `version`, so a handler-body edit did NOT move it: `unchanged` was the COMMON answer, and the drift report existed to explain why. ADR-0086 reverses both. Identity is now DERIVED FROM THE CODE and never declared, the browser's module arrival derives its own from the handler sources, and the drift report is deleted along with `version` itself.
+>
+> The SEQUENCING was changed rather than the premise patched: this task is now `blockedBy: [a-module-handed-to-a-tab-is-identified-by-its-handler-sources]`, which supplies that derivation, so HMR is built ONCE against the identity it will actually ship with instead of being built against the declared one and rewritten weeks later. When you build this, a real handler edit MOVES the identity and registers a successor; `unchanged` is RARE and TRUE (a hot update that genuinely changed nothing); and there is no drift report to point at, because the condition it described cannot occur.
 
-Note also that an identity is unchanged by a handler-body edit unless the author's `version` is generated, so `unchanged` will be a COMMON answer here and must be legible rather than looking like a failure. The drift report task covers saying why.
+Note that `unchanged` must still be LEGIBLE rather than looking like a failure, even though it is now the rare answer: a developer who saves without changing anything should be told so plainly rather than left wondering.
 
 The seam to test at is the browser package's existing indexer tests, driving the handover directly rather than simulating a bundler: the claim worth asserting is "this running indexer held a warm fold, took a new processor, and answered throughout".
 
