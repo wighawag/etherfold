@@ -45,10 +45,12 @@ export type EntityEventProcessorOptions = {
 	 * BUNDLE off disk names the fold by the SHA-256 of those bytes, so an edited
 	 * handler is a different fold whether or not anybody remembered to say so.
 	 *
-	 * ABSENT is a real answer and the one every caller gives until the migrate
-	 * batches land: there are no bytes that describe this processor, so the identity
-	 * falls back to `entityProcessorVersionHash` -- the author-DECLARED `version`
-	 * plus the entity declarations and the config -- exactly as it always did.
+	 * ABSENT is a real answer, and the one a caller gives whenever its arrival had no
+	 * bytes to hash (a configuration naming an unbundled entry point, which is still
+	 * accepted while the migration runs): there are no bytes that describe this
+	 * processor, so the identity falls back to `entityProcessorVersionHash` -- the
+	 * author-DECLARED `version` plus the entity declarations and the config -- exactly
+	 * as it always did.
 	 *
 	 * It is deliberately NOT the declaration ADR-0043 rejected. That one was a
 	 * caller restating a value this class also computes, which can silently
@@ -62,12 +64,17 @@ export type EntityEventProcessorOptions = {
 };
 
 /**
- * THE IDENTITY OF A FOLD, computable BEFORE the fold exists.
+ * THE AUTHOR'S DECLARED IDENTITY FOR A FOLD, computable BEFORE the fold exists.
  *
- * The same value `EntityEventProcessor.getVersionHash()` returns, as a FUNCTION
- * of the things a host already holds -- the declared version, the entity
- * declarations and the processor config -- rather than of a constructed
- * processor over a constructed store.
+ * The value `EntityEventProcessor.getVersionHash()` returns WHEN NO ARRIVAL
+ * SUPPLIED ONE, as a FUNCTION of the things a host already holds -- the declared
+ * version, the entity declarations and the processor config -- rather than of a
+ * constructed processor over a constructed store. A host that WAS handed an
+ * identity does not call this at all: asking a processor built from bytes to state
+ * its own version is the question ADR-0086 says it cannot answer, and
+ * `EntityEventProcessorOptions.identity` is where that host puts the answer it
+ * has. This function and that option are peers, and the option wins; the declared
+ * one is what `the-declared-version-and-the-drift-report-are-deleted` removes.
  *
  * It exists because a **generation**'s state is a TABLE-NAME NAMESPACE named
  * from `{stream digest, processor version hash}` (ADR-0053), and a generation is
@@ -78,8 +85,10 @@ export type EntityEventProcessorOptions = {
  * It is ONE formula in ONE place, which is the whole point. ADR-0043 rejected
  * having a caller DECLARE the version hash beside its factory, because a
  * declaration that can silently disagree with `getVersionHash()` keys a store on
- * a lie. Calling the owner's own function is not that: `getVersionHash()` is
- * this, so the two cannot diverge.
+ * a lie. Calling the owner's own function is not that: on the declared path
+ * `getVersionHash()` is this, so the two cannot diverge -- and on the arrival path
+ * a host passes the SAME supplied value to the namespace and to the fold, so
+ * neither can there.
  */
 export function entityProcessorVersionHash<ABI extends Abi, ProcessorConfig = undefined>(
 	processor: EntityProcessor<ABI, ProcessorConfig>,
@@ -197,16 +206,21 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	}
 
 	/**
-	 * Identity of the processor's LOGIC, which is what invalidates stored state.
+	 * WHICH FOLD THIS IS, which is what invalidates stored state. The core compares
+	 * it against the stored cursor's `context.processor` and clears on a mismatch.
 	 *
-	 * The entity declarations are hashed in alongside the version, unlike the
-	 * in-memory path which hashes only `version` and config. Here the schema is
-	 * part of the state's meaning: renaming a field or changing its type makes
-	 * previously written rows mean something else, and a stale `version` string
-	 * would let the core adopt them. The core compares this against the stored
-	 * cursor's `context.processor` and clears on a mismatch.
+	 * THE ARRIVAL'S, where a host was handed one (see `options.identity` and
+	 * ADR-0086): a fold built from bytes is named by those bytes, so an edited
+	 * handler is a different fold with no author action. It is answered as given and
+	 * never inspected -- nothing in this tree parses an identity.
 	 *
-	 * The BACKEND is deliberately not in it. The same declarations on SQLite and
+	 * Otherwise the author's DECLARATION, and then the entity declarations are hashed
+	 * in alongside the version, unlike the in-memory path which hashed only `version`
+	 * and config. There the schema is part of the state's meaning: renaming a field or
+	 * changing its type makes previously written rows mean something else, and a stale
+	 * `version` string would let the core adopt them.
+	 *
+	 * The BACKEND is in NEITHER, deliberately. The same declarations on SQLite and
 	 * on IndexedDB are the same state, which is the whole claim this class makes;
 	 * hashing the store in would discard state for moving a deployment.
 	 */

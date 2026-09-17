@@ -12,6 +12,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/fixtures.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // Every processor VARIANT below is annotated `SQLProcessor<TestABI>`. The handler
 // map MAPS over the ABI's event names, so `ABI` is not inferrable from an object
@@ -53,8 +54,12 @@ describe('the sync cursor', () => {
 			lastSync({latestBlock: 100, lastToBlock: 100}),
 		);
 
-		const v2: SQLProcessor<TestABI> = {...processor, version: '2.0.0'};
-		const upgraded = new VersionedStateEventProcessor(db, v2);
+		// The upgrade is a DIFFERENT ARRIVAL and not a bumped `version` (ADR-0086): the
+		// same authored object, folded under the identity a host derived from other
+		// bytes. What the case is about is a stored context that does not match the fold
+		// now running, and where that mismatch came from is exactly what the engine never
+		// asks.
+		const upgraded = new VersionedStateEventProcessor(db, processor, {identity: identityOf('v2')});
 		const loaded = await upgraded.load(SOURCE, {finality});
 		expect(loaded).toBeDefined();
 		expect(loaded!.lastSync.context.processor).not.toBe(upgraded.getVersionHash());
@@ -105,7 +110,72 @@ describe('the sync cursor', () => {
 	});
 });
 
-describe('getVersionHash', () => {
+describe('the identity this fold answers with', () => {
+	it('is the one the ARRIVAL handed it, where a host had one', () => {
+		// ADR-0086: an author cannot STATE their processor's identity, and where a host
+		// read a self-contained BUNDLE off disk it hands over the hash of those bytes.
+		// The DECLARED hash is then not consulted at all rather than compared with it,
+		// which is what lets an edited handler be a different fold with no author action.
+		const identity = identityOf('the-bundle-this-deployment-runs');
+		const handed = new VersionedStateEventProcessor(createTestDB(), processor, {identity});
+		expect(handed.getVersionHash()).toBe(identity);
+
+		const declared = new VersionedStateEventProcessor(createTestDB(), processor);
+		expect(handed.getVersionHash()).not.toBe(declared.getVersionHash());
+	});
+
+	it('is not moved by a later `configure`, because a bundle carries the config it was built with', () => {
+		// The declared hash covers the config, so `configure` MOVES it -- asserted below,
+		// so this case is about the arrival's identity rather than about `configure`
+		// happening to do nothing. An arrival's does not move, and that is correct rather
+		// than a limitation: the config a bundle was built with is IN the bundle, so there
+		// is nothing left for a caller to add.
+		const configurable = processor as unknown as SQLProcessor<TestABI, {fee: number}>;
+		const identity = identityOf('configured-in-the-bundle');
+
+		const handed = new VersionedStateEventProcessor(createTestDB(), configurable, {identity});
+		handed.configure({fee: 1});
+		expect(handed.getVersionHash()).toBe(identity);
+
+		const declared = new VersionedStateEventProcessor(createTestDB(), configurable);
+		const unconfigured = declared.getVersionHash();
+		declared.configure({fee: 1});
+		expect(declared.getVersionHash()).not.toBe(unconfigured);
+	});
+
+	it('reaches the fold underneath, so there is one answer and never two', async () => {
+		// The wrapper is what the core asks, but the fold it builds computes an identity
+		// of its own unless it is handed this one -- and two live answers to "which fold
+		// is this" is the whole hazard `EntityEventProcessorOptions.identity` exists to
+		// close. Reached through `load`, which is what builds the inner fold.
+		const identity = identityOf('forwarded-to-the-inner-fold');
+		const p = new VersionedStateEventProcessor(createTestDB(), processor, {identity});
+		await p.load(SOURCE, {finality});
+		expect((await innerFoldOf(p)).getVersionHash()).toBe(identity);
+	});
+});
+
+/**
+ * The neutral fold the wrapper built, reached the only way a test can.
+ *
+ * It is private, memoised and deliberately absent from the public surface,
+ * because a deployment holds the WRAPPER and asks it; so the one thing worth
+ * asserting about the fold underneath is that it was told the same thing, and
+ * that has to be read off the field. Built on first use, so `load` or `process`
+ * must have run.
+ */
+async function innerFoldOf(p: VersionedStateEventProcessor<TestABI, any>): Promise<{getVersionHash(): string}> {
+	const folding = (p as unknown as {folding?: Promise<{getVersionHash(): string}>}).folding;
+	if (!folding) throw new Error(`no fold was built: call load() or process() first`);
+	return folding;
+}
+
+describe('getVersionHash, the DECLARED fallback', () => {
+	// RETAINED on the declared path on purpose. Every other identity in this package
+	// now comes from an arrival, but the declared `version` must still WORK until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it, and a batch
+	// that left no assertion of that inside this package would be trusting a sibling
+	// package to notice. These three go with the field they describe.
 	it('changes when the processor version changes', () => {
 		const v2: SQLProcessor<TestABI> = {...processor, version: '2.0.0'};
 		const a = new VersionedStateEventProcessor(createTestDB(), processor);

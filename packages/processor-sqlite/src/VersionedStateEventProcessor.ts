@@ -45,7 +45,8 @@ export {forkPoint, groupByBlock} from '@etherfold/processor-entities';
  * HOLDS is `prune`, which the deployment schedules.
  */
 /**
- * What this convenience class passes through to the store it builds for you.
+ * What this convenience class was told: what it passes through to the store it
+ * builds for you, plus the one thing it keeps for itself.
  *
  * `tableNamespace` is here because a generation's state IS a table-name namespace
  * inside one database (ADR-0053), so WITHOUT it two generations built through this
@@ -58,7 +59,23 @@ export {forkPoint, groupByBlock} from '@etherfold/processor-entities';
 export type VersionedStateProcessorOptions = Pick<
 	VersionedStateStoreOptions,
 	'retention' | 'finalityDepth' | 'tableNamespace'
->;
+> & {
+	/**
+	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one.
+	 *
+	 * The store never sees it, which is why this type is no longer purely a
+	 * pass-through: it is `EntityEventProcessorOptions.identity`, spelled the same
+	 * and meaning the same, forwarded to the neutral fold this class builds. See
+	 * there for the whole reasoning; the short of it is ADR-0086's invariant, that
+	 * an author cannot STATE their processor's identity and the engine is HANDED one
+	 * and never asks where it came from.
+	 *
+	 * ABSENT is a real answer: there are no bytes that describe this processor, so
+	 * the identity falls back to the author-DECLARED `version` plus the entity
+	 * declarations and the config, exactly as it always did.
+	 */
+	readonly identity?: string;
+};
 
 /**
  * The SQLite flavour of `EntityEventProcessor`: build the store from a
@@ -120,6 +137,14 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 	 */
 	private folding: Promise<EntityEventProcessor<ABI, ProcessorConfig>> | undefined;
 	/**
+	 * What the ARRIVAL supplied, held so that BOTH halves answer with it: this
+	 * wrapper (which is what the core asks) and the fold underneath (which would
+	 * otherwise compute one of its own). Two live answers to "which fold is this" is
+	 * the hazard ADR-0086's identity option exists to close, and a wrapper is exactly
+	 * where one would appear.
+	 */
+	private readonly identity: string | undefined;
+	/**
 	 * The fold reporter, HELD HERE until there is an inner fold to give it to.
 	 *
 	 * A wrapper that forgot to forward this would take the wrapped fold's reporting
@@ -149,6 +174,7 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 		this.store = new VersionedStateStore(db, processor.entities, options);
 		this.view = new VersionedStateView(this.store);
 		this.finalityDepth = options.finalityDepth;
+		this.identity = options.identity;
 	}
 
 	/**
@@ -156,15 +182,20 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 	 *
 	 * The config is re-applied on every call rather than once at build time, so a
 	 * `configure` that arrived before the claim and one that arrived after mean the
-	 * same thing to the fold. `configure` itself stays synchronous, because
-	 * `getVersionHash` is a function of the config and a host reads it before
-	 * anything is folded.
+	 * same thing to the fold. `configure` itself stays synchronous, because the
+	 * DECLARED fallback is a function of the config and a host reads the identity
+	 * before anything is folded. (An arrival's identity is a constant and unmoved by
+	 * either, since the config a bundle was built with is in the bundle.)
 	 */
 	private async folded(): Promise<EntityEventProcessor<ABI, ProcessorConfig>> {
 		this.folding ??= openForWriting(this.store).then(
 			(claimed) =>
 				new EntityEventProcessor<ABI, ProcessorConfig>(claimed, this.processor, {
 					...(this.finalityDepth === undefined ? {} : {finalityDepth: this.finalityDepth}),
+					// FORWARDED, so the fold underneath answers what this wrapper answers. A
+					// wrapper that kept the arrival's identity to itself would leave the inner fold
+					// computing the author's declaration, which is two live answers to one question.
+					...(this.identity === undefined ? {} : {identity: this.identity}),
 				}),
 		);
 		const fold = await this.folding;
@@ -187,17 +218,23 @@ export class VersionedStateEventProcessor<ABI extends Abi, ProcessorConfig = und
 	}
 
 	/**
-	 * See `EntityEventProcessor.getVersionHash`: the version plus the declarations and
-	 * config.
+	 * WHICH FOLD THIS IS, and the same answer `EntityEventProcessor.getVersionHash`
+	 * gives for the same reasons.
 	 *
-	 * Through the SHARED function rather than through the fold, because a host reads
-	 * this before anything is folded (it names the state's table namespace,
-	 * ADR-0053) and `EntityEventProcessor.getVersionHash` is that same function. Two
-	 * spellings of one formula is how a namespace comes to be keyed on a hash the
-	 * fold does not have; one function called twice is not.
+	 * THE ARRIVAL'S, where a host was handed one (ADR-0086): a fold built from bytes
+	 * is named by those bytes, and no author action is needed for an edited handler to
+	 * be a different fold. Otherwise the author's DECLARED value -- the `version` plus
+	 * the entity declarations and the config -- through the SHARED function rather
+	 * than beside it, because a host reads this before anything is folded (it names
+	 * the state's table namespace, ADR-0053) and `EntityEventProcessor.getVersionHash`
+	 * is that same function. Two spellings of one formula is how a namespace comes to
+	 * be keyed on a hash the fold does not have; one function called twice is not.
+	 *
+	 * Answered from the field rather than from the fold underneath for the same
+	 * reason: the fold is built on FIRST USE and a host asks this before then.
 	 */
 	getVersionHash(): string {
-		return entityProcessorVersionHash(this.processor, this.config);
+		return this.identity ?? entityProcessorVersionHash(this.processor, this.config);
 	}
 
 	/** Advisory; see `EventProcessor.getCodeFingerprint`. Taken from the author's object. */

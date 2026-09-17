@@ -17,6 +17,18 @@ import {finality, freshProcessor, lastSync, processor, SOURCE, transfer, type Te
 // goes through a BigInt-tagging codec rather than plain JSON, so "the
 // fingerprint rides along in the context" is a claim that has to be tested
 // rather than assumed.
+//
+// THIS WHOLE FILE IS THE DECLARED PATH'S OWN SUITE, and it is RETAINED here
+// deliberately rather than migrated. ADR-0086 moves identity off the author's
+// declaration and onto the ARRIVAL, and every fold in this package that is HANDED
+// an identity now takes it from there (`lifecycle.test.ts`,
+// `deployment-shapes.test.ts`). But the declared `version`, the code fingerprint
+// and the `PROCESSOR DRIFT` report must still EXIST AND WORK until
+// `the-declared-version-and-the-drift-report-are-deleted` removes them -- sibling
+// migrate batches are landing against them -- and these are the assertions that
+// say so. Rewriting them onto an arrival identity would not migrate the declared
+// path, it would delete its test coverage while leaving the code. They go with the
+// field they describe, in that task.
 // ---------------------------------------------------------------------------
 
 /** The same processor with an edited handler and a DELIBERATELY unchanged version. */

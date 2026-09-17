@@ -9,6 +9,7 @@ import {
 } from '../src/index.js';
 import {BACKENDS} from './utils/backends.js';
 import {finality, lastSync, processor, SOURCE, transfer, type TestABI} from './utils/fixtures.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * The claim the storage seam was built to make, now reachable through a shipped
@@ -170,8 +171,11 @@ describe.each(BACKENDS)('the sync cursor on $name', (backend) => {
 		await p.load(SOURCE, STREAM_CONFIG);
 		await p.process(STREAM.slice(0, 3), lastSync({latestBlock: 100, lastToBlock: 100}));
 
-		const v2: EntityProcessor<TestABI> = {...processor, version: '2.0.0'};
-		const upgraded = new EntityEventProcessor(store, v2);
+		// The upgrade is a DIFFERENT ARRIVAL and not a bumped `version` (ADR-0086): the
+		// same authored object, folded under the identity a host derived from other bytes.
+		// What the case is about is a stored context that does not match the fold now
+		// running, and where that mismatch came from is exactly what the engine never asks.
+		const upgraded = new EntityEventProcessor(store, processor, {identity: identityOf('v2')});
 		const loaded = await upgraded.load(SOURCE, STREAM_CONFIG);
 		expect(loaded).toBeDefined();
 		expect(loaded!.lastSync.context.processor).not.toBe(upgraded.getVersionHash());
@@ -256,10 +260,17 @@ describe('the component itself', () => {
 		await expect(p.process(STREAM, lastSync())).rejects.toThrow(/load\(\) must be called/);
 	});
 
-	it('hashes the declarations and the config, and NOT the backend', async () => {
+	it('hashes the declarations and the config, and NOT the backend, on the DECLARED fallback', async () => {
 		// The same declarations on two backends are the same state, which is the
 		// whole claim: hashing the store in would discard state for moving a
 		// deployment from a server to a browser and back.
+		//
+		// RETAINED on the declared path deliberately. Every identity this package's
+		// suites otherwise hand a fold now comes from an ARRIVAL, but the declared
+		// `version` must still WORK until `the-declared-version-and-the-drift-report-are-deleted`
+		// removes it, and a migrate batch that left no assertion of that inside this
+		// package would be trusting a sibling package to notice. This case goes with the
+		// field it describes.
 		const sqlite = new EntityEventProcessor(await BACKENDS[1].open(processor.entities), processor);
 		const indexeddb = new EntityEventProcessor(await BACKENDS[2].open(processor.entities), processor);
 		expect(sqlite.getVersionHash()).toBe(indexeddb.getVersionHash());
@@ -278,7 +289,7 @@ describe('the component itself', () => {
 		// The engine takes it and never asks where it came from -- so the DECLARED hash
 		// is not consulted at all rather than compared with it, which is what lets an
 		// edited handler be a different fold with no author action.
-		const identity = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+		const identity = identityOf('the-bundle-this-deployment-runs');
 		const handed = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), processor, {identity});
 		expect(handed.getVersionHash()).toBe(identity);
 
