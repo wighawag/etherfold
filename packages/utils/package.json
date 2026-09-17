@@ -1,7 +1,7 @@
 {
 	"name": "@etherfold/utils",
 	"version": "0.7.0",
-	"description": "Node-side glue for hosts that take a processor path from an operator: load the processor module, get the authoring object out of it, and resolve which contracts it indexes.",
+	"description": "Node-side glue for hosts that take a processor from an operator, as a path or as bundled BYTES: load it, get the authoring object out of it, name the bytes by their hash, and resolve which contracts it indexes.",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -28,6 +28,7 @@
 	"devDependencies": {
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
+		"esbuild": "^0.28.0",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.8"

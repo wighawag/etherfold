@@ -1,0 +1,1 @@
+function e(t){return t.toString().padStart(78,"0")}var r={version:"1.0.0",entities:[{name:"nft",id:["tokenID"],fields:{owner:"text"}}],onTransfer(t,n){t.set("nft",e(n.args.tokenID),{owner:n.args.to})}},i=()=>r;export{r as NFTProcessor,i as createProcessor};

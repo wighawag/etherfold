@@ -9,6 +9,12 @@ docs/
 # on a prettier upgrade would only add noise to code nobody is going to change.
 archive/
 
+# A committed BUNDLE is an artifact, not source: reformatting it would give it a
+# different identity (the hash of its octets IS its name, ADR-0086) while changing
+# nothing about what it does -- and `--minify` is mandatory for that identity to be
+# stable across machines, so the one-line shape is the point.
+packages/utils/test/fixtures/processor-artifact/processor.bundle.js
+
 *.md
 *.yaml
 *.html
