@@ -76,11 +76,15 @@ function urlsOf(location: SnapshotLocation): {head: string; body: string} {
 
 export type BootstrapOptions = {
 	/**
-	 * The version hash of the processor about to index (`getVersionHash()`).
+	 * WHICH FOLD is about to index: the identity of the generation this store will
+	 * belong to, as the deployment's ARRIVAL derived it (ADR-0086) -- the hash of the
+	 * bundle's bytes where there are bytes.
 	 *
-	 * A snapshot from another version is not a candidate: entity rows are the
+	 * A snapshot from another processor is not a candidate: entity rows are the
 	 * output of the processor that wrote them, so adopting them under different
-	 * logic is adopting another program's conclusions.
+	 * logic is adopting another program's conclusions. The value is COMPARED for
+	 * equality and never parsed, so how either side derived one is nothing this
+	 * module has an opinion about.
 	 */
 	readonly processor: string;
 	/**
@@ -160,7 +164,7 @@ export function createSnapshot<ABI extends Abi>(snapshot: {
 	readonly rows: readonly Mutation[];
 	/** The cursor those rows belong to. Serialized here, installed with them as one unit. */
 	readonly lastSync: LastSync<ABI>;
-	/** The version hash of the processor that computed the rows. */
+	/** WHICH FOLD computed the rows: its identity, compared for equality and never parsed. */
 	readonly processor: string;
 	readonly savedAt?: string;
 }): StateSnapshot {
@@ -210,11 +214,13 @@ type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHe
  * unless the store is already further along.
  *
  * ```ts
+ * // `processorIdentity` is what the deployment's arrival derived and handed to its
+ * // fold (ADR-0086), which is the one value naming this generation everywhere.
  * const store = await openSnapshotAware(await createBrowserStateStore(processor.entities));
  * const outcome = await bootstrapFromSnapshot(store, [
  *   'https://mirror-a.example/state.json',
  *   {url: 'https://mirror-b.example/state.json', head: 'https://mirror-b.example/head.json'},
- * ], {processor: eventProcessor.getVersionHash(), finalityDepth: 64});
+ * ], {processor: processorIdentity, finalityDepth: 64});
  * ```
  *
  * The behaviour is the free-form keeper's, point for point: every location is
@@ -226,11 +232,11 @@ type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHe
  *   free-form keeper tries the winner and then exactly one more (its own source
  *   says `// TODO more than 2`). With one mirror down and two up, this one gets
  *   state and that one does not.
- * - **A snapshot from another processor version is not a candidate at all.** The
+ * - **A snapshot from another processor is not a candidate at all.** The
  *   free-form keeper does not check, which is the gap
  *   `processor-version-hash-cannot-silently-lie` closed on the CLI's envelope.
- *   Here it is decisive rather than advisory, because a version mismatch means
- *   the rows describe different entities.
+ *   Here it is decisive rather than advisory, because a mismatch means the rows
+ *   were computed by different logic.
  *
  * Returning an OUTCOME rather than throwing on "nothing usable" is the same
  * judgement the free-form path makes: not finding a snapshot is a normal first

@@ -32,6 +32,17 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import {beforeAll, describe, expect, it} from 'vitest';
 import {VersionedStateEventProcessor} from '../src/index.js';
 import {abi, processor, timestampOf, type TestABI} from './utils/fixtures.js';
+import {identityOf} from './utils/processorIdentity.js';
+
+/**
+ * The identity BOTH deployment shapes fold under, handed over the way an arrival
+ * hands one (ADR-0086: derived from bytes, never declared by the author).
+ *
+ * ONE value for both, which is this file's claim restated: where the state lives
+ * is a deployment's choice and nothing the processor sees, so the fold's name
+ * cannot depend on the backend underneath it either.
+ */
+const PROCESSOR_IDENTITY = identityOf('deployment-shapes');
 
 // ---------------------------------------------------------------------------
 // ONE PROCESSOR, TWO DEPLOYMENT SHAPES
@@ -447,6 +458,7 @@ async function snapshotOf(read: Reader): Promise<Snapshot> {
 function entityProcessorOver(
 	store: StateStoreBackend,
 	authored: EntityProcessor<TestABI>,
+	identity: string,
 ): EventProcessor<TestABI, void> {
 	// CLAIMED once, on first use: folding is writing, and the ability to mutate is
 	// obtained by claiming (ADR-0077). `openForWriting` migrates, which is what the
@@ -454,7 +466,11 @@ function entityProcessorOver(
 	let writer: Promise<WritableStateStore> | undefined;
 	const claimed = () => (writer ??= openForWriting(store));
 	return {
-		getVersionHash: () => `${authored.version}-${simple_hash({entities: authored.entities})}`,
+		// HANDED, not computed: a fold is told which fold it is and never derives one
+		// from the author's declaration (ADR-0086). The seam still asks for it under the
+		// declared path's name, which `the-declared-version-and-the-drift-report-are-deleted`
+		// is what removes.
+		getVersionHash: () => identity,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			await claimed();
@@ -482,7 +498,13 @@ const backends: Backend[] = [
 		// the published one: versioned rows in a REAL local libSQL database
 		name: 'sqlite',
 		make() {
-			const p = new VersionedStateEventProcessor<TestABI>(new RemoteLibSQL(createClient({url: ':memory:'})), processor);
+			const p = new VersionedStateEventProcessor<TestABI>(
+				new RemoteLibSQL(createClient({url: ':memory:'})),
+				processor,
+				{
+					identity: PROCESSOR_IDENTITY,
+				},
+			);
 			return {processor: p, read: (entity, id) => p.state.getCurrent(entity, id)};
 		},
 	},
@@ -492,7 +514,10 @@ const backends: Backend[] = [
 		name: 'memory',
 		make() {
 			const store = new MemoryStateStore(processor.entities);
-			return {processor: entityProcessorOver(store, processor), read: (entity, id) => store.getCurrent(entity, id)};
+			return {
+				processor: entityProcessorOver(store, processor, PROCESSOR_IDENTITY),
+				read: (entity, id) => store.getCurrent(entity, id),
+			};
 		},
 	},
 ];

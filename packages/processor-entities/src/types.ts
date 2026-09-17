@@ -59,15 +59,22 @@ export type EventHandlers<ABI extends Abi, ProcessorConfig = undefined> = {
  */
 export type EntityProcessor<ABI extends Abi, ProcessorConfig = undefined> = EventHandlers<ABI, ProcessorConfig> & {
 	/**
-	 * REQUIRED. The identity of this processor's logic.
+	 * REQUIRED, and SUPERSEDED: the author's own declaration of which fold this is.
 	 *
-	 * The indexer discards state computed by a previous version by comparing
-	 * `getVersionHash()`, of which this is the author-declared part. The entity
-	 * declarations are hashed in alongside it, so a SCHEMA change invalidates
-	 * without a bump; handlers are functions, not data, so a HANDLER change does
-	 * not. Ideally generate this (from a content hash, a build id, a git sha) so
-	 * it cannot be forgotten; when you do forget, the advisory code fingerprint
-	 * is what says so.
+	 * ADR-0086 moves identity off the author and onto the ARRIVAL -- a processor IS a
+	 * bundle and the hash of its bytes IS its name -- precisely because this field
+	 * could be forgotten, and a forgotten bump means state computed by the previous
+	 * logic served for ever and silently. So do not reach for it in new code: a host
+	 * that has an identity hands it over (`EntityEventProcessorOptions.identity`) and
+	 * the declaration is not consulted at all.
+	 *
+	 * It is still REQUIRED and still WORKS, because it is what identifies a fold whose
+	 * arrival had no bytes to hash, and `the-declared-version-and-the-drift-report-are-deleted`
+	 * is what removes it. On that path: the indexer discards state computed by a
+	 * previous version by comparing `getVersionHash()`, of which this is the declared
+	 * part. The entity declarations are hashed in alongside it, so a SCHEMA change
+	 * invalidates without a bump; handlers are functions, not data, so a HANDLER
+	 * change does not, and the advisory code fingerprint is what says so.
 	 */
 	version: string;
 	/** `{name, id, fields}` per entity: the store owns the versions, the layout and the revert. */
