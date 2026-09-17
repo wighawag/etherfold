@@ -92,11 +92,15 @@ export const ENTITY_SNAPSHOT_FORMAT = 1;
 export type StateSnapshot = {
 	readonly format: number;
 	/**
-	 * The version hash of the processor that COMPUTED these rows.
+	 * WHICH FOLD COMPUTED THESE ROWS: its identity, as the producing deployment's
+	 * ARRIVAL derived it (ADR-0086) -- the SHA-256 of a bundle's octets where there
+	 * are bytes.
 	 *
-	 * Checked against the local processor's, so state computed by different logic
-	 * is refused rather than trusted (`processor-version-hash-cannot-silently-lie`
-	 * is why that hash can be relied on).
+	 * Checked for EQUALITY against the identity the local deployment was handed, so
+	 * state computed by different logic is refused rather than trusted. It is never
+	 * parsed, and nothing here has an opinion about which arrival produced either
+	 * side, which is what lets a producer and a consumer derive one two different
+	 * ways and still agree when they are the same fold.
 	 */
 	readonly processor: string;
 	/** When the snapshot was produced. Informational; nothing keys off it. */
@@ -175,17 +179,17 @@ export class SnapshotProcessorMismatchError extends Error {
 	readonly name = 'SnapshotProcessorMismatchError';
 
 	constructor(
-		/** The version hash of the processor that is about to index. */
+		/** The identity of the fold that is about to index, as its arrival derived it. */
 		readonly expected: string,
-		/** The version hash the snapshot says computed it. */
+		/** The identity the snapshot says computed it. */
 		readonly found: string,
 		/** The block the snapshot was taken at, so a message can say which one. */
 		readonly takenAt: number,
 	) {
 		super(
-			`this snapshot (block ${takenAt}) was computed by processor version \`${found}\`, and this deployment runs ` +
+			`this snapshot (block ${takenAt}) was computed by processor \`${found}\`, and this deployment runs ` +
 				`\`${expected}\`. It is refused rather than loaded: entity rows are the output of the processor that wrote ` +
-				`them, so state from another version is another program's conclusions, and nothing downstream could tell ` +
+				`them, so state from another fold is another program's conclusions, and nothing downstream could tell ` +
 				`the result apart from a correct state. Publish a snapshot from \`${expected}\`, or index from the start ` +
 				`block.`,
 		);
@@ -254,7 +258,9 @@ export class RevertBeyondSnapshotError extends Error {
  *
  * ```ts
  * const store = await openSnapshotAware(await createBrowserStateStore(processor.entities));
- * await store.bootstrap(snapshot, {processor: eventProcessor.getVersionHash()});
+ * // the identity this deployment's ARRIVAL handed its fold (ADR-0086), never a
+ * // value the processor was asked for: it is compared for equality and never parsed
+ * await store.bootstrap(snapshot, {processor: processorIdentity});
  * ```
  *
  * A host that fetches its snapshot from published mirrors, and that wants "only

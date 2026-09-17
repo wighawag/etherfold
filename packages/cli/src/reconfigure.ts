@@ -47,24 +47,35 @@ const logger = logs('etherfold');
 //     `ReconfigureReport` (`@etherfold/server`), and the section below on why
 //     `unchanged` is the one a developer will actually meet most often.
 //
-// ## WHY `unchanged` IS COMMON, AND WHAT MOVES THE IDENTITY
+// ## WHAT MOVES THE IDENTITY, WHICH DEPENDS ON THE ARRIVAL
 //
-// A generation is registered only when its IDENTITY differs, and the processor
-// half of that identity is `getVersionHash()`: the author-DECLARED `version`,
-// plus a hash of the entity declarations and the processor config. It is
-// deliberately NOT a hash of the handler source -- the code fingerprint is
-// ADVISORY and stays out of the identity, because a bundler re-emitting the same
-// behaviour differently would otherwise invalidate every deployment's state
-// (`@etherfold/core`, `utils/fingerprint.ts`, which records that as a deviation
-// from ADR-0008).
+// A generation is registered only when its IDENTITY differs, and WHERE that
+// identity comes from belongs to the ARRIVAL (ADR-0086). An author cannot state
+// it; this process is handed one and never asks where it came from.
 //
-// So an edit to a HANDLER BODY alone names the generation this deployment
-// already holds, and the honest answer is `unchanged`. That is not a failure of
-// the trigger and it is not something to paper over by folding the fingerprint
-// into the identity: the author bumps `version` (or changes the entity
-// declarations, or the source) when they mean "this is a different fold", and the
-// message this returns says exactly that, so "I saved the file and nothing
-// happened" has an answer rather than three indistinguishable causes.
+// A deployment whose `--processor` path names a self-contained BUNDLE is
+// identified by the SHA-256 of those octets, so a re-read after a REBUILD sees a
+// different identity whenever the bytes moved -- which an edited handler always
+// does. There `unchanged` means what it says: these are the same bytes, and there
+// is nothing an author could have forgotten.
+//
+// A deployment whose path names an unbundled MODULE still carries the
+// author-DECLARED identity `getVersionHash()` answers with: the `version`, plus a
+// hash of the entity declarations and the processor config. It is deliberately
+// NOT a hash of the handler source -- the code fingerprint is ADVISORY and stays
+// out of it, because a bundler re-emitting the same behaviour differently would
+// otherwise invalidate every deployment's state (`@etherfold/core`,
+// `utils/fingerprint.ts`, which records that as a deviation from ADR-0008).
+//
+// So on THAT arrival an edit to a HANDLER BODY alone names the generation this
+// deployment already holds, `unchanged` is the common answer, and it is not
+// something to paper over by folding the fingerprint into the identity: the
+// author bumps `version` (or changes the entity declarations, or the source) when
+// they mean "this is a different fold", and the message this returns says exactly
+// that -- and says it only to an author who HAS a `version` to bump, so "I saved
+// the file and nothing happened" has an answer rather than three
+// indistinguishable causes. `the-declared-version-and-the-drift-report-are-deleted`
+// removes that half, and with it the section below.
 //
 // ## AND `unchanged` SAYS WHETHER THE CODE MOVED -- WHICH TWO FINGERPRINTS, AND WHY THOSE TWO
 //

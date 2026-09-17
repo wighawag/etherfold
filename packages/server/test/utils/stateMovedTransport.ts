@@ -33,6 +33,7 @@ import {
 	ZERO,
 	type TestABI,
 } from './feedHarness.js';
+import {identityOf} from './processorIdentity.js';
 import {openSignalStream, type SignalStream} from './signalStream.js';
 
 /**
@@ -91,32 +92,40 @@ function freshDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-/**
- * The FOLD, at a version the caller may move.
- *
- * The version is a parameter because a PROCESSOR change over an unchanged stream
- * is what makes the promotion case cheap: the same logs, a different fold, so
- * the successor re-folds the stored stream and fetches nothing.
- */
-function entityProcessorAt(version: string): EntityProcessor<TestABI> {
-	return {
-		version,
-		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
-		async onTransfer(state, event) {
-			// A BURN this processor does not track: decoded, handed to the handler, and the
-			// handler takes a branch that mutates nothing. That is how a block is APPLIED
-			// while touching no entity, which is what `applyNextEmptyBlock` drives. It is a
-			// different thing from a range carrying no logs, which applies no block at all.
-			if (event.args.to === ZERO) return;
-			state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
-		},
-	};
-}
+/** The FOLD. WHICH fold it is comes from the arrival, not from anything in here. */
+const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: `foldAt` hands the fold the
+	// identity its ARRIVAL derived (ADR-0086), so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
+	version: '1.0.0',
+	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
+	async onTransfer(state, event) {
+		// A BURN this processor does not track: decoded, handed to the handler, and the
+		// handler takes a branch that mutates nothing. That is how a block is APPLIED
+		// while touching no entity, which is what `applyNextEmptyBlock` drives. It is a
+		// different thing from a range carrying no logs, which applies no block at all.
+		if (event.args.to === ZERO) return;
+		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
+	},
+};
 
-function foldAt(version: string) {
+/**
+ * A FOLD ARRIVING AS THE BYTES `marker` NAMES.
+ *
+ * The marker is a parameter because a PROCESSOR change over an unchanged stream
+ * is what makes the promotion case cheap: the same logs, a different fold, so
+ * the successor re-folds the stored stream and fetches nothing. Under ADR-0086
+ * that change is different BYTES rather than a bumped `version`, and the identity
+ * is HANDED to the fold instead of asked of it.
+ */
+function foldAt(marker: string) {
+	const identity = identityOf(marker);
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorAt(version)),
+		createProcessor: (state: RemoteSQL) =>
+			new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -137,7 +146,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource<TestABI>(db, NAME),
-		generation: foldAt('1.0.0'),
+		generation: foldAt('the-incumbent-fold'),
 	});
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
@@ -224,7 +233,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 
 		async applyNextEmptyBlock(): Promise<number> {
 			// The same event-bearing block as above, sent TO the zero address, which
-			// `entityProcessorAt` does not track: the receiving fold applies the block and
+			// `entityProcessor` does not track: the receiving fold applies the block and
 			// mutates nothing, so the changed-set crossing the stream is empty.
 			const block = (told.at(-1)?.block ?? FIRST_EVENT_BLOCK - 1) + 1;
 			told.push({block, hash: `0xa${block.toString(16)}`, id: BigInt(block), to: ZERO});
@@ -252,7 +261,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 			// catches up by re-folding what the emission table already holds. The pointer
 			// moves under the ordinary default once it is level.
 			const before = await indexer.canonical();
-			await indexer.add(foldAt('2.0.0'));
+			await indexer.add(foldAt('the-successor-fold'));
 			for (let round = 0; round < 60; round++) {
 				if ((await indexer.canonical())?.processor !== before?.processor) return;
 				// The pointer moves at the END of a rebuild rather than inside one, so a

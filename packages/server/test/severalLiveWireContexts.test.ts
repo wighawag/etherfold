@@ -34,6 +34,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // ONE REGISTRY ENTRY HOLDS SEVERAL LIVE WIRE CONTEXTS
@@ -67,8 +68,20 @@ import {
 
 const NAME = 'alpha';
 
+/**
+ * WHICH FOLD both streams here run, as the ARRIVAL derived it (ADR-0086): a hash
+ * of the bytes a bundle would have arrived as, handed to the fold rather than
+ * asked of it. ONE value, deliberately -- WHICH STREAM a generation folds is the
+ * half that differs here, so the two generations must agree on the other half.
+ */
+const PROCESSOR_IDENTITY = identityOf('alpha');
+
 /** The fold both streams here run. WHICH stream a generation folds is the half that differs. */
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: the construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
@@ -94,7 +107,9 @@ function freshDatabase(): RemoteSQL {
 function foldOwningItsOwnState() {
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
+		createProcessor: (state: RemoteSQL) =>
+			new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity: PROCESSOR_IDENTITY}),
+		processorIdentity: PROCESSOR_IDENTITY,
 	};
 }
 

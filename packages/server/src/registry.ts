@@ -23,19 +23,25 @@ import type {RemoteSQL} from 'remote-sql';
  * and the deployment is exactly as it was.
  *
  * `unchanged` is a SUCCESS and is deliberately not folded into `registered` with
- * a flag: it is the ordinary answer to an edit that did not move the processor's
- * DECLARED identity, which `getVersionHash()` is (the code fingerprint is
- * advisory and stays out of it, `@etherfold/core`'s `utils/fingerprint.ts`), so
- * a developer reading it learns something true rather than watching a no-op
- * report success.
+ * a flag: it is the ordinary answer to a re-read that landed on the generation
+ * this deployment already holds, so a developer reading it learns something true
+ * rather than watching a no-op report success.
  *
- * ## `unchanged` READS TWO WAYS, and they stay ONE OUTCOME
+ * ## `unchanged` READS TWO WAYS ON THE DECLARED ARRIVAL, and they stay ONE OUTCOME
  *
- * "Nothing changed" is truthful and, alone, useless: an edited handler body and a
- * save that changed nothing produce the same answer, because neither moves the
- * DECLARED identity. So an `unchanged` carries the second opinion when there is
- * one (`drift`), and an operator can tell "your `version` has not moved since the
- * day you wrote it" from "this really was a no-op".
+ * WHERE the identity came from is the arrival's business and not this type's
+ * (ADR-0086). A deployment whose `--processor` path named a BUNDLE is identified
+ * by the SHA-256 of those bytes, so an edited handler moves it and `unchanged`
+ * means what it says. A deployment whose path named an unbundled module still
+ * carries the author-DECLARED identity `getVersionHash()` answers with (the code
+ * fingerprint is advisory and stays out of it, `@etherfold/core`'s
+ * `utils/fingerprint.ts`) -- and there "nothing changed" is truthful and, alone,
+ * useless: an edited handler body and a save that changed nothing produce the
+ * same answer, because neither moves a declared identity. So an `unchanged`
+ * carries the second opinion when there is one (`drift`), and an operator can
+ * tell "your `version` has not moved since the day you wrote it" from "this
+ * really was a no-op". `the-declared-version-and-the-drift-report-are-deleted`
+ * retires that half along with the path it describes.
  *
  * It is deliberately NOT a fourth outcome. Nothing was registered and nothing
  * changed, which is exactly what `unchanged` means; drift is a FACT ABOUT THE
@@ -413,8 +419,11 @@ export function singleContextEntry(db: RemoteSQL, ingestion: LogIngestion): Inde
 	return {
 		db,
 		liveIngestions: async () => live,
-		// DERIVED on the call and never captured: `generation` reads the processor's
-		// version hash at the moment it is asked, and `configure()` can move it
+		// DERIVED on the call and never captured: `generation` resolves the fold half
+		// at the moment it is asked. An ARRIVAL-supplied identity is a constant
+		// (ADR-0086), but the declared fallback still under it is not -- it covers the
+		// processor's config, and `configure()` can move it -- so reading it late is what
+		// keeps both answers honest.
 		canonicalGeneration: async () => ingestion.generation,
 	};
 }

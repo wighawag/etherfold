@@ -14,6 +14,7 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {expect} from 'vitest';
 import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry} from '../../src/index.js';
+import {identityOf} from './processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE FIXTURE BOTH VIEWS ARE ASSERTED THROUGH
@@ -84,27 +85,33 @@ export const STREAM_CONFIG = {finality: FINALITY};
 export const STREAM_DIGEST = streamDigestOf(SOURCE, resolveStreamConfig(STREAM_CONFIG));
 export const RECONFIGURED_DIGEST = streamDigestOf(RECONFIGURED_SOURCE, resolveStreamConfig(STREAM_CONFIG));
 
-/**
- * The FOLD, at a version the caller may move.
- *
- * The version is a parameter because a PROCESSOR CHANGE over an unchanged stream
- * is a thing the feed has to be asserted across: the same logs, a different fold,
- * which is the one case no cursor check can detect. `getVersionHash` is the
- * version plus the declarations, so bumping this and leaving the entities alone
- * is the narrowest way to say "the same data, folded by something else".
- */
-function entityProcessorAt(version: string): EntityProcessor<TestABI> {
-	return {
-		version,
-		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
-		async onTransfer(state, event) {
-			state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
-		},
-	};
-}
+/** The FOLD. WHICH fold it is comes from the arrival, not from anything in here. */
+const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: `deploy` hands the fold the
+	// identity its ARRIVAL derived (ADR-0086), so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
+	version: '1.0.0',
+	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
+	async onTransfer(state, event) {
+		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
+	},
+};
 
-/** What every deployment folds with unless it says otherwise. */
-export const PROCESSOR_VERSION = '1.0.0';
+/**
+ * WHICH BYTES a deployment arrived as, unless it says otherwise.
+ *
+ * The marker is a parameter of `deploy` because a PROCESSOR CHANGE over an
+ * unchanged stream is a thing the feed has to be asserted across: the same logs,
+ * a different fold, which is the one case no cursor check can detect. Under
+ * ADR-0086 that is a different BUNDLE rather than a bumped `version`, so naming
+ * other bytes is the narrowest way to say "the same data, folded by something
+ * else".
+ */
+export const PROCESSOR_MARKER = 'the-fold-every-deployment-here-runs';
+
+/** The identity those bytes carry, which is what a generation is named by. */
+export const PROCESSOR_IDENTITY = identityOf(PROCESSOR_MARKER);
 
 let logCounter = 0;
 
@@ -151,15 +158,15 @@ export type Deployment = {
 /**
  * A host built with several named indexers over ONE database.
  *
- * `processorVersion` is what a REDEPLOY moves: passing the same `db` and a
- * different version is a host restarted with a new fold over the stream it
+ * `processorMarker` is what a REDEPLOY moves: passing the same `db` and a
+ * different marker is a host restarted on a rebuilt bundle, folding the stream it
  * already stored, which is exactly the change the emission table is keyed
  * independently of (ADR-0006).
  */
 export async function deploy(
 	sources: Record<string, IndexingSource<TestABI>>,
 	db?: RemoteSQL,
-	options: {processorVersion?: string} = {},
+	options: {processorMarker?: string} = {},
 ): Promise<Deployment> {
 	const database: RemoteSQL = db ?? new RemoteLibSQL(createClient({url: ':memory:'}));
 	const hosted: Record<string, Hosted> = {};
@@ -167,14 +174,17 @@ export async function deploy(
 	// name COLUMN doing the partitioning. A database per name is ADR-0053's shape
 	// and is asserted in `twoNamedIndexers.test.ts`.
 	const ingestions: Record<string, ReturnType<typeof singleContextEntry>> = {};
+	const processorIdentity = identityOf(options.processorMarker ?? PROCESSOR_MARKER);
 	for (const [name, source] of Object.entries(sources)) {
 		const processor = new VersionedStateEventProcessor<TestABI>(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
-			entityProcessorAt(options.processorVersion ?? PROCESSOR_VERSION),
+			entityProcessor,
+			{identity: processorIdentity},
 		);
 		const builder = new StreamBuilder<TestABI, unknown>(processor, source, {
 			stream: STREAM_CONFIG,
 			appendEmissions: emissionAppenderFor(database, name),
+			processorIdentity,
 		});
 		hosted[name] = {builder};
 		ingestions[name] = singleContextEntry(database, builder);

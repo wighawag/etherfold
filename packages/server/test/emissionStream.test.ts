@@ -16,6 +16,7 @@ import {beforeEach, describe, expect, it} from 'vitest';
 import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry, applySchema} from '../src/index.js';
 import {schemaStatements} from '../src/schema.js';
 import {clearLastError} from '../src/api/status.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE STORED EMISSION STREAM (ADR-0006)
@@ -125,7 +126,19 @@ const STREAM_CONFIG = {finality: FINALITY};
 /** What the `stream` column must hold, computed the way core computes it. */
 const STREAM_DIGEST = streamDigestOf(SOURCE, resolveStreamConfig(STREAM_CONFIG));
 
+/**
+ * WHICH FOLD every deployment here runs, as its ARRIVAL derived it (ADR-0086): a
+ * hash of the bytes a bundle would have arrived as, handed to the fold rather
+ * than asked of it. One value, because what partitions the rows below is the
+ * NAME column and the stream, never the fold.
+ */
+const PROCESSOR_IDENTITY = identityOf('alpha');
+
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: every construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
@@ -190,6 +203,7 @@ async function deploy(sources: Record<string, IndexingSource<TestABI>>): Promise
 		const processor = new VersionedStateEventProcessor<TestABI>(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessor,
+			{identity: PROCESSOR_IDENTITY},
 		);
 		// the APPENDER is the host's, closed over the name this indexer is registered
 		// under and bound to the shared database: the route is a caller of the fold and
@@ -197,6 +211,7 @@ async function deploy(sources: Record<string, IndexingSource<TestABI>>): Promise
 		const builder = new StreamBuilder<TestABI, unknown>(processor, source, {
 			stream: STREAM_CONFIG,
 			appendEmissions: emissionAppenderFor(db, name),
+			processorIdentity: PROCESSOR_IDENTITY,
 		});
 		hosted[name] = {builder};
 		ingestions[name] = singleContextEntry(db, builder);
@@ -420,10 +435,12 @@ describe('the stream column is the WIDE digest, not the wire identity', () => {
 		const processor = new VersionedStateEventProcessor<TestABI>(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessor,
+			{identity: PROCESSOR_IDENTITY},
 		);
 		const builder = new StreamBuilder<TestABI, unknown>(processor, DECODE_ONLY_SOURCE, {
 			stream: STREAM_CONFIG,
 			appendEmissions: emissionAppenderFor(before.db, 'alpha'),
+			processorIdentity: PROCESSOR_IDENTITY,
 		});
 		const after: Deployment = {
 			app: createServer<TestEnv>({

@@ -23,6 +23,7 @@ import {
 	type ReconfigureReport,
 } from '../src/index.js';
 import {ALICE, CONTRACT, SOURCE, STREAM_CONFIG, TOKEN, transfer, type TestABI} from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE TRIGGER: ONE ENDPOINT MAKES A RUNNING DEPLOYMENT RE-READ ITS OWN CONFIGURATION
@@ -48,26 +49,32 @@ const ADMIN_TOKEN = 'an-operator-secret';
 
 type TestEnv = {DEV?: string; INGEST_TOKEN?: string; ADMIN_TOKEN?: string};
 
-/** The fold this deployment came up with. */
-function entityProcessorAt(version: string): EntityProcessor<TestABI> {
-	return {
-		version,
-		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
-		async onTransfer(state, event) {
-			const args = event.args as {from: string; to: string; id: bigint};
-			state.set('token', {id: args.id.toString()}, {owner: args.to});
-		},
-	};
-}
+/** The fold this deployment came up with. WHICH fold it is comes from the arrival. */
+const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: `foldAt` hands the fold the
+	// identity its ARRIVAL derived (ADR-0086), so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
+	version: '1.0.0',
+	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
+	async onTransfer(state, event) {
+		const args = event.args as {from: string; to: string; id: bigint};
+		state.set('token', {id: args.id.toString()}, {owner: args.to});
+	},
+};
 
 function freshDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-function foldAt(version: string) {
+/** A FOLD ARRIVING AS THE BYTES `marker` NAMES, identified by them rather than by a declaration. */
+function foldAt(marker: string) {
+	const identity = identityOf(marker);
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorAt(version)),
+		createProcessor: (state: RemoteSQL) =>
+			new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity}),
+		processorIdentity: identity,
 	};
 }
 
@@ -92,7 +99,7 @@ async function aRunningDeployment(): Promise<Deployment> {
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
-		generation: foldAt('v1'),
+		generation: foldAt('the-running-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 
 	let rereads = 0;

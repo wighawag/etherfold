@@ -308,13 +308,19 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
  *
  * ## Why the state factory can name its namespace up front
  *
- * A generation is `{stream digest, processor version hash}`, the digest is a
- * function of the source and the stream config, and `entityProcessorVersionHash`
- * is the very function `EntityEventProcessor.getVersionHash()` answers with -- so
- * the namespace is computable BEFORE the processor exists (ADR-0053) and the
- * state-then-processor build order (ADR-0043) still holds. The identity the
- * container OBSERVES afterwards, from the processor's own hash, is therefore the
- * one the tables were named from and the two cannot disagree.
+ * A generation is `{stream digest, fold identity}`, the digest is a function of
+ * the source and the stream config, and the fold half is a value this function
+ * ALREADY HOLDS -- so the namespace is computable BEFORE the processor exists
+ * (ADR-0053) and the state-then-processor build order (ADR-0043) still holds.
+ *
+ * It holds it either way, which is what keeps that true across both arrivals
+ * (ADR-0086). Where the arrival derived one, it was handed in as `identity` and
+ * is passed unchanged to the namespace, to the fold and to the registry. Where it
+ * did not -- an unbundled module, which has no bytes that describe it --
+ * `entityProcessorVersionHash` is the very function
+ * `EntityEventProcessor.getVersionHash()` answers with, so the two cannot
+ * diverge. Either way the identity the container OBSERVES afterwards is the one
+ * the tables were named from.
  *
  * The imports are dynamic so that a command which never opens a database does not
  * pay for libSQL, matching how `serve` keeps the server's dependency tree off

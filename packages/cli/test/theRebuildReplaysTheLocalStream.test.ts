@@ -7,7 +7,6 @@ import {
 	type WireBatch,
 } from '@etherfold/core';
 import {
-	entityProcessorVersionHash,
 	EntityEventProcessor,
 	type EntityProcessor,
 	openForWriting,
@@ -41,6 +40,7 @@ import {
 	ZERO,
 	type RawLog,
 } from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A PROCESSOR UPGRADE COSTS A LOCAL SCAN: THE REBUILD, END TO END, ON A REAL DATABASE
@@ -74,8 +74,8 @@ const INDEXER = 'alpha';
 const FINALITY = 3;
 const TOKEN = '1'.padStart(78, '0');
 
-/** The incumbent fold: one transfer counted once. */
-const V1: EntityProcessor<typeof abi> = nftProcessor;
+/** The incumbent fold: one transfer counted once, named by the bytes it arrived as. */
+const V1 = {declared: nftProcessor as EntityProcessor<typeof abi>, identity: identityOf('the-incumbent-fold')};
 
 /**
  * THE UPGRADE: the same logs, a DIFFERENT fold.
@@ -85,20 +85,26 @@ const V1: EntityProcessor<typeof abi> = nftProcessor;
  * answered from the canonical generation throughout" a real assertion rather
  * than one two identical folds would pass by accident.
  */
-const V2: EntityProcessor<typeof abi> = {
-	version: '2.0.0',
-	entities: nftEntities,
-	async onTransfer(state, event) {
-		const tokenID = event.args.id.toString().padStart(78, '0');
-		const to = event.args.to.toLowerCase();
-		if (to === ZERO) {
-			state.delete('nft', {tokenID});
-		} else {
-			state.set('nft', {tokenID}, {owner: to});
-		}
-		const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
-		state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + 2});
-	},
+const V2 = {
+	declared: {
+		// STILL REQUIRED and deliberately NAMING NOTHING: `specFor` hands this fold the
+		// identity its ARRIVAL derived (ADR-0086).
+		// `the-declared-version-and-the-drift-report-are-deleted` removes the field.
+		version: '1.0.0',
+		entities: nftEntities,
+		async onTransfer(state, event) {
+			const tokenID = event.args.id.toString().padStart(78, '0');
+			const to = event.args.to.toLowerCase();
+			if (to === ZERO) {
+				state.delete('nft', {tokenID});
+			} else {
+				state.set('nft', {tokenID}, {owner: to});
+			}
+			const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
+			state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + 2});
+		},
+	} as EntityProcessor<typeof abi>,
+	identity: identityOf('the-successor-fold'),
 };
 
 function oneDatabase(): RemoteSQL {
@@ -109,24 +115,28 @@ function oneDatabase(): RemoteSQL {
  * ONE FOLD, as the host builds it: the state namespace named from the generation
  * identity, then the processor over it (ADR-0043, ADR-0053).
  */
-function specFor(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
+function specFor(db: RemoteSQL, fold: {declared: EntityProcessor<typeof abi>; identity: string}) {
+	const {declared, identity} = fold;
 	return {
 		// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
 		// claiming (ADR-0077), exactly as the CLI's own `buildFolding` does it.
+		//
+		// The identity the ARRIVAL supplied goes to BOTH halves, so the namespace named
+		// before the processor exists (ADR-0053) and the fold that lands in it cannot
+		// answer to two different names.
 		createState: (context: {stream: string}) =>
 			openForWriting(
 				new VersionedStateStore(db, declared.entities, {
-					tableNamespace: generationDigestOf({
-						stream: context.stream,
-						processor: entityProcessorVersionHash(declared),
-					}),
+					tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 					finalityDepth: FINALITY,
 				}),
 			),
 		createProcessor: (state: WritableStateStore) =>
 			new EntityEventProcessor<typeof abi>(state, declared, {
 				finalityDepth: FINALITY,
+				identity,
 			}) as unknown as EntityEventProcessor<typeof abi>,
+		processorIdentity: identity,
 	};
 }
 
@@ -402,7 +412,7 @@ describe('resumability, through a genuinely FRESH container between every chunk'
 		await first.add(specFor(db, V2));
 		const successorNamespace = generationDigestOf({
 			stream: first.streamDigest,
-			processor: entityProcessorVersionHash(V2),
+			processor: V2.identity,
 		});
 
 		// ONE chunk, then the process is gone. Nothing in memory survives: the next

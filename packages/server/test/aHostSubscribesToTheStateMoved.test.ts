@@ -30,6 +30,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A SERVER-SHAPED DEPLOYMENT CAN SUBSCRIBE TO THE STATE-MOVED SIGNAL
@@ -57,7 +58,18 @@ import {
 
 const NAME = 'alpha';
 
+/**
+ * WHICH FOLD this deployment runs, as its ARRIVAL derived it (ADR-0086): a hash
+ * of the bytes a bundle would have arrived as, handed to the fold rather than
+ * asked of it.
+ */
+const PROCESSOR_IDENTITY = identityOf('alpha');
+
 const entityProcessor: EntityProcessor<TestABI> = {
+	// STILL REQUIRED and deliberately NAMING NOTHING: the construction site below
+	// hands the fold the identity above, so this value is read by nobody.
+	// `assertProcessorVersion` still demands the field until
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
@@ -80,7 +92,9 @@ async function deploy() {
 		appendEmissions: emissionAppenderFor(db, NAME),
 		generation: {
 			createState: () => db,
-			createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
+			createProcessor: (state: RemoteSQL) =>
+				new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity: PROCESSOR_IDENTITY}),
+			processorIdentity: PROCESSOR_IDENTITY,
 		},
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 

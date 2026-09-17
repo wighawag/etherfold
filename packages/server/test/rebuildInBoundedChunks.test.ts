@@ -24,6 +24,7 @@ import {
 	EMISSION_STREAM_TABLE,
 	STREAM_COVERAGE_TABLE,
 } from '../src/index.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /** The slice a read was expected to hand back, or a failure naming the verdict instead (ADR-0070). */
 function chunkOf<ABI extends Abi>(read: ReplayRead<ABI>): Extract<ReplayRead<ABI>, {status: 'chunk'}> {
@@ -134,11 +135,17 @@ function idOf(event: {blockNumber: number; blockHash: string; logIndex: number})
  * emission ids says that directly. The revert is exact, which is what makes "the
  * re-fold reproduces it" a real claim rather than one an approximate revert
  * could pass by luck.
+ *
+ * The MARKER names the bytes this fold would have arrived as, and `identity` is
+ * what every construction site below hands the engine (ADR-0086). The
+ * `getVersionHash()` beside it is the DECLARED path, still a required member of
+ * `EventProcessor` until the contract task removes it and deliberately read by
+ * nobody here.
  */
-function foldingProcessor(version = 'proc-v2') {
+function foldingProcessor(marker = 'successor') {
 	const store: {rows: string[]; lastSync?: string} = {rows: []};
 	const processor: EventProcessor<TestABI, string[]> = {
-		getVersionHash: () => version,
+		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () =>
 			store.lastSync ? {state: store.rows, lastSync: JSON.parse(store.lastSync) as LastSync<TestABI>} : undefined,
@@ -163,7 +170,7 @@ function foldingProcessor(version = 'proc-v2') {
 			store.lastSync = undefined;
 		},
 	};
-	return {processor, store};
+	return {processor, store, identity: identityOf(marker)};
 }
 
 /** The window holds DECODED events, and every `uint256` in one is a BigInt. */
@@ -179,10 +186,11 @@ async function freshDB(): Promise<RemoteSQL> {
 
 /** A receiver bound to one database and one NAME, exactly as a host binds one (ADR-0052). */
 function receiverOn(db: RemoteSQL, indexer: string, source: IndexingSource<TestABI> = SOURCE) {
-	const fold = foldingProcessor('proc-v1');
+	const fold = foldingProcessor('writer');
 	const builder = new StreamBuilder<TestABI, string[]>(fold.processor, source, {
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, indexer),
+		processorIdentity: fold.identity,
 	});
 	return {
 		builder,
@@ -482,6 +490,7 @@ describe('a rebuild over the stored stream, chunk after chunk through a FRESH dr
 				streamConfig: resolveStreamConfig(STREAM_CONFIG),
 				replay: storedEmissionReplaySource<TestABI>(db, indexer),
 				maxEmissions,
+				processorIdentity: fold.identity,
 			});
 			const report = await driver.more();
 			reports.push(report);

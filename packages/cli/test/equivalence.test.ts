@@ -3,7 +3,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {generationDigestOf, type GenerationId, type ReorgCounters} from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
-import {EntityEventProcessor, entityProcessorVersionHash, type EntityProcessor} from '@etherfold/processor-entities';
+import {EntityEventProcessor, type EntityProcessor} from '@etherfold/processor-entities';
 import {createNodeDB, startServer, type RunningServer} from '@etherfold/platform-nodejs';
 import type {RunningFetcher} from '@etherfold/platform-nodejs-fetcher';
 import {
@@ -46,6 +46,7 @@ import {
 	transfer,
 	ZERO,
 } from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * THE UPGRADE a reconfigure reaching a long-running `run` would bring: the same
@@ -57,7 +58,11 @@ import {
  * pass by accident.
  */
 const V2: EntityProcessor<typeof abi> = {
-	version: '2.0.0',
+	// STILL REQUIRED and deliberately NAMING NOTHING: `successorSpec` hands this
+	// fold the identity its ARRIVAL derived (`V2_IDENTITY`, ADR-0086), so this value
+	// is read by nobody. `the-declared-version-and-the-drift-report-are-deleted`
+	// removes the field.
+	version: '1.0.0',
 	entities: nftEntities,
 	async onTransfer(state, event) {
 		const id = event.args.id.toString().padStart(78, '0');
@@ -72,24 +77,28 @@ const V2: EntityProcessor<typeof abi> = {
 	},
 };
 
+/** The identity the REBUILT bundle arrived as, which is what names the successor (ADR-0086). */
+const V2_IDENTITY = identityOf('the-successor-fold');
+
 /**
  * ONE FOLD, as a host builds one: its own table namespace, then the processor
  * over it (ADR-0043, ADR-0053).
  *
  * The same four lines `folding.ts` writes for the fold a command OPENS with --
  * written out here because this is the caller's side of `container.add`, which is
- * what a reconfigure reaching a running process is.
+ * what a reconfigure reaching a running process is. The identity the ARRIVAL
+ * supplied goes to the namespace, the fold and the registry record alike, so no
+ * two of them can spell it differently.
  */
-function successorSpec(db: RemoteSQL, declared: EntityProcessor<typeof abi>) {
+function successorSpec(db: RemoteSQL, declared: EntityProcessor<typeof abi>, identity: string) {
 	return {
 		createState: (context: {stream: string}) =>
 			new VersionedStateStore(db, declared.entities, {
-				tableNamespace: generationDigestOf({
-					stream: context.stream,
-					processor: entityProcessorVersionHash(declared),
-				}),
+				tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 			}),
-		createProcessor: (state: unknown) => new EntityEventProcessor<typeof abi>(state as never, declared) as never,
+		createProcessor: (state: unknown) =>
+			new EntityEventProcessor<typeof abi>(state as never, declared, {identity}) as never,
+		processorIdentity: identity,
 	};
 }
 
@@ -891,7 +900,7 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 		// THE RECONFIGURE, reaching a process that is running: a different fold over the
 		// same stream. Nothing is cleared and nothing is re-fetched -- the successor
 		// re-folds the stream this process already stored.
-		const successor = await combined.container.add(successorSpec(combined.db, V2));
+		const successor = await combined.container.add(successorSpec(combined.db, V2, V2_IDENTITY));
 		expect(successor.follows).toBe(true);
 		// ...and it does NOT write the stream: that duty stays with the oldest surviving
 		// generation on it (ADR-0044), so the history stays ONE history

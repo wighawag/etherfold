@@ -34,7 +34,7 @@ import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './ut
 //                 it answers anybody.
 //
 // The successor is introduced exactly as a deployment introduces one: an EDIT to
-// the processor module on disk and `POST /{indexer}/admin/reconfigure`. That is
+// the processor bundle on disk and `POST /{indexer}/admin/reconfigure`. That is
 // what makes the assertion honest rather than a test of `container.add` wearing a
 // command line -- and it is the only way a successor reaches a running CLI
 // deployment at all, which is why `run` is the one command that owns this input.
@@ -50,20 +50,23 @@ const LOGS = [
 const TIP = START_BLOCK + 50;
 
 /**
- * THE SIBLING MODULE the entry point below imports, which is what makes it an
- * UNBUNDLED ENTRY POINT rather than a bundle.
+ * THE PROCESSOR BUNDLE A DEPLOYMENT SHIPS, as text: a successor is an EDIT to
+ * these bytes and nothing else.
  *
- * A processor arrives either as a PATH the module system resolves, keeping the
- * author-DECLARED identity, or as a self-contained BUNDLE, named by the hash of
- * its bytes (ADR-0086) -- and "self-contained" means exactly "expects nobody else
- * to resolve anything", so an entry point that imported nothing at all would BE a
- * bundle. These cases are about WHEN THE POINTER MOVES and express a successor as
- * a `version` bump, so the module ships its ABI the way a real one does, in a
- * second file, and stays on the route they were written for. Do not inline it
- * back.
+ * It is SELF-CONTAINED -- the ABI is inline, so it expects nobody else to resolve
+ * anything -- which is exactly what makes it a BUNDLE (`unresolvedImportsOf`,
+ * `@etherfold/utils`), so the deployment's arrival reads it, hashes it, and names
+ * the generation by the SHA-256 of these octets (ADR-0086). Nothing bundles
+ * anything here: writing self-contained bytes to disk IS the artifact, and a test
+ * that reached for `esbuild` to obtain an identity would have misread the design.
+ *
+ * These cases are about WHEN THE POINTER MOVES, so what matters is only that the
+ * successor is a DIFFERENT fold from the incumbent. Under the arrival that is one
+ * changed handler line -- the edit a developer actually makes -- rather than a
+ * `version` bump they had to remember, which is the whole of what ADR-0086 buys.
  */
-const abiModuleSource = `
-export const abi = [
+function processorBundleSource(options: {credit: 'to' | 'from'}): string {
+	return `const abi = [
 	{
 		anonymous: false,
 		inputs: [
@@ -75,11 +78,6 @@ export const abi = [
 		type: 'event',
 	},
 ];
-`;
-
-/** The processor module a deployment SHIPS, as text: the successor is an EDIT to these bytes. */
-function processorModuleSource(options: {version: string; credit: 'to' | 'from'}): string {
-	return `import {abi} from './abi.js';
 
 export const contractsDataPerChain = {
 	'1': [
@@ -93,7 +91,10 @@ export const contractsDataPerChain = {
 
 export function createProcessor() {
 	return {
-		version: '${options.version}',
+		// STILL REQUIRED and deliberately CONSTANT: this bundle is named by its bytes,
+		// so a successor below moves the handler and never this.
+		// \`the-declared-version-and-the-drift-report-are-deleted\` removes the field.
+		version: '1.0.0',
 		entities: [{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
 			const tokenID = event.args.id.toString().padStart(78, '0');
@@ -104,14 +105,13 @@ export function createProcessor() {
 `;
 }
 
-/** The scratch directories these cases write processor modules into, outside the repository. */
+/** The scratch directories these cases write processor bundles into, outside the repository. */
 const scratch: string[] = [];
 
-async function aProcessorModuleOnDisk(source: string): Promise<string> {
+async function aProcessorBundleOnDisk(source: string): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), 'etherfold-promotion-'));
 	scratch.push(dir);
-	await writeFile(join(dir, 'abi.js'), abiModuleSource, 'utf-8');
-	const path = join(dir, 'processor.mjs');
+	const path = join(dir, 'processor.bundle.js');
 	await writeFile(path, source, 'utf-8');
 	return path;
 }
@@ -248,11 +248,13 @@ async function waitUntilLevel(indexer: RunningIndexer, successor: string, incumb
 async function aDeploymentWithASuccessor(
 	promotion?: Partial<Options>,
 ): Promise<{indexer: RunningIndexer; incumbent: string; successor: string}> {
-	const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+	const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
 	const indexer = await aRunServing(path, promotion);
 	const incumbent = generationDigestOf(indexer.streamBuilder.generation);
 
-	await writeFile(path, processorModuleSource({version: '2.0.0', credit: 'from'}), 'utf-8');
+	// THE REBUILD a watcher notices: one edited handler at the same path, so the
+	// bytes moved and the identity with them, with no author action
+	await writeFile(path, processorBundleSource({credit: 'from'}), 'utf-8');
 	const registered = await reconfigure(indexer);
 	expect(registered.outcome).toBe('registered');
 	const successor = registered.generation?.digest as string;
@@ -343,7 +345,7 @@ describe('`--promotion manual`: it moves only when asked', () => {
 
 describe('the combination this runtime cannot honour is refused BEFORE anything folds', () => {
 	it('refuses `--promotion immediate --drop-on-promotion` at start-up, naming what to use instead', async () => {
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
 		const chain = fakeChain().serve(LOGS, TIP);
 		await expect(
 			run(optionsFor(path, {promotion: 'immediate', dropOnPromotion: true}), {
@@ -375,7 +377,7 @@ describe('every value the type names is reachable from a command line', () => {
 
 	for (const policy of policies) {
 		it(`stands a deployment up under \`--promotion ${policy}\` and reports it back`, async () => {
-			const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+			const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
 			const indexer = await aRunServing(path, {promotion: policy});
 			expect((await statusOf(indexer)).promotion).toMatchObject({reported: true, policy});
 		});

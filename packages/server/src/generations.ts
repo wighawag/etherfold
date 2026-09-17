@@ -70,7 +70,7 @@ export const GENERATION_TABLE = '_generations';
  * forward and what it moved off into `predecessor` -- a single row update rather
  * than two writes a crash could land between. What ADR-0008 called
  * `current_version` is the `canonical` pair here, keyed on the generation
- * identity rather than on the processor version hash alone.
+ * identity rather than on the fold's identity alone.
  *
  * The table was `_generation_pointer` while `canonical` was the only durable
  * assignment there was. It is RENAMED rather than kept and widened, because a
