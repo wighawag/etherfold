@@ -1,0 +1,16 @@
+{
+	"name": "spike-a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Evidence for work/notes/findings/: can a browser tab turn retained BYTES into a running processor, and under which Content-Security-Policy?",
+	"scripts": {
+		"build-bundle": "node build-bundle.mjs",
+		"run": "node run.mjs",
+		"serve": "node server.mjs 8099"
+	},
+	"devDependencies": {
+		"esbuild": "0.28.1",
+		"playwright": "1.62.1"
+	}
+}
