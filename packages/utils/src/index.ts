@@ -12,3 +12,14 @@ export * from './processorSetup.js';
  * module-shape rule, which `instantiateProcessor` owns and this one reuses.
  */
 export * from './processorArtifact.js';
+/**
+ * THE ARRIVAL: one operator-supplied PATH, landing on whichever of the two units
+ * above it turns out to describe, with the identity coming from the artifact
+ * where there is one.
+ *
+ * Last, because it is the only thing here that knows about both: the two units it
+ * chooses between name each other nowhere, which is what keeps "bytes that carry
+ * their own name" and "a specifier the module system resolves" two answers rather
+ * than one with a flag.
+ */
+export * from './processorArrival.js';

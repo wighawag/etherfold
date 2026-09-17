@@ -121,6 +121,10 @@ A flag combination that names no store is REFUSED rather than ignored: an accept
 
 The processor module hands back the AUTHORING object (declarations plus handlers) and never picks a store; that is what makes the SAME module file the one a browser tab runs. A module still returning the retired `{kind, processor}` tag is refused by name (ADR-0037).
 
+**`-p` may name a self-contained BUNDLE, and then its hash identifies the generation** (ADR-0086). A path is still how a deployment names its processor; what changes is what the path may point at. Where the file at it expects nobody else to resolve anything -- what `esbuild <entry> --bundle --format=esm --minify` produces -- these commands read it, name it `sha256:<hex>` over its octets and register a generation under that name. An edited handler is then a different generation with no author action, and the same source built on two machines is the same generation whatever directory either checked out into. Nothing here bundles anything: reading a file and hashing it is not bundling, and the author runs the build.
+
+A path naming an ordinary module -- one that still imports its ABI or a sibling -- resolves exactly as it always has and keeps the identity its author declared in `version`. Both shapes work today; the declared one is on its way out (ADR-0086) and the migration is deliberately staged.
+
 ## `etherfold fetch` -- the chain-facing half, and the ONLY way to run a fetcher
 
 ```sh

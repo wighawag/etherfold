@@ -9,7 +9,7 @@ import {
 import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport} from '@etherfold/server';
-import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
+import {openProcessorArrival} from '@etherfold/utils';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import {isAbsolute} from 'node:path';
@@ -161,15 +161,21 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 	/**
 	 * Import the module as it is ON DISK NOW.
 	 *
+	 * It governs the MODULE arrival alone, which is all it was ever about: a path
+	 * naming a BUNDLE is re-READ as bytes and imported as a `data:` URL, where the
+	 * ESM registry is keyed on those bytes and a cache HIT is the right answer --
+	 * identical bytes are the same module, and a rebuild is a different one by
+	 * construction. There is no cache to defeat there, which is why this is not
+	 * threaded through it (`openProcessorArrival`, `@etherfold/utils`).
+	 *
 	 * An INJECTED importer wins and is left alone: a test supplying one is stating
 	 * what comes back, and appending a query to a specifier it may never look at
 	 * would be this module pretending to control something it does not. Otherwise
-	 * the specifier -- always a filesystem path by the time `loadProcessorModule`
-	 * hands it over, absolute or resolved against the working directory -- becomes a
-	 * file URL carrying a counter. A specifier that is somehow NOT a path is
-	 * imported as-is rather than mangled: a bare package name is not something this
-	 * can make a URL of, and importing it unchanged is strictly better than
-	 * refusing.
+	 * the specifier -- always a filesystem path by the time the module arm hands it
+	 * over, absolute or resolved against the working directory -- becomes a file URL
+	 * carrying a counter. A specifier that is somehow NOT a path is imported as-is
+	 * rather than mangled: a bare package name is not something this can make a URL
+	 * of, and importing it unchanged is strictly better than refusing.
 	 */
 	const importFresh =
 		held.importModule ??
@@ -182,6 +188,18 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 
 	const reread = async (): Promise<ReconfigureReport> => {
 		let wanted: GenerationId;
+		/**
+		 * WHICH ARRIVAL supplied the identity, which is the only thing about it anything
+		 * here is allowed to know.
+		 *
+		 * It selects the sentence an `unchanged` explains itself with, and nothing else:
+		 * "rebuild your bundle" and "bump your `version`" are different instructions and
+		 * giving an author the wrong one is how a correct answer becomes an afternoon.
+		 * Note what this is NOT: it is the arrival ANSWERING whether it derived an
+		 * identity, never anything looking at the identity STRING to guess. Nothing in
+		 * the tree parses `GenerationId.processor` (ADR-0086) and this does not start.
+		 */
+		let fromBundle = false;
 		let parts: Awaited<ReturnType<typeof foldPartsFor<ABI, ProcessResultType>>>;
 		let providedStreamConfig: ReturnType<typeof streamConfigFor>;
 		let source: Awaited<ReturnType<typeof openIndexingSource<ABI, ProcessResultType>>>;
@@ -198,20 +216,29 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 			// digest this generation is filed under and the finality the state is built with
 			// cannot be two different answers to one configuration.
 			const streamConfig = resolveStreamConfig(providedStreamConfig);
-			const processorModule = await loadProcessorModule<ABI, ProcessResultType>(resolved.processor, {
-				importModule: importFresh,
-			});
-			const declared = instantiateProcessor<ABI, ProcessResultType, EntityProcessor<ABI, any>>(processorModule, {
-				processorPath: resolved.processor,
-			});
-			source = await openIndexingSource<ABI, ProcessResultType>(resolved.source, processorModule, held.provider);
+			// WHAT THE PATH POINTS AT NOW, resolved through the ONE arrival every command
+			// resolves a processor through (ADR-0086). A path naming a BUNDLE is re-READ from
+			// disk and re-hashed, which is why the cache breaker below is the MODULE route's
+			// concern alone: a bundle's bytes ARE its cache key, so a rebuild is a different
+			// module by construction and a rebuild that changed nothing is the same one.
+			const arrival = await openProcessorArrival<ABI, ProcessResultType, EntityProcessor<ABI, any>>(
+				resolved.processor,
+				{importModule: importFresh},
+			);
+			fromBundle = arrival.identity !== undefined;
+			source = await openIndexingSource<ABI, ProcessResultType>(
+				resolved.source,
+				arrival.processorModule,
+				held.provider,
+			);
 			parts = await foldPartsFor<ABI, ProcessResultType>(
-				declared,
+				arrival.processor,
 				resolved.destination,
 				held.db,
 				streamConfig.finality,
+				arrival.identity,
 			);
-			wanted = {stream: streamDigestOf(source, streamConfig), processor: parts.versionHash};
+			wanted = {stream: streamDigestOf(source, streamConfig), processor: parts.processorIdentity};
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			logger.error(`reconfigure: this deployment could not re-read its configuration, and nothing changed`, err);
@@ -259,11 +286,17 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 				// their save.
 				message: drift
 					? drift.message
-					: `this deployment re-read its configuration and it named the generation it is already holding ` +
-						`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation is ` +
-						`identified by the processor's DECLARED version hash -- its \`version\` plus its entity declarations and ` +
-						`config -- and not by the source text of its handlers, so editing a handler body alone names the same ` +
-						`generation. Bump the processor's \`version\` to say that this is a different fold.`,
+					: fromBundle
+						? `this deployment re-read its configuration and it named the generation it is already holding ` +
+							`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation folded ` +
+							`from a BUNDLE is identified by the hash of that bundle's bytes (ADR-0086), and the bytes at this ` +
+							`path are the ones this deployment is already folding -- so either the edit is not in them yet or ` +
+							`the build has not run.`
+						: `this deployment re-read its configuration and it named the generation it is already holding ` +
+							`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation is ` +
+							`identified by the processor's DECLARED version hash -- its \`version\` plus its entity declarations and ` +
+							`config -- and not by the source text of its handlers, so editing a handler body alone names the same ` +
+							`generation. Bump the processor's \`version\` to say that this is a different fold.`,
 				...(drift ? {drift} : {}),
 			};
 		}

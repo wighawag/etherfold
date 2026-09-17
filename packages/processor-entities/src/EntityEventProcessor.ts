@@ -36,6 +36,29 @@ export type EntityEventProcessorOptions = {
 	 * no retention window has stated no floor and cannot disagree with one.
 	 */
 	readonly finalityDepth?: number;
+	/**
+	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one.
+	 *
+	 * ADR-0086's invariant is that an author cannot STATE their processor's
+	 * identity and that the engine is HANDED one and never asks where it came from.
+	 * This is where a host hands it over: a deployment that read a self-contained
+	 * BUNDLE off disk names the fold by the SHA-256 of those bytes, so an edited
+	 * handler is a different fold whether or not anybody remembered to say so.
+	 *
+	 * ABSENT is a real answer and the one every caller gives until the migrate
+	 * batches land: there are no bytes that describe this processor, so the identity
+	 * falls back to `entityProcessorVersionHash` -- the author-DECLARED `version`
+	 * plus the entity declarations and the config -- exactly as it always did.
+	 *
+	 * It is deliberately NOT the declaration ADR-0043 rejected. That one was a
+	 * caller restating a value this class also computes, which can silently
+	 * disagree; this is a value derived from something this class CANNOT see (bytes
+	 * it was never given) and it REPLACES the computation rather than sitting beside
+	 * it, so there are still never two live answers. A host that names a state
+	 * namespace before building the fold passes the SAME value to both, which is
+	 * what keeps ADR-0053's before-the-processor-exists naming honest.
+	 */
+	readonly identity?: string;
 };
 
 /**
@@ -188,11 +211,15 @@ export class EntityEventProcessor<ABI extends Abi, ProcessorConfig = undefined> 
 	 * hashing the store in would discard state for moving a deployment.
 	 */
 	getVersionHash(): string {
-		// through the exported function rather than beside it: a host names this
-		// generation's table namespace from the same value before this object exists
-		// (`entityProcessorVersionHash`, ADR-0053), and two spellings of one formula is
-		// how a namespace comes to be keyed on a hash the fold does not have.
-		return entityProcessorVersionHash(this.processor, this.config);
+		// THE ARRIVAL'S, where the host was given one (ADR-0086): a fold built from
+		// bytes is named by those bytes, and `configure()` cannot move that -- which is
+		// correct rather than a limitation, since the config a bundle was built with is
+		// IN the bundle. Otherwise, through the exported function rather than beside it:
+		// a host names this generation's table namespace from the same value before this
+		// object exists (`entityProcessorVersionHash`, ADR-0053), and two spellings of
+		// one formula is how a namespace comes to be keyed on a hash the fold does not
+		// have.
+		return this.options.identity ?? entityProcessorVersionHash(this.processor, this.config);
 	}
 
 	/**

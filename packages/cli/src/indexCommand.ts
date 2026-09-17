@@ -10,7 +10,7 @@ import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
-import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
+import {openProcessorArrival} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
@@ -190,12 +190,15 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		const config: IndexConfig<ABI> = resolveCommandConfig<'index', ABI>('index', options, env);
 		logger.info({store: config.destination.store, source: config.source.from, port: config.serving.port});
 
-		const processorModule = await loadProcessorModule<ABI, ProcessResultType>(config.processor, {
+		// WHAT THE `--processor` PATH TURNS OUT TO BE: a self-contained BUNDLE, read and
+		// hashed, or a module the module system resolves (ADR-0086). The RECEIVING half
+		// resolves it through the same arrival the combined shapes do, because one path
+		// naming one file must not name two different generations depending on which
+		// command was pointed at it.
+		const arrival = await openProcessorArrival<ABI, ProcessResultType, EntityProcessor<ABI, any>>(config.processor, {
 			...(deps.importModule ? {importModule: deps.importModule} : {}),
 		});
-		const declared = instantiateProcessor<ABI, ProcessResultType, EntityProcessor<ABI, any>>(processorModule, {
-			processorPath: config.processor,
-		});
+		const declared = arrival.processor;
 
 		const providedStreamConfig = streamConfigFor(env);
 		const streamConfig = resolveStreamConfig(providedStreamConfig);
@@ -235,6 +238,8 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 				// addresses: one value, required here and never defaulted, because on this
 				// half it routes as well as keys (ADR-0036)
 				indexer: config.wire.indexer,
+				// the identity the ARRIVAL derived, where it derived one (ADR-0086)
+				...(arrival.identity === undefined ? {} : {processorIdentity: arrival.identity}),
 			},
 		);
 
