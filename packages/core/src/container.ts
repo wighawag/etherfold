@@ -4,10 +4,13 @@ import {logs} from 'named-logs';
 
 import {IndexerGeneration, type LoadingState, type PauseState, type ReconfigureOutcome} from './indexer.js';
 import {
+	displacedBySuccessor,
 	sameGeneration,
+	writerOf,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
+	type SlottedGenerations,
 } from './generation/registry.js';
 import {
 	hasReachedCursor,
@@ -89,6 +92,49 @@ const namedLogger = logs('@etherfold/core');
  * `updateIndexer` and `updateProcessor` do to the canonical generation exactly
  * what they did before. Building a successor is `add`, which is what a caller
  * that wants a reconfigure without an outage calls.
+ *
+ * ## A GENERATION IS HELD BY A DURABLE NAMED SLOT (ADR-0084)
+ *
+ * The registry holds three assignments and `canonical` is merely the first:
+ * `successor` is the generation being built beside the incumbent and holds AT
+ * MOST ONE, and `predecessor` is what a revert moves back to. `add` registers
+ * into `successor`, so a second registration REPLACES the first pending one --
+ * and because the slot is a ROW, a RELOADED TAB replaces what it finds there
+ * having registered nothing and remembered nothing, which is the property no
+ * in-memory rule could have. What that replaced is DROPPED: the registry row, the
+ * state store (`dropState`) and the stream where no registered generation is left
+ * folding it.
+ *
+ * **This is the twin where it matters most**, and it is the same rule as the
+ * receiving container's rather than a second dialect of it. A page reload is a
+ * fresh process with an empty memory, the caps here are the tightest in the
+ * system (`BROWSER_GENERATION_CAPS`, two of each), and a developer reloads a tab
+ * constantly -- so an in-memory rule protected the long-lived server process,
+ * which accumulates slowly, and missed the tab, which accumulates every few
+ * minutes. WHAT a registration displaces is `displacedBySuccessor`, shared with
+ * the receiving twin so the safety clause has one home; HOW it is dropped is
+ * repeated here, because a fold on this side is an ENGINE and stopping one is
+ * this container's own business.
+ *
+ * **What the browser's numbers mean under three slots**, stated because it is
+ * arithmetic rather than taste: at `maxGenerations: 2` the tab can hold
+ * `canonical` + `successor` (the reconfigure loop, which is what this makes
+ * unbounded) or `canonical` + `predecessor` (the revert window after a
+ * promotion), and NOT all three. A registration that would need all three meets
+ * the cap and is REFUSED, which is what a cap is for -- the revert target is
+ * never dropped to make room, because no policy can know which generation was
+ * being kept (`GenerationCapReachedError`). The caps are deliberately unchanged
+ * by this (ADR-0084's consequences).
+ *
+ * `predecessor` is ASSIGNED by the pointer move that creates one, in the same
+ * commit, and is never inferred -- which generation a revert wants is precisely
+ * the fact the rows never held, and the reason a boolean (`everCanonical`) used
+ * to stand on each held entry. It answered "has the pointer EVER named this
+ * generation, as far as THIS container has seen", which after a reload was `false`
+ * for everything, so a restarted tab read every move as a revert. The slots answer
+ * it durably and better: a PROMOTION is a move onto what `successor` names, and
+ * every other move -- back to what `predecessor` names, or onto any other
+ * registered generation -- drops nothing.
  * ------------------------------------------------------------------------- */
 
 /** What both of a generation's factories are told about the generation being built. */
@@ -240,17 +286,17 @@ type HeldEntry<ABI extends Abi, ProcessResultType> = {
 	 * a candidate is what a container is DOING with one.
 	 */
 	candidate: boolean;
-	/**
-	 * Whether the canonical pointer has EVER named this generation.
+	/* --------------------------------------------------------------------------
+	 * WHAT USED TO BE HERE, and what reads it now (ADR-0084)
 	 *
-	 * It is what tells a PROMOTION from a REVERT, and nothing else can: a move to a
-	 * generation that has answered reads before is going BACK to it (story 4),
-	 * whichever way the clock reads. Deliberately not `createdAt`, which ties --
-	 * two generations registered in the same millisecond compare equal, and the
-	 * registry breaks that tie on the identity, which is a fine order for a listing
-	 * and no basis at all for deciding whether to DELETE one.
-	 */
-	everCanonical: boolean;
+	 * `everCanonical`, "whether the canonical pointer has EVER named this
+	 * generation", which is how a PROMOTION was told from a REVERT. It is DELETED
+	 * rather than left beside the slot agreeing with it most of the time: what it
+	 * actually held was a record of the moves ONE PROCESS had seen, so after a page
+	 * reload it was `false` for every generation and a genuine promotion read as a
+	 * revert. `movePointerTo` reads the `successor` SLOT instead -- a durable row any
+	 * process can read, which is the same answer the receiving twin reads.
+	 * ------------------------------------------------------------------------ */
 	published?: ProcessResultType;
 	/** Distinguishes "published nothing yet" from "published `undefined`", which a `void` fold does. */
 	hasPublished: boolean;
@@ -664,7 +710,25 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		};
 		const state = await spec.createState(context);
 		const processor = await spec.createProcessor(state, context);
-		const record = await this.registry.create({stream: context.stream, processor: processor.getVersionHash()});
+
+		const wanted: GenerationId = {stream: context.stream, processor: processor.getVersionHash()};
+		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
+		// this generation is a successor at all and what it displaces; the records decide
+		// which of those are still registered and which generation writes each stream.
+		const registeredBefore = await this.registry.list();
+		const slotsBefore = await this.registry.slots();
+		// WHAT THE SUCCESSOR SLOT HELD GOES FIRST, so the room this registration needs is
+		// already free when the CAP is decided. It is deliberately not cap-PRESSURE
+		// eviction: a replaced successor is dead the moment a newer one takes its place,
+		// whether the registry holds two generations or none to spare, and a rule that
+		// fired only near the bound would make a deterministic lifecycle a heuristic.
+		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream);
+		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
+		// that means for this identity: the first generation of an empty registry takes
+		// `canonical` instead, and a generation some slot ALREADY names stays where it is
+		// -- so a reload on the canonical processor stays canonical, and one on the
+		// generation a revert returned to is not re-armed by the act of starting up.
+		const record = await this.registry.create(wanted, {slot: 'successor'});
 
 		const existing = this.held.find((entry) => sameGeneration(entry.record, record));
 		if (existing) {
@@ -688,32 +752,41 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		//
 		// Asked of the durable REGISTRY rather than of this process's `held` array,
 		// which is whatever order the caller passed its specs in and does not survive a
-		// restart. The question is "is any OTHER generation already registered on this
-		// stream", which is the container's form of the one-writer rule: it never
-		// REASSIGNS the duty, so the first generation registered on a stream keeps it.
+		// restart. And asked as `writerOf` -- the SAME expression the receiving twin
+		// uses and ADR-0044's rule itself -- so "which generation writes this stream"
+		// has ONE home and `follows` is simply "and it is not me". The duty is never
+		// REASSIGNED, so the first generation registered on a stream keeps it.
 		//
-		// Deliberately NOT `writerOf(...)`, and the reason has two halves.
+		// ADR-0071 REJECTED this form and that rejection has EXPIRED, twice over.
 		//
-		// It USED to be unsafe: `writerOf` is a function of the whole record SET at a
-		// moment, while `follows` is frozen per generation at ADD time -- `readOnlyStream`
-		// is baked into the engine's config, so it cannot be recomputed later the way
-		// `reconcileWriters` recomputes it on the receiving side. Evaluating a
-		// set-function per element at different moments let two generations added in one
-		// millisecond each see `writerOf` name THEMSELVES, and one stream got two
-		// writers (ADR-0071, measured).
+		// It rejected it because `createdAt` was a millisecond clock with a hash
+		// tie-break, so two generations added in the same millisecond could each see
+		// `writerOf` name THEMSELVES and one stream got two writers (measured, 20/20).
+		// ADR-0072 removed the tie: `createdAt` is strictly increasing within a
+		// registry, so records sort in REGISTRATION order and every reader of
+		// `writerOf` gets the same answer. That is exactly the precondition ADR-0071
+		// named as the open work, and it has landed.
 		//
-		// ADR-0072 removed that: `createdAt` is strictly increasing within a registry, so
-		// a record being added always sorts LAST and `writerOf` can never name it while
-		// others exist. The two questions now give the same answer here, always. This
-		// one is kept anyway because it is the one that does not DEPEND on that: "is
-		// anyone else already registered on this stream" is correct whatever the
-		// ordering, where the `writerOf` form is correct only while the ordering holds.
-		// Having just paid for that distinction once, the robust form is worth its two
-		// lines.
-		const alreadyOnThisStream = (await this.registry.list()).filter(
-			(other) => other.stream === record.stream && !sameGeneration(other, record),
-		);
-		const follows = alreadyOnThisStream.length > 0;
+		// What it fell back to -- "is any OTHER generation already registered on this
+		// stream" -- was then kept on the claim that the two forms "now give the same
+		// answer here, always", because a record being added always sorts LAST. That
+		// claim is FALSE, and exactly one case breaks it: a record that ALREADY EXISTS.
+		// `create` RESOLVES rather than duplicating, so a generation re-registered keeps
+		// its original `createdAt` and sorts FIRST -- and re-registering what is already
+		// there is precisely what a page RELOAD is. A tab re-opening on canonical A with
+		// a leftover successor B found B "already on this stream" and built its own
+		// CANONICAL generation as a FOLLOWER of a stream nothing writes: it stopped
+		// fetching while its state and its reported status both went on looking healthy.
+		// The set question is equivalent only for a record that is NEW. `writerOf` is
+		// right for both, so it is what is asked.
+		//
+		// This is still the INITIAL derivation and nothing recomputes it: `follows`
+		// freezes `readOnlyStream` into the engine's config at construction, where the
+		// receiving side can recompute through `reconcileWriters`. That asymmetry is
+		// untouched here and only matters if the writer CHANGES while a fold is held;
+		// what a reload needs is this one derivation being right at the start.
+		const writer = writerOf(await this.registry.list(), record.stream);
+		const follows = !!writer && !sameGeneration(writer, record);
 		const config: ProvidedIndexerConfig<ABI> =
 			follows && this.config.keepStream
 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}
@@ -727,7 +800,6 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			spec,
 			follows,
 			candidate: false,
-			everCanonical: false,
 			hasPublished: false,
 			publications: 0,
 		};
@@ -1184,6 +1256,24 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	protected async movePointerTo(entry: HeldEntry<ABI, ProcessResultType>): Promise<GenerationRecord> {
 		const superseded = this.current;
+		/**
+		 * WHICH KIND OF MOVE THIS IS, read from the SLOTS before it applies rather than
+		 * from what this process happens to have seen.
+		 *
+		 * A PROMOTION is a move onto what `successor` names: that generation was built
+		 * beside the incumbent precisely to take over, so a promotion demonstrated
+		 * something and drop-on-promotion may discard what it superseded. EVERY OTHER
+		 * MOVE DROPS NOTHING -- a move back to what `predecessor` names is a revert, and
+		 * an operator naming any other generation is treated the same way, which is the
+		 * safe direction: the only consequence is that a generation is kept.
+		 *
+		 * This is what `everCanonical` used to approximate in memory, and it is strictly
+		 * better: that flag was `false` for everything after a reload, so a reloaded tab
+		 * read every move as a revert. The same read, in the same words, as the receiving
+		 * twin's `movePointer`.
+		 */
+		const slotsBefore = await this.registry.slots();
+		const wasPromotion = !!slotsBefore.successor && sameGeneration(slotsBefore.successor, entry.record);
 		const record = await this.registry.moveCanonicalTo(entry.record);
 		// It is canonical: it is no longer waiting to become so, and a REVERT past it
 		// later must not re-promote it on the next cycle.
@@ -1220,9 +1310,6 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				namedLogger.error(`onPromoted listener threw`, err);
 			}
 		}
-		// Read BEFORE the move applies, because that is what makes it readable at all:
-		// a generation the pointer has named before is one this is going BACK to.
-		const wasRevert = entry.everCanonical;
 		this.applyAtNotification(entry);
 		if (superseded !== entry && entry.lastSync) {
 			// The cursor of the generation that answers NOW. Without it a consumer would
@@ -1231,7 +1318,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			this.onLastSyncUpdated?.(entry.lastSync);
 		}
 		if (superseded && superseded !== entry) {
-			await this.arrangeDrop(superseded, entry, wasRevert);
+			await this.arrangeDrop(superseded, entry, wasPromotion);
 		}
 		return record;
 	}
@@ -1249,16 +1336,18 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * successor reaches the cursor the previous generation had at the promotion,
 	 * and the drop happens then.
 	 *
-	 * A BACKWARDS move drops nothing. Moving the pointer to an older generation is
-	 * a REVERT, not a promotion, and dropping what it moved away from would delete
-	 * the very thing the developer might revert forwards to again.
+	 * A MOVE THAT IS NOT A PROMOTION DROPS NOTHING. A promotion is a move onto what
+	 * the `successor` slot names; a move back to what `predecessor` names is a
+	 * REVERT, and an operator naming any other registered generation is treated the
+	 * same way. Dropping what such a move left behind would delete the very thing the
+	 * developer might move forwards to again.
 	 */
 	protected async arrangeDrop(
 		superseded: HeldEntry<ABI, ProcessResultType>,
 		successor: HeldEntry<ABI, ProcessResultType>,
-		wasRevert: boolean,
+		wasPromotion: boolean,
 	): Promise<void> {
-		if (!this.promotionConfig.dropOnPromotion || wasRevert) {
+		if (!this.promotionConfig.dropOnPromotion || !wasPromotion) {
 			return;
 		}
 		if (this.promotionConfig.policy === 'immediate') {
@@ -1329,6 +1418,179 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				err,
 			);
 		}
+	}
+
+	// ------------------------------------------------------------------------------------------------------------------
+	// THE OTHER HALF OF THE LIFECYCLE: the SUCCESSOR SLOT holds ONE, so a newer one REPLACES it
+	// ------------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * MAKE ROOM IN THE `successor` SLOT, because the registration about to happen is
+	 * what takes it.
+	 *
+	 * The container knew ONE kind of supersession and it is a PROMOTION: the incumbent
+	 * becomes the predecessor and is RETAINED, because the pointer must be able to
+	 * move back to it (`dropSuperseded`, above). This is the other half, and it is the
+	 * half a browser tab lives in. A successor that is still catching up and that a
+	 * NEWER one has just replaced is dead work in every case and a WALL in this one:
+	 * it keeps its registry row, keeps its state store and keeps being advanced by
+	 * every cycle, so a developer saving twice reaches `maxGenerations` -- two here --
+	 * almost at once, and the only remedy was deleting a generation by hand.
+	 *
+	 * ## The PREDICATE is the whole safety argument, and it is now a ROW
+	 *
+	 * "Not canonical right now" is NOT the test: a predecessor kept for a revert is not
+	 * canonical right now either, and dropping it would silently destroy the way back.
+	 * Nor is it "has never been canonical", which is the question the rows cannot
+	 * answer and which `everCanonical` approximated IN MEMORY, from what one tab had
+	 * seen since the page loaded -- so a RELOAD answered "nothing" and dropped
+	 * nothing, which is exactly the shape that reloads most. The test is now the SLOT,
+	 * and `displacedBySuccessor` is where it is written down, ONCE, for both
+	 * containers.
+	 *
+	 * ## "THE SAME ROLE" MEANS THE SLOT, REGARDLESS OF STREAM
+	 *
+	 * There is ONE `successor` slot, so the cross-stream question is answered
+	 * structurally rather than by fiat: a newer successor replaces the pending one
+	 * wherever either sits, because there is only one place for a pending successor to
+	 * be. That is also what frees a STREAM slot -- `maxStreams` counts the distinct
+	 * streams among registered generations, and a tab that reconfigures its SOURCE
+	 * meets that bound first.
+	 */
+	protected async replaceTheSuccessor(
+		arriving: GenerationId,
+		registered: readonly GenerationRecord[],
+		slots: SlottedGenerations,
+		arrivingStream: string,
+	): Promise<void> {
+		const displaced = displacedBySuccessor(arriving, registered, slots, (record) =>
+			this.held.some((entry) => sameGeneration(entry.record, record)),
+		);
+
+		const surviving = [...registered];
+		for (const record of displaced) {
+			if (this.wouldStrandAFollower(record, surviving, arrivingStream)) {
+				namedLogger.info(
+					`the replaced successor {stream: ${record.stream}, processor: ${record.processor}} is RETAINED for now: ` +
+						`it WRITES the stream ${record.stream}, which another generation here follows, and dropping it would ` +
+						`leave that one folding a stream nothing appends to (ADR-0044). No slot names it any more, so it goes ` +
+						`when nothing follows its stream.`,
+				);
+				continue;
+			}
+			if (await this.dropReplaced(record, arriving)) {
+				surviving.splice(
+					surviving.findIndex((held) => sameGeneration(held, record)),
+					1,
+				);
+			}
+		}
+	}
+
+	/**
+	 * Whether dropping this generation would leave a stream being folded by something
+	 * with nothing appending to it.
+	 *
+	 * `dropSuperseded`'s rule, applied one moment earlier and with one more follower in
+	 * view. Which generation WRITES a stream is the oldest SURVIVING one registered on
+	 * it (ADR-0044), so dropping a writer another held generation follows leaves that
+	 * one folding a stream nothing appends to. The generation about to be ADDED counts
+	 * as such a follower, because it is about to be one: a generation on a stream this
+	 * container already holds FOLLOWS it, and dropping its writer here would also reap
+	 * the stored stream out from under it and send it back to the chain for a history
+	 * it already has -- which on a browser's public node may not be served at all.
+	 *
+	 * It reads the RECORDS rather than a held entry's `follows`, because the generation
+	 * the slot names may be one this process holds no engine for at all -- which is
+	 * exactly the reload case, and the case the durable slot exists for.
+	 */
+	protected wouldStrandAFollower(
+		record: GenerationRecord,
+		registered: readonly GenerationRecord[],
+		arrivingStream: string,
+	): boolean {
+		const writer = writerOf(registered, record.stream);
+		if (!writer || !sameGeneration(writer, record)) return false;
+		if (record.stream === arrivingStream) return true;
+		return this.held.some(
+			(entry) => !sameGeneration(entry.record, record) && entry.follows && entry.record.stream === record.stream,
+		);
+	}
+
+	/**
+	 * Drop ONE replaced successor: its registry row, its state store, and every trace
+	 * of it in this container.
+	 *
+	 * Deleting a generation is already a drop of its state (`dropState`, injected by
+	 * whoever named the storage) and a reap of its stream where no registered
+	 * generation is left folding it, so nothing new is invented here: what is new is
+	 * deciding WHEN, without being asked.
+	 *
+	 * The REGISTRY GOES FIRST, which is the opposite order from `dropSuperseded` and
+	 * deliberately so: there the drop is the last act of a promotion that has already
+	 * happened, while here a registration is about to be decided on the result, so a
+	 * failure must leave the container exactly as it was rather than holding a
+	 * generation it has stopped driving.
+	 *
+	 * A FAILED DROP DOES NOT STOP THE REPLACEMENT, and the slot is what makes that
+	 * safe: the arriving generation takes `successor` regardless, so what failed to go
+	 * is left named by no slot -- which is the definition of collectable, and the next
+	 * registration tries again. Refusing the registration instead would make a stuck
+	 * deletion an outage for the tab that is trying to move forward, and a tab is what
+	 * a user is looking at.
+	 */
+	protected async dropReplaced(record: GenerationRecord, arriving: GenerationId): Promise<boolean> {
+		let reaped: string | undefined;
+		try {
+			reaped = (await this.registry.deleteGeneration(record)).reaped;
+		} catch (err) {
+			namedLogger.error(
+				`failed to drop the replaced successor {stream: ${record.stream}, processor: ${record.processor}}; it is ` +
+					`still registered, and the arriving generation takes the \`successor\` slot anyway -- so nothing names it ` +
+					`and it can be collected later`,
+				err,
+			);
+			return false;
+		}
+		this.stopDriving(record);
+		namedLogger.info(
+			`the generation {stream: ${record.stream}, processor: ${record.processor}} was what the \`successor\` slot ` +
+				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
+				`AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was replaced -- it is ` +
+				`neither the canonical generation nor what \`predecessor\` holds, so nothing can revert to it and re-folding ` +
+				`it would be work for a result nobody will ever ask for. Its state store is gone` +
+				`${reaped ? `, and the stream ${reaped} was reaped with it, no registered generation being left on it` : ''}. ` +
+				`The canonical generation and the revert target are untouched.`,
+		);
+		return true;
+	}
+
+	/**
+	 * STOP DRIVING a generation whose record has gone: out of the held list, out of
+	 * any deferred drop, and off the reporter.
+	 *
+	 * One function rather than the same lines wherever a generation is deleted,
+	 * because the last is the one that is easy to forget and the worst to omit: a
+	 * dropped fold that went on REPORTING would be a channel into a publisher nothing
+	 * can reach it through any more.
+	 *
+	 * A generation this container holds no engine for is the ordinary case after a
+	 * reload (a tab holds only the fold it was built with), and then there is simply
+	 * nothing to stop driving.
+	 */
+	protected stopDriving(record: GenerationId): void {
+		const entry = this.held.find((held) => sameGeneration(held.record, record));
+		if (!entry) {
+			return;
+		}
+		this.held.splice(this.held.indexOf(entry), 1);
+		entry.candidate = false;
+		for (const deferred of [...this.deferredDrops]) {
+			if (deferred.superseded === entry || deferred.successor === entry) {
+				this.deferredDrops.splice(this.deferredDrops.indexOf(deferred), 1);
+			}
+		}
+		entry.processor.setFoldReporter?.(undefined);
 	}
 
 	/** What the container hands OUT for a generation it holds. */
@@ -1420,7 +1682,6 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			);
 		}
 		this.current = entry;
-		entry.everCanonical = true;
 	}
 
 	protected requireCurrent(): HeldEntry<ABI, ProcessResultType> {
@@ -1448,7 +1709,6 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	protected applyAtNotification(entry: HeldEntry<ABI, ProcessResultType>): void {
 		this.current = entry;
-		entry.everCanonical = true;
 		this.notifyState();
 	}
 

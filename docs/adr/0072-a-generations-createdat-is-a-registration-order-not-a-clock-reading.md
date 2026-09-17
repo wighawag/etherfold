@@ -26,6 +26,8 @@ That set is empty today -- nothing is published (`CONTEXT.md`), and the referenc
 
 `writerOf` still means "the oldest SURVIVING generation registered on this stream", and it is still the shared model both containers consult. What changed is that "oldest" is now a fact rather than an approximation. ADR-0071 left this open explicitly, having found that deriving the chain-facing container's `follows` from `writerOf` per generation produced two writers there too; that container asks the registry a set question instead, and that is unchanged and still correct.
 
+> **AMENDED 2026-09-17 (`the-chain-facing-container-holds-its-generations-in-slots`): the last sentence has expired, and this ADR is what let it.** The chain-facing container no longer asks a set question: `Indexer.add` derives `follows` from `writerOf` like the receiving twin, because the registration order this ADR guarantees is exactly the precondition ADR-0071 named before that form could be used. It is not a tidy-up. The set question was WRONG on reload -- a registration that resolves to an EXISTING record keeps its original `createdAt` and sorts FIRST, so a reloaded tab read its own canonical generation as a follower and stopped fetching. ADR-0071 carries the reasoning.
+
 ## The other half: a report nobody read
 
 ADR-0070 gave `RebuildReport` a `stopped` reason and `retryCanAdvance`, so a host could tell "call again" from "calling again will do exactly this for ever". Nothing in this repository read it: the CLI called `rebuildMore()` and discarded the result, which is the loop ADR-0070's cost story is about.

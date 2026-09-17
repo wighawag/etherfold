@@ -3,7 +3,7 @@ import type {Abi} from 'abitype';
 import type {EventProcessor, IndexingSource} from '../src/types.js';
 import {openIndexer, UnheldGenerationError, type GenerationSpec} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
-import type {GenerationRegistry} from '../src/generation/registry.js';
+import type {GenerationId, GenerationRecord, GenerationRegistry} from '../src/generation/registry.js';
 
 // ---------------------------------------------------------------------------
 // THE GENERATION CONTAINER, which is now the only shape there is.
@@ -259,6 +259,105 @@ describe('a discard is PUBLISHED and not merely applied', () => {
 		// nothing to say -- and a store blanked on every save would be its own bug
 		expect(await indexer.updateProcessor(a.processor)).toEqual({stateDiscarded: false});
 		expect(published).toEqual([]);
+	});
+});
+
+/**
+ * A GENERATION IS HELD BY A DURABLE NAMED SLOT (ADR-0084), in the chain-facing
+ * twin.
+ *
+ * The slots themselves -- what they mean, what `create` and `moveCanonicalTo`
+ * write -- are pinned in `generationRegistry.test.ts`, and the receiving twin's
+ * application of them in `receivingContainer.test.ts`. What is asserted here is
+ * this container's half: `add` registers into `successor`, so a generation added
+ * beside the live one REPLACES the pending one rather than piling up, and the
+ * replacement can reach neither the generation that answers reads nor the one a
+ * revert returns to.
+ *
+ * The runtime the rule was written FOR is a browser tab, and the claims that are
+ * only observable there -- a RELOAD over the same IndexedDB, the state keyspace
+ * really going, and what a cap of two means under three slots -- are in
+ * `@etherfold/browser`'s `aTabHoldsItsGenerationsInSlots.test.ts`.
+ */
+describe('a generation is held by a durable named SLOT', () => {
+	/** A registry that records what it was asked to drop the state of. */
+	async function registryRecordingDrops(caps = {maxGenerations: 4, maxStreams: 2}) {
+		const dropped: GenerationId[] = [];
+		const registry = await openMemoryGenerationRegistry(caps, {
+			dropState: async (id) => {
+				dropped.push(id);
+			},
+		});
+		return {registry, dropped};
+	}
+
+	/** What each slot holds, as the fold that names it, so an assertion reads as a sentence. */
+	async function slotsBy(registry: GenerationRegistry) {
+		const held = await registry.slots();
+		const name = (record: GenerationRecord | undefined) => record?.processor.replace('version-of-', '');
+		return {canonical: name(held.canonical), successor: name(held.successor), predecessor: name(held.predecessor)};
+	}
+
+	it('registers a generation added beside the live one INTO `successor`', async () => {
+		const {registry} = await registryRecordingDrops();
+		const {indexer} = await openContainer([makeFold('A')], registry);
+
+		// the first generation of an empty registry takes `canonical` whatever slot
+		// was asked for, because a registry holding generations and pointing at none
+		// of them answers nothing
+		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: undefined, predecessor: undefined});
+
+		await indexer.add(specFor(makeFold('B')));
+
+		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'B', predecessor: undefined});
+	});
+
+	it('REPLACES what `successor` held, and drops it: the slot holds AT MOST ONE', async () => {
+		const {registry, dropped} = await registryRecordingDrops();
+		const {indexer} = await openContainer([makeFold('A')], registry);
+		const b = await indexer.add(specFor(makeFold('B')));
+
+		const c = await indexer.add(specFor(makeFold('C')));
+
+		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
+		// the row, the state, and this container's driving of it: all three go
+		expect(dropped).toEqual([{stream: b.record.stream, processor: b.record.processor}]);
+		expect((await registry.list()).map((record) => record.processor)).toEqual(['version-of-A', 'version-of-C']);
+		expect(indexer.generations.map((held) => held.record)).toEqual([indexer.canonical.record, c.record]);
+	});
+
+	it('never displaces what `canonical` or `predecessor` names', async () => {
+		const {registry, dropped} = await registryRecordingDrops();
+		const {indexer} = await openContainer([makeFold('A')], registry);
+		const b = await indexer.add(specFor(makeFold('B')));
+		await indexer.promote(b.record);
+		// the pointer moved, so what it moved OFF is what `predecessor` names
+		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: undefined, predecessor: 'A'});
+
+		const c = await indexer.add(specFor(makeFold('C')));
+		await indexer.add(specFor(makeFold('D')));
+
+		// the replacement reached the PENDING successor and nothing else: "not
+		// canonical right now" would have taken the revert target with it
+		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: 'D', predecessor: 'A'});
+		expect(dropped).toEqual([{stream: c.record.stream, processor: c.record.processor}]);
+		// ...so the way back is still there, and still exact
+		await indexer.promote({stream: c.record.stream, processor: 'version-of-A'});
+		expect(indexer.state.read()).toBe('A');
+	});
+
+	it('replaces what a PREVIOUS container left in the slot, having remembered nothing', async () => {
+		const {registry, dropped} = await registryRecordingDrops();
+		const before = await openContainer([makeFold('A')], registry);
+		const abandoned = await before.indexer.add(specFor(makeFold('B')));
+
+		// a container that registered nothing and saw nothing, over the same records:
+		// this is the RESTART, and no in-memory rule could reach it
+		await openContainer([makeFold('A'), makeFold('C')], registry);
+
+		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
+		expect(dropped).toEqual([{stream: abandoned.record.stream, processor: abandoned.record.processor}]);
+		expect((await registry.list()).map((record) => record.processor)).toEqual(['version-of-A', 'version-of-C']);
 	});
 });
 
