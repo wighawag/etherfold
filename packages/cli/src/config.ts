@@ -147,7 +147,11 @@ export const DEFAULT_INDEXER_NAME = 'default';
 export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 	processor: {
 		flag: '-p, --processor <path>',
-		describe: 'the event processor module (it must export a field named "createProcessor")',
+		describe:
+			'the event processor (it must export a field named "createProcessor"). A path is how a deployment ' +
+			'names it, and the file at that path may be an ordinary module, which keeps the identity its author ' +
+			'declared, or a SELF-CONTAINED BUNDLE, which is read and named by the sha256 of its own bytes -- so ' +
+			'an edited handler is a different generation with nobody having to remember to say so (ADR-0086)',
 	},
 	source: {
 		flag: '-d, --deployments <folder>',

@@ -1,6 +1,12 @@
 import type {StateStore, WritableStateStore} from '@etherfold/state-store';
 import {beforeEach, describe, expect, it} from 'vitest';
-import {EntityEventProcessor, fromEntityProcessor, SYNC_CURSOR_KEY, type EntityProcessor} from '../src/index.js';
+import {
+	EntityEventProcessor,
+	entityProcessorVersionHash,
+	fromEntityProcessor,
+	SYNC_CURSOR_KEY,
+	type EntityProcessor,
+} from '../src/index.js';
 import {BACKENDS} from './utils/backends.js';
 import {finality, lastSync, processor, SOURCE, transfer, type TestABI} from './utils/fixtures.js';
 
@@ -264,6 +270,23 @@ describe('the component itself', () => {
 		};
 		const changed = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), renamed);
 		expect(changed.getVersionHash()).not.toBe(sqlite.getVersionHash());
+	});
+
+	it('answers with the identity the ARRIVAL handed it, where a host had one', async () => {
+		// ADR-0086: an author cannot STATE their processor's identity, and where a host
+		// read a self-contained BUNDLE off disk it hands over the hash of those bytes.
+		// The engine takes it and never asks where it came from -- so the DECLARED hash
+		// is not consulted at all rather than compared with it, which is what lets an
+		// edited handler be a different fold with no author action.
+		const identity = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+		const handed = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), processor, {identity});
+		expect(handed.getVersionHash()).toBe(identity);
+
+		// ...and ABSENT is the ordinary case until the migrate batches land: the
+		// declared version plus the declarations, exactly as before.
+		const declared = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), processor);
+		expect(declared.getVersionHash()).toBe(entityProcessorVersionHash(processor));
+		expect(handed.getVersionHash()).not.toBe(declared.getVersionHash());
 	});
 
 	it('is built by a factory that takes the STORE, which is the deployment choice', async () => {

@@ -259,23 +259,31 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
 	stateFor(id: GenerationId): SQLiteStateStore;
 	/**
 	 * The processor half of the generation identity this declaration WILL have,
-	 * computable before the processor exists (ADR-0053) and the very value
-	 * `EntityEventProcessor.getVersionHash()` answers with.
+	 * computable before the processor exists (ADR-0053).
 	 *
-	 * It is author-DECLARED (`version` plus a hash of the entity declarations and
-	 * the config) and deliberately not a hash of the handler source: the code
-	 * fingerprint is ADVISORY and stays out of the identity, because a minifier that
-	 * re-emitted the same behaviour differently would otherwise invalidate every
-	 * deployment's state (`@etherfold/core`, `utils/fingerprint.ts`). A re-read is
-	 * therefore a no-op for an edit that did not move it, which is what makes
-	 * reporting the outcome load-bearing rather than decorative.
+	 * WHERE IT CAME FROM is the ARRIVAL's business and not this module's
+	 * (ADR-0086). A deployment whose `--processor` path named a self-contained
+	 * BUNDLE is identified by the SHA-256 of those bytes, which the arrival supplied
+	 * and which no author can state or fail to state. A deployment whose path named
+	 * an unbundled module has no bytes that describe it, so it keeps the
+	 * author-DECLARED identity `EntityEventProcessor.getVersionHash()` answers with
+	 * (`version` plus a hash of the entity declarations and the config) -- unchanged,
+	 * because four migrate batches and a contract task are still to land.
+	 *
+	 * Renamed from `versionHash`, which now describes only one of the two: a field
+	 * whose name says DECLARED VERSION while it holds a hash of bytes is the kind of
+	 * quiet re-meaning that costs a reader an afternoon.
+	 *
+	 * It is a string the registry compares for equality and renders into messages.
+	 * NOTHING reads it to work out which arrival produced it, which is exactly what
+	 * lets two derivations coexist through the migration and after it.
 	 */
-	versionHash: string;
+	processorIdentity: string;
 	/**
 	 * The ADVISORY second opinion this declaration answers with: a digest of the
 	 * HANDLER SOURCE, and the very value `EntityEventProcessor.getCodeFingerprint()`
 	 * returns -- taken here, from the same declared object, for the reason
-	 * `versionHash` is (one formula, one spelling).
+	 * `processorIdentity` is (one formula, one spelling).
 	 *
 	 * `undefined` is a real answer and means "cannot tell", never "unchanged": a
 	 * processor whose handlers are all bound or proxied has no readable source.
@@ -283,7 +291,9 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
 	 * It is NOT part of any identity and nothing branches on it. It exists so that a
 	 * RE-READ can say whether the module it just imported differs from the fold this
 	 * process is running (`reconfigure.ts`), which is the question a developer who
-	 * saved a file is actually asking and the one the version hash cannot answer.
+	 * saved a file is actually asking and the one a DECLARED identity cannot answer.
+	 * A deployment folding a BUNDLE has no such question -- its identity moves with
+	 * every edit -- so this is the declared path's affordance and goes with it.
 	 */
 	codeFingerprint: string | undefined;
 	/** The two factories, in ADR-0043's order: state FIRST, then the fold over it. */
@@ -316,6 +326,18 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 	db: RemoteSQL,
 	/** The stream's own resolved finality, which the retention window is validated against. */
 	finalityDepth: number,
+	/**
+	 * The identity the ARRIVAL derived, where it derived one: the SHA-256 of the
+	 * bundle this deployment was configured with (ADR-0086).
+	 *
+	 * ABSENT is a real answer and means the path named an unbundled module, which has
+	 * no bytes that describe it -- so the identity falls back to the author's own
+	 * declaration, exactly as it always did. It is deliberately an OVERRIDE of the
+	 * declared value rather than a special case of it: the two derivations are peers
+	 * and the contract task removes the declared one, at which point this parameter
+	 * stops being optional rather than the branch changing shape.
+	 */
+	identity?: string,
 ): Promise<FoldParts<ABI, ProcessResultType>> {
 	const [{EntityEventProcessor, entityProcessorVersionHash}, {VersionedStateStore}] = await Promise.all([
 		import('@etherfold/processor-entities'),
@@ -345,11 +367,15 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 			retention: target.retention,
 			finalityDepth,
 		});
-	const versionHash = entityProcessorVersionHash(declared);
+	// the ARRIVAL's identity where there is one, and the author's declaration where
+	// there is not. `entityProcessorVersionHash` is not called at all for a bundle:
+	// asking a processor built from bytes to state its own version is the question
+	// ADR-0086 says it cannot answer.
+	const processorIdentity = identity ?? entityProcessorVersionHash(declared);
 
 	return {
 		stateFor,
-		versionHash,
+		processorIdentity,
 		// The AUTHOR'S OWN OBJECT is fingerprinted, exactly as `EntityEventProcessor`
 		// fingerprints it: its `on<Event>` handlers and `handleUnparsedEvent` ARE the
 		// logic, and the wrapper around them is this package's code, which no author edit
@@ -360,12 +386,20 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A
 			// second process pointed at this database takes the claim and this one's next
 			// mutation is refused whole rather than half-applied (ADR-0075).
-			createState: (generation) => openForWriting(stateFor({stream: generation.stream, processor: versionHash})),
+			createState: (generation) => openForWriting(stateFor({stream: generation.stream, processor: processorIdentity})),
 			// The CLI intentionally constructs the processor with NO factory argument (the
 			// server passes its folder); see MEDIUM-3.
+			//
+			// The fold is HANDED the arrival's identity where there is one, rather than
+			// computing one (ADR-0086). That is what keeps ONE answer to "which generation is
+			// this" everywhere below: the container registers what the fold answers, the
+			// receiver advertises it on the feed, and the stored cursor records it -- so the
+			// table namespace named above from `processorIdentity` and the identity the
+			// registry files cannot be two different values.
 			createProcessor: (state) =>
 				new EntityEventProcessor<ABI, any>(state, declared, {
 					finalityDepth,
+					...(identity === undefined ? {} : {identity}),
 				}) as unknown as EventProcessor<ABI, ProcessResultType>,
 		},
 	};
@@ -456,6 +490,12 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 * question about the command, answered by the resolver.
 		 */
 		promotion?: PromotionConfig;
+		/**
+		 * The identity the ARRIVAL derived, where it derived one -- the hash of the
+		 * bundle this deployment was configured with (ADR-0086). Passed straight through
+		 * to `foldPartsFor`, which documents what absent means.
+		 */
+		processorIdentity?: string;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([
@@ -468,7 +508,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		// the state, the identity and the two factories, built the ONE way this
 		// deployment builds them -- so a fold added later by a RE-READ lands in the same
 		// database under the same convention (`foldPartsFor`).
-		foldPartsFor<ABI, ProcessResultType>(declared, target, db, context.finalityDepth),
+		foldPartsFor<ABI, ProcessResultType>(declared, target, db, context.finalityDepth, context.processorIdentity),
 	]);
 	const {stateFor} = parts;
 

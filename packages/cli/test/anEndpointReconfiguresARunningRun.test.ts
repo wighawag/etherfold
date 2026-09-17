@@ -44,30 +44,52 @@ const LOGS = [
 const TIP = START_BLOCK + 50;
 
 /**
+ * THE SIBLING MODULE the entry point below imports, which is what makes it an
+ * UNBUNDLED ENTRY POINT rather than a bundle.
+ *
+ * That distinction is load-bearing now and was not when this suite was written.
+ * A processor arrives either as a PATH the module system resolves, keeping the
+ * author-DECLARED identity, or as a self-contained BUNDLE, named by the hash of
+ * its bytes (ADR-0086) -- and "self-contained" means exactly "expects nobody else
+ * to resolve anything", so an entry point that imported nothing at all would BE a
+ * bundle and would be identified by its bytes. Every case below is about the
+ * declared identity: a `version` bump registering a successor, a handler edit at
+ * a static version reporting drift and registering nothing. So the module ships
+ * its ABI the way a real one does, in a second file, and stays on the route these
+ * cases are about. Do not inline it back.
+ */
+const abiModuleSource = `
+export const abi = [
+	{
+		anonymous: false,
+		inputs: [
+			{indexed: true, internalType: 'address', name: 'from', type: 'address'},
+			{indexed: true, internalType: 'address', name: 'to', type: 'address'},
+			{indexed: true, internalType: 'uint256', name: 'id', type: 'uint256'},
+		],
+		name: 'Transfer',
+		type: 'event',
+	},
+];
+`;
+
+/** What every source below opens with, so an EDIT never turns the module into a bundle. */
+const IMPORTS_ITS_ABI = `import {abi} from './abi.js';\n`;
+
+/**
  * The processor module a deployment SHIPS, as text, because the thing under test
  * is what happens when the bytes on disk change.
  *
- * It imports nothing: the ABI is a literal, the entity declarations are literals,
- * and the handler is a function, so this is a module the real `import()` can
- * evaluate with no build step between the test and the loader.
+ * The entity declarations are literals and the handler is a function, so apart
+ * from the sibling ABI this is a module the real `import()` can evaluate with no
+ * build step between the test and the loader.
  */
 function processorModuleSource(options: {version: string; credit: 'to' | 'from'}): string {
-	return `
+	return `${IMPORTS_ITS_ABI}
 export const contractsDataPerChain = {
 	'1': [
 		{
-			abi: [
-				{
-					anonymous: false,
-					inputs: [
-						{indexed: true, internalType: 'address', name: 'from', type: 'address'},
-						{indexed: true, internalType: 'address', name: 'to', type: 'address'},
-						{indexed: true, internalType: 'uint256', name: 'id', type: 'uint256'},
-					],
-					name: 'Transfer',
-					type: 'event',
-				},
-			],
+			abi,
 			address: '${CONTRACT}',
 			startBlock: ${START_BLOCK},
 		},
@@ -93,6 +115,7 @@ const scratch: string[] = [];
 async function aProcessorModuleOnDisk(source: string): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), 'etherfold-reconfigure-'));
 	scratch.push(dir);
+	await writeFile(join(dir, 'abi.js'), abiModuleSource, 'utf-8');
 	const path = join(dir, 'processor.mjs');
 	await writeFile(path, source, 'utf-8');
 	return path;
@@ -288,7 +311,7 @@ describe('a processor that does not compile leaves the deployment exactly as it 
 
 		// the NORMAL state between the two halves of one change: the source landed and
 		// the handlers have not, so the module throws the moment it is evaluated
-		await edit(path, `throw new Error('the deployments folder is not built yet');\n`);
+		await edit(path, `${IMPORTS_ITS_ABI}throw new Error('the deployments folder is not built yet');\n`);
 
 		const refused = await reconfigure(indexer);
 		expect(refused.status, JSON.stringify(refused.body)).toBe(409);
@@ -321,7 +344,7 @@ describe('a processor that does not compile leaves the deployment exactly as it 
 		const {indexer} = await aRunServing(path);
 		const before = await generationsOf(indexer);
 
-		await edit(path, `export function createProcessor() { return {\n`);
+		await edit(path, `${IMPORTS_ITS_ABI}export function createProcessor() { return {\n`);
 
 		const refused = await reconfigure(indexer);
 		expect(refused.status).toBe(409);

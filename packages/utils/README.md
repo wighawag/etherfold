@@ -50,6 +50,25 @@ A bundle is produced by the author and not by any host here (reading a file and 
 
 This arrival is for a CLI or a server. A browser is handed a processor OBJECT by its own bundler, and where a tab does hold bytes, `data:` and `blob:` imports are refused by every realistic Content-Security-Policy, so there is deliberately no browser path here.
 
+## One PATH, whichever arrival it turns out to be
+
+A host takes one `-p <path>` from an operator and should not have to ask which of the two shapes above it named. `openProcessorArrival` answers that, and it is what [`etherfold`](https://github.com/wighawag/etherfold/tree/main/packages/cli) calls:
+
+```ts
+import {openProcessorArrival} from '@etherfold/utils';
+
+const arrival = await openProcessorArrival<Abi, unknown, EntityProcessor<Abi>>('./dist/processor.bundle.js');
+// arrival.processor, arrival.processorModule, and:
+if (arrival.identity) {
+	// the path named a BUNDLE: this is `sha256:<hex>` over its octets, and it NAMES the
+	// generation the host is about to register. Nothing parses it.
+}
+```
+
+A path whose bytes are **self-contained** is a bundle, read and hashed. Anything else -- a specifier that is not a readable file, a directory, an entry point that still imports its ABI -- goes through `loadProcessorModule` exactly as before and comes back with **no identity**, which means the author's declared one still names the fold. `identity` is therefore read as present-or-absent and never inspected as a string: nothing in etherfold parses a processor identity, which is what lets an identity derived from bytes and one derived any other way coexist.
+
+The consequence worth knowing: an entry point that imports NOTHING is self-contained, so it is a bundle by this definition and is identified by its bytes. An injected `importModule` governs the module arm alone; to state what the BYTES are, inject `readBundle`.
+
 ## Loading contracts from a deployments folder
 
 For the `-d ./deployments/sepolia` case, where the ABIs and addresses are build artifacts rather than something the processor module carries:

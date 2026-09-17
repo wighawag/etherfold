@@ -20,7 +20,7 @@ import {
 } from '@etherfold/fetcher-host';
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport} from '@etherfold/server';
-import {instantiateProcessor, loadProcessorModule} from '@etherfold/utils';
+import {openProcessorArrival} from '@etherfold/utils';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
 import {logs} from 'named-logs';
@@ -221,14 +221,20 @@ export async function prepareIndexing<
 			requestsPerSecond: resolved.rps,
 		}) as unknown as EIP1193ProviderWithoutEvents);
 
-	// The CLI intentionally constructs the processor with NO factory argument (the server passes its
-	// folder); see MEDIUM-3.
-	const processorModule = await loadProcessorModule<ABI, ProcessResultType>(resolved.processor, {
+	// WHAT THE `--processor` PATH TURNS OUT TO BE. A path is still how a deployment
+	// names its processor and that has not changed (ADR-0086); what the path points
+	// AT may now be a self-contained BUNDLE, which is read and hashed here and whose
+	// hash IS the generation's processor identity. A path naming an unbundled module
+	// resolves through the module system exactly as it always did and keeps the
+	// identity its author declared. Nothing here bundles anything.
+	//
+	// The CLI intentionally constructs the processor with NO factory argument (the
+	// server passes its folder); see MEDIUM-3.
+	const arrival = await openProcessorArrival<ABI, ProcessResultType, EntityProcessor<ABI, any>>(resolved.processor, {
 		...(deps.importModule ? {importModule: deps.importModule} : {}),
 	});
-	const declared = instantiateProcessor<ABI, ProcessResultType, EntityProcessor<ABI, any>>(processorModule, {
-		processorPath: resolved.processor,
-	});
+	const {processorModule} = arrival;
+	const declared = arrival.processor;
 
 	// derived ONCE and handed to both halves below: the sending fetcher host and the
 	// receiving stream builder hash this same object into the wire identity
@@ -275,6 +281,10 @@ export async function prepareIndexing<
 			// which is the whole reason this shape can store a stream at all: the emission
 			// table's key is `NOT NULL` and there was no fold-side value to put in it.
 			indexer: resolved.indexer,
+			// THE IDENTITY THE ARRIVAL DERIVED, where it derived one: a generation folded
+			// from a bundle is named by that bundle's hash, and the engine below this line
+			// cannot tell the difference and is not meant to (ADR-0086).
+			...(arrival.identity === undefined ? {} : {processorIdentity: arrival.identity}),
 			// WHEN a successor takes over, on the one command that can register one while it
 			// runs. Only `run` resolves the input (`OWNERSHIP`, `config.ts`): the one-shot
 			// holds exactly ONE generation and exits, so a policy there would be accepted

@@ -49,24 +49,42 @@ const LOGS = [
 ];
 const TIP = START_BLOCK + 50;
 
+/**
+ * THE SIBLING MODULE the entry point below imports, which is what makes it an
+ * UNBUNDLED ENTRY POINT rather than a bundle.
+ *
+ * A processor arrives either as a PATH the module system resolves, keeping the
+ * author-DECLARED identity, or as a self-contained BUNDLE, named by the hash of
+ * its bytes (ADR-0086) -- and "self-contained" means exactly "expects nobody else
+ * to resolve anything", so an entry point that imported nothing at all would BE a
+ * bundle. These cases are about WHEN THE POINTER MOVES and express a successor as
+ * a `version` bump, so the module ships its ABI the way a real one does, in a
+ * second file, and stays on the route they were written for. Do not inline it
+ * back.
+ */
+const abiModuleSource = `
+export const abi = [
+	{
+		anonymous: false,
+		inputs: [
+			{indexed: true, internalType: 'address', name: 'from', type: 'address'},
+			{indexed: true, internalType: 'address', name: 'to', type: 'address'},
+			{indexed: true, internalType: 'uint256', name: 'id', type: 'uint256'},
+		],
+		name: 'Transfer',
+		type: 'event',
+	},
+];
+`;
+
 /** The processor module a deployment SHIPS, as text: the successor is an EDIT to these bytes. */
 function processorModuleSource(options: {version: string; credit: 'to' | 'from'}): string {
-	return `
+	return `import {abi} from './abi.js';
+
 export const contractsDataPerChain = {
 	'1': [
 		{
-			abi: [
-				{
-					anonymous: false,
-					inputs: [
-						{indexed: true, internalType: 'address', name: 'from', type: 'address'},
-						{indexed: true, internalType: 'address', name: 'to', type: 'address'},
-						{indexed: true, internalType: 'uint256', name: 'id', type: 'uint256'},
-					],
-					name: 'Transfer',
-					type: 'event',
-				},
-			],
+			abi,
 			address: '${CONTRACT}',
 			startBlock: ${START_BLOCK},
 		},
@@ -92,6 +110,7 @@ const scratch: string[] = [];
 async function aProcessorModuleOnDisk(source: string): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), 'etherfold-promotion-'));
 	scratch.push(dir);
+	await writeFile(join(dir, 'abi.js'), abiModuleSource, 'utf-8');
 	const path = join(dir, 'processor.mjs');
 	await writeFile(path, source, 'utf-8');
 	return path;
