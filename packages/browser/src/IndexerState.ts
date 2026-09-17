@@ -403,7 +403,8 @@ export type EntityEventProcessorLike<ABI extends Abi, ProcessResultType, Process
  *
  * The order is `createState` then `createProcessor`, and it is the order a
  * generation's IDENTITY forces: the stream half is known from the source and the
- * stream config, and the FOLD half is the processor's own version hash, so the
+ * stream config, and the FOLD half is `processorIdentity` where the arrival
+ * derived one and the processor's own declared hash where it did not, so the
  * processor has to exist before the generation can be named -- which means the
  * state cannot be keyed on the finished name. The factories are per generation
  * instead, so the caller's own closure is what distinguishes this generation's
@@ -459,13 +460,41 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 		context: GenerationContext,
 		patience: ClaimPatience,
 	) => WritableStateStore | Promise<WritableStateStore>;
-	/** The fold, over that state. The FACTORY, not its result: its version hash NAMES the generation. */
+	/** The fold, over that state. The FACTORY, not its result: `processorIdentity` NAMES the generation. */
 	createProcessor: (
 		state: WritableStateStore,
 		context: GenerationContext,
 	) =>
 		| EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>
 		| Promise<EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>>;
+	/**
+	 * THE IDENTITY THIS GENERATION WAS HANDED, where the ARRIVAL derived one: the
+	 * fold half of the generation this spec registers.
+	 *
+	 * ADR-0086: an author cannot STATE a processor's identity, so it comes from what
+	 * the processor IS. An app that fetched or read a self-contained BUNDLE names
+	 * its generation by the SHA-256 of those octets, and an edited handler is a
+	 * different generation whether or not anybody remembered to say so. Nothing here
+	 * or below looks INSIDE the value -- it is COMPARED and RENDERED, and nothing in
+	 * the tree parses one -- so neither this hook nor the container cares which
+	 * arrival derived it.
+	 *
+	 * It is handed straight to `GenerationSpec.processorIdentity`
+	 * (`@etherfold/core`) and is ALSO what this hook keys its own per-generation
+	 * store record on, so the name the registry files and the name the scheduled
+	 * prune looks a store up by cannot be two different values.
+	 *
+	 * ABSENT is a real answer and still the common one: no bytes describe this
+	 * processor, so the identity falls back to the processor's own
+	 * `getVersionHash()` exactly as it always did. That fallback is what
+	 * `the-declared-version-and-the-drift-report-are-deleted` removes.
+	 *
+	 * It is PER GENERATION, which is why it sits here beside the factories rather
+	 * than among the options: two generations given one identity would be ONE
+	 * registry record, ONE state namespace and one fold of a stream two specs asked
+	 * to fold separately.
+	 */
+	processorIdentity?: string;
 	/**
 	 * Which generations this indexer holds and which one is canonical.
 	 *
@@ -681,11 +710,19 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// The processor arrives as the `EventProcessor` the core drives, which is all
 		// `new IndexerGeneration(...)` takes. This is the container's
 		// `createGeneration`: one of these is built per generation.
+		//
+		// The fifth argument is the IDENTITY this generation was registered under --
+		// what the arrival supplied, or the processor's own declared hash where none did
+		// (ADR-0086). Forward it (`{processorIdentity}` on `IndexerGenerationOptions`)
+		// or the engine this factory builds answers to a different name than the
+		// registry filed. A four-parameter factory still compiles, which is exactly why
+		// it is said here: nothing but this sentence would warn a caller that dropped it.
 		createIndexer?: (
 			provider: EIP1193ProviderWithoutEvents,
 			processor: EventProcessor<ABI, ProcessResultType>,
 			source: IndexingSource<ABI>,
 			config: ProvidedIndexerConfig<ABI>,
+			processorIdentity: string,
 		) => IndexerGeneration<ABI, ProcessResultType>;
 	},
 ) {
@@ -894,6 +931,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		createState: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createState'],
 		createProcessor: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createProcessor'],
 		processorConfig?: ProcessorConfig,
+		processorIdentity?: string,
 	) {
 		return {
 			createState: (context: GenerationContext) =>
@@ -904,9 +942,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					built.configure(processorConfig);
 				}
 				// Recorded HERE and not in `createState`, because this is the first moment
-				// both halves exist: a generation is `{stream, processor version hash}` and
-				// the fold's half is only known once the processor is built, which is why
-				// the factories run in this order at all.
+				// both halves exist: a generation is `{stream, processor identity}` and the
+				// fold's half is only settled once the processor is built, which is why the
+				// factories run in this order at all -- an ARRIVAL-supplied identity is known
+				// before either factory runs, but the DECLARED fallback under it is not.
 				//
 				// The FIRST one wins, because that is what the container does with the
 				// generation itself: naming a generation it already holds RESOLVES to the one
@@ -914,7 +953,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// is being folded into is the one built alongside THAT processor. Overwriting
 				// would point this at a store nothing writes to and quietly stop pruning the
 				// one that is growing.
-				const key = generationKey({stream: context.stream, processor: built.getVersionHash()});
+				//
+				// The identity the ARRIVAL supplied, and the processor's own declared hash
+				// only where no arrival derived one (ADR-0086). It is resolved with the same
+				// expression the container resolves it with (`processorIdentityOf`,
+				// `@etherfold/core`) rather than a second opinion about it, because a key that
+				// disagreed with the registry record would leave every read of this generation's
+				// store looking for a name nothing filed.
+				const key = generationKey({
+					stream: context.stream,
+					processor: processorIdentity ?? built.getVersionHash(),
+				});
 				if (!statesByGeneration.has(key)) {
 					statesByGeneration.set(key, state as WritableStateStore);
 				}
@@ -922,6 +971,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			},
 			stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
 				(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
+			// Handed STRAIGHT to the container, which registers the generation under it and
+			// never asks where it came from. Omitted rather than passed as `undefined` so
+			// that "no arrival derived one" is the absence the core's own fallback reads.
+			...(processorIdentity === undefined ? {} : {processorIdentity}),
 		};
 	}
 
@@ -1129,7 +1182,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			source,
 			config,
 			...(options?.promotion ? {promotion: options.promotion} : {}),
-			generations: [generationSpecFor(spec.createState, spec.createProcessor, processorConfig)],
+			generations: [generationSpecFor(spec.createState, spec.createProcessor, processorConfig, spec.processorIdentity)],
 			createGeneration: options?.createIndexer,
 		});
 		indexer.onPromoted = onPromoted;
@@ -1949,7 +2002,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					// narrow it: the envelope is not generic, and a tab and its host come out of
 					// ONE build.
 					source: source as IndexingSource<ABI>,
-					...generationSpecFor(spec.createState, spec.createProcessor, processorConfigUsed),
+					...generationSpecFor(spec.createState, spec.createProcessor, processorConfigUsed, spec.processorIdentity),
 				});
 				// A promotion may already have happened (`immediate`), and the generation list
 				// an app renders has moved either way.
@@ -2066,6 +2119,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			generation: {
 				createState: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createState'];
 				createProcessor: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createProcessor'];
+				/**
+				 * WHAT NAMES THIS GENERATION, from the arrival that produced it: the same
+				 * value `init` takes and with the same meaning (ADR-0086). A reconfigure is a
+				 * NEW fold beside the live one, so it arrives on its own and carries its own
+				 * identity rather than inheriting the running generation's.
+				 */
+				processorIdentity?: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['processorIdentity'];
 			},
 			processorConfig?: ProcessorConfig,
 		): Promise<HeldGeneration<ABI, ProcessResultType>> {
@@ -2080,7 +2140,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					throw new Error(`no indexer setup, call init`);
 				}
 				const held = await indexer.add(
-					generationSpecFor(generation.createState, generation.createProcessor, processorConfig),
+					generationSpecFor(
+						generation.createState,
+						generation.createProcessor,
+						processorConfig,
+						generation.processorIdentity,
+					),
 				);
 				// Reported from the moment it EXISTS, before it has folded anything: an app
 				// that hides its answers during a rebuild must be able to do so from the
@@ -2182,6 +2247,16 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * redeployed contract has nothing to replay. The CONTAINER is what does that
 		 * now (`Indexer.publishDiscard`, `@etherfold/core`), so it reaches every
 		 * consumer of one and not this hook's subscribers alone.
+		 *
+		 * ## WHY THERE IS NO `processorIdentity` HERE, when a generation spec has one
+		 *
+		 * ADR-0086 derives an identity PER ARRIVAL, and what arrives at this call is a
+		 * MODULE OBJECT a dev server handed the tab: there are no bytes to hash, so an
+		 * app cannot supply what a bundle's arrival supplies, and letting it state one
+		 * anyway would be the author-declared identity coming back through the one door
+		 * left open. The derivation this arrival needs is over its HANDLER SOURCES and is
+		 * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`; until it lands,
+		 * this call compares the declared hashes described above.
 		 */
 		updateProcessor(
 			newProcessor: EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>,

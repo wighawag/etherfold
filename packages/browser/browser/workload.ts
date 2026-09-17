@@ -575,8 +575,8 @@ export async function writableStore(config: BrowserStateStoreConfig = {}): Promi
  * Two lines an application author writes: the store is the deployment's choice
  * and the processor above is untouched.
  */
-export function indexerFor(store: WritableStateStore) {
-	return indexerForProcessor(store, processor);
+export function indexerFor(store: WritableStateStore, processorIdentity?: string) {
+	return indexerForProcessor(store, processor, processorIdentity);
 }
 
 /**
@@ -595,10 +595,25 @@ export function indexerFor(store: WritableStateStore) {
  * `createState` hands that one back -- the factory is what distinguishes THIS
  * generation's state, and this fixture has exactly one.
  */
-export function indexerForProcessor(store: WritableStateStore, definition: EntityProcessor<TestABI>) {
+export function indexerForProcessor(
+	store: WritableStateStore,
+	definition: EntityProcessor<TestABI>,
+	/**
+	 * WHAT NAMES THIS GENERATION, where the case has an ARRIVAL to take one from
+	 * (ADR-0086: an author cannot state a processor's identity).
+	 *
+	 * PASSED THROUGH and never derived here: this harness is loaded inside a browser
+	 * by the Playwright specs, so hashing bytes is the caller's business (the Vitest
+	 * suites do it in `test/utils/processorIdentity.ts`). Omitted, the generation
+	 * keeps the author-declared fallback, which is what every case that never looks
+	 * at an identity goes on doing until the contract task deletes it.
+	 */
+	processorIdentity?: string,
+) {
 	return createIndexerState<TestABI, EntityStateView>({
 		createState: () => store,
 		createProcessor: (state) => entityProcessorOver(state, definition),
+		...(processorIdentity === undefined ? {} : {processorIdentity}),
 	});
 }
 
@@ -658,13 +673,15 @@ function demotedOrCursor(indexer: IndexerState, lastSync: LastSync<TestABI> | un
 export async function runWorkload(
 	store: WritableStateStore,
 	chain: ReturnType<typeof fakeChain> = fakeChain(),
+	/** The identity this run's arrival supplied, where the case has one: see `indexerForProcessor`. */
+	processorIdentity?: string,
 ): Promise<{
 	state: Awaited<ReturnType<typeof readState>>;
 	lastSync: LastSync<TestABI>;
 	ranges: FetchedRange[];
 	indexer: IndexerState;
 }> {
-	const indexer = indexerFor(store);
+	const indexer = indexerFor(store, processorIdentity);
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 	const lastSync = await indexToTip(indexer);
 	const state = await readState(indexer.state.$state);

@@ -2,6 +2,7 @@ import type {Abi, IndexingSource} from '@etherfold/core';
 import type {StateMovedTransport} from '@etherfold/state-moved-conformance';
 import {EntityEventProcessor, EntityStateView, type EntityProcessor} from '@etherfold/processor-entities';
 import {openForReading, openForWriting} from '@etherfold/state-store';
+import {identityOf} from './processorIdentity.js';
 import {
 	connectToIndexerHost,
 	createBrowserStateStore,
@@ -254,6 +255,10 @@ async function openWorld() {
 		{
 			createState: () => store,
 			createProcessor: (state) => new EntityEventProcessor<TestABI>(state, foldAt('1.0.0')),
+			// what this app's ARRIVAL derived, which is what names the generation
+			// (ADR-0086): an author cannot state one, so the declared version above
+			// names nothing here
+			processorIdentity: identityOf('the-app'),
 		},
 		// A KEEPER, because a successor generation over the same stream is a FOLLOWER:
 		// it re-folds the stored stream rather than fetching a history of its own, which
@@ -325,6 +330,8 @@ async function openWorld() {
 			await indexer.addGeneration({
 				createState: () => successorStore,
 				createProcessor: (state) => new EntityEventProcessor<TestABI>(state, foldAt('2.0.0')),
+				// a NEW build arrived, so a new identity arrived with it
+				processorIdentity: identityOf('the-edited-app'),
 			});
 			// The pointer moves under the ordinary default (`on-catch-up`) once the
 			// successor reaches the cursor the canonical generation has -- nothing here

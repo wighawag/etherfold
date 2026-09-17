@@ -3,6 +3,7 @@ import type {Abi, IndexingSource, LogEvent} from '@etherfold/core';
 import {IndexerGeneration} from '@etherfold/core';
 import {createIndexerState, type EntityEventProcessorLike} from '../src/IndexerState.js';
 import {generationOf} from './utils/fakeGeneration.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 const CHAIN_ID_HEX = '0x1';
 
@@ -25,9 +26,12 @@ function makeProvider(chainIdHex: string = CHAIN_ID_HEX) {
 
 type State = {count: number};
 
-function makeProcessor(versionHash = 'v1'): EntityEventProcessorLike<Abi, State, undefined> {
+function makeProcessor(): EntityEventProcessorLike<Abi, State, undefined> {
 	return {
-		getVersionHash: () => versionHash,
+		// The DECLARED path, still on the seam until the contract task removes it and
+		// deliberately NOT what names anything here: every spec below supplies the
+		// identity its arrival derived, so this value is read by nobody.
+		getVersionHash: () => 'declared-version-never-read',
 		// required on `EventProcessor`: a fake that omits it is a fake that would
 		// lose drift detection without anybody noticing
 		getCodeFingerprint: () => undefined,
@@ -47,15 +51,18 @@ const SOURCE: IndexingSource<Abi> = {
 
 describe('createIndexerState - dispose() (teardown / leak prevention)', () => {
 	it('exposes a dispose() method', async () => {
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()));
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')));
 		expect(typeof (indexer as any).dispose).toBe('function');
 	});
 
 	it('stops the auto-index loop so no further ticks fire after dispose()', async () => {
 		let indexMoreCalls = 0;
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {
-			createIndexer: (provider, processor, source, config) => {
-				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config);
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')), {
+			// The fifth argument is the identity the generation was REGISTERED under, and
+			// forwarding it is what keeps the engine answering to the name the registry
+			// filed (ADR-0086).
+			createIndexer: (provider, processor, source, config, processorIdentity) => {
+				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config, {processorIdentity});
 				const realIndexMore = real.indexMore.bind(real);
 				real.indexMore = (async (...args: any[]) => {
 					indexMoreCalls++;
@@ -99,9 +106,9 @@ describe('createIndexerState - dispose() (teardown / leak prevention)', () => {
 	 */
 	it('detaches the indexer callbacks (onLoad / onLastSyncUpdated / onStateUpdated) on dispose()', async () => {
 		let captured!: IndexerGeneration<Abi, State>;
-		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {
-			createIndexer: (provider, processor, source, config) => {
-				captured = new IndexerGeneration<Abi, State>(provider, processor, source, config);
+		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor(), identityOf('the-tab')), {
+			createIndexer: (provider, processor, source, config, processorIdentity) => {
+				captured = new IndexerGeneration<Abi, State>(provider, processor, source, config, {processorIdentity});
 				return captured;
 			},
 		});

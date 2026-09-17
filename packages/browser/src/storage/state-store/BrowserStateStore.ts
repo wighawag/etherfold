@@ -75,7 +75,11 @@ import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
  * const {store} = await openAndBootstrap(
  *   await createBrowserStateStore(processor.entities),
  *   ['https://mirror-a.example/state.json', 'https://mirror-b.example/state.json'],
- *   {processor: eventProcessor.getVersionHash(), finalityDepth: 64},
+ *   // WHICH FOLD is about to index: the identity this app's arrival derived and
+ *   // handed the hook (`BrowserGenerationSpec.processorIdentity`, ADR-0086). A
+ *   // snapshot computed by a different fold is not a candidate at all, which is
+ *   // the rule this value is compared for -- nothing parses it.
+ *   {processor: processorIdentity, finalityDepth: 64},
  * );
  * ```
  *

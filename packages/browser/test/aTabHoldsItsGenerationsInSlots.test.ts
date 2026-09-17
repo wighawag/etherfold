@@ -29,6 +29,7 @@ import {
 	SOURCE,
 	type TestABI,
 } from '../browser/workload.js';
+import {identityOf, markerOf} from './utils/processorIdentity.js';
 
 /**
  * A GENERATION IS HELD BY A DURABLE NAMED SLOT, in the twin a browser tab runs
@@ -57,8 +58,21 @@ import {
 let counter = 0;
 const freshName = () => `slots-${counter++}-${Math.random().toString(36).slice(2, 8)}`;
 
-/** The fold a save produces: the same events, counted differently, so a READ says which one answered. */
-const editedTo = (countBy: number) => processorVariant({version: `${countBy}.0.0`, countBy});
+/**
+ * The fold a save produces: the same events, counted differently, so a READ says
+ * which one answered.
+ *
+ * It declares the SAME version as the fold it replaces, deliberately: what NAMES
+ * a generation is the identity its arrival supplied (ADR-0086), and an author
+ * cannot state one. `identityFor` is the value a save arrives with.
+ */
+const editedTo = (countBy: number) => processorVariant({countBy});
+
+/** What a save's ARRIVAL derived: new bytes, so a new generation, with no author action. */
+const identityFor = (countBy: number) => identityOf(`edited-by-${countBy}`);
+
+/** What the app itself arrived as: the bundle the tab was loaded with. */
+const APP_IDENTITY = identityOf('the-app');
 
 async function memoryStore(definition: EntityProcessor<TestABI> = processor): Promise<WritableStateStore> {
 	return openForWriting(new MemoryStateStore(definition.entities));
@@ -83,23 +97,33 @@ async function durableRegistry(
 function generationOver(
 	store: WritableStateStore,
 	definition: EntityProcessor<TestABI>,
+	/** What the ARRIVAL that produced this fold derived: the identity it is registered under. */
+	processorIdentity: string,
 ): AnyGenerationSpec<TestABI, EntityStateView> {
 	let fold: EntityEventProcessor<TestABI> | undefined;
 	return {
 		createState: () => store,
 		createProcessor: (state) => (fold = entityProcessorOver(state as WritableStateStore, definition)),
 		stateOf: () => (fold as EntityEventProcessor<TestABI>).state,
+		processorIdentity,
 	};
 }
 
-/** What each slot holds, as the `countBy` of the fold it names, so an assertion reads as a sentence. */
+/**
+ * What each slot holds, as the MARKER of the fold it names, so an assertion reads
+ * as a sentence.
+ *
+ * It used to read the declared version off the front of the identity. Nothing may
+ * look inside one (ADR-0086) and after this batch there is nothing in there to
+ * read, so the suite asks which bytes it hashed instead (`markerOf`).
+ */
 async function slotsBy(registry: GenerationRegistry): Promise<Record<string, string | undefined>> {
 	const held = await registry.slots();
-	const version = (record: GenerationRecord | undefined) => record?.processor.split('-')[0];
+	const marker = (record: GenerationRecord | undefined) => markerOf(record?.processor);
 	return {
-		canonical: version(held.canonical),
-		successor: version(held.successor),
-		predecessor: version(held.predecessor),
+		canonical: marker(held.canonical),
+		successor: marker(held.successor),
+		predecessor: marker(held.predecessor),
 	};
 }
 
@@ -126,6 +150,7 @@ describe('a tab that reconfigures over and over holds ONE successor', () => {
 				registry,
 				createState: () => memoryStore(),
 				createProcessor: (state) => entityProcessorOver(state, processor),
+				processorIdentity: APP_IDENTITY,
 			},
 			{keepStream: keepStreamOnIndexedDB<TestABI>(name)},
 		);
@@ -139,13 +164,14 @@ describe('a tab that reconfigures over and over holds ONE successor', () => {
 			const held = await app.addGeneration({
 				createState: () => memoryStore(definition),
 				createProcessor: (state) => entityProcessorOver(state, definition),
+				processorIdentity: identityFor(countBy),
 			});
 			saved.push(held.record);
 
 			// ONE pending successor at a time, whatever the developer did before it
 			expect(await slotsBy(registry)).toEqual({
-				canonical: '1.0.0',
-				successor: `${countBy}.0.0`,
+				canonical: 'the-app',
+				successor: `edited-by-${countBy}`,
 				predecessor: undefined,
 			});
 			// ...so the count never climbs: the incumbent, plus one
@@ -186,10 +212,12 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 			provider: chain.provider,
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
-			generations: [generationOver(await memoryStore(), processor)],
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
-		const abandoned = await beforeReload.add(generationOver(await memoryStore(editedTo(2)), editedTo(2)));
-		expect(await slotsBy(registry)).toEqual({canonical: '1.0.0', successor: '2.0.0', predecessor: undefined});
+		const abandoned = await beforeReload.add(
+			generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)),
+		);
+		expect(await slotsBy(registry)).toEqual({canonical: 'the-app', successor: 'edited-by-2', predecessor: undefined});
 
 		// THE RELOAD: a container that has registered nothing and remembers nothing,
 		// over the same records, arriving with the fold the developer saved last. It
@@ -203,14 +231,14 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
 			generations: [
-				generationOver(await memoryStore(), processor),
-				generationOver(await memoryStore(editedTo(3)), editedTo(3)),
+				generationOver(await memoryStore(), processor, APP_IDENTITY),
+				generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3)),
 			],
 		});
 
 		// the slot holds the fold this session arrived with, and the one the PREVIOUS
 		// session left is gone -- row and state both
-		expect(await slotsBy(registry)).toEqual({canonical: '1.0.0', successor: '3.0.0', predecessor: undefined});
+		expect(await slotsBy(registry)).toEqual({canonical: 'the-app', successor: 'edited-by-3', predecessor: undefined});
 		expect((await registry.list()).length).toBe(2);
 		expect(reloaded.dropped).toEqual([{stream: abandoned.record.stream, processor: abandoned.record.processor}]);
 		// ...and the generation that answers reads is untouched by any of it
@@ -256,7 +284,7 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 			provider: fakeChain().provider,
 			source: SOURCE,
 			config,
-			generations: [generationOver(await memoryStore(), processor)],
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
 		const before = await registry.list();
 
@@ -266,11 +294,11 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 			provider: fakeChain().provider,
 			source: SOURCE,
 			config,
-			generations: [generationOver(await memoryStore(), processor)],
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
 
 		expect((await registry.list()).map((record) => record.processor)).toEqual(before.map((record) => record.processor));
-		expect(await slotsBy(registry)).toEqual({canonical: '1.0.0', successor: undefined, predecessor: undefined});
+		expect(await slotsBy(registry)).toEqual({canonical: 'the-app', successor: undefined, predecessor: undefined});
 		expect(reloaded.dropped).toEqual([]);
 		expect(first.canonical.record).toEqual(before[0]);
 	});
@@ -299,27 +327,35 @@ describe('a replacement can never reach the canonical generation or the revert t
 			provider: fakeChain().provider,
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
-			generations: [generationOver(await memoryStore(), processor)],
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
-		const promoted = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2)));
+		const promoted = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
 		await container.promote(promoted.record);
 		// the pointer moved, so the generation it moved OFF is what `predecessor`
 		// names: the one a revert returns to
-		expect(await slotsBy(registry)).toEqual({canonical: '2.0.0', successor: undefined, predecessor: '1.0.0'});
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: 'the-app'});
 
-		const pending = await container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3)));
-		expect(await slotsBy(registry)).toEqual({canonical: '2.0.0', successor: '3.0.0', predecessor: '1.0.0'});
+		const pending = await container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3)));
+		expect(await slotsBy(registry)).toEqual({
+			canonical: 'edited-by-2',
+			successor: 'edited-by-3',
+			predecessor: 'the-app',
+		});
 		expect(dropped).toEqual([]);
 
 		// ...and a save on top of it replaces the PENDING one and reaches neither of
 		// the other two
-		await container.add(generationOver(await memoryStore(editedTo(4)), editedTo(4)));
+		await container.add(generationOver(await memoryStore(editedTo(4)), editedTo(4), identityFor(4)));
 
-		expect(await slotsBy(registry)).toEqual({canonical: '2.0.0', successor: '4.0.0', predecessor: '1.0.0'});
+		expect(await slotsBy(registry)).toEqual({
+			canonical: 'edited-by-2',
+			successor: 'edited-by-4',
+			predecessor: 'the-app',
+		});
 		expect(dropped).toEqual([{stream: pending.record.stream, processor: pending.record.processor}]);
 		// the way back is still there, and still exact
 		await container.promote((await registry.slots()).predecessor as GenerationRecord);
-		expect((await slotsBy(registry)).canonical).toBe('1.0.0');
+		expect((await slotsBy(registry)).canonical).toBe('the-app');
 	});
 });
 
@@ -349,20 +385,20 @@ describe('what a cap of TWO means under three slots', () => {
 			provider: fakeChain().provider,
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
-			generations: [generationOver(await memoryStore(), processor)],
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
-		const successor = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2)));
+		const successor = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
 		await container.promote(successor.record);
-		expect(await slotsBy(registry)).toEqual({canonical: '2.0.0', successor: undefined, predecessor: '1.0.0'});
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: 'the-app'});
 
-		await expect(container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3)))).rejects.toThrow(
-			GenerationCapReachedError,
-		);
+		await expect(
+			container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3))),
+		).rejects.toThrow(GenerationCapReachedError);
 
 		// nothing was evicted to make room, and the thing that was NOT evicted is
 		// precisely the generation a revert needs
 		expect(dropped).toEqual([]);
-		expect(await slotsBy(registry)).toEqual({canonical: '2.0.0', successor: undefined, predecessor: '1.0.0'});
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: 'the-app'});
 		expect((await registry.list()).length).toBe(2);
 	});
 });
@@ -379,16 +415,17 @@ describe('the replaced generation is RECLAIMED in this runtime storage shape', (
 	 */
 	it('deletes the replaced generation own database, not merely its record', async () => {
 		const name = freshName();
-		const databaseNameOf = (version: string) => `${name}-${version}`;
+		const databaseNameOf = (marker: string) => `${name}-${marker}`;
 		const connections = new Map<string, IndexedDBStateStore>();
 
 		const registry = await openGenerationRegistryOnIndexedDB(name, {
 			// what a host's `dropState` really is on the IndexedDB default: close the
-			// connection, then delete the database that generation folded into. The
-			// version is the head of the version hash, which is how this app named its
-			// databases.
+			// connection, then delete the database that generation folded into. A host
+			// looks the database up BY THE IDENTITY it was handed and never by reading
+			// anything out of it -- nothing parses a generation identity (ADR-0086) --
+			// so this fixture keys its connections on the identity too.
 			dropState: async (id) => {
-				const store = connections.get(id.processor.split('-')[0] as string);
+				const store = connections.get(id.processor);
 				if (!store) return;
 				await store.close();
 				await new Promise<void>((resolve, reject) => {
@@ -399,10 +436,15 @@ describe('the replaced generation is RECLAIMED in this runtime storage shape', (
 			},
 		});
 
-		const realStore = async (definition: EntityProcessor<TestABI>): Promise<WritableStateStore> => {
-			const store = new IndexedDBStateStore(definition.entities, {databaseName: databaseNameOf(definition.version)});
+		const realStore = async (
+			definition: EntityProcessor<TestABI>,
+			processorIdentity: string,
+		): Promise<WritableStateStore> => {
+			const store = new IndexedDBStateStore(definition.entities, {
+				databaseName: databaseNameOf(markerOf(processorIdentity) as string),
+			});
 			await store.migrate();
-			connections.set(definition.version, store);
+			connections.set(processorIdentity, store);
 			return openForWriting(store);
 		};
 
@@ -411,12 +453,12 @@ describe('the replaced generation is RECLAIMED in this runtime storage shape', (
 			provider: fakeChain().provider,
 			source: SOURCE,
 			config: {keepStream: keepStreamOnIndexedDB<TestABI>(name), stream: {finality: FINALITY}},
-			generations: [generationOver(await realStore(processor), processor)],
+			generations: [generationOver(await realStore(processor, APP_IDENTITY), processor, APP_IDENTITY)],
 		});
 
 		const abandoned = editedTo(2);
-		const pendingState = await realStore(abandoned);
-		const pending = await container.add(generationOver(pendingState, abandoned));
+		const pendingState = await realStore(abandoned, identityFor(2));
+		const pending = await container.add(generationOver(pendingState, abandoned, identityFor(2)));
 		// something of its own is in there, so "it went" is a claim about rows
 		await pendingState.applyBlock({number: 1, hash: '0x1', timestamp: 1}, [
 			{type: 'upsert', entity: 'counter', id: {name: 'transfers'}, values: {value: 99}},
@@ -424,13 +466,15 @@ describe('the replaced generation is RECLAIMED in this runtime storage shape', (
 		expect(await pendingState.getCurrent('counter', {name: 'transfers'})).toBeDefined();
 
 		const replacement = editedTo(3);
-		await container.add(generationOver(await realStore(replacement), replacement));
+		await container.add(generationOver(await realStore(replacement, identityFor(3)), replacement, identityFor(3)));
 
 		// the record is gone...
 		expect((await registry.list()).map((record) => record.processor)).not.toContain(pending.record.processor);
 		// ...and so is the keyspace it folded into: a fresh handle on that database
 		// reads nothing back
-		const reopened = new IndexedDBStateStore(abandoned.entities, {databaseName: databaseNameOf(abandoned.version)});
+		const reopened = new IndexedDBStateStore(abandoned.entities, {
+			databaseName: databaseNameOf(markerOf(identityFor(2)) as string),
+		});
 		await reopened.migrate();
 		expect(await reopened.getCurrent('counter', {name: 'transfers'})).toBeUndefined();
 	});

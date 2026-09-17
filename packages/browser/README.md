@@ -133,6 +133,8 @@ Pass `{watch: false}`: a host on this thread cannot die independently of the tab
 
 The main-thread host is also a hook, and an app that runs there can subscribe to it directly instead of holding a port. You hand over the two FACTORIES rather than their results: an indexer holds any number of **generations** (a stream plus a fold over it), one of which is canonical and answers every read, and each folds into its own state — so the hook is what calls these, once per generation.
 
+**Say WHICH FOLD this is, if your build knows.** A generation spec — this one, `addGeneration`'s and a worker host's alike — takes an optional `processorIdentity`: the identity the app's ARRIVAL derived, ordinarily the `sha256:<hex>` of the self-contained bundle the processor came from. It is what the generation is registered under, compared for equality and rendered into messages and never parsed, so an edited handler is a different generation whether or not anybody bumped anything ([ADR-0086](https://github.com/wighawag/etherfold/blob/main/docs/adr/0086-a-processors-identity-is-derived-from-its-code-and-never-declared.md)). Leave it off and the generation keeps the author-declared identity the processor computes from its `version`, exactly as before.
+
 ```ts
 import {createBrowserStateStore, createIndexerState} from '@etherfold/browser';
 import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';

@@ -2,13 +2,11 @@ import 'fake-indexeddb/auto';
 import {
 	bootstrapFromSnapshot,
 	createSnapshot,
-	EntityEventProcessor,
 	openSnapshotAware,
 	type SnapshotAwareStateStore,
 } from '@etherfold/processor-entities';
 import {
 	BlockNotRetainedError,
-	MemoryStateStore,
 	openForWriting,
 	type Mutation,
 	type StateSnapshot,
@@ -27,6 +25,7 @@ import {
 	type TestABI,
 } from '../browser/workload.js';
 import {createBrowserStateStore} from '../src/index.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * A tab that comes up from state somebody else computed.
@@ -82,26 +81,30 @@ async function publish(store: StateStore, lastSync: Parameters<typeof createSnap
 		},
 		rows,
 		lastSync,
-		// the version hash the LOCAL processor will compute, which is what makes
-		// this snapshot adoptable at all.
-		processor: await versionHash(),
+		// the identity the fold that computed these rows was handed, which is what
+		// makes this snapshot adoptable at all.
+		processor: APP_IDENTITY,
 	});
 }
 
 /**
- * The version hash the local processor computes, taken FROM the runtime rather
- * than written out here, so a change to how it is built cannot leave this file
- * asserting against a constant nobody produces.
+ * WHICH FOLD computed these rows, and which fold may adopt them: the identity the
+ * app's ARRIVAL derived (ADR-0086), supplied to every indexer in this file and
+ * written into every snapshot it publishes.
+ *
+ * It used to be taken from the runtime, by building a processor and asking it for
+ * its declared version hash. An author cannot STATE an identity any more: a
+ * browser app is handed one, derived from what its processor IS, so the test does
+ * what an arrival does -- it has BYTES and it hashes them. Nothing here parses the
+ * result; the candidate rule is an equality between the label a producer wrote and
+ * the identity the client says it is running, which is exactly what this value is
+ * on both sides.
+ *
+ * The DERIVATION a producer should use for that label is
+ * `a-snapshot-is-labelled-with-the-identity-it-was-computed-under`; what this file
+ * is about is the bootstrap, which compares the two and never computes either.
  */
-async function versionHash(): Promise<string> {
-	// CLAIMED because building a processor is declaring an intent to fold, and the
-	// ability to mutate is obtained by claiming (ADR-0077). The hash is a function
-	// of the declarations, so the store is only here to be the runtime's own.
-	return new EntityEventProcessor<TestABI>(
-		await openForWriting(new MemoryStateStore(processor.entities)),
-		processor,
-	).getVersionHash();
-}
+const APP_IDENTITY = identityOf('published-app');
 
 /** A mirror that serves one snapshot, and records what was asked for. */
 function mirror(snapshot: StateSnapshot) {
@@ -124,7 +127,7 @@ describe('a new tab that starts from a published snapshot', () => {
 		const publisher = await openForWriting(
 			await createBrowserStateStore(processor.entities, {databaseName: freshName()}),
 		);
-		const first = await runWorkload(publisher);
+		const first = await runWorkload(publisher, fakeChain(), APP_IDENTITY);
 		expect(first.state).toEqual(EXPECTED_A);
 		expect(first.ranges[0].from).toBe(START_BLOCK);
 		const snapshot = await publish(publisher, first.lastSync);
@@ -136,12 +139,12 @@ describe('a new tab that starts from a published snapshot', () => {
 			// a real publisher takes a snapshot at least the finality depth behind
 			// the tip, and `finalityDepth` here is how a client insists on it; this
 			// fixture's tip IS the snapshot block, so the option is left off.
-			processor: await versionHash(),
+			processor: APP_IDENTITY,
 			fetch: remote.fetch,
 		});
 		expect(outcome).toMatchObject({status: 'bootstrapped', at: BRANCH_A_TIP});
 
-		const second = await runWorkload(await openForWriting(store), fakeChain());
+		const second = await runWorkload(await openForWriting(store), fakeChain(), APP_IDENTITY);
 
 		expect(second.state).toEqual(EXPECTED_A);
 		// the point: this tab never asked for the start block. It asked from inside
@@ -154,12 +157,12 @@ describe('a new tab that starts from a published snapshot', () => {
 		const publisher = await openForWriting(
 			await createBrowserStateStore(processor.entities, {databaseName: freshName()}),
 		);
-		const first = await runWorkload(publisher);
+		const first = await runWorkload(publisher, fakeChain(), APP_IDENTITY);
 		const snapshot = await publish(publisher, first.lastSync);
 
 		const store = await browserStore();
 		const remote = mirror(snapshot);
-		await bootstrapFromSnapshot(store, remote.url, {processor: await versionHash(), fetch: remote.fetch});
+		await bootstrapFromSnapshot(store, remote.url, {processor: APP_IDENTITY, fetch: remote.fetch});
 
 		// the tab that computed the state can answer about the block token 1 moved in
 		expect(await publisher.getAsOf('token', {id: '1'}, START_BLOCK)).toMatchObject({owner: expect.any(String)});
@@ -171,7 +174,7 @@ describe('a new tab that starts from a published snapshot', () => {
 	it('keeps its own state when a mirror is behind it, and downloads nothing more', async () => {
 		const databaseName = freshName();
 		const publisher = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName}));
-		const first = await runWorkload(publisher);
+		const first = await runWorkload(publisher, fakeChain(), APP_IDENTITY);
 		// only its HEAD is ever read (it loses the comparison), so the rows it
 		// carries never matter; what is under test is the choice, not the payload.
 		const stale = await publish(publisher, {...first.lastSync, lastToBlock: START_BLOCK - 1});
@@ -180,7 +183,7 @@ describe('a new tab that starts from a published snapshot', () => {
 		const store = await browserStore(databaseName);
 		const remote = mirror(stale);
 		const outcome = await bootstrapFromSnapshot(store, remote.url, {
-			processor: await versionHash(),
+			processor: APP_IDENTITY,
 			fetch: remote.fetch,
 		});
 
