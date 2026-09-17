@@ -2,8 +2,8 @@
 title: "A fold's cursor is read with the SOURCE it folded, so a filter-change successor can be seen to catch up"
 slug: a-folds-cursor-is-read-with-the-source-it-folded
 blockedBy: []
+reason: 'Superseded and folded in. Its premise is false (auto-promotion is NOT broken today: neither implementation of `load` uses `source` to choose a cursor, so `cursorOf` already answers correctly and a filter-change successor is already promoted), so its end-to-end criterion could never go red first. The real, latent contract correction it identified is now a criterion of `promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade`, which rewrites the same function. See `work/notes/observations/the-source-argument-to-load-is-inert-so-the-cursor-defect-is-latent.md`.'
 covers: []
-needsAnswers: true
 ---
 
 ## What to build

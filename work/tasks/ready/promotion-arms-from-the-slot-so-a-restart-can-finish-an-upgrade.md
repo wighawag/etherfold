@@ -4,14 +4,13 @@ slug: promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade
 spec: a-save-replaces-the-pending-successor
 blockedBy: [a-successor-lands-in-a-durable-slot-that-holds-one]
 covers: [4, 5]
-needsAnswers: true
 ---
 
 ## What to build
 
 The correctness cliff ADR-0084 exists to remove, now that the fact it needs is durable.
 
-> **RE-SCOPED 2026-09-16, after a measured build STOPPED on this task.** The first launch of this task said the only things stopping a successor registered at `open` from being promoted were the `opened` gate and the in-memory candidate set, which is what ADR-0084's third symptom says. An agent implemented exactly that narrowing, measured it, and the pointer still never moved. There are THREE parts, not one, and all three are in scope here because none of the others is sufficient alone. The measurement and the reasoning are in `work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`, which is READ-FIRST for this task. `needsAnswers` stays set until a human clears it.
+> **RE-SCOPED 2026-09-16, after a measured build STOPPED on this task.** The first launch of this task said the only things stopping a successor registered at `open` from being promoted were the `opened` gate and the in-memory candidate set, which is what ADR-0084's third symptom says. An agent implemented exactly that narrowing, measured it, and the pointer still never moved. There are THREE parts, not one, and all three are in scope here because none of the others is sufficient alone. The measurement and the reasoning are in `work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`, which is READ-FIRST for this task. ANSWERED and cleared 2026-09-17; the decisions are in `work/questions/task-promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade.md`.
 
 A generation registered at `open` can never be promoted. Not late: never. `open()` adds the fold the host was built with and only THEN sets `opened`; `add()` ends in `applyPolicyTo`, whose first line returns while `!opened`; and `settlePromotion` returns immediately on an empty candidate set. So a developer who restarts with a changed processor gets a successor that catches up and sits there for ever, with nothing reported and no policy value that changes it.
 
@@ -31,6 +30,7 @@ That is an INCONSISTENCY rather than a missing capability, and seeing it that wa
 - [ ] `manual` still WAITS. A successor sitting armed in a slot must not creep forward because the slot exists: the slot says what a generation is FOR, the policy still says WHEN.
 - [ ] The cursor of a generation this container holds NO FOLD for can be read, through the same kind of injected seam `dropState` already uses and for the same stated reason (the registry cannot know the namespace convention, so whoever named the tables supplies it). Every host that constructs a registry port supplies it.
 - [ ] Reading that cursor NEVER requires the generation's processor, and nothing in this change retains, re-imports or reconstructs past processor code. That is a separate question and is explicitly out of scope here (see the Prompt).
+- [ ] A fold added with its OWN source has its cursor read with the pair it ACTUALLY folded under, not with the container's source paired against the fold's config. Folded in from `a-folds-cursor-is-read-with-the-source-it-folded`, which is CANCELLED: it corrects the same function this task rewrites. Note honestly that this fixes nothing observable TODAY, because neither implementation of `load` uses `source` to choose a cursor (`work/notes/observations/the-source-argument-to-load-is-inert-so-the-cursor-defect-is-latent.md`), so it is a contract correction rather than a bug fix and the changeset should say so.
 - [ ] An unreadable cursor stays `undefined` and never reads as zero, so "has not loaded" remains distinguishable from "level at block 0" in the comparison.
 - [ ] A slotted successor is DRIVEN on `run`, so the settle is actually reached in the restart shape rather than gated out by a follower check that a restart-shape successor cannot satisfy.
 - [ ] The three policy values become observable on every path that can hold a successor, not only through the reconfigure endpoint, so the input added by `the-cli-selects-its-promotion-policy` means the same thing however the successor arrived.

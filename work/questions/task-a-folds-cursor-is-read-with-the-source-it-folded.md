@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-folds-cursor-is-read-with-the-source-it-folded type=task slug=a-folds-cursor-is-read-with-the-source-it-folded allAnswered=false -->
+<!-- dorfl-sidecar: item=task:a-folds-cursor-is-read-with-the-source-it-folded type=task slug=a-folds-cursor-is-read-with-the-source-it-folded allAnswered=true -->
 
 ## Q1
 
@@ -28,3 +28,14 @@
 <!-- q1 fields: id=q1 kind=stuck -->
 
 **Your answer** (write below this line):
+
+ANSWERED 2026-09-17 (decided by the repo owner in session; recorded by the conductor).
+
+CANCELLED, and its content folded into `promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade`.
+
+The stop was right: neither implementation of `EventProcessor.load` uses `source` to decide which cursor it answers (`this.source` is assigned and never read, and the field's own comment says so), so the cursor is read correctly today and `on-catch-up` already promotes a filter-change successor. The defect is a CONTRACT violation that is inert as a BEHAVIOUR, which is why this task's end-to-end criterion could not go red first.
+
+Rather than re-scope it into a standalone "harden a latent defect" task carrying an awkward changeset that admits it fixes nothing observable today, the one-line correction moves to the arming task, which already rewrites how `cursorOf` reads. Same function, one touch, and there it is a clause of a change that DOES have observable behaviour.
+
+The measurement survives as `work/notes/observations/the-source-argument-to-load-is-inert-so-the-cursor-defect-is-latent.md`, and the original observation stays.
+

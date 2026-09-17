@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade type=task slug=promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade allAnswered=false -->
+<!-- dorfl-sidecar: item=task:promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade type=task slug=promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade allAnswered=true -->
 
 ## Q1
 
@@ -21,3 +21,16 @@
 <!-- q1 fields: id=q1 kind=stuck -->
 
 **Your answer** (write below this line):
+
+ANSWERED 2026-09-17 (decided by the repo owner in session; recorded by the conductor).
+
+Re-scoped rather than redesigned, and WIDER than suggestion (a): all THREE parts stay in this one task, because none of them is sufficient alone and splitting them would leave a task whose headline criterion is unreachable, which is what happened the first time.
+
+On BLOCKER 1, take the injected port, not a second trigger rule. The framing that settles it: this is an INCONSISTENCY, not a missing capability. The read tier already resolves a generation's state by namespace with NO engine at all, and both the container's module JSDoc and `promote`'s docstring state that rule deliberately; `cursorOf` is the one read still going through a processor, which is why it alone breaks on a restart. So the fix is a `readCursor(id)`-shaped seam beside `dropState`, supplied by whoever named the tables, exactly as `dropState` already is and for the reason `dropState`'s own comment gives. It reaches core + cli + server + browser, which is mechanical. A tip-based rule is rejected: it would change the safety property `on-catch-up` exists for and would fork the shared `readyForPromotion`.
+
+On BLOCKER 2, the `followers().length > 0` gate on `run` IS in scope here, because criterion 1 is not reachable end to end without it. It does NOT fork `an-index-process-advances-the-successor-it-registered`: `run` already has a cycle and only needs to stop gating it on a follower check a restart-shape successor cannot satisfy, while that task still owns where a rebuild gets its turn against the INGEST path on `index`, which has no driver at all.
+
+Also folded in: `a-folds-cursor-is-read-with-the-source-it-folded` is CANCELLED and its content becomes a criterion here. It corrects the same function this task already rewrites, and it was unbuildable on its own because its premise (that auto-promotion is broken today) is false.
+
+`needsAnswers` is cleared. The task body carries the re-scope.
+
