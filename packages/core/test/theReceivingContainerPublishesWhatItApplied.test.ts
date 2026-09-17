@@ -18,6 +18,7 @@ import {
 	type TestABI,
 	type World,
 } from './utils/receivingWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE RECEIVING CONTAINER PUBLISHES WHAT IT APPLIED
@@ -78,7 +79,8 @@ async function aContainerBeingFed(): Promise<{
 	incumbent: ReceivingIndexer<TestABI, string[], MemoryStore>;
 	moved: StateMoved[];
 	push: ReturnType<typeof pushTo>;
-	digestOf: (processor: string) => string;
+	/** The rendered generation a fold built from `bundleBytes(marker)` publishes under. */
+	digestOf: (marker: string) => string;
 }> {
 	const w = world();
 	const incumbent = await w.open('v1', 1);
@@ -89,7 +91,7 @@ async function aContainerBeingFed(): Promise<{
 		incumbent,
 		moved,
 		push: pushTo(incumbent),
-		digestOf: (processor: string) => generationDigestOf({stream: incumbent.streamDigest, processor}),
+		digestOf: (marker: string) => generationDigestOf({stream: incumbent.streamDigest, processor: identityOf(marker)}),
 	};
 }
 
@@ -185,7 +187,7 @@ describe('the receiving container publishes what it applied', () => {
 
 		// the follower DID re-fold the stream -- otherwise this asserts nothing
 		expect(w.rowsIn('v2', incumbent.streamDigest).length).toBeGreaterThan(0);
-		expect((await incumbent.canonical())?.processor).toBe('v1');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v1'));
 		expect(moved.length).toBe(publishedBeforeTheFollower);
 
 		// ...and the re-fold included the REORG, so the filter covers the TOKEN as well
@@ -215,7 +217,7 @@ describe('the receiving container publishes what it applied', () => {
 
 		await incumbent.add(w.specFor('v2', 10));
 		await catchUp(incumbent);
-		expect((await incumbent.canonical())?.processor).toBe('v2');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 		// THE MOVE PUBLISHED NOTHING: a pointer move has no block to name and no fold
 		// applied anything, so what a reader receives is the NEXT notification.
 		expect(moved.length).toBe(publishedBefore);
@@ -243,7 +245,7 @@ describe('the receiving container publishes what it applied', () => {
 		await push({toBlock: 105, latestBlock: 105, logs: [AT_101, DEAD_104]});
 		const tokenBefore = moved[moved.length - 1].coherence;
 
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 		await push({toBlock: 106, latestBlock: 106, logs: [REORGED_104, AT_106]});
 
 		// the reorg in that batch rotates it once, and the promotion that moved no

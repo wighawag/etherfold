@@ -28,6 +28,7 @@ import {
 	type SlottedGenerations,
 } from './generation/registry.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
+import {processorIdentityOf} from './internal/processorIdentity.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import {StreamBuilder, type GenerationContainer, type LogIngestion} from './streamBuilder.js';
@@ -62,8 +63,8 @@ const namedLogger = logs('@etherfold/core');
  * generations are recorded in, the caps that REFUSE, and the canonical pointer
  * reads resolve through. It builds each generation the way ADR-0043 says one is
  * built -- `createState` then `createProcessor(state)`, per generation -- and
- * REGISTERS it from the processor's own `getVersionHash()`, so nothing declares
- * an identity twice.
+ * REGISTERS it under the identity the ARRIVAL supplied (ADR-0086), so nothing
+ * declares an identity twice.
  *
  * ## The MODEL is `@etherfold/core`'s already and is consumed UNCHANGED
  *
@@ -196,7 +197,7 @@ const namedLogger = logs('@etherfold/core');
  */
 export type ReceivedGenerationSpec<ABI extends Abi, ProcessResultType = unknown, State = unknown> = Pick<
 	GenerationSpec<ABI, ProcessResultType, State>,
-	'createState' | 'createProcessor' | 'source'
+	'createState' | 'createProcessor' | 'source' | 'processorIdentity'
 > & {
 	/** The stream CONFIG this fold runs, when it is not the container's own. Hashed into both identities. */
 	stream?: ProvidedStreamConfig;
@@ -1057,6 +1058,9 @@ export class ReceivingIndexer<
 			...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
 			container: this,
 			onProcessorDrift: this.relayProcessorDrift,
+			// The same name the shape being replaced answered to: succession changes which
+			// ENGINE advances this fold and never which fold it is.
+			processorIdentity: fold.record.processor,
 		});
 		namedLogger.info(
 			`WRITER SUCCESSION on the stream ${fold.streamDigest}: {stream: ${fold.record.stream}, processor: ` +
@@ -1121,12 +1125,18 @@ export class ReceivingIndexer<
 			refuseFollowerWithNoStream(context.stream);
 		}
 
-		// STATE FIRST, then the fold over it (ADR-0043). The identity is OBSERVED after
-		// both, from the processor's own hash, so nothing declares it twice.
+		// STATE FIRST, then the fold over it (ADR-0043). The identity is the ARRIVAL's
+		// where this spec was handed one (ADR-0086) and the processor's own declared hash
+		// where it was not, resolved ONCE here and handed DOWN to whichever engine shape
+		// this fold turns out to be -- so the record, the receiver and the rebuild cannot
+		// name one generation three ways.
 		const state = await spec.createState(context);
 		const processor = await spec.createProcessor(state, context);
 
-		const wanted: GenerationId = {stream: context.stream, processor: processor.getVersionHash()};
+		const wanted: GenerationId = {
+			stream: context.stream,
+			processor: processorIdentityOf(processor, spec.processorIdentity),
+		};
 		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
 		// this fold is a successor at all and what it displaces; the records decide which
 		// held folds are still registered and which generation writes each stream.
@@ -1184,6 +1194,10 @@ export class ReceivingIndexer<
 								? {}
 								: {maxEmissions: this.options.maxEmissionsPerChunk}),
 							onProcessorDrift: this.relayProcessorDrift,
+							// THE NAME THIS FOLD IS ALREADY REGISTERED UNDER, taken from the record rather
+							// than re-derived: `create` RESOLVES a generation already there rather than
+							// duplicating it, so the record is the authority on what this fold is called.
+							processorIdentity: record.processor,
 						}),
 					}
 				: {
@@ -1195,6 +1209,9 @@ export class ReceivingIndexer<
 							...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
 							container: this,
 							onProcessorDrift: this.relayProcessorDrift,
+							// As above: the identity the registry recorded, so the generation this receiver
+							// ADVERTISES on the wire is the one it was registered as.
+							processorIdentity: record.processor,
 						}),
 					}),
 		};
@@ -1384,7 +1401,10 @@ export class ReceivingIndexer<
 	 * never be read as level with one that has.
 	 */
 	private async cursorOf(fold: HeldFold<ABI, ProcessResultType, unknown>): Promise<number | undefined> {
-		const processorHash = fold.processor.getVersionHash();
+		// WHAT THIS FOLD IS CALLED, read off the RECORD: the identity the arrival
+		// supplied is what this generation was registered under, and the record is where
+		// that was written down (ADR-0086).
+		const processorHash = fold.record.processor;
 		const loaded = await fold.processor.load(this.options.source, fold.streamConfig);
 		if (!loaded || loaded.lastSync.context.processor !== processorHash) {
 			return undefined;

@@ -24,6 +24,7 @@ import {generationDigestOf} from './generation/identity.js';
 import {streamDigestOf} from './stream/identity.js';
 import {readOnlyStream} from './stream/readOnly.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
+import {processorIdentityOf} from './internal/processorIdentity.js';
 import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import type {
 	EventProcessor,
@@ -164,7 +165,7 @@ export type GenerationContext = {
  * The way out is that the factories are supplied PER GENERATION rather than once
  * for the container: the caller's own closure is what distinguishes this
  * generation's state from the next one's, and the container registers the
- * identity AFTER building, from the processor's own `getVersionHash()`. Nothing
+ * identity AFTER building, from whatever the ARRIVAL supplied (ADR-0086). Nothing
  * has to be declared twice, and nothing can be declared wrongly.
  */
 export type GenerationSpec<ABI extends Abi, ProcessResultType = void, State = unknown> = {
@@ -200,7 +201,7 @@ export type GenerationSpec<ABI extends Abi, ProcessResultType = void, State = un
 	/**
 	 * Build the processor that folds it. The FACTORY, not its result.
 	 *
-	 * Its `getVersionHash()` is what NAMES this generation, so two generations
+	 * What NAMES this generation is `processorIdentity` below, so two generations
 	 * over one stream are two records exactly when their folds differ -- which is
 	 * the common reconfigure (a processor change re-fetches nothing) made
 	 * identity.
@@ -209,6 +210,28 @@ export type GenerationSpec<ABI extends Abi, ProcessResultType = void, State = un
 		state: State,
 		context: GenerationContext,
 	) => EventProcessor<ABI, ProcessResultType> | Promise<EventProcessor<ABI, ProcessResultType>>;
+	/**
+	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one: the fold
+	 * half of the generation this spec registers.
+	 *
+	 * ADR-0086: an author cannot STATE a processor's identity, so it comes from what
+	 * the processor IS. A host that read a self-contained BUNDLE off disk names its
+	 * generation by the SHA-256 of those octets, and an edited handler is a
+	 * different generation whether or not anybody remembered to say so. The
+	 * container never looks INSIDE the value -- it is COMPARED and RENDERED and
+	 * nothing here parses it -- so it does not care which arrival derived it.
+	 *
+	 * ABSENT is a real answer and still the common one: no bytes describe this
+	 * processor, so the identity falls back to the processor's own
+	 * `getVersionHash()` exactly as it always did. That fallback is what
+	 * `the-declared-version-and-the-drift-report-are-deleted` removes.
+	 *
+	 * It is PER GENERATION and deliberately not on `IndexerOptions.config`, which is
+	 * one value shared by every generation this container builds: two generations
+	 * given one identity would be ONE record, one state namespace and one fold of a
+	 * stream two specs asked to fold separately.
+	 */
+	processorIdentity?: string;
 	/**
 	 * The state handle to answer with BEFORE this generation has folded anything.
 	 *
@@ -477,6 +500,13 @@ export type IndexerOptions<ABI extends Abi, ProcessResultType = void> = {
 		processor: EventProcessor<ABI, ProcessResultType>,
 		source: IndexingSource<ABI>,
 		config: ProvidedIndexerConfig<ABI>,
+		/**
+		 * The identity this generation was REGISTERED under, RESOLVED: whatever the
+		 * spec's arrival supplied, or the processor's own declared hash where it
+		 * supplied nothing. Handed over so the engine cannot name its fold anything
+		 * other than what the registry already recorded.
+		 */
+		processorIdentity: string,
 	) => IndexerGeneration<ABI, ProcessResultType>;
 };
 
@@ -647,8 +677,8 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		this.promotionConfig = resolvePromotionConfig(options.promotion);
 		this.createGeneration =
 			options.createGeneration ??
-			((provider, processor, source, config) =>
-				new IndexerGeneration<ABI, ProcessResultType>(provider, processor, source, config));
+			((provider, processor, source, config, processorIdentity) =>
+				new IndexerGeneration<ABI, ProcessResultType>(provider, processor, source, config, {processorIdentity}));
 		this.streamDigest = this.digestOf(this.source, this.config);
 	}
 
@@ -711,7 +741,12 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		const state = await spec.createState(context);
 		const processor = await spec.createProcessor(state, context);
 
-		const wanted: GenerationId = {stream: context.stream, processor: processor.getVersionHash()};
+		// THE ARRIVAL'S, where this spec was handed one (ADR-0086), and the processor's
+		// own declared hash where it was not. Resolved ONCE here and passed DOWN to the
+		// engine, so the registry record and the fold advancing it cannot name this
+		// generation two different things.
+		const processorIdentity = processorIdentityOf(processor, spec.processorIdentity);
+		const wanted: GenerationId = {stream: context.stream, processor: processorIdentity};
 		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
 		// this generation is a successor at all and what it displaces; the records decide
 		// which of those are still registered and which generation writes each stream.
@@ -792,7 +827,10 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}
 				: this.config;
 
-		const generation = this.createGeneration(this.provider, processor, source, config);
+		// `record.processor` rather than the value resolved above, and they are the same
+		// value: `create` RESOLVES a generation already registered rather than
+		// duplicating it, so the record is the authority on what this fold is called.
+		const generation = this.createGeneration(this.provider, processor, source, config, record.processor);
 		const entry: HeldEntry<ABI, ProcessResultType> = {
 			record,
 			generation,
@@ -1139,7 +1177,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	async updateProcessor(
 		newProcessor: EventProcessor<ABI, ProcessResultType>,
-		options?: {force?: boolean},
+		options?: {force?: boolean; processorIdentity?: string},
 	): Promise<ReconfigureOutcome> {
 		const entry = this.requireCurrent();
 		const publishedBefore = entry.publications;
@@ -1157,9 +1195,9 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			this.stopRelayingFoldReports(entry.processor, newProcessor);
 			entry.processor = newProcessor;
 		} else {
-			// The swap was declined (same version hash, not forced), so this generation
-			// goes on folding with the processor it already had and the newcomer is not
-			// this container's.
+			// The swap was declined (same identity, not forced), so this generation goes on
+			// folding with the processor it already had and the newcomer is not this
+			// container's.
 			this.stopRelayingFoldReports(newProcessor, entry.processor);
 		}
 		this.publishDiscard(entry, outcome, publishedBefore);

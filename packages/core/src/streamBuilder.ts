@@ -14,6 +14,7 @@ import {
 } from './internal/engine/utils.js';
 import type {EmissionAppender} from './emissionStream.js';
 import type {GenerationId, GenerationRecord} from './generation/registry.js';
+import {processorIdentityOf} from './internal/processorIdentity.js';
 import {announceProcessorDrift, processorDriftReport} from './processorDrift.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {streamDigestOf} from './stream/identity.js';
@@ -119,11 +120,13 @@ export type LogIngestion = {
 	 * notice that the fold behind the feed changed; no cursor check can, because
 	 * the stream did not move).
 	 *
-	 * DERIVED on every read, never a snapshot: `getVersionHash()` covers the
-	 * processor's configuration as well as its version, and `configure()` can move
-	 * it after construction. A field captured once would then advertise a fold that
-	 * is no longer running, which is worse than not advertising at all. Its `stream`
-	 * half is `streamDigest` itself, so the two can never disagree.
+	 * DERIVED on every read, never a snapshot. An identity the ARRIVAL supplied is a
+	 * constant (the config a bundle was built with is IN the bundle), but the
+	 * fallback where none did is not: it covers the processor's configuration as well
+	 * as its version, and `configure()` can move it after construction. A field
+	 * captured once would then advertise a fold that is no longer running, which is
+	 * worse than not advertising at all. Its `stream` half is `streamDigest` itself,
+	 * so the two can never disagree.
 	 */
 	readonly generation: GenerationId;
 	expectedFromBlock(): Promise<number>;
@@ -202,6 +205,23 @@ export type StreamBuilderOptions<ABI extends Abi> = Pick<ProvidedIndexerConfig<A
 	 * reconfigure endpoint still learns from its logs" true.
 	 */
 	onProcessorDrift?: (report: ProcessorDriftReport) => void;
+	/**
+	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one: the
+	 * processor half of the generation this receiver advertises and writes onto its
+	 * cursor.
+	 *
+	 * ADR-0086: an author cannot STATE a processor's identity, so it comes from what
+	 * the processor IS -- the SHA-256 of a bundle's octets where a deployment read
+	 * one off disk. This receiver only COMPARES it against a persisted cursor and
+	 * RENDERS it, and nothing here parses it, so it is indifferent to which arrival
+	 * derived it.
+	 *
+	 * ABSENT is a real answer and still the common one: no bytes describe this
+	 * processor, so the identity falls back to its own `getVersionHash()` exactly as
+	 * it always did. A container above this receiver ALWAYS supplies it, because it
+	 * has already registered the generation under that name.
+	 */
+	processorIdentity?: string;
 };
 
 /**
@@ -280,13 +300,27 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	 *
 	 * A GETTER rather than a field, so the processor half is read at the moment it
 	 * is asked for -- exactly as `currentLastSync` reads it on every call, and for
-	 * the same reason: `getVersionHash()` covers the processor's config too, so a
-	 * value captured in the constructor can stop being true. See `LogIngestion`.
+	 * the same reason: where no arrival supplied an identity the fallback covers the
+	 * processor's config too, so a value captured in the constructor can stop being
+	 * true. See `LogIngestion` and `processorIdentityOf`.
 	 */
 	get generation(): GenerationId {
-		return {stream: this.streamDigest, processor: this.processor.getVersionHash()};
+		return {stream: this.streamDigest, processor: this.processorIdentity()};
 	}
 
+	/**
+	 * WHAT THIS FOLD IS CALLED: the arrival's identity, or the processor's own
+	 * declared hash where no arrival derived one (ADR-0086).
+	 *
+	 * One expression, asked by the generation this receiver advertises and by the
+	 * cursor it resumes from, so the two can never name different folds.
+	 */
+	private processorIdentity(): string {
+		return processorIdentityOf(this.processor, this.suppliedProcessorIdentity);
+	}
+
+	/** What the ARRIVAL supplied, held UNRESOLVED: see `processorIdentity` and `processorIdentityOf`. */
+	private readonly suppliedProcessorIdentity: string | undefined;
 	private readonly finality: number;
 	private readonly recordReorg: ReorgRecorder | undefined;
 	private readonly appendEmissions: EmissionAppender | undefined;
@@ -311,6 +345,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 		private readonly source: IndexingSource<ABI>,
 		config: StreamBuilderOptions<ABI> = {},
 	) {
+		this.suppliedProcessorIdentity = config.processorIdentity;
 		this.recordReorg = config.recordReorg;
 		this.appendEmissions = config.appendEmissions;
 		this.container = config.container;
@@ -524,7 +559,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	 * first case and would not repair the second, so it is said out loud instead.
 	 */
 	private async currentLastSync(): Promise<LastSync<ABI>> {
-		const processorHash = this.processor.getVersionHash();
+		const processorHash = this.processorIdentity();
 		// FIRST, before anything is read and long before anything is written: with a
 		// container above it this fold IS a generation, and a generation is registered
 		// BEFORE anything writes its stream (the registry's own rule -- a stream subtree

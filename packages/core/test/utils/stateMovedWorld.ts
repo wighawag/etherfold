@@ -7,6 +7,7 @@ import {IndexerGeneration} from '../../src/indexer.js';
 import type {StateApplied, StateMoved} from '../../src/stateMoved.js';
 import type {EventProcessor, FoldReporter, LogEvent} from '../../src/types.js';
 import {BRANCH_A, fakeChain, FINALITY, makeLog, memoryStream, SOURCE} from './streamCacheWorld.js';
+import {identityOf} from './processorIdentity.js';
 
 /**
  * The world the SIGNAL's container tests drive: the real container over the
@@ -70,7 +71,10 @@ export function reportingFold(name: string, entitiesOf: (block: number, hash: st
 	/** What this fold HOLDS, per entity: the rows a reader would re-read. */
 	const rows: {block: number; entity: string; row: string}[] = [];
 	const processor: EventProcessor<Abi, string[]> = {
-		getVersionHash: () => `proc-${name}`,
+		// The DECLARED path, still on the seam until the contract task removes it, and
+		// deliberately NOT what names this fold: `specFor` hands the container the
+		// identity its ARRIVAL derived.
+		getVersionHash: () => `declared-version-of-${name}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (eventStream: LogEvent<Abi>[]) => {
@@ -101,6 +105,8 @@ export function reportingFold(name: string, entitiesOf: (block: number, hash: st
 	};
 	return {
 		processor,
+		/** WHICH synthetic bundle this fold stands for: `specFor` names it by that bundle's hash. */
+		name,
 		applied,
 		/** The fork points this fold reverted to, in order. */
 		retractedTo,
@@ -128,6 +134,9 @@ export function specFor(fold: ReturnType<typeof reportingFold>): AnyGenerationSp
 	return {
 		createState: () => ({}),
 		createProcessor: () => fold.processor,
+		// The identity this fold ARRIVED with (ADR-0086), derived from synthetic bytes
+		// rather than declared by the processor about itself.
+		processorIdentity: identityOf(fold.name),
 		stateOf: () => [],
 	};
 }
@@ -162,8 +171,8 @@ export async function openWorld(
 			streamWriteRetry: {delaySeconds: 0},
 		},
 		generations: folds.map(specFor),
-		createGeneration: (provider, processor, source, config) => {
-			const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config);
+		createGeneration: (provider, processor, source, config, processorIdentity) => {
+			const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config, {processorIdentity});
 			(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = chain.fetcher;
 			return generation;
 		},
@@ -179,8 +188,8 @@ export async function openWorld(
 		add: (fold: ReturnType<typeof reportingFold>) => indexer.add(specFor(fold)),
 		digestOf: (name: string) =>
 			generationDigestOf({
-				stream: indexer.generations.find((held) => held.record.processor === `proc-${name}`)?.record.stream as string,
-				processor: `proc-${name}`,
+				stream: indexer.generations.find((held) => held.record.processor === identityOf(name))?.record.stream as string,
+				processor: identityOf(name),
 			}),
 	};
 }

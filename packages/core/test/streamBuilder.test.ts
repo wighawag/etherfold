@@ -6,6 +6,7 @@ import {StreamBuilder, parseWireBatch, serializeWireBatch} from '../src/streamBu
 import type {ReorgDetection} from '../src/index.js';
 import type {EmissionWrite} from '../src/emissionStream.js';
 import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE RECEIVING SIDE OF THE WIRE (ADR-0004)
@@ -74,12 +75,15 @@ function transfer(blockNumber: number, blockHash: string, id: bigint, logIndex =
  * for a persisted cursor and hands it a stream, so anything more would be
  * asserting a store rather than the wire.
  */
-function recordingProcessor(versionHash = 'v1') {
+function recordingProcessor(marker = 'v1') {
 	const streams: LogEvent<TestABI>[][] = [];
 	let stored: LastSync<TestABI> | undefined;
 	let cleared = 0;
 	const processor: EventProcessor<TestABI, void> = {
-		getVersionHash: () => versionHash,
+		// The DECLARED path, still on the seam until the contract task removes it.
+		// `builderOn` hands the receiver the identity its ARRIVAL derived instead, so
+		// this is read only by the one case below that pins the fallback.
+		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => (stored ? {state: undefined as void, lastSync: stored} : undefined),
 		process: async (eventStream, lastSync) => {
@@ -95,6 +99,8 @@ function recordingProcessor(versionHash = 'v1') {
 	};
 	return {
 		processor,
+		/** WHICH synthetic bundle this fold stands for: `builderOn` names it by that bundle's hash. */
+		marker,
 		streams,
 		get cleared() {
 			return cleared;
@@ -110,8 +116,16 @@ function recordingProcessor(versionHash = 'v1') {
 	};
 }
 
-function builderOn(processor: EventProcessor<TestABI, void>): StreamBuilder<TestABI, void> {
-	return new StreamBuilder(processor, SOURCE, {stream: {finality: FINALITY}});
+/**
+ * A receiver over this processor, named by the identity its ARRIVAL supplied.
+ *
+ * ADR-0086: the fold's name is derived from what the processor IS rather than
+ * declared by it, so a host hands one over. Synthetic bytes are what these cases
+ * need, because a receiver only COMPARES an identity against a persisted cursor
+ * and RENDERS it, and never parses it.
+ */
+function builderOn(processor: EventProcessor<TestABI, void>, marker = 'v1'): StreamBuilder<TestABI, void> {
+	return new StreamBuilder(processor, SOURCE, {stream: {finality: FINALITY}, processorIdentity: identityOf(marker)});
 }
 
 function batch(
@@ -189,11 +203,15 @@ describe('the receiver owns the cursor', () => {
 		await builder.receive(batch(builder, {fromBlock: 100, toBlock: 105, latestBlock: 105}));
 		const expected = await builder.expectedFromBlock();
 
-		const indexer = new IndexerGeneration<TestABI, void>(noChain(), recordingProcessor().processor, SOURCE, {
-			stream: {finality: FINALITY},
-		});
+		const indexer = new IndexerGeneration<TestABI, void>(
+			noChain(),
+			recordingProcessor().processor,
+			SOURCE,
+			{stream: {finality: FINALITY}},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.feed([], {
-			context: {source: builder.context.source, config: builder.context.config, processor: 'v1'},
+			context: {source: builder.context.source, config: builder.context.config, processor: identityOf('v1')},
 			latestBlock: 105,
 			lastFromBlock: START_BLOCK,
 			lastToBlock: 105,
@@ -208,21 +226,29 @@ describe('the receiver says WHICH GENERATION it is', () => {
 	// advertises it on every feed response -- and the processor is the one thing a
 	// host cannot see: it hands one over at construction and then holds an
 	// interface that never mentions it again
-	it('is the stream it folds, plus the fold over it', () => {
+	it('is the stream it folds, plus the identity the ARRIVAL supplied', () => {
 		const target = recordingProcessor('v1');
-		const builder = builderOn(target.processor);
+		const builder = builderOn(target.processor, 'v1');
 
-		expect(builder.generation).toEqual({stream: builder.streamDigest, processor: 'v1'});
+		expect(builder.generation).toEqual({stream: builder.streamDigest, processor: identityOf('v1')});
+		// ...and NOT anything the processor says about itself (ADR-0086)
+		expect(builder.generation.processor).not.toBe(target.processor.getVersionHash());
 	});
 
-	it('reads the fold LIVE, so a processor reconfigured after construction is not misreported', () => {
-		// `getVersionHash()` covers a processor's CONFIG as well as its version, and
-		// `configure()` can move it after this object was built. A value snapshotted in
-		// the constructor would advertise a fold that is no longer running, which is
-		// worse than advertising nothing.
+	it('reads the DECLARED fallback live, so a processor reconfigured after construction is not misreported', () => {
+		// The one case here that deliberately supplies NO arrival identity, because it
+		// pins the fallback every un-migrated caller still rests on: `getVersionHash()`
+		// covers a processor's CONFIG as well as its version, and `configure()` can move
+		// it after this object was built, so a value snapshotted in the constructor
+		// would advertise a fold that is no longer running. An identity the arrival
+		// supplied has no such problem -- the config a bundle was built with is IN the
+		// bundle -- and `the-declared-version-and-the-drift-report-are-deleted` retires
+		// this case along with the path it describes.
 		let version = 'v1';
 		const target = recordingProcessor();
-		const builder = builderOn({...target.processor, getVersionHash: () => version});
+		const builder = new StreamBuilder<TestABI, void>({...target.processor, getVersionHash: () => version}, SOURCE, {
+			stream: {finality: FINALITY},
+		});
 		expect(builder.generation.processor).toBe('v1');
 
 		version = 'v2';
@@ -285,16 +311,14 @@ describe('the context is validated on every batch', () => {
 		expect(target.cleared).toBe(1);
 	});
 
-	it('discards a persisted cursor written by another processor version', async () => {
+	it('discards a persisted cursor written by another fold', async () => {
 		const target = recordingProcessor('v2');
-		const builder = builderOn(target.processor);
+		const builder = builderOn(target.processor, 'v2');
 		await builder.receive(batch(builder, {fromBlock: 100, toBlock: 105, latestBlock: 105}));
 		expect(await builder.expectedFromBlock()).toBe(102);
 
-		// same source and config, different processor: the state means something else
-		const upgraded = new StreamBuilder<TestABI, void>({...target.processor, getVersionHash: () => 'v3'}, SOURCE, {
-			stream: {finality: FINALITY},
-		});
+		// same source and config, DIFFERENT BYTES: the state means something else
+		const upgraded = builderOn(target.processor, 'v3');
 		expect(await upgraded.expectedFromBlock()).toBe(START_BLOCK);
 		expect(target.cleared).toBe(1);
 	});

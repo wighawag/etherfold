@@ -9,6 +9,7 @@ import {installStreamSeed} from '../src/stream/seedInstall.js';
 import {createSegmentedStream, type StreamCursorRecord} from '../src/stream/segments.js';
 import type {LogEvent} from '../src/types.js';
 import {memorySegmentPort, nodeRefusingProvider} from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE COMMITTED REFERENCE ARTIFACT, INSTALLED AND FOLDED
@@ -101,7 +102,9 @@ function countingProcessor() {
 	return {
 		seen,
 		processor: {
-			getVersionHash: () => 'reference-install-test',
+			// the DECLARED path, still on the seam until the contract task removes it: the
+			// generation below is named by the identity its ARRIVAL supplied
+			getVersionHash: () => 'declared-version-of-reference-install-test',
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async (eventStream: LogEvent<Abi>[]) => {
@@ -167,10 +170,13 @@ describe('the committed reference seed, installed through the keeper seam', () =
 		// counting calls afterwards
 		const {calls, provider} = nodeRefusingProvider(capture.source.chainId);
 		const folding = countingProcessor();
-		const generation = new IndexerGeneration<Abi, number>(provider, folding.processor, capture.source, {
-			stream: {finality: 12},
-			keepStream: keeper,
-		});
+		const generation = new IndexerGeneration<Abi, number>(
+			provider,
+			folding.processor,
+			capture.source,
+			{stream: {finality: 12}, keepStream: keeper},
+			{processorIdentity: identityOf('reference-install-test')},
+		);
 
 		const lastSync = await generation.load();
 

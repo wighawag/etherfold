@@ -44,8 +44,8 @@ export const GENERATION_DIGEST_LENGTH = 32;
 const GENERATION_DIGEST_RULE = 'etherfold/generation/1';
 
 /**
- * The digest that IDENTIFIES one generation: `streamDigestOf` plus the
- * processor's `getVersionHash()`, rolled up.
+ * The digest that IDENTIFIES one generation: `streamDigestOf` plus the identity
+ * the processor's ARRIVAL supplied (ADR-0086), rolled up.
  *
  * BOTH halves are in it, and neither alone would do. The processor hash alone
  * would make two indexers folding different streams with one processor look like

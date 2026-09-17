@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {Abi} from 'abitype';
 import {IndexerGeneration} from '../src/indexer.js';
 import type {EventProcessor, IndexingSource} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // Minimal provider: empty chain, no logs.
 function makeProvider() {
@@ -28,9 +29,16 @@ const SOURCE: IndexingSource<Abi> = {
 
 type Hooks = {clearGate?: Promise<void>; resetGate?: Promise<void>};
 
-function makeProcessor(versionHash: string, hooks: Hooks = {}): EventProcessor<Abi, void> {
+/**
+ * A processor, plus the marker naming the synthetic BYTES it ARRIVED as.
+ *
+ * ADR-0086: a processor cannot state its own identity, so every construction and
+ * every swap below hands the engine `identityOf(marker)` and the declared hash is
+ * read by nobody.
+ */
+function makeProcessor(marker: string, hooks: Hooks = {}): EventProcessor<Abi, void> {
 	return {
-		getVersionHash: () => versionHash,
+		getVersionHash: () => `declared-version-of-${marker}`,
 		// required on `EventProcessor`: a fake that omits it is a fake that would
 		// lose drift detection without anybody noticing
 		getCodeFingerprint: () => undefined,
@@ -52,16 +60,22 @@ function deferred() {
 }
 
 describe('IndexerGeneration.updateProcessor (core #5: align with updateIndexer)', () => {
-	it('blocks the index action while a (version-changing) updateProcessor is in flight (like updateIndexer)', async () => {
+	it('blocks the index action while an (identity-changing) updateProcessor is in flight (like updateIndexer)', async () => {
 		// gate the OLD processor's clear() — that is what updateProcessor awaits before calling load(),
 		// so during this window load() has NOT started yet and the only thing that should prevent a
 		// racing indexMore is disableProcessing()/block().
 		const gate = deferred();
 		const original = makeProcessor('v1', {clearGate: gate.promise});
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), original, SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			original,
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		const updating = indexer.updateProcessor(makeProcessor('v2'));
+		const updating = indexer.updateProcessor(makeProcessor('v2'), {processorIdentity: identityOf('v2')});
 		await Promise.resolve();
 
 		// While reconfiguring, processing must be disabled so a racing indexMore cannot run
@@ -73,11 +87,17 @@ describe('IndexerGeneration.updateProcessor (core #5: align with updateIndexer)'
 		await updating;
 	});
 
-	it('re-enables processing after a version-changing updateProcessor resolves', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+	it('re-enables processing after an identity-changing updateProcessor resolves', async () => {
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		await indexer.updateProcessor(makeProcessor('v2'));
+		await indexer.updateProcessor(makeProcessor('v2'), {processorIdentity: identityOf('v2')});
 
 		// after the swap settles, indexMore must work again (processing re-enabled)
 		await expect(indexer.indexMore()).resolves.toBeTruthy();
@@ -85,41 +105,59 @@ describe('IndexerGeneration.updateProcessor (core #5: align with updateIndexer)'
 
 	it('does not swap this.processor before deciding (no-op path must not replace the instance mid-flight)', async () => {
 		const original = makeProcessor('v1');
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), original, SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			original,
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		// A same-version-hash update is a no-op: there is nothing to reset/reload, so the running
-		// processor instance should not be silently replaced (which would swap mid-flight before
-		// the version check even decided anything needed to happen).
+		// An update carrying the SAME identity is a no-op: there is nothing to reset/reload, so
+		// the running processor instance should not be silently replaced (which would swap
+		// mid-flight before the identity check even decided anything needed to happen).
 		const sameVersion = makeProcessor('v1');
-		await indexer.updateProcessor(sameVersion);
+		await indexer.updateProcessor(sameVersion, {processorIdentity: identityOf('v1')});
 
 		expect((indexer as any).processor).toBe(original);
 	});
 
 	it('swaps a same-version processor when force:true is passed', async () => {
 		const original = makeProcessor('v1');
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), original, SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			original,
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		// Same version hash, but the caller explicitly forces the swap (e.g. they know the new
-		// instance differs and forgot / chose not to bump the version hash).
+		// The same identity -- the same bytes arrived -- but the caller explicitly forces the
+		// swap, which is the one way a fold is replaced without its name moving.
 		const sameVersionForced = makeProcessor('v1');
-		await indexer.updateProcessor(sameVersionForced, {force: true});
+		await indexer.updateProcessor(sameVersionForced, {force: true, processorIdentity: identityOf('v1')});
 
 		expect((indexer as any).processor).toBe(sameVersionForced);
 	});
 
-	it('force:true clears the old processor and reloads even when the version is unchanged', async () => {
+	it('force:true clears the old processor and reloads even when the identity is unchanged', async () => {
 		let cleared = false;
 		const original = makeProcessor('v1');
 		(original as any).clear = async () => {
 			cleared = true;
 		};
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), original, SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			original,
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		await indexer.updateProcessor(makeProcessor('v1'), {force: true});
+		await indexer.updateProcessor(makeProcessor('v1'), {force: true, processorIdentity: identityOf('v1')});
 
 		expect(cleared).toBe(true);
 	});
@@ -138,31 +176,61 @@ describe('IndexerGeneration.updateProcessor (core #5: align with updateIndexer)'
  * a caller that derives it wrong fails silently.
  */
 describe('IndexerGeneration reconfigure outcomes', () => {
-	it('reports a discard when the processor version changed', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+	it('reports a discard when the processor IDENTITY changed', async () => {
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		expect(await indexer.updateProcessor(makeProcessor('v2'))).toEqual({stateDiscarded: true});
+		expect(await indexer.updateProcessor(makeProcessor('v2'), {processorIdentity: identityOf('v2')})).toEqual({
+			stateDiscarded: true,
+		});
 	});
 
-	it('reports NO discard when the version hash did not move, because the swap was skipped', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+	it('reports NO discard when the identity did not move, because the swap was skipped', async () => {
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		// the "author edited a handler and forgot to bump `version`" case: the core
-		// cannot see the edit, so it keeps the running processor
-		expect(await indexer.updateProcessor(makeProcessor('v1'))).toEqual({stateDiscarded: false});
+		// the SAME bytes arrived again, so the identity says the fold did not change and
+		// the running processor is kept
+		expect(await indexer.updateProcessor(makeProcessor('v1'), {processorIdentity: identityOf('v1')})).toEqual({
+			stateDiscarded: false,
+		});
 	});
 
-	it('reports a discard when force is passed against an unchanged version', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+	it('reports a discard when force is passed against an unchanged identity', async () => {
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
-		expect(await indexer.updateProcessor(makeProcessor('v1'), {force: true})).toEqual({stateDiscarded: true});
+		expect(
+			await indexer.updateProcessor(makeProcessor('v1'), {force: true, processorIdentity: identityOf('v1')}),
+		).toEqual({stateDiscarded: true});
 	});
 
 	it('reports a discard when the source changed, and none when it hashes the same', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
 		// a DIFFERENT object carrying the same contents: the hash is over the
@@ -188,7 +256,13 @@ describe('IndexerGeneration reconfigure outcomes', () => {
 	});
 
 	it('always reports a discard from reset, because reset IS the discard', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
 		expect(await indexer.reset()).toEqual({stateDiscarded: true});
@@ -212,7 +286,13 @@ describe('IndexerGeneration reconfigure outcomes', () => {
  */
 describe('the invalidation verdict a reconfigure publishes', () => {
 	it('reports both halves valid when the source did not move', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
 		// a DIFFERENT object carrying the same contents, which is what a redeploy
@@ -227,7 +307,13 @@ describe('the invalidation verdict a reconfigure publishes', () => {
 	});
 
 	it('names the BLOCK and the REASON, which is what one bit could not say', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
 		// a stream CONFIG change is the both-halves case: it is hashed into the wire
@@ -243,14 +329,22 @@ describe('the invalidation verdict a reconfigure publishes', () => {
 	});
 
 	it('carries no source verdict from the two verbs that ask no source question', async () => {
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), makeProcessor('v1'), SOURCE);
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			makeProcessor('v1'),
+			SOURCE,
+			{},
+			{processorIdentity: identityOf('v1')},
+		);
 		await indexer.load();
 
 		// A processor swap moves neither the fetch filter nor the decoding shape, and
 		// `reset` is a discard by fiat that also CLEARS the stream. Reporting "both
 		// halves valid" for either would be answering a question nobody asked, and for
 		// `reset` it would read as "the stream stands" about a stream it just deleted.
-		expect((await indexer.updateProcessor(makeProcessor('v2'))).sourceInvalidation).toBeUndefined();
+		expect(
+			(await indexer.updateProcessor(makeProcessor('v2'), {processorIdentity: identityOf('v2')})).sourceInvalidation,
+		).toBeUndefined();
 		expect((await indexer.reset()).sourceInvalidation).toBeUndefined();
 	});
 });

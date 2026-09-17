@@ -10,6 +10,19 @@ import type {
 	StoredLogEvent,
 	StreamRead,
 } from '../../src/types.js';
+import {identityOf} from './processorIdentity.js';
+
+/**
+ * THE IDENTITY THE FOLDS IN THIS WORLD ARRIVED WITH.
+ *
+ * ADR-0086: an author cannot STATE a processor's identity, so a deployment hands
+ * the engine one derived from the bytes it was given. These bytes are synthetic
+ * and that is correct -- nothing in the engine parses an identity, it compares it
+ * against a persisted cursor and writes it onto the next one -- and it is ONE
+ * value here because every fold this world builds is the same generation unless a
+ * test says otherwise.
+ */
+export const PROCESSOR_IDENTITY = identityOf('proc');
 
 /**
  * The world the stream-cache tests drive: a fake chain, a stream keeper with the
@@ -311,7 +324,10 @@ export function fakeProcessor(store: ProcessorStore = {}, options: {persist?: bo
 	const batches: LogEvent<Abi>[][] = [];
 	let throwing = false;
 	const processor: any = {
-		getVersionHash: () => 'proc',
+		// The DECLARED path, still on the seam until the contract task removes it, and
+		// deliberately NOT what names this fold: `makeIndexer` hands the engine
+		// `PROCESSOR_IDENTITY` instead, exactly as an arrival would.
+		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			if (!persist || !store.saved) {
@@ -367,12 +383,20 @@ export function makeIndexer(
 	processor: any,
 	keepStream?: ExistingStream<Abi>,
 	streamWriteRetry: StreamWriteRetry = {delaySeconds: 0},
+	/** What the ARRIVAL supplied. One generation unless a test names a second one. */
+	processorIdentity: string = PROCESSOR_IDENTITY,
 ) {
-	const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor, SOURCE, {
-		stream: {finality: FINALITY},
-		...(keepStream ? {keepStream} : {}),
-		streamWriteRetry,
-	});
+	const indexer = new IndexerGeneration<Abi, string[]>(
+		chain.provider,
+		processor,
+		SOURCE,
+		{
+			stream: {finality: FINALITY},
+			...(keepStream ? {keepStream} : {}),
+			streamWriteRetry,
+		},
+		{processorIdentity},
+	);
 	(indexer as any).logEventFetcher = chain.fetcher;
 	return indexer;
 }

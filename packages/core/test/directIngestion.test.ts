@@ -5,6 +5,7 @@ import {InvalidBatchError, UnexpectedFromBlockError} from '../src/errors.js';
 import {LogFetcher} from '../src/logFetcher.js';
 import {StreamBuilder, type LogIngestion} from '../src/streamBuilder.js';
 import type {EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE WIRE, WITH NO WIRE (ADR-0004)
@@ -119,7 +120,9 @@ function recordingProcessor() {
 	const streams: LogEvent<TestABI>[][] = [];
 	let stored: LastSync<TestABI> | undefined;
 	const processor: EventProcessor<TestABI, void> = {
-		getVersionHash: () => 'v1',
+		// the DECLARED path, still on the seam until the contract task removes it: the
+		// receiver below is named by the identity its ARRIVAL supplied
+		getVersionHash: () => 'declared-version-of-v1',
 		getCodeFingerprint: () => undefined,
 		load: async () => (stored ? {state: undefined as void, lastSync: stored} : undefined),
 		process: async (eventStream, lastSync) => {
@@ -149,7 +152,10 @@ function combined(): {
 } {
 	const chain = fakeChain();
 	const target = recordingProcessor();
-	const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {stream: {finality: FINALITY}});
+	const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+		stream: {finality: FINALITY},
+		processorIdentity: identityOf('v1'),
+	});
 	return {
 		chain,
 		builder,

@@ -38,6 +38,7 @@ import {
 	wait,
 } from './internal/engine/utils.js';
 import {sourceHashesOf} from './internal/engine/eventRanges.js';
+import {processorIdentityOf} from './internal/processorIdentity.js';
 import {announceProcessorDrift, processorDriftReport} from './processorDrift.js';
 import {CancellablePromiseCancelled, CancelOperations, createAction} from './internal/utils/promises.js';
 import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
@@ -282,6 +283,39 @@ export type ReconfigureOutcome = {
 // and this one would slim down the event stream
 
 /**
+ * WHAT A HOST TELLS A GENERATION ABOUT THE FOLD IT WAS HANDED, as opposed to how
+ * that fold RUNS (`ProvidedIndexerConfig`) or what it INDEXES (the source).
+ *
+ * One field today, and it is here rather than in the config because the config is
+ * a value a CONTAINER shares across every generation it builds, while this one
+ * names exactly ONE of them.
+ */
+export type IndexerGenerationOptions = {
+	/**
+	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one.
+	 *
+	 * ADR-0086: an author cannot STATE a processor's identity, and this engine is
+	 * HANDED one and never asks where it came from. A deployment that read a
+	 * self-contained BUNDLE off disk names its fold by the SHA-256 of those octets,
+	 * so an edited handler is a different fold whether or not anybody remembered to
+	 * say so; a browser tab handed a MODULE, which has no bytes to hash, derives one
+	 * another way. Neither difference reaches here: the value is COMPARED against a
+	 * persisted cursor and WRITTEN onto the next one, and nothing in this package
+	 * parses it.
+	 *
+	 * ABSENT is a real answer and still the common one: no bytes describe this
+	 * processor, so the identity falls back to its own `getVersionHash()` exactly as
+	 * it always did. `the-declared-version-and-the-drift-report-are-deleted` removes
+	 * that fallback once every caller has moved.
+	 *
+	 * A container ALWAYS supplies it, because it has already registered the
+	 * generation under that name and the fold advancing it must answer to the same
+	 * one.
+	 */
+	readonly processorIdentity?: string;
+};
+
+/**
  * ONE GENERATION: one stream, one processor, one state.
  *
  * A **generation** is a stream plus a fold over it, and this class is exactly
@@ -296,6 +330,10 @@ export type ReconfigureOutcome = {
  * state, which is precisely what a container holding N generations cannot be
  * handed -- so a caller builds a container through `openIndexer` and hands it
  * the FACTORIES instead, and the container builds one of these per generation.
+ *
+ * It is handed the fold's IDENTITY the same way, and for the reason ADR-0086
+ * gives: an author cannot state one, so it comes from the ARRIVAL that produced
+ * the processor. See `IndexerGenerationOptions.processorIdentity`.
  */
 export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	// ------------------------------------------------------------------------------------------------------------------
@@ -474,8 +512,33 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		protected processor: EventProcessor<ABI, ProcessResultType>,
 		source: IndexingSource<ABI>,
 		config: ProvidedIndexerConfig<ABI> = {},
+		options: IndexerGenerationOptions = {},
 	) {
+		this.suppliedProcessorIdentity = options.processorIdentity;
 		this.reinit(provider, source, config);
+	}
+
+	/**
+	 * What the ARRIVAL supplied, held UNRESOLVED and beside `processor` rather than
+	 * folded into it.
+	 *
+	 * It travels WITH the processor: `updateProcessor` replaces both together, so a
+	 * fold and the name it answers to cannot come apart. Not `readonly` for exactly
+	 * that reason, and not resolved at construction for the reason
+	 * `processorIdentityOf` gives.
+	 */
+	protected suppliedProcessorIdentity: string | undefined;
+
+	/**
+	 * WHAT THIS FOLD IS CALLED: the arrival's identity, or the processor's own
+	 * declared hash where no arrival derived one (ADR-0086).
+	 *
+	 * Every place this engine needs the fold half of a generation asks here, so the
+	 * cursor it writes, the invalidation it decides and the swap it declines all
+	 * speak of one value.
+	 */
+	protected processorIdentity(): string {
+		return processorIdentityOf(this.processor, this.suppliedProcessorIdentity);
 	}
 
 	reinit(provider: EIP1193ProviderWithoutEvents, source: IndexingSource<ABI>, config: ProvidedIndexerConfig<ABI>) {
@@ -857,11 +920,11 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// against block 0 answered "yes, always" and kept state that had been derived
 		// over blocks the new entry describes.
 		const cursor = this.lastSync?.lastToBlock ?? 0;
-		const processorVersionHash = this.processor.getVersionHash();
+		const processorIdentity = this.processorIdentity();
 		const invalidation = sourceInvalidationOf(newSourceHashes, newConfigHash, cursor, {
 			source: this.sourceHashes,
 			config: this.streamConfigHash,
-			processor: processorVersionHash,
+			processor: processorIdentity,
 		});
 		// The STATE half, and not the stream half: what a reset discards is the fold.
 		// A stream that is no longer covered is dealt with where it is read, in
@@ -888,7 +951,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 					newConfigHash,
 					sourceHashes: this.sourceHashes,
 					streamConfigHash: this.streamConfigHash,
-					processorVersionHash,
+					processorIdentity,
 				});
 			}
 		}
@@ -931,19 +994,25 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 
 	async updateProcessor(
 		newProcessor: EventProcessor<ABI, ProcessResultType>,
-		options?: {force?: boolean},
+		options?: {force?: boolean; processorIdentity?: string},
 	): Promise<ReconfigureOutcome> {
 		// Align with updateIndexer: disable processing first so a racing index/feed tick cannot
 		// interleave with the swap, then decide, then re-enable.
 		this.disableProcessing();
 
 		const oldProcessor = this.processor;
-		const versionChanged = oldProcessor.getVersionHash() != newProcessor.getVersionHash();
+		// WHAT EACH FOLD IS CALLED, each taken from its OWN arrival (ADR-0086): the one
+		// running here, and the one the caller is handing over. Comparing identities and
+		// never the objects is the same rule as before, sourced differently.
+		const identityChanged = this.processorIdentity() != processorIdentityOf(newProcessor, options?.processorIdentity);
 
-		if (versionChanged || options?.force) {
+		if (identityChanged || options?.force) {
 			// Only swap once we have decided a change is needed; do not replace the running instance
 			// on a no-op path.
 			this.processor = newProcessor;
+			// TOGETHER with the processor, because the two are one fact: an identity left
+			// behind by a swap would name the fold that was replaced.
+			this.suppliedProcessorIdentity = options?.processorIdentity;
 			this._feed.reset();
 			this._index.reset();
 			this._load.reset();
@@ -959,14 +1028,24 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			}
 			return {stateDiscarded: true};
 		} else {
-			// Same version hash and not forced: nothing to reset/reload, so we keep the running
-			// processor instance. Warn in case the developer changed the processor but forgot to bump
-			// its version hash (the new instance will NOT take effect). Pass `{force: true}` to swap
-			// regardless of the version hash.
+			// Same identity and not forced: nothing to reset/reload, so we keep the running
+			// processor instance.
+			//
+			// WHICH ADVICE IS TRUE depends on which ARRIVAL supplied the identity, and the
+			// branch asks the arrival rather than reading the string -- nothing here parses an
+			// identity and this does not start. An author whose identity came from BYTES
+			// cannot bump anything and must not be told to: for them the honest reading is
+			// that the bytes really are the same. An author still on the declared path may
+			// simply have edited a handler and forgotten to bump, which is the condition
+			// ADR-0086 makes unrepresentable and the reason the declared half of this message
+			// goes with `the-declared-version-and-the-drift-report-are-deleted`.
 			namedLogger.warn(
-				`updateProcessor: new processor has the same version hash as the current one; ` +
-					`the swap was skipped. If this is unexpected, bump the processor's version hash or call ` +
-					`updateProcessor(newProcessor, {force: true}).`,
+				`updateProcessor: the new processor has the same identity as the current one; the swap was skipped. ` +
+					(options?.processorIdentity === undefined
+						? `If this is unexpected, bump the processor's version hash or call ` +
+							`updateProcessor(newProcessor, {force: true}).`
+						: `That identity was derived from the processor this deployment was handed, so it says the fold ` +
+							`did not change. Call updateProcessor(newProcessor, {force: true}) to swap anyway.`),
 			);
 			this.reenableProcessing();
 			return {stateDiscarded: false};
@@ -1174,7 +1253,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 
 		let currentLastSync: LastSync<ABI> | undefined = undefined;
 		await this._onLoad('Loading');
-		const processorHash = this.processor.getVersionHash();
+		const processorHash = this.processorIdentity();
 		const loaded = await this.processor.load(this.source, this.config.stream);
 		if (loaded) {
 			const {lastSync: loadedLastSync, state} = loaded;
@@ -1456,7 +1535,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		const lastSyncFetched = params.lastSyncFetched;
 
 		if (!this.lastSync) {
-			this.lastSync = this.freshLastSync(this.processor.getVersionHash());
+			this.lastSync = this.freshLastSync(this.processorIdentity());
 			this._onLastSyncUpdated();
 		}
 

@@ -4,6 +4,17 @@ import {TimestamplessLogError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {LogFetcher, type IngestionResponse, type IngestionTarget} from '../src/logFetcher.js';
 import type {IndexingSource, LastSync, ProvidedStreamConfig, WireBatch, WireContext} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
+
+/**
+ * THE IDENTITY EVERY FOLD IN THIS FILE ARRIVED WITH.
+ *
+ * ADR-0086: a processor cannot state its own identity, so a host derives one from
+ * the bytes it was handed and gives it to the engine. Nothing here asserts on the
+ * value -- it only has to be the SAME one a persisted cursor carries -- so
+ * synthetic bytes are exactly right and a bundler would buy nothing.
+ */
+const PROCESSOR_IDENTITY = identityOf('proc');
 
 // ---------------------------------------------------------------------------
 // A TIMESTAMPLESS LOG IS REFUSED AT THE FETCH BOUNDARY, NAMING THE NODE
@@ -115,7 +126,7 @@ const passThrough = <T>(p: Promise<T>) => p;
 
 function freshLastSync(): LastSync<TestABI> {
 	return {
-		context: {source: [{startBlock: START_BLOCK, hash: 'h'}], config: 'cfg', processor: 'proc'},
+		context: {source: [{startBlock: START_BLOCK, hash: 'h'}], config: 'cfg', processor: PROCESSOR_IDENTITY},
 		latestBlock: 0,
 		lastFromBlock: 0,
 		lastToBlock: 0,
@@ -125,14 +136,22 @@ function freshLastSync(): LastSync<TestABI> {
 
 function makeIndexer(provider: any, stream: ProvidedStreamConfig = {}) {
 	const processor: any = {
-		getVersionHash: () => 'proc',
+		// The DECLARED path, still on the seam until the contract task removes it, and
+		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
+		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async () => undefined,
 		reset: async () => {},
 		clear: async () => {},
 	};
-	return new IndexerGeneration<TestABI>(provider, processor, SOURCE, {stream: {finality: 12, ...stream}});
+	return new IndexerGeneration<TestABI>(
+		provider,
+		processor,
+		SOURCE,
+		{stream: {finality: 12, ...stream}},
+		{processorIdentity: PROCESSOR_IDENTITY},
+	);
 }
 
 /** A receiver that records what it was handed, so "nothing was pushed" is checkable. */

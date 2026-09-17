@@ -4,6 +4,7 @@ import type {EventProcessor, IndexingSource} from '../src/types.js';
 import {openIndexer, UnheldGenerationError, type GenerationSpec} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
 import type {GenerationId, GenerationRecord, GenerationRegistry} from '../src/generation/registry.js';
+import {bundleBytes, identityOf, identityOfBytes, markerOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE GENERATION CONTAINER, which is now the only shape there is.
@@ -65,7 +66,11 @@ function makeFold(name: string): Fold {
 	const handle: Handle = {read: () => store.name};
 	const calls = {load: 0, process: 0};
 	const processor: EventProcessor<Abi, Handle> = {
-		getVersionHash: () => `version-of-${name}`,
+		// The DECLARED path, still on the seam until the contract task removes it and
+		// deliberately NOT what names anything here: every spec below supplies the
+		// identity its arrival derived, so a value this thing returned would be read by
+		// nobody. See `specFor`.
+		getVersionHash: () => `declared-version-of-${name}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			calls.load++;
@@ -82,7 +87,16 @@ function makeFold(name: string): Fold {
 	return {processor, store, handle, calls};
 }
 
-/** The two factories, in the order a generation's identity forces: state, then the fold over it. */
+/**
+ * The two factories, in the order a generation's identity forces: state, then the
+ * fold over it -- plus the identity the ARRIVAL supplied.
+ *
+ * The identity is a hash of BYTES, because that is what an arrival has (ADR-0086)
+ * and because nothing in the container parses one: it is compared and rendered.
+ * Synthetic bytes are therefore exactly as good as a bundler's, and these
+ * assertions are about WHICH generation answered rather than about what any code
+ * inside one does.
+ */
 function specFor(fold: Fold): GenerationSpec<Abi, Handle, {name: string; opened: number}> {
 	return {
 		createState: () => {
@@ -90,6 +104,7 @@ function specFor(fold: Fold): GenerationSpec<Abi, Handle, {name: string; opened:
 			return fold.store;
 		},
 		createProcessor: () => fold.processor,
+		processorIdentity: identityOf(fold.store.name),
 		stateOf: (processor) => handles.get(processor) as Handle,
 	};
 }
@@ -124,6 +139,7 @@ describe('the generation container', () => {
 						order.push(`processor:${(state as {name: string}).name}:${context.stream}`);
 						return fold.processor;
 					},
+					processorIdentity: identityOf('A'),
 					stateOf: (processor) => handles.get(processor) as Handle,
 				},
 			],
@@ -131,10 +147,43 @@ describe('the generation container', () => {
 
 		const stream = indexer.canonical.record.stream;
 		expect(order).toEqual([`state:${stream}`, `processor:A:${stream}`]);
-		// the fold half of the identity is the processor's OWN version hash, taken
-		// after it was built rather than declared twice
-		expect(indexer.canonical.record.processor).toBe('version-of-A');
-		expect(await registry.canonical()).toMatchObject({stream, processor: 'version-of-A'});
+		// the fold half of the identity is the one the ARRIVAL supplied, recorded after
+		// both factories ran rather than declared twice
+		expect(indexer.canonical.record.processor).toBe(identityOf('A'));
+		expect(await registry.canonical()).toMatchObject({stream, processor: identityOf('A')});
+	});
+
+	it('takes the FOLD HALF of the identity from the ARRIVAL, not from the processor it built', async () => {
+		const fold = makeFold('A');
+		const registry = await openMemoryGenerationRegistry({maxGenerations: 2, maxStreams: 1});
+		const indexer = await openIndexer<Abi, Handle>({
+			registry,
+			provider: makeProvider(),
+			source: SOURCE,
+			generations: [
+				{
+					createState: () => fold.store,
+					createProcessor: () => fold.processor,
+					// what a deployment that read a BUNDLE off disk would hand over: the hash of
+					// those octets, derived from something the processor cannot see
+					processorIdentity: identityOfBytes(bundleBytes('A')),
+				},
+			],
+		});
+
+		// ADR-0086: an author cannot STATE a processor's identity, and the engine is
+		// HANDED one and never asks where it came from. So the processor's own declared
+		// hash is a value nothing consulted.
+		expect(indexer.canonical.record.processor).toBe(identityOfBytes(bundleBytes('A')));
+		expect(indexer.canonical.record.processor).not.toBe(fold.processor.getVersionHash());
+		expect(await registry.canonical()).toMatchObject({
+			stream: indexer.canonical.record.stream,
+			processor: identityOfBytes(bundleBytes('A')),
+		});
+
+		// ...and it is the BYTES that name it: one edited handler, one different
+		// generation, with no author action in either case
+		expect(identityOfBytes(bundleBytes('A'))).not.toBe(identityOfBytes(bundleBytes('A-edited')));
 	});
 
 	it('holds several generations, and only the canonical one ANSWERS', async () => {
@@ -142,9 +191,9 @@ describe('the generation container', () => {
 		const b = makeFold('B');
 		const {indexer} = await openContainer([a, b]);
 
-		expect(indexer.generations.map((held) => held.record.processor)).toEqual(['version-of-A', 'version-of-B']);
+		expect(indexer.generations.map((held) => held.record.processor)).toEqual([identityOf('A'), identityOf('B')]);
 		// the FIRST registered is canonical, which is the registry's rule
-		expect(indexer.canonical.record.processor).toBe('version-of-A');
+		expect(indexer.canonical.record.processor).toBe(identityOf('A'));
 		expect(indexer.state.read()).toBe('A');
 
 		await indexer.load();
@@ -169,9 +218,9 @@ describe('the generation container', () => {
 	it('refuses to point reads at a generation it does not hold', async () => {
 		const a = makeFold('A');
 		const {indexer} = await openContainer([a]);
-		await expect(indexer.promote({stream: indexer.canonical.record.stream, processor: 'version-of-B'})).rejects.toThrow(
-			UnheldGenerationError,
-		);
+		await expect(
+			indexer.promote({stream: indexer.canonical.record.stream, processor: identityOf('B')}),
+		).rejects.toThrow(UnheldGenerationError);
 	});
 });
 
@@ -229,7 +278,11 @@ describe('a discard is PUBLISHED and not merely applied', () => {
 		const published: string[] = [];
 		indexer.onStateUpdated = (state) => published.push(state.read());
 
-		expect(await indexer.updateProcessor(b.processor)).toEqual({stateDiscarded: true});
+		// the identity comes from the ARRIVAL that produced the new processor, the same
+		// way the spec that registered the running one supplied its own
+		expect(await indexer.updateProcessor(b.processor, {processorIdentity: identityOf('B')})).toEqual({
+			stateDiscarded: true,
+		});
 
 		// the NEW fold's handle, because the old one no longer exists: a subscriber
 		// that kept what it was handed is now reading the generation that is folding
@@ -255,9 +308,11 @@ describe('a discard is PUBLISHED and not merely applied', () => {
 		const published: string[] = [];
 		indexer.onStateUpdated = (state) => published.push(state.read());
 
-		// the same version hash, unforced: the core skips the swap, so there is
-		// nothing to say -- and a store blanked on every save would be its own bug
-		expect(await indexer.updateProcessor(a.processor)).toEqual({stateDiscarded: false});
+		// the same identity, unforced: the core skips the swap, so there is nothing to
+		// say -- and a store blanked on every save would be its own bug
+		expect(await indexer.updateProcessor(a.processor, {processorIdentity: identityOf('A')})).toEqual({
+			stateDiscarded: false,
+		});
 		expect(published).toEqual([]);
 	});
 });
@@ -294,7 +349,7 @@ describe('a generation is held by a durable named SLOT', () => {
 	/** What each slot holds, as the fold that names it, so an assertion reads as a sentence. */
 	async function slotsBy(registry: GenerationRegistry) {
 		const held = await registry.slots();
-		const name = (record: GenerationRecord | undefined) => record?.processor.replace('version-of-', '');
+		const name = (record: GenerationRecord | undefined) => markerOf(record?.processor);
 		return {canonical: name(held.canonical), successor: name(held.successor), predecessor: name(held.predecessor)};
 	}
 
@@ -322,7 +377,7 @@ describe('a generation is held by a durable named SLOT', () => {
 		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
 		// the row, the state, and this container's driving of it: all three go
 		expect(dropped).toEqual([{stream: b.record.stream, processor: b.record.processor}]);
-		expect((await registry.list()).map((record) => record.processor)).toEqual(['version-of-A', 'version-of-C']);
+		expect((await registry.list()).map((record) => record.processor)).toEqual([identityOf('A'), identityOf('C')]);
 		expect(indexer.generations.map((held) => held.record)).toEqual([indexer.canonical.record, c.record]);
 	});
 
@@ -342,7 +397,7 @@ describe('a generation is held by a durable named SLOT', () => {
 		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: 'D', predecessor: 'A'});
 		expect(dropped).toEqual([{stream: c.record.stream, processor: c.record.processor}]);
 		// ...so the way back is still there, and still exact
-		await indexer.promote({stream: c.record.stream, processor: 'version-of-A'});
+		await indexer.promote({stream: c.record.stream, processor: identityOf('A')});
 		expect(indexer.state.read()).toBe('A');
 	});
 
@@ -357,7 +412,7 @@ describe('a generation is held by a durable named SLOT', () => {
 
 		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
 		expect(dropped).toEqual([{stream: abandoned.record.stream, processor: abandoned.record.processor}]);
-		expect((await registry.list()).map((record) => record.processor)).toEqual(['version-of-A', 'version-of-C']);
+		expect((await registry.list()).map((record) => record.processor)).toEqual([identityOf('A'), identityOf('C')]);
 	});
 });
 
