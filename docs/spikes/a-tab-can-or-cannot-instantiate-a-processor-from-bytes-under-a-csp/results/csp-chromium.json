@@ -1,0 +1,4736 @@
+{
+	"measuredAt": "2026-09-17T17:31:44.061Z",
+	"engine": "chromium",
+	"launched": true,
+	"version": "149.0.7827.55",
+	"runs": [
+		{
+			"delivery": "header",
+			"policy": "none",
+			"csp": null,
+			"results": {
+				"href": "http://localhost:8099/p/none/?policy=none",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "data-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "new-function",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"dataImportInsideBlobWorker": "allowed",
+						"violations": []
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "SyntaxError",
+							"name": "SyntaxError",
+							"message": "Invalid or unexpected token"
+						},
+						"violations": []
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": []
+		},
+		{
+			"delivery": "header",
+			"policy": "default-self",
+			"csp": "default-src 'self'",
+			"results": {
+				"href": "http://localhost:8099/p/default-self/?policy=default-self",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/fa661b85-7a6c-41a0-8299-5a6759b2a175"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/ae27b7db-e0a5-4d7d-a3a1-c8a3e595a62a"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=default-self]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/8ece1d7a-89d9-4ea5-8cc1-dd3a4e9f54ce"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/3e8d9a54-605c-4862-a43e-972251944d6d"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/fa661b85-7a6c-41a0-8299-5a6759b2a175' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				" Note that 'script-src' was not explicitly set, so 'default-src' is used as a fallback.",
+				"Creating a worker from 'blob:http://localhost:8099/949036a7-8824-4a40-97a9-fc36dd7b8808' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'worker-src' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/ae27b7db-e0a5-4d7d-a3a1-c8a3e595a62a' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "header",
+			"policy": "script-self",
+			"csp": "script-src 'self'",
+			"results": {
+				"href": "http://localhost:8099/p/script-self/?policy=script-self",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/7cc93510-5aa9-4a72-b7e5-64f6655711e8"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/d107bbdc-5b99-482c-bf30-6f91bfbd15e0"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/3840d4f2-0523-4f80-8943-2958a9324480"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/574564a3-0742-473c-b839-70e5c6c8505d"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/7cc93510-5aa9-4a72-b7e5-64f6655711e8' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Creating a worker from 'blob:http://localhost:8099/92101f52-b947-443d-bc3d-3ccaaf4ffd8d' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/d107bbdc-5b99-482c-bf30-6f91bfbd15e0' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "header",
+			"policy": "script-self-blob",
+			"csp": "script-src 'self' blob:",
+			"results": {
+				"href": "http://localhost:8099/p/script-self-blob/?policy=script-self-blob",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' blob:\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"dataImportInsideBlobWorker": "TypeError: Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK",
+						"violations": []
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "SyntaxError",
+							"name": "SyntaxError",
+							"message": "Invalid or unexpected token"
+						},
+						"violations": []
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self-blob]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' blob:\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "TypeError: Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"script-src 'self' blob:\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "header",
+			"policy": "script-self-data",
+			"csp": "script-src 'self' data:",
+			"results": {
+				"href": "http://localhost:8099/p/script-self-data/?policy=script-self-data",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/ce925c00-7092-43b5-90e4-7f2001d440ea"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' data:\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/ef9751b8-c2d1-4b29-be39-581641488df3"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self-data]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/74614ed8-f557-4179-aa81-41ede9dd430b"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' data:\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/e3bf2929-5dc1-4d48-8c95-9d23d432badb"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/ce925c00-7092-43b5-90e4-7f2001d440ea' violates the following Content Security Policy directive: \"script-src 'self' data:\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Creating a worker from 'blob:http://localhost:8099/8f86855f-b7c6-4ed4-82a2-98b05610a378' violates the following Content Security Policy directive: \"script-src 'self' data:\". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/ef9751b8-c2d1-4b29-be39-581641488df3' violates the following Content Security Policy directive: \"script-src 'self' data:\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "header",
+			"policy": "script-self-unsafe-eval",
+			"csp": "script-src 'self' 'unsafe-eval'",
+			"results": {
+				"href": "http://localhost:8099/p/script-self-unsafe-eval/?policy=script-self-unsafe-eval",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/5f829b2c-9e4f-4c0c-b10b-26be24d95405"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/b109c5c0-b18f-41e4-9439-64d938f05475"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self-unsafe-eval]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/9f40bb59-80ca-4785-9d7a-749dfaf250d5"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/f21d2aac-52fc-444b-b7bd-df1270e74a2d"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/5f829b2c-9e4f-4c0c-b10b-26be24d95405' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Creating a worker from 'blob:http://localhost:8099/1ac39086-062a-47d4-a055-46b328463613' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/b109c5c0-b18f-41e4-9439-64d938f05475' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "header",
+			"policy": "nonce-strict-dynamic",
+			"csp": "script-src 'nonce-{NONCE}' 'strict-dynamic'",
+			"results": {
+				"href": "http://localhost:8099/p/nonce-strict-dynamic/?policy=nonce-strict-dynamic",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "data-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'nonce-LdMyd7O3Hx8R8dCdtIX96g==' 'strict-dynamic'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"dataImportInsideBlobWorker": "allowed",
+						"violations": []
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "SyntaxError",
+							"name": "SyntaxError",
+							"message": "Invalid or unexpected token"
+						},
+						"violations": []
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=nonce-strict-dynamic]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'nonce-RMtzgwiPp6HgQXVn8nWWiA==' 'strict-dynamic'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": []
+		},
+		{
+			"delivery": "header",
+			"policy": "pinata-gateway",
+			"csp": "default-src 'self'; img-src * data: blob: 'unsafe-inline'; style-src * 'unsafe-inline'",
+			"results": {
+				"href": "http://localhost:8099/p/pinata-gateway/?policy=pinata-gateway",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/5d285fe7-06dd-4ddc-9cee-a9bf3bf8df7a"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/5d256ba0-2b9d-4121-89ff-5f2278492a7b"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=pinata-gateway]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/3b5460f2-f177-4f38-b042-a710f0760b6c"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/68055930-bd5e-4214-84eb-64ff3343b1cc"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/5d285fe7-06dd-4ddc-9cee-a9bf3bf8df7a' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				" Note that 'script-src' was not explicitly set, so 'default-src' is used as a fallback.",
+				"Creating a worker from 'blob:http://localhost:8099/733f48c8-0074-4be8-944d-be4022f3e8fa' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'worker-src' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/5d256ba0-2b9d-4121-89ff-5f2278492a7b' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "meta",
+			"policy": "none",
+			"csp": null,
+			"results": {
+				"href": "http://localhost:8099/m/none/?policy=none",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "data-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "new-function",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"dataImportInsideBlobWorker": "allowed",
+						"violations": []
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "SyntaxError",
+							"name": "SyntaxError",
+							"message": "Invalid or unexpected token"
+						},
+						"violations": []
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": []
+		},
+		{
+			"delivery": "meta",
+			"policy": "default-self",
+			"csp": "default-src 'self'",
+			"results": {
+				"href": "http://localhost:8099/m/default-self/?policy=default-self",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/2d943bc1-cfa0-43af-b0d6-29d4df83c562"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/7573c6fc-0ee3-43d3-9c6a-3b4748e5a78b"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=default-self]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/aef50479-0df0-40d2-9e4d-cd31b34b4bef"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/3646fe2c-c6da-432a-ad41-20659576434e"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/2d943bc1-cfa0-43af-b0d6-29d4df83c562' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				" Note that 'script-src' was not explicitly set, so 'default-src' is used as a fallback.",
+				"Creating a worker from 'blob:http://localhost:8099/5f43c416-4c66-4a6f-b655-a0c188bbf46c' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'worker-src' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/7573c6fc-0ee3-43d3-9c6a-3b4748e5a78b' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "meta",
+			"policy": "script-self",
+			"csp": "script-src 'self'",
+			"results": {
+				"href": "http://localhost:8099/m/script-self/?policy=script-self",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/26716882-9fc1-4f92-9275-e92f5ab32bc9"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/29e6f35c-c9cb-4478-bee3-7ccfa91c815b"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/7af819ac-91f8-421e-9450-421b3c07264f"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/cbf1f482-48e1-45e0-a861-55d616d4231e"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/26716882-9fc1-4f92-9275-e92f5ab32bc9' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Creating a worker from 'blob:http://localhost:8099/10f7d40a-d726-4574-abdf-7570b3b34ed8' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/29e6f35c-c9cb-4478-bee3-7ccfa91c815b' violates the following Content Security Policy directive: \"script-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "meta",
+			"policy": "script-self-blob",
+			"csp": "script-src 'self' blob:",
+			"results": {
+				"href": "http://localhost:8099/m/script-self-blob/?policy=script-self-blob",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' blob:\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"dataImportInsideBlobWorker": "TypeError: Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK",
+						"violations": []
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "SyntaxError",
+							"name": "SyntaxError",
+							"message": "Invalid or unexpected token"
+						},
+						"violations": []
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self-blob]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' blob:\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "TypeError: Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"script-src 'self' blob:\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "meta",
+			"policy": "script-self-data",
+			"csp": "script-src 'self' data:",
+			"results": {
+				"href": "http://localhost:8099/m/script-self-data/?policy=script-self-data",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/e6038163-714f-42df-8870-4d5ca809b2fe"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' data:\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/c1114b93-8d3e-4f85-a127-fc3a523dfee6"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self-data]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/c33e3fb9-1322-4060-a522-6684f6105736"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'self' data:\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/ff82ddf4-3823-44cb-8040-e3e87c87a12a"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/e6038163-714f-42df-8870-4d5ca809b2fe' violates the following Content Security Policy directive: \"script-src 'self' data:\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Creating a worker from 'blob:http://localhost:8099/878c593c-323d-4231-8f30-cb4db8ace209' violates the following Content Security Policy directive: \"script-src 'self' data:\". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/c1114b93-8d3e-4f85-a127-fc3a523dfee6' violates the following Content Security Policy directive: \"script-src 'self' data:\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "meta",
+			"policy": "script-self-unsafe-eval",
+			"csp": "script-src 'self' 'unsafe-eval'",
+			"results": {
+				"href": "http://localhost:8099/m/script-self-unsafe-eval/?policy=script-self-unsafe-eval",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/2d306bd2-3163-43ad-9f6a-bb8c59a8ee6f"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/aaaba63a-5678-4fe0-82ac-cb06272ba8e6"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=script-self-unsafe-eval]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/b19fd29f-ebea-49d5-a9be-ed4d3aa027e2"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/c8ebba64-537d-416b-b533-2b475748d3d3"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/2d306bd2-3163-43ad-9f6a-bb8c59a8ee6f' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Creating a worker from 'blob:http://localhost:8099/7e188859-2ad5-4ad1-8f28-8d88d96629d8' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/aaaba63a-5678-4fe0-82ac-cb06272ba8e6' violates the following Content Security Policy directive: \"script-src 'self' 'unsafe-eval'\". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The action has been blocked."
+			]
+		},
+		{
+			"delivery": "meta",
+			"policy": "nonce-strict-dynamic",
+			"csp": "script-src 'nonce-{NONCE}' 'strict-dynamic'",
+			"results": {
+				"href": "http://localhost:8099/m/nonce-strict-dynamic/?policy=nonce-strict-dynamic",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "data-import",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'nonce-s5ysDRmlJmCpbgoZoO6JUg==' 'strict-dynamic'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": true,
+						"proof": {
+							"ran": true,
+							"folded": {
+								"count": 42,
+								"last": "Transfer"
+							}
+						},
+						"dataImportInsideBlobWorker": "allowed",
+						"violations": []
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "SyntaxError",
+							"name": "SyntaxError",
+							"message": "Invalid or unexpected token"
+						},
+						"violations": []
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=nonce-strict-dynamic]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: script-src 'nonce-JfP4klptfoELqKNG3a795Q==' 'strict-dynamic'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": []
+		},
+		{
+			"delivery": "meta",
+			"policy": "pinata-gateway",
+			"csp": "default-src 'self'; img-src * data: blob: 'unsafe-inline'; style-src * 'unsafe-inline'",
+			"results": {
+				"href": "http://localhost:8099/m/pinata-gateway/?policy=pinata-gateway",
+				"userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+				"document": [
+					{
+						"mechanism": "blob-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/33a0bd6a-5bb6-4fc3-a5ed-0a62f8d9344b"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "data-import",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "data",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "new-function",
+						"ok": false,
+						"error": {
+							"arrival": "sync-throw",
+							"constructor": "EvalError",
+							"name": "EvalError",
+							"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src",
+								"blockedURI": "eval",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-worker",
+						"ok": false,
+						"error": {
+							"arrival": "worker-onerror",
+							"message": "(empty)"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "worker-src",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					},
+					{
+						"mechanism": "blob-import-corrupt-bytes",
+						"ok": false,
+						"error": {
+							"arrival": "rejected-promise",
+							"constructor": "TypeError",
+							"name": "TypeError",
+							"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/a2189523-423b-480c-a1aa-fb2cab48c891"
+						},
+						"violations": [
+							{
+								"effectiveDirective": "script-src-elem",
+								"blockedURI": "blob",
+								"disposition": "enforce",
+								"sourceFile": "http://localhost:8099/harness.js",
+								"statusCode": 200
+							}
+						]
+					}
+				],
+				"serviceWorker": {
+					"mechanism": "service-worker-same-origin-import",
+					"ok": true,
+					"proof": {
+						"ran": true,
+						"folded": {
+							"count": 42,
+							"last": "Transfer"
+						}
+					},
+					"servedFrom": "/retained/retained-153.js",
+					"violations": []
+				},
+				"workers": [
+					{
+						"mechanism": "same-origin-worker[csp=none]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "data-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "new-function",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"dataImportInsideBlobWorker": "allowed",
+									"violations": []
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "SyntaxError",
+										"name": "SyntaxError",
+										"message": "Invalid or unexpected token"
+									},
+									"violations": []
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					},
+					{
+						"mechanism": "same-origin-worker[csp=pinata-gateway]",
+						"ok": true,
+						"inside": {
+							"results": [
+								{
+									"mechanism": "blob-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/47f955da-dedf-4025-b261-d0b132c52b98"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "data-import",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "data",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "new-function",
+									"ok": false,
+									"error": {
+										"arrival": "sync-throw",
+										"constructor": "EvalError",
+										"name": "EvalError",
+										"message": "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: default-src 'self'\".\n"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src",
+											"blockedURI": "eval",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-worker",
+									"ok": false,
+									"error": {
+										"arrival": "worker-onerror",
+										"message": "(empty)"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "worker-src",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "blob-import-corrupt-bytes",
+									"ok": false,
+									"error": {
+										"arrival": "rejected-promise",
+										"constructor": "TypeError",
+										"name": "TypeError",
+										"message": "Failed to fetch dynamically imported module: blob:http://localhost:8099/9926c454-b250-492e-a0d6-b54157d92fbd"
+									},
+									"violations": [
+										{
+											"effectiveDirective": "script-src-elem",
+											"blockedURI": "blob",
+											"disposition": "enforce",
+											"sourceFile": "http://localhost:8099/worker.js",
+											"statusCode": 0
+										}
+									]
+								},
+								{
+									"mechanism": "service-worker-same-origin-import",
+									"ok": true,
+									"proof": {
+										"ran": true,
+										"folded": {
+											"count": 42,
+											"last": "Transfer"
+										}
+									},
+									"violations": []
+								}
+							]
+						},
+						"violations": []
+					}
+				]
+			},
+			"console": [
+				"Loading the script 'blob:http://localhost:8099/33a0bd6a-5bb6-4fc3-a5ed-0a62f8d9344b' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'data:text/javascript;base64,ZnVuY3Rpb24gZSh0KXtyZXR1cm4gdCsxfXZhciBvPXtuYW1lOiJzcGlrZS1jb3VudGVyIixoYW5kbGVFdmVudCh0LG4pe3JldHVybntjb3VudDplKHQuY291bnQ/PzApLGxhc3Q6bi5uYW1lfX19LHA9bztleHBvcnR7cCBhcyBkZWZhdWx0LG8gYXMgcHJvY2Vzc29yfTsK' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				" Note that 'script-src' was not explicitly set, so 'default-src' is used as a fallback.",
+				"Creating a worker from 'blob:http://localhost:8099/bb8da3c5-9529-4041-94a9-66ac292b7ce5' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'worker-src' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked.",
+				"Loading the script 'blob:http://localhost:8099/a2189523-423b-480c-a1aa-fb2cab48c891' violates the following Content Security Policy directive: \"default-src 'self'\". Note that 'script-src-elem' was not explicitly set, so 'default-src' is used as a fallback. The action has been blocked."
+			]
+		}
+	]
+}

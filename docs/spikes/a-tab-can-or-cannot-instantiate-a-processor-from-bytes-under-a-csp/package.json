@@ -7,10 +7,11 @@
 	"scripts": {
 		"build-bundle": "node build-bundle.mjs",
 		"run": "node run.mjs",
+		"summarise": "node summarise.mjs",
 		"serve": "node server.mjs 8099"
 	},
 	"devDependencies": {
 		"esbuild": "0.28.1",
-		"playwright": "1.62.1"
+		"playwright": "1.61.1"
 	}
 }
