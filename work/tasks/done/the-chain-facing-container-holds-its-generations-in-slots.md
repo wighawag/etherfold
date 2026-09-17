@@ -4,7 +4,7 @@ slug: the-chain-facing-container-holds-its-generations-in-slots
 spec: a-save-replaces-the-pending-successor
 blockedBy: [a-successor-lands-in-a-durable-slot-that-holds-one]
 covers: [3]
-needsAnswers: true
+needsAnswers: false
 ---
 
 ## What to build
