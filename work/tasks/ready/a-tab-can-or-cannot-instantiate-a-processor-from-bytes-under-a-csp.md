@@ -3,6 +3,7 @@ title: 'SPIKE: can a tab instantiate a processor from BYTES under a realistic Co
 slug: a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
