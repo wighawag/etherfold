@@ -19,3 +19,32 @@
 <!-- q1 fields: id=q1 kind=stuck -->
 
 **Your answer** (write below this line):
+
+## Q2
+
+**'task:a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp' was bounced — how should we proceed?**
+
+> acceptance gate failed (exit 1) on the rebased tip — the failing step was: `pnpm format:check && pnpm check:adr && pnpm check:refs && pnpm check:changesets && { [ "$GITHUB_HEAD_REF" = "changeset-release/main" ] && echo 'skip changeset status on the Version PR (it consumes changesets)' || pnpm changeset status --since=main; } && pnpm build && pnpm typecheck && pnpm test`; its last output was:
+>
+> [WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides". See https://pnpm.io/settings for the new home of each setting.
+> > etherfold-monorepo@ format:check /tmp/dorfl-fresh-gate-ennYsZ/tip
+> > prettier --check .
+> Checking formatting...
+> All matched files use Prettier code style!
+> [WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides". See https://pnpm.io/settings for the new home of each setting.
+> > etherfold-monorepo@ check:adr /tmp/dorfl-fresh-gate-ennYsZ/tip
+> > node scripts/check-adr-numbers.mjs
+> docs/adr: 86 ADRs, no duplicate numbers (self-check: 4 cases, 2 rejecting)
+> [WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides". See https://pnpm.io/settings for the new home of each setting.
+> > etherfold-monorepo@ check:refs /tmp/dorfl-fresh-gate-ennYsZ/tip
+> > node scripts/check-work-refs.mjs
+> 1 dead work/ reference(s):
+>   docs/spikes/a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp/README.md
+>     -> work/tasks/ready/a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp.md
+>        MOVED to work/tasks/done/a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp.md -- update the citation
+> A status-folder move is normal, so a citation of a work/ artifact has to be updated with it. If the reference is HISTORICAL rather than navigational, the surface holding it probably belongs in this check's exempt list (see the header) rather than being reworded.
+>  ELIFECYCLE  Command failed with exit code 1.
+
+<!-- q2 fields: id=q2 kind=stuck -->
+
+**Your answer** (write below this line):
