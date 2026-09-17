@@ -7,6 +7,7 @@ import {StateMovedPublisher, type StateMoved} from '../src/stateMoved.js';
 import type {EventProcessor, LastSync} from '../src/types.js';
 import {BRANCH_A, fakeChain, FINALITY, makeLog, SOURCE} from './utils/streamCacheWorld.js';
 import {appendsIn, driveToTip, openWorld, reportingFold} from './utils/stateMovedWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE FOLD PUBLISHES WHAT IT JUST CHANGED
@@ -188,7 +189,9 @@ describe('the fold publishes what it just changed', () => {
 		// package has no mutation vocabulary at all. Silence is the honest answer
 		// there; the entity path is what fills it.
 		const silent: EventProcessor<Abi, string[]> = {
-			getVersionHash: () => 'proc-silent',
+			// still on the seam until the contract task removes it, and read by nobody: the
+			// spec below hands the container the identity this fold ARRIVED with
+			getVersionHash: () => 'declared-version-of-silent',
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async () => [],
@@ -202,9 +205,18 @@ describe('the fold publishes what it just changed', () => {
 			provider: chain.provider,
 			source: SOURCE,
 			config: {stream: {finality: FINALITY}},
-			generations: [{createState: () => ({}), createProcessor: () => silent, stateOf: () => []}],
-			createGeneration: (provider, processor, source, config) => {
-				const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config);
+			generations: [
+				{
+					createState: () => ({}),
+					createProcessor: () => silent,
+					processorIdentity: identityOf('silent'),
+					stateOf: () => [],
+				},
+			],
+			createGeneration: (provider, processor, source, config, processorIdentity) => {
+				const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config, {
+					processorIdentity,
+				});
 				(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = chain.fetcher;
 				return generation;
 			},

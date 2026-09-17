@@ -25,6 +25,7 @@ import {
 	SOURCE,
 	START_BLOCK,
 } from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // A GENERATION PAUSES BY CAPPING AND DRAINING. IT TRUNCATES NOTHING.
@@ -292,7 +293,9 @@ function labelledFold(label: string) {
 	const state: string[] = [];
 	const calls = {load: 0};
 	const processor: EventProcessor<Abi, string[]> = {
-		getVersionHash: () => `proc-${label}`,
+		// The DECLARED path, still on the seam until the contract task removes it: what
+		// NAMES each generation here is the identity its spec's arrival supplied.
+		getVersionHash: () => `declared-version-of-${label}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			calls.load++;
@@ -319,7 +322,7 @@ function labelledFold(label: string) {
 			state.length = 0;
 		},
 	};
-	return {processor, state, calls};
+	return {processor, state, calls, label};
 }
 
 /**
@@ -338,6 +341,9 @@ async function openWorld() {
 	const specFor = (fold: ReturnType<typeof labelledFold>): AnyGenerationSpec<Abi, string[]> => ({
 		createState: () => ({}),
 		createProcessor: () => fold.processor,
+		// The identity this fold ARRIVED with: the hash of the bytes a deployment would
+		// have read off disk (ADR-0086), never a value the processor states about itself.
+		processorIdentity: identityOf(fold.label),
 		stateOf: () => [],
 	});
 
@@ -348,9 +354,9 @@ async function openWorld() {
 		source: SOURCE,
 		config: {stream: {finality: FINALITY}, keepStream: stream.keeper, streamWriteRetry: {delaySeconds: 0}},
 		generations: [specFor(A), specFor(B)],
-		createGeneration: (provider, processor, source, config) => {
-			const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config);
-			const by = processor.getVersionHash();
+		createGeneration: (provider, processor, source, config, processorIdentity) => {
+			const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config, {processorIdentity});
+			const by = processorIdentity;
 			(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = {
 				async getLogEvents(range: {fromBlock: number; toBlock: number}) {
 					fetches.push({by, from: range.fromBlock, to: range.toBlock});
@@ -363,8 +369,8 @@ async function openWorld() {
 	});
 
 	const idOfGeneration = (label: string) => {
-		const held = indexer.generations.find((entry) => entry.record.processor === `proc-${label}`);
-		return {stream: held?.record.stream as string, processor: `proc-${label}`};
+		const held = indexer.generations.find((entry) => entry.record.processor === identityOf(label));
+		return {stream: held?.record.stream as string, processor: identityOf(label)};
 	};
 
 	return {
@@ -375,8 +381,8 @@ async function openWorld() {
 		fetches,
 		id: idOfGeneration,
 		heldOf: (label: string) =>
-			indexer.generations.find((entry) => entry.record.processor === `proc-${label}`) ?? undefined,
-		fetchesBy: (label: string) => fetches.filter((call) => call.by === `proc-${label}`),
+			indexer.generations.find((entry) => entry.record.processor === identityOf(label)) ?? undefined,
+		fetchesBy: (label: string) => fetches.filter((call) => call.by === identityOf(label)),
 		round: async (logs?: StoredLogEvent[]) => {
 			chain.serve(logs ?? [...BRANCH_A], chain.tip + 1);
 			return indexer.indexMore();

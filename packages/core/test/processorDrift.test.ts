@@ -4,15 +4,24 @@ import {IndexerGeneration} from '../src/indexer.js';
 import {processorDriftReport} from '../src/processorDrift.js';
 import {simple_hash} from '../src/utils/hash.js';
 import type {ContextIdentifier, EventProcessor, IndexingSource, LastSync, ProcessorDriftReport} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
-// PROCESSOR DRIFT: the declared version says "unchanged", the code says otherwise
+// PROCESSOR DRIFT: the identity says "unchanged", the code says otherwise
 // ---------------------------------------------------------------------------
-// `getVersionHash()` is author-declared, so an author who edits a handler and
-// forgets to bump `version` gets state computed by the PREVIOUS logic, adopted
-// silently and served forever. Under docs/adr/0008 it is worse: a version change
-// is what triggers the blue-green rebuild, so a missed bump means the rebuild
-// never runs.
+// A processor's identity used to be AUTHOR-DECLARED, so an author who edited a
+// handler and forgot to bump `version` got state computed by the PREVIOUS logic,
+// adopted silently and served forever. Under docs/adr/0008 it is worse: an
+// identity change is what triggers the blue-green rebuild, so a missed bump means
+// the rebuild never runs.
+//
+// The IDENTITIES here now come from the ARRIVAL (ADR-0086) because that is how
+// this engine is told what a fold is called, but WHAT IS ASSERTED is unchanged:
+// the check compares the FINGERPRINT on a persisted cursor against the one the
+// running processor reports, at an identity that did not move. ADR-0086 is what
+// eventually makes the condition unrepresentable rather than merely reported, and
+// `the-declared-version-and-the-drift-report-are-deleted` removes this file with
+// the fingerprint it is about.
 //
 // The fingerprint is the second opinion. It is compared HERE, in the core,
 // rather than in each `EventProcessor` implementation, because drift is defined
@@ -60,12 +69,14 @@ function storedLastSync(context: ContextIdentifier): LastSync<Abi> {
 
 /** A processor that hands back a persisted cursor, as a keeper-backed one would. */
 function makeProcessor(
-	versionHash: string,
+	marker: string,
 	options: {stored?: ContextIdentifier; fingerprint?: string} = {},
 ): EventProcessor<Abi, void> & {cleared: boolean} {
 	const processor = {
 		cleared: false,
-		getVersionHash: () => versionHash,
+		// The DECLARED path, still on the seam until the contract task removes it:
+		// `indexerWith` hands the engine `identityOf(marker)` instead.
+		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => options.fingerprint,
 		load: async () => (options.stored ? {state: undefined, lastSync: storedLastSync(options.stored)} : undefined),
 		process: async () => undefined,
@@ -77,16 +88,25 @@ function makeProcessor(
 	return processor;
 }
 
-function indexerWith(processor: EventProcessor<Abi, void>, config: {strictProcessorDrift?: boolean} = {}) {
+function indexerWith(
+	processor: EventProcessor<Abi, void>,
+	config: {strictProcessorDrift?: boolean} = {},
+	marker = 'v1',
+) {
 	const reports: ProcessorDriftReport[] = [];
-	const indexer = new IndexerGeneration<Abi, void>(makeProvider(), processor, SOURCE, config);
+	const indexer = new IndexerGeneration<Abi, void>(makeProvider(), processor, SOURCE, config, {
+		processorIdentity: identityOf(marker),
+	});
 	indexer.onProcessorDrift = (report) => reports.push(report);
 	return {indexer, reports};
 }
 
 describe('processor drift detection', () => {
 	it('reports when the version hash is unchanged but the handler code is not', async () => {
-		const processor = makeProcessor('v1', {stored: storedContext('v1', 'fingerprint-A'), fingerprint: 'fingerprint-B'});
+		const processor = makeProcessor('v1', {
+			stored: storedContext(identityOf('v1'), 'fingerprint-A'),
+			fingerprint: 'fingerprint-B',
+		});
 		const {indexer, reports} = indexerWith(processor);
 
 		await indexer.load();
@@ -98,15 +118,18 @@ describe('processor drift detection', () => {
 		// different logic" -- and never the reload one, which compares a re-imported
 		// module with the fold that is running and can disagree with this
 		expect(reports[0].compared).toBe('persisted-state');
-		// the report NAMES which processor drifted, by the version hash both sides agree on
-		expect(reports[0].processorHash).toBe('v1');
-		expect(reports[0].message).toContain('v1');
+		// the report NAMES which processor drifted, by the identity both sides agree on
+		expect(reports[0].processorHash).toBe(identityOf('v1'));
+		expect(reports[0].message).toContain(identityOf('v1'));
 	});
 
 	it('does not halt on drift by default: the state is still adopted', async () => {
 		// The false positive is real (a re-minification changes handler source without
 		// changing behaviour), so the default cannot be a refusal to start.
-		const processor = makeProcessor('v1', {stored: storedContext('v1', 'fingerprint-A'), fingerprint: 'fingerprint-B'});
+		const processor = makeProcessor('v1', {
+			stored: storedContext(identityOf('v1'), 'fingerprint-A'),
+			fingerprint: 'fingerprint-B',
+		});
 		const {indexer, reports} = indexerWith(processor);
 
 		const lastSync = await indexer.load();
@@ -117,7 +140,10 @@ describe('processor drift detection', () => {
 	});
 
 	it('refuses to start under strictProcessorDrift', async () => {
-		const processor = makeProcessor('v1', {stored: storedContext('v1', 'fingerprint-A'), fingerprint: 'fingerprint-B'});
+		const processor = makeProcessor('v1', {
+			stored: storedContext(identityOf('v1'), 'fingerprint-A'),
+			fingerprint: 'fingerprint-B',
+		});
 		const {indexer, reports} = indexerWith(processor, {strictProcessorDrift: true});
 
 		await expect(indexer.load()).rejects.toThrow(/PROCESSOR DRIFT/);
@@ -126,7 +152,10 @@ describe('processor drift detection', () => {
 	});
 
 	it('says nothing when the fingerprint matches', async () => {
-		const processor = makeProcessor('v1', {stored: storedContext('v1', 'fingerprint-A'), fingerprint: 'fingerprint-A'});
+		const processor = makeProcessor('v1', {
+			stored: storedContext(identityOf('v1'), 'fingerprint-A'),
+			fingerprint: 'fingerprint-A',
+		});
 		const {indexer, reports} = indexerWith(processor);
 
 		await indexer.load();
@@ -134,12 +163,14 @@ describe('processor drift detection', () => {
 		expect(reports).toEqual([]);
 	});
 
-	it('says nothing when the version WAS bumped, code change or not', async () => {
-		// A deliberate bump is never a drift. The state is discarded on the version
-		// hash, which is the mechanism this whole check exists to back up, not
-		// replace.
-		const processor = makeProcessor('v2', {stored: storedContext('v1', 'fingerprint-A'), fingerprint: 'fingerprint-B'});
-		const {indexer, reports} = indexerWith(processor);
+	it('says nothing when the IDENTITY moved, code change or not', async () => {
+		// A deliberate change is never a drift. The state is discarded on the identity,
+		// which is the mechanism this whole check exists to back up, not replace.
+		const processor = makeProcessor('v2', {
+			stored: storedContext(identityOf('v1'), 'fingerprint-A'),
+			fingerprint: 'fingerprint-B',
+		});
+		const {indexer, reports} = indexerWith(processor, {}, 'v2');
 
 		await indexer.load();
 
@@ -151,7 +182,7 @@ describe('processor drift detection', () => {
 		// Absence means "unknown", never "drifted". Otherwise every existing
 		// deployment reports drift exactly once on upgrade, and a report that cried
 		// wolf on day one is a report nobody reads on day two.
-		const legacy = storedContext('v1');
+		const legacy = storedContext(identityOf('v1'));
 		expect('processorFingerprint' in legacy).toBe(false);
 		const processor = makeProcessor('v1', {stored: legacy, fingerprint: 'fingerprint-B'});
 		const {indexer, reports} = indexerWith(processor);
@@ -165,7 +196,7 @@ describe('processor drift detection', () => {
 		// `getCodeFingerprint` is REQUIRED on `EventProcessor`, but it may ANSWER
 		// `undefined`: a processor whose handlers are all bound or proxied has no
 		// readable source. "Cannot tell" is not "changed", so nothing is reported.
-		const processor = makeProcessor('v1', {stored: storedContext('v1', 'fingerprint-A')});
+		const processor = makeProcessor('v1', {stored: storedContext(identityOf('v1'), 'fingerprint-A')});
 		const {indexer, reports} = indexerWith(processor);
 
 		await indexer.load();
@@ -186,7 +217,7 @@ describe('processor drift detection', () => {
 		// The stored fingerprint describes the code that computed the state, so it is
 		// not refreshed when the drift is reported: the condition lasts until the
 		// author bumps `version`, and so does the report.
-		const stored = storedContext('v1', 'fingerprint-A');
+		const stored = storedContext(identityOf('v1'), 'fingerprint-A');
 		const first = indexerWith(makeProcessor('v1', {stored, fingerprint: 'fingerprint-B'}));
 		await first.indexer.load();
 		const second = indexerWith(makeProcessor('v1', {stored, fingerprint: 'fingerprint-B'}));
@@ -206,8 +237,19 @@ describe('processor drift detection', () => {
 	});
 
 	it('survives a listener that throws, because a drift report must not break loading', async () => {
-		const processor = makeProcessor('v1', {stored: storedContext('v1', 'fingerprint-A'), fingerprint: 'fingerprint-B'});
-		const indexer = new IndexerGeneration<Abi, void>(makeProvider(), processor, SOURCE);
+		const processor = makeProcessor('v1', {
+			stored: storedContext(identityOf('v1'), 'fingerprint-A'),
+			fingerprint: 'fingerprint-B',
+		});
+		const indexer = new IndexerGeneration<Abi, void>(
+			makeProvider(),
+			processor,
+			SOURCE,
+			{},
+			{
+				processorIdentity: identityOf('v1'),
+			},
+		);
 		indexer.onProcessorDrift = () => {
 			throw new Error('listener blew up');
 		};
@@ -225,10 +267,18 @@ describe('processor drift detection', () => {
 		const spy = vi.spyOn(namedLogger, 'error').mockImplementation(() => {});
 		try {
 			const processor = makeProcessor('v1', {
-				stored: storedContext('v1', 'fingerprint-A'),
+				stored: storedContext(identityOf('v1'), 'fingerprint-A'),
 				fingerprint: 'fingerprint-B',
 			});
-			const indexer = new IndexerGeneration<Abi, void>(makeProvider(), processor, SOURCE);
+			const indexer = new IndexerGeneration<Abi, void>(
+				makeProvider(),
+				processor,
+				SOURCE,
+				{},
+				{
+					processorIdentity: identityOf('v1'),
+				},
+			);
 
 			await indexer.load();
 

@@ -9,6 +9,7 @@ import {
 	idOf,
 	transfer,
 } from './utils/receivingWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // WRITER SUCCESSION, THE ENGINE HALF: THE WIRE MOVES TO THE OLDEST SURVIVOR
@@ -146,7 +147,7 @@ describe('a survivor that has NOT caught up does not take the wire', () => {
 		// the writer goes while the survivor is still behind. The registry answers the
 		// succession immediately -- that half is durable and needs no host.
 		await incumbent.registry.deleteGeneration(incumbent.opening.record);
-		expect((await incumbent.registry.writerOf(successor.streamDigest))?.processor).toBe('v2');
+		expect((await incumbent.registry.writerOf(successor.streamDigest))?.processor).toBe(identityOf('v2'));
 
 		const live = await incumbent.liveIngestions();
 

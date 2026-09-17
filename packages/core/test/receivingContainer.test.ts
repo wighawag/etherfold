@@ -13,6 +13,7 @@ import type {
 	ProcessorDriftReport,
 	WireBatch,
 } from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A CHANGED CONTEXT CREATES A SUCCESSOR INSTEAD OF CALLING `processor.clear()`
@@ -115,7 +116,8 @@ function substrate() {
 	 * database is.
 	 */
 	function specFor(
-		version: string,
+		/** WHICH synthetic bundle this fold ARRIVED as: `identityOf` is what a host handed those bytes derives. */
+		marker: string,
 		namespace: 'own' | {shared: string},
 		/**
 		 * The `getCodeFingerprint()` this fold answers with, which is what a drift report
@@ -128,16 +130,24 @@ function substrate() {
 		return {
 			createState: (context: {stream: string}) =>
 				storeFor(
-					namespace === 'own' ? generationDigestOf({stream: context.stream, processor: version}) : namespace.shared,
+					namespace === 'own'
+						? generationDigestOf({stream: context.stream, processor: identityOf(marker)})
+						: namespace.shared,
 				),
+			// The identity this fold ARRIVED with (ADR-0086), named from the same expression
+			// the namespace above is: ADR-0053's namespace is chosen before the processor
+			// exists and must be the one the registered generation owns.
+			processorIdentity: identityOf(marker),
 			createProcessor: (state: {rows: string[]; lastSync?: LastSync<TestABI>}): EventProcessor<TestABI, void> => {
 				const processor: EventProcessor<TestABI, void> = {
-					getVersionHash: () => version,
+					// The DECLARED path, still on the seam until the contract task removes it and
+					// read by nobody here.
+					getVersionHash: () => `declared-version-of-${marker}`,
 					getCodeFingerprint: () => options.fingerprint,
 					load: async () => (state.lastSync ? {state: undefined as void, lastSync: state.lastSync} : undefined),
 					process: async (eventStream, lastSync) => {
 						for (const event of eventStream) {
-							state.rows.push(`${version}@${event.blockNumber}`);
+							state.rows.push(`${marker}@${event.blockNumber}`);
 						}
 						state.lastSync = lastSync;
 					},
@@ -146,7 +156,7 @@ function substrate() {
 						state.lastSync = undefined;
 					},
 					clear: async () => {
-						cleared.push(version);
+						cleared.push(marker);
 						await processor.reset();
 					},
 				};
@@ -222,9 +232,9 @@ describe('a changed context, with a container above the receiver', () => {
 		expect(before).toEqual(['v1@101']);
 
 		const records = await successor.registry.list();
-		expect(records.map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect(records.map((record) => record.processor)).toEqual([identityOf('v1'), identityOf('v2')]);
 		// the pointer did NOT move: the successor exists beside the live one
-		expect(await successor.canonical()).toMatchObject({processor: 'v1'});
+		expect(await successor.canonical()).toMatchObject({processor: identityOf('v1')});
 		// ADR-0052: only the INDEXING generation writes a stream, and that is the
 		// OLDEST SURVIVING one on it -- so the successor appends nothing rather than
 		// storing a second copy of a history every generation re-folds
@@ -266,8 +276,8 @@ describe('a changed context, with a container above the receiver', () => {
 		await again.ingestion.expectedFromBlock();
 		await again.ingestion.expectedFromBlock();
 
-		expect((await again.registry.list()).map((record) => record.processor)).toEqual(['v1']);
-		expect(await again.canonical()).toMatchObject({processor: 'v1'});
+		expect((await again.registry.list()).map((record) => record.processor)).toEqual([identityOf('v1')]);
+		expect(await again.canonical()).toMatchObject({processor: identityOf('v1')});
 	});
 
 	it('comes back holding the same generations, with the same canonical one, against the same substrate', async () => {
@@ -277,8 +287,11 @@ describe('a changed context, with a container above the receiver', () => {
 
 		// a restart is a new container over the same records
 		const restarted = await open(world, 'v2');
-		expect((await restarted.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
-		expect(await restarted.canonical()).toMatchObject({processor: 'v1'});
+		expect((await restarted.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
+		expect(await restarted.canonical()).toMatchObject({processor: identityOf('v1')});
 	});
 });
 
@@ -307,8 +320,8 @@ describe('the generation caps, on the runtime that supplies them', () => {
 		await expect(refused).rejects.toThrow(/maxGenerations of 1/);
 		// nothing was evicted and no partial record was left behind
 		const registry = await open(world, 'v1');
-		expect((await registry.generations()).map((record) => record.processor)).toEqual(['v1']);
-		expect(await registry.canonical()).toMatchObject({processor: 'v1'});
+		expect((await registry.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
+		expect(await registry.canonical()).toMatchObject({processor: identityOf('v1')});
 	});
 
 	it('lets a host that raises the bound past the refusal create the successor', async () => {
@@ -323,7 +336,10 @@ describe('the generation caps, on the runtime that supplies them', () => {
 			generation: world.specFor('v2', 'own'),
 		});
 
-		expect((await successor.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await successor.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 	});
 });
 
@@ -371,7 +387,7 @@ describe('one container, SEVERAL live wire contexts', () => {
 		// `packages/core/test/rebuild.test.ts` is the same call with one supplied.
 		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/ONE address on the wire/);
 		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/no `replay` source/);
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1']);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
 	});
 
 	it('reports as LIVE exactly the folds whose generation is still registered', async () => {
@@ -461,7 +477,10 @@ describe('a receiver built WITHOUT a container', () => {
 		// the same fold, over the same store, with no container attached
 		const state = world.stores.get(namespace) as {rows: string[]; lastSync?: LastSync<TestABI>};
 		const processor = world.specFor('v2', {shared: namespace}).createProcessor(state);
-		const bare = new StreamBuilder<TestABI, void>(processor, SOURCE, {stream: {finality: FINALITY}});
+		const bare = new StreamBuilder<TestABI, void>(processor, SOURCE, {
+			stream: {finality: FINALITY},
+			processorIdentity: identityOf('v2'),
+		});
 
 		expect(await bare.expectedFromBlock()).toBe(START_BLOCK);
 		expect(world.cleared).toEqual(['v2']);
@@ -513,7 +532,7 @@ describe('the receiving container reports PROCESSOR DRIFT in its own right', () 
 		await indexer.ingestion.expectedFromBlock();
 
 		expect(reports).toHaveLength(1);
-		expect(reports[0].processorHash).toBe('v1');
+		expect(reports[0].processorHash).toBe(identityOf('v1'));
 		expect(reports[0].previousFingerprint).toBe('fp-A');
 		expect(reports[0].currentFingerprint).toBe('fp-B');
 		// WHICH question this answers, said rather than left to be guessed from where
@@ -534,7 +553,7 @@ describe('the receiving container reports PROCESSOR DRIFT in its own right', () 
 
 		expect(reports).toHaveLength(1);
 		// ONE generation still: drift is not an identity, so it registers none
-		expect((await indexer.generations()).map((record) => record.processor)).toEqual(['v1']);
+		expect((await indexer.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
 		// and it discards nothing: the state is adopted exactly as it would have been
 		expect(world.cleared).toEqual([]);
 		expect(world.rowsIn(namespace)).toEqual(['v1@101']);
@@ -615,7 +634,10 @@ describe('the receiving container reports PROCESSOR DRIFT in its own right', () 
 		await successor.ingestion.expectedFromBlock();
 
 		expect(reports).toEqual([]);
-		expect((await successor.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await successor.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 	});
 
 	it('survives a listener that throws, because a drift report must not break a batch', async () => {

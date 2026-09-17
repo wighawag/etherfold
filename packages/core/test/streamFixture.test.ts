@@ -83,7 +83,10 @@ function makeProvider(logs: ReturnType<typeof rawLog>[]) {
 function recordingProcessor() {
 	const batches: {events: LogEvent<Abi>[]; lastSync: LastSync<Abi>}[] = [];
 	const processor: EventProcessor<Abi, number> = {
-		getVersionHash: () => 'v1',
+		// Required by the seam and CALLED BY NOTHING on this path: a fixture replay hands
+		// a processor a stream and never names a generation, so there is no identity here
+		// for an arrival to supply.
+		getVersionHash: () => 'declared-version-never-read',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (eventStream, lastSync) => {

@@ -33,6 +33,7 @@ import {
 	SOURCE,
 	START_BLOCK,
 } from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // A NON-CANONICAL GENERATION ADVANCES, AND HOW IT ADVANCES IS DETERMINED
@@ -179,10 +180,13 @@ async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) 
 		createState: () => ({name: spec.name}),
 		createProcessor: () => {
 			const fold = fakeProcessor();
-			fold.processor.getVersionHash = () => `proc-${spec.name}`;
 			folds.set(spec.name, fold);
 			return fold.processor as EventProcessor<Abi, string[]>;
 		},
+		// The identity this fold ARRIVED with (ADR-0086): the processor states nothing
+		// about itself, and a hash of synthetic bytes is what a deployment reading a
+		// bundle off disk would have handed over.
+		processorIdentity: identityOf(spec.name),
 		stateOf: () => [],
 	});
 
@@ -193,9 +197,11 @@ async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) 
 		source: SOURCE,
 		config: {stream: {finality: FINALITY}, keepStream: stream.keeper, streamWriteRetry: {delaySeconds: 0}},
 		generations: specs.map(specFor),
-		createGeneration: (generationProvider, processor, source, config) => {
-			const generation = new IndexerGeneration<Abi, string[]>(generationProvider, processor, source, config);
-			const by = processor.getVersionHash();
+		createGeneration: (generationProvider, processor, source, config, processorIdentity) => {
+			const generation = new IndexerGeneration<Abi, string[]>(generationProvider, processor, source, config, {
+				processorIdentity,
+			});
+			const by = processorIdentity;
 			configs.set(by, config);
 			(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = {
 				async getLogEvents({fromBlock, toBlock}: {fromBlock: number; toBlock: number}) {
@@ -234,13 +240,13 @@ async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) 
 			tip = tip + 1;
 			return indexer.indexMore();
 		},
-		fetchesBy: (name: string) => fetches.filter((call) => call.by === `proc-${name}`),
-		reparsesBy: (name: string) => reparses.filter((who) => who === `proc-${name}`).length,
+		fetchesBy: (name: string) => fetches.filter((call) => call.by === identityOf(name)),
+		reparsesBy: (name: string) => reparses.filter((who) => who === identityOf(name)).length,
 		batchesOf: (name: string) => folds.get(name)?.batches ?? [],
-		heldOf: (name: string) => indexer.generations.find((entry) => entry.record.processor === `proc-${name}`),
+		heldOf: (name: string) => indexer.generations.find((entry) => entry.record.processor === identityOf(name)),
 		id: (name: string) => ({
-			stream: indexer.generations.find((entry) => entry.record.processor === `proc-${name}`)?.record.stream as string,
-			processor: `proc-${name}`,
+			stream: indexer.generations.find((entry) => entry.record.processor === identityOf(name))?.record.stream as string,
+			processor: identityOf(name),
 		}),
 		stateOf: (name: string) => folds.get(name)?.state ?? [],
 		/** Build a generation BESIDE the ones already held, the way a reconfigure will. */
@@ -268,7 +274,6 @@ async function driveToTip(indexer: Indexer<Abi, string[]>, maxRounds = 30): Prom
  */
 async function refoldStoredStream(stream: ReturnType<typeof keyedStream>, source = SOURCE): Promise<string[]> {
 	const fold = fakeProcessor();
-	fold.processor.getVersionHash = () => 'proc-refold';
 	const provider = {
 		async request(args: {method: string}): Promise<unknown> {
 			if (args.method === 'eth_chainId') {
@@ -277,10 +282,17 @@ async function refoldStoredStream(stream: ReturnType<typeof keyedStream>, source
 			throw new Error(`a re-fold must not reach the node: ${args.method}`);
 		},
 	} as never;
-	const generation = new IndexerGeneration<Abi, string[]>(provider, fold.processor, source, {
-		stream: {finality: FINALITY},
-		keepStream: readOnlyStream<Abi>(stream.keeper),
-	});
+	const generation = new IndexerGeneration<Abi, string[]>(
+		provider,
+		fold.processor,
+		source,
+		{
+			stream: {finality: FINALITY},
+			keepStream: readOnlyStream<Abi>(stream.keeper),
+		},
+		// a generation of its own, named by the arrival that built it
+		{processorIdentity: identityOf('refold')},
+	);
 	(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = {
 		getLogEvents: async () => {
 			throw new Error('a re-fold must not fetch');
@@ -302,7 +314,7 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		expect(world.stateOf('A')).toEqual(BRANCH_A.map(idOf));
 		// ...and the non-canonical one ADVANCED, which is the whole point
 		expect(world.stateOf('B')).toEqual(world.stateOf('A'));
-		expect(world.indexer.canonical.record.processor).toBe('proc-A');
+		expect(world.indexer.canonical.record.processor).toBe(identityOf('A'));
 	});
 
 	it('issues NO `eth_getLogs` AT ALL: zero, not fewer', async () => {
@@ -339,8 +351,8 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		await world.indexer.load();
 		await driveToTip(world.indexer);
 
-		const follower = world.configs.get('proc-B')?.keepStream as ExistingStream<Abi>;
-		const writer = world.configs.get('proc-A')?.keepStream as ExistingStream<Abi>;
+		const follower = world.configs.get(identityOf('B'))?.keepStream as ExistingStream<Abi>;
+		const writer = world.configs.get(identityOf('A'))?.keepStream as ExistingStream<Abi>;
 
 		// the WRITER holds the keeper itself; the FOLLOWER holds a view of it
 		expect(writer).toBe(world.stream.keeper);
@@ -350,7 +362,7 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		await follower.saveNewEvents(SOURCE, {
 			eventStream: [makeLog(199, '0xdead')],
 			lastSync: {
-				context: {source: [], config: 'c', processor: 'proc-B'},
+				context: {source: [], config: 'c', processor: identityOf('B')},
 				latestBlock: 200,
 				lastFromBlock: 199,
 				lastToBlock: 199,

@@ -3,6 +3,17 @@ import {describe, expect, it} from 'vitest';
 import {GenesisBlockNotServedError, GenesisCheckUnavailableError, GenesisHashMismatchError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import type {EventProcessor, IndexingSource} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
+
+/**
+ * THE IDENTITY EVERY FOLD IN THIS FILE ARRIVED WITH.
+ *
+ * ADR-0086: a processor cannot state its own identity, so a host derives one from
+ * the bytes it was handed and gives it to the engine. Nothing here asserts on the
+ * value -- it only has to be the SAME one a persisted cursor carries -- so
+ * synthetic bytes are exactly right and a bundler would buy nothing.
+ */
+const PROCESSOR_IDENTITY = identityOf('proc');
 
 // ---------------------------------------------------------------------------
 // THE GENESIS CHECK ASKS FOR BLOCK 0, NOT THE `earliest` TAG
@@ -89,7 +100,9 @@ function aNode(answers: {earliest: BlockAnswer | (() => never); zero: BlockAnswe
 
 function aProcessor(): EventProcessor<TestABI, undefined> {
 	return {
-		getVersionHash: () => 'proc',
+		// The DECLARED path, still on the seam until the contract task removes it, and
+		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
+		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async () => undefined,
@@ -112,10 +125,13 @@ async function refusalFrom<E>(load: Promise<unknown>): Promise<E> {
 }
 
 function anIndexer(provider: never, config: {skipGenesisCheck?: boolean} = {}) {
-	return new IndexerGeneration<TestABI>(provider, aProcessor() as never, SOURCE, {
-		stream: {finality: 12},
-		...config,
-	});
+	return new IndexerGeneration<TestABI>(
+		provider,
+		aProcessor() as never,
+		SOURCE,
+		{stream: {finality: 12}, ...config},
+		{processorIdentity: PROCESSOR_IDENTITY},
+	);
 }
 
 describe('a node whose lowest available block is not genesis', () => {

@@ -27,6 +27,7 @@ import {
 	SOURCE,
 	START_BLOCK,
 } from './utils/streamCacheWorld.js';
+import {identityOf, markerOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE PROMOTION POLICY: WHEN the canonical pointer moves, and what happens to
@@ -71,7 +72,9 @@ const BRANCH_C = [makeLog(101, '0xc101'), makeLog(103, '0xc103')];
 function markedFold(name: string) {
 	let state: string[] = [];
 	const processor = {
-		getVersionHash: () => `proc-${name}`,
+		// The DECLARED path, still on the seam until the contract task removes it: what
+		// NAMES each generation here is the identity its spec's arrival supplied.
+		getVersionHash: () => `declared-version-of-${name}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (events: LogEvent<Abi>[]) => {
@@ -190,9 +193,12 @@ async function openWorld(options?: {
 
 	const throttles = new Map<string, number>();
 	const specFor = (wanted: GenerationWanted): AnyGenerationSpec<Abi, string[]> => {
-		throttles.set(`proc-${wanted.name}`, wanted.slowFetches ?? 0);
+		throttles.set(identityOf(wanted.name), wanted.slowFetches ?? 0);
 		return {
 			...(wanted.source ? {source: wanted.source} : {}),
+			// The identity this fold ARRIVED with: the hash of the bytes a deployment would
+			// have read off disk (ADR-0086). Synthetic, because nothing here parses one.
+			processorIdentity: identityOf(wanted.name),
 			createState: () => ({name: wanted.name}),
 			createProcessor: () => {
 				const fold = markedFold(wanted.name);
@@ -216,9 +222,11 @@ async function openWorld(options?: {
 		config: {stream: {finality: FINALITY}, keepStream: stream.keeper, streamWriteRetry: {delaySeconds: 0}},
 		...(options?.promotion ? {promotion: options.promotion} : {}),
 		generations: (options?.generations ?? [{name: 'A'}]).map(specFor),
-		createGeneration: (generationProvider, processor, source, config) => {
-			const generation = new IndexerGeneration<Abi, string[]>(generationProvider, processor, source, config);
-			const by = processor.getVersionHash();
+		createGeneration: (generationProvider, processor, source, config, processorIdentity) => {
+			const generation = new IndexerGeneration<Abi, string[]>(generationProvider, processor, source, config, {
+				processorIdentity,
+			});
+			const by = processorIdentity;
 			(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = {
 				async getLogEvents({fromBlock, toBlock}: {fromBlock: number; toBlock: number}) {
 					const remaining = throttles.get(by) ?? 0;
@@ -243,8 +251,8 @@ async function openWorld(options?: {
 		/** What the CANONICAL generation answers right now, snapshotted. */
 		read: () => [...indexer.state],
 		stateOf: (name: string) => [...(folds.get(name)?.state ?? [])],
-		heldNames: () => indexer.generations.map((held) => held.record.processor.replace('proc-', '')),
-		canonicalName: () => indexer.canonical.record.processor.replace('proc-', ''),
+		heldNames: () => indexer.generations.map((held) => markerOf(held.record.processor)),
+		canonicalName: () => markerOf(indexer.canonical.record.processor),
 		/** Build a generation BESIDE the ones already held: what a reconfigure does. */
 		add: (wanted: GenerationWanted) => indexer.add(specFor(wanted)),
 		serve(address: string, logs: StoredLogEvent[], newTip: number) {
@@ -520,7 +528,7 @@ describe('a promotion says so, and re-publishes the cursor that now answers', ()
 		await world.add({name: 'B'});
 		await driveToTip(world.indexer);
 
-		const promotion = told.indexOf('promoted:proc-B<-proc-A');
+		const promotion = told.indexOf(`promoted:${identityOf('B')}<-${identityOf('A')}`);
 		expect(promotion).toBeGreaterThanOrEqual(0);
 		expect(told.indexOf('state:B')).toBe(promotion + 1);
 		// ...and the cursor that follows is the NEW canonical generation's own
@@ -569,9 +577,9 @@ describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () =
 
 		expect(world.canonicalName()).toBe('B');
 		// the promotion DEMONSTRATED something, so the generation left behind goes
-		expect(world.dropped.map((id) => id.processor)).toEqual(['proc-A']);
+		expect(world.dropped.map((id) => id.processor)).toEqual([identityOf('A')]);
 		expect(world.heldNames()).toEqual(['B']);
-		expect((await world.registry.list()).map((record) => record.processor)).toEqual(['proc-B']);
+		expect((await world.registry.list()).map((record) => record.processor)).toEqual([identityOf('B')]);
 	});
 
 	it('RETAINS the previous generation on an `immediate` promotion, until the successor reaches its cursor', async () => {
@@ -594,7 +602,7 @@ describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () =
 
 		// ...and only once it reaches the cursor A had at the promotion
 		await driveToTip(world.indexer);
-		expect(world.dropped.map((id) => id.processor)).toEqual(['proc-A']);
+		expect(world.dropped.map((id) => id.processor)).toEqual([identityOf('A')]);
 		expect(world.heldNames()).toEqual(['B']);
 	});
 
@@ -606,7 +614,7 @@ describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () =
 		await driveToTip(world.indexer);
 
 		await world.indexer.promote(successor.record);
-		expect(world.dropped.map((id) => id.processor)).toEqual(['proc-A']);
+		expect(world.dropped.map((id) => id.processor)).toEqual([identityOf('A')]);
 		expect(world.heldNames()).toEqual(['B']);
 	});
 

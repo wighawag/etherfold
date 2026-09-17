@@ -38,9 +38,9 @@ const namedLogger = logs('@etherfold/core');
  *
  * The two halves are the whole identity. The stream digest (`streamDigestOf`)
  * already covers the fetch filter AND the stream config, so naming the config
- * again here would be redundant; the processor's `version` hash covers what the
- * fold MEANS. A processor change is therefore a new generation over the SAME
- * stream and re-fetches nothing, and a filter or config change is a new stream.
+ * again here would be redundant; the processor half covers what the fold MEANS. A
+ * processor change is therefore a new generation over the SAME stream and
+ * re-fetches nothing, and a filter or config change is a new stream.
  *
  * Kept as two FIELDS and never packed into one delimited string: a composite key
  * whose parts can be compared element by element cannot confuse one component's
@@ -50,7 +50,17 @@ const namedLogger = logs('@etherfold/core');
 export type GenerationId = {
 	/** The stream digest, as `streamDigestOf` renders it. */
 	readonly stream: string;
-	/** The processor's version hash, as `getVersionHash` returns it. */
+	/**
+	 * WHAT THE FOLD IS CALLED: the identity the ARRIVAL that produced it supplied
+	 * (ADR-0086) -- the SHA-256 of a bundle's octets where a deployment read one off
+	 * disk -- falling back, until the declared path is deleted, to the processor's
+	 * own `getVersionHash()`.
+	 *
+	 * An OPAQUE string, and that is load-bearing rather than incidental: this
+	 * registry COMPARES it for equality and RENDERS it into messages, nothing in this
+	 * tree parses it, and that is exactly what lets two derivations name generations
+	 * side by side while the migration runs.
+	 */
 	readonly processor: string;
 };
 

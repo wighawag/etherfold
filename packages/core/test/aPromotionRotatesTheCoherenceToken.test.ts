@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {BRANCH_A, makeLog} from './utils/streamCacheWorld.js';
 import {appendsIn, driveToTip, openWorld, reportingFold} from './utils/stateMovedWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // A PROMOTION ROTATES THE COHERENCE TOKEN
@@ -72,7 +73,7 @@ async function aSuccessorBesideTheCanonicalOne() {
 
 	// the two folds are level, and the pointer has not moved
 	expect(successor.applied).toEqual(incumbent.applied);
-	expect(world.indexer.canonical.record.processor).toBe('proc-A');
+	expect(world.indexer.canonical.record.processor).toBe(identityOf('A'));
 
 	// The chain GROWS: every block it has ever served is still served, because a
 	// block that stopped being served is a REORG and would rotate the token for a
@@ -216,7 +217,7 @@ describe('a promotion rotates the coherence token', () => {
 		// canonical generation has, and the container moves the pointer itself
 		await world.indexer.load();
 		await driveToTip(world.indexer);
-		expect(world.indexer.canonical.record.processor).toBe('proc-B');
+		expect(world.indexer.canonical.record.processor).toBe(identityOf('B'));
 
 		world.chain.serve([...BRANCH_A, makeLog(106, '0xa106')], 107);
 		await driveToTip(world.indexer);

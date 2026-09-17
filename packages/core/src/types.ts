@@ -223,6 +223,22 @@ export type FoldReport = AppliedBlock | Retraction;
 export type FoldReporter = (report: FoldReport) => void;
 
 export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
+	/**
+	 * The AUTHOR-DECLARED identity of this processor's logic.
+	 *
+	 * NOT what names the generation a container registers any more. ADR-0086's
+	 * invariant is that an author cannot STATE their processor's identity, so the
+	 * engine is HANDED one by whatever ARRIVAL produced the processor
+	 * (`GenerationSpec.processorIdentity`, `StreamBuilderOptions.processorIdentity`,
+	 * `IndexerGenerationOptions.processorIdentity`) and never asks where it came
+	 * from.
+	 *
+	 * It survives only as the FALLBACK for a caller that has not supplied one yet,
+	 * which is the migrate step of a wide refactor
+	 * (`work/protocol/TASKING-PROTOCOL.md` 3a) rather than a second supported way to
+	 * name a fold. `the-declared-version-and-the-drift-report-are-deleted` removes it
+	 * from this seam once every caller has moved.
+	 */
 	getVersionHash(): string;
 	/**
 	 * A hash of the processor's own handler SOURCE, or `undefined` when it cannot

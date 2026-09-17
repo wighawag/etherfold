@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {UnknownGenerationError} from '../src/generation/registry.js';
 import {openReceivingIndexer, type ReceivingIndexer} from '../src/receivingContainer.js';
 import type {MemoryStore, TestABI, World} from './utils/receivingWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {
 	AT_101,
 	AT_106,
@@ -69,7 +70,7 @@ async function anUpgradeThatLanded(): Promise<{
 	const before = await canonicalAnswers(w, incumbent);
 	await incumbent.add(w.specFor('v2', 10));
 	await catchUp(incumbent);
-	expect((await incumbent.canonical())?.processor).toBe('v2');
+	expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 	return {world: w, incumbent, before};
 }
 
@@ -80,9 +81,9 @@ describe('moving the pointer BACK restores the previous generation`s own answers
 		// answers came back" is a real claim rather than two identical lists
 		expect(await canonicalAnswers(w, incumbent)).not.toEqual(before);
 
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 
-		expect((await incumbent.canonical())?.processor).toBe('v1');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v1'));
 		// byte for byte what it answered before the promotion: nothing was folded into
 		// it in between, and nothing the successor wrote could reach it -- its state is
 		// its own namespace (ADR-0053)
@@ -99,7 +100,7 @@ describe('moving the pointer BACK restores the previous generation`s own answers
 		const stream = w.stream.snapshot();
 		const folds = [...w.stores.entries()].map(([namespace, store]) => [namespace, [...store.rows]] as const);
 
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 
 		// the stream is what every generation re-folds, so a single row appended here
 		// would be a second history rather than an operational blemish
@@ -114,7 +115,7 @@ describe('moving the pointer BACK restores the previous generation`s own answers
 	it('holds the pointer where the operator put it: the successor is not re-promoted', async () => {
 		const {world: w, incumbent} = await anUpgradeThatLanded();
 
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 		// the successor is level BY CONSTRUCTION -- it was promoted for reaching the
 		// incumbent's cursor -- so an unarmed trigger would put the pointer straight
 		// back on the next chunk (ADR-0046)
@@ -128,7 +129,7 @@ describe('moving the pointer BACK restores the previous generation`s own answers
 		await incumbent.ingestion.receive(batch(incumbent, {toBlock: 115, latestBlock: 115, logs: [LATER]}, fromBlock));
 		await incumbent.rebuildMore();
 
-		expect((await incumbent.canonical())?.processor).toBe('v1');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v1'));
 		// the reverted-TO generation kept folding, so what it answers is CURRENT and
 		// not a snapshot of the promotion instant
 		expect(await canonicalAnswers(w, incumbent)).toContain(`${idOf(LATER)}x1`);
@@ -140,15 +141,18 @@ describe('the generation reverted FROM stays available, so a second move forward
 		const {world: w, incumbent} = await anUpgradeThatLanded();
 		const successorAnswers = await canonicalAnswers(w, incumbent);
 
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 		// its rows were not touched by the move: a revert is a POINTER write
 		expect(w.rowsIn('v2', incumbent.streamDigest)).toEqual(successorAnswers);
 
 		// forward again, and it costs the same one write
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v2'});
-		expect((await incumbent.canonical())?.processor).toBe('v2');
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v2')});
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 		expect(await canonicalAnswers(w, incumbent)).toEqual(successorAnswers);
 	});
 
@@ -170,17 +174,23 @@ describe('the generation reverted FROM stays available, so a second move forward
 		await catchUp(incumbent);
 		// the forward move kept BOTH: dropping the superseded one would have stranded
 		// the promoted follower, which writes nothing (ADR-0046)
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 		const successorAnswers = await canonicalAnswers(w, incumbent);
 
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 
 		// A BACKWARDS MOVE DROPS NOTHING. Dropping what the pointer moved away from
 		// would delete the very generation a second move forward wants, and would make
 		// a revert an unrecoverable operation under a flag about storage.
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 		expect(w.rowsIn('v2', incumbent.streamDigest)).toEqual(successorAnswers);
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v2'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v2')});
 		expect(await canonicalAnswers(w, incumbent)).toEqual(successorAnswers);
 	});
 });
@@ -193,13 +203,13 @@ describe('the pointer moves to a generation this container holds no FOLD for', (
 		// and nothing else. The old generation is in the durable registry, its state is
 		// in its own namespace, and NOTHING here can build its processor.
 		const restarted = await w.open('v2', 10);
-		expect(restarted.held().map((fold) => fold.record.processor)).toEqual(['v2']);
-		expect((await restarted.canonical())?.processor).toBe('v2');
+		expect(restarted.held().map((fold) => fold.record.processor)).toEqual([identityOf('v2')]);
+		expect((await restarted.canonical())?.processor).toBe(identityOf('v2'));
 
-		await restarted.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await restarted.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 
 		// reads answer from a table NAMESPACE the pointer names, with no engine at all
-		expect((await restarted.canonical())?.processor).toBe('v1');
+		expect((await restarted.canonical())?.processor).toBe(identityOf('v1'));
 		expect(await canonicalAnswers(w, restarted)).toEqual(before);
 	});
 
@@ -212,6 +222,6 @@ describe('the pointer moves to a generation this container holds no FOLD for', (
 		// a wrong name is worth getting back rather than a silent success
 		await expect(refused).rejects.toBeInstanceOf(UnknownGenerationError);
 		await expect(refused).rejects.toThrow(/v3-never-registered/);
-		expect((await incumbent.canonical())?.processor).toBe('v2');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 	});
 });

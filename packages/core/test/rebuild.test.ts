@@ -2,6 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {DEFAULT_MAX_EMISSIONS_PER_CHUNK, retryCanAdvance, type RebuildReport} from '../src/generation/rebuild.js';
 import {openReceivingIndexer} from '../src/receivingContainer.js';
 import type {MemoryStore, TestABI} from './utils/receivingWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {
 	AT_101,
 	AT_106,
@@ -183,7 +184,7 @@ describe('a re-folding successor does not re-count the reverts the stream carrie
 			`${idOf(REORGED_104)}x10`,
 			`${idOf(AT_106)}x10`,
 		]);
-		expect(successor.record.processor).toBe('v2');
+		expect(successor.record.processor).toBe(identityOf('v2'));
 		// ...and the count is still ONE. The chain contradicted itself once.
 		expect(w.reorgs).toEqual([{blockNumber: 104}]);
 	});
@@ -432,10 +433,10 @@ describe('the canonical generation is served throughout, and the pointer moves O
 		for (const answer of answersDuring) {
 			expect(answer).toEqual(incumbentAnswers);
 		}
-		expect(new Set(pointers)).toEqual(new Set(['v1']));
+		expect(new Set(pointers)).toEqual(new Set([identityOf('v1')]));
 
 		// and at the end the pointer names the successor
-		expect((await incumbent.canonical())?.processor).toBe('v2');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 		expect(await canonicalAnswers(w, incumbent)).toEqual([
 			`${idOf(AT_101)}x10`,
 			`${idOf(REORGED_104)}x10`,
@@ -455,11 +456,14 @@ describe('the canonical generation is served throughout, and the pointer moves O
 
 		// still registered, with its own rows untouched -- which is what makes moving
 		// the pointer BACK a revert rather than a re-index
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 		expect(w.rowsIn('v1', incumbent.streamDigest)).toEqual(before);
 
 		// and moving the pointer back restores the answers EXACTLY, with no re-fold
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 		expect(await canonicalAnswers(w, incumbent)).toEqual(before);
 	});
 
@@ -471,14 +475,14 @@ describe('the canonical generation is served throughout, and the pointer moves O
 			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
 			done = !!report?.complete;
 		}
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v1'});
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
 
 		// the successor is caught up by construction, so "any level non-canonical
 		// generation is promotable" would put the pointer straight back (ADR-0046)
 		await incumbent.rebuildMore();
 		await incumbent.rebuildMore();
 
-		expect((await incumbent.canonical())?.processor).toBe('v1');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v1'));
 	});
 
 	it('keeps the WRITER and the retired generation FOLDING after the move (open question 2)', async () => {
@@ -489,11 +493,11 @@ describe('the canonical generation is served throughout, and the pointer moves O
 			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
 			done = !!report?.complete;
 		}
-		expect((await incumbent.canonical())?.processor).toBe('v2');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 
 		// the append duty did NOT move with the pointer: the writer is the oldest
 		// surviving generation on the stream, registration order and never the pointer
-		expect((await incumbent.registry.writerOf(incumbent.streamDigest))?.processor).toBe('v1');
+		expect((await incumbent.registry.writerOf(incumbent.streamDigest))?.processor).toBe(identityOf('v1'));
 		expect(incumbent.writesStream).toBe(true);
 		// so the retired generation is still the one being fed...
 		expect((await incumbent.liveIngestions()).map((live) => live.streamDigest)).toEqual([incumbent.streamDigest]);
@@ -539,9 +543,9 @@ describe('the promotion policy is applied here and re-decided nowhere', () => {
 		}
 
 		// caught up, and still not canonical: `manual` means an operator inspects first
-		expect((await incumbent.canonical())?.processor).toBe('v1');
-		await incumbent.promote({stream: incumbent.streamDigest, processor: 'v2'});
-		expect((await incumbent.canonical())?.processor).toBe('v2');
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v1'));
+		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v2')});
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 	});
 
 	it('REFUSES `immediate` with drop-on-promotion rather than dropping a state that proved nothing', async () => {
@@ -581,7 +585,10 @@ describe('the promotion policy is applied here and re-decided nowhere', () => {
 
 		// the superseded generation WRITES the stream the promoted one follows, so
 		// dropping it would leave the app simply not advancing (ADR-0046)
-		expect((await incumbent.canonical())?.processor).toBe('v2');
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual(['v1', 'v2']);
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+		]);
 	});
 });

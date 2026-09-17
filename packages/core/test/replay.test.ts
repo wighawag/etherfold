@@ -2,6 +2,17 @@ import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
 import {IndexerGeneration} from '../src/indexer.js';
 import type {IndexingSource, LastSync, LogEvent} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
+
+/**
+ * THE IDENTITY EVERY FOLD IN THIS FILE ARRIVED WITH.
+ *
+ * ADR-0086: a processor cannot state its own identity, so a host derives one from
+ * the bytes it was handed and gives it to the engine. Nothing here asserts on the
+ * value -- it only has to be the SAME one a persisted cursor carries -- so
+ * synthetic bytes are exactly right and a bundler would buy nothing.
+ */
+const PROCESSOR_IDENTITY = identityOf('proc');
 
 // ---------------------------------------------------------------------------
 // A REPLAY honours the verdicts the stream already carries
@@ -77,7 +88,9 @@ function logsIn(branch: LogEvent<Abi>[], fromBlock: number, toBlock: number): Lo
 function recordingProcessor() {
 	const batches: LogEvent<Abi>[][] = [];
 	const processor: any = {
-		getVersionHash: () => 'proc',
+		// The DECLARED path, still on the seam until the contract task removes it, and
+		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
+		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (list: LogEvent<Abi>[]) => {
@@ -96,12 +109,18 @@ function makeIndexer(processor: any) {
 			throw new Error(`unexpected ${method}`);
 		},
 	};
-	return new IndexerGeneration<Abi>(provider as any, processor, SOURCE, {stream: {finality: FINALITY}});
+	return new IndexerGeneration<Abi>(
+		provider as any,
+		processor,
+		SOURCE,
+		{stream: {finality: FINALITY}},
+		{processorIdentity: PROCESSOR_IDENTITY},
+	);
 }
 
 function cursor(over: Partial<LastSync<Abi>>): LastSync<Abi> {
 	return {
-		context: {source: [{startBlock: START_BLOCK, hash: 'h'}], config: 'cfg', processor: 'proc'},
+		context: {source: [{startBlock: START_BLOCK, hash: 'h'}], config: 'cfg', processor: PROCESSOR_IDENTITY},
 		latestBlock: 0,
 		lastFromBlock: START_BLOCK,
 		lastToBlock: 0,

@@ -16,6 +16,7 @@ import type {
 } from '../../src/types.js';
 import {taggedBnReplacer, taggedBnReviver} from '../../src/utils/bigint.js';
 import {appliedBlocksOf, forkPointOf} from './stateMovedWorld.js';
+import {identityOf} from './processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE WORLD A RECEIVING CONTAINER RUNS IN: a stored stream, a registry substrate,
@@ -226,10 +227,13 @@ export const REPORTED_ENTITY = 'row';
  * the driver keeps no position of its own, and a store that wrote one without
  * the other is exactly what ADR-0027 puts behind the storage seam to prevent.
  */
-function foldingProcessor(version: string, store: MemoryStore, weight: number): EventProcessor<TestABI, string[]> {
+function foldingProcessor(marker: string, store: MemoryStore, weight: number): EventProcessor<TestABI, string[]> {
 	let reporter: FoldReporter | undefined;
 	return {
-		getVersionHash: () => version,
+		// The DECLARED path, still on the seam until the contract task removes it, and
+		// deliberately NOT what names this fold: the spec hands the container the
+		// identity its ARRIVAL derived (`specFor`), so nothing reads this.
+		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => (store.lastSync ? {state: store.rows, lastSync: clone(store.lastSync)} : undefined),
 		process: async (eventStream, lastSync) => {
@@ -283,6 +287,10 @@ export function world() {
 	const stream = storedStream();
 	const stores = new Map<string, MemoryStore>();
 
+	function rowsUnder(processorIdentity: string, streamDigest: string): string[] {
+		return storeFor(generationDigestOf({stream: streamDigest, processor: processorIdentity})).rows;
+	}
+
 	function storeFor(namespace: string): MemoryStore {
 		let store = stores.get(namespace);
 		if (!store) {
@@ -292,12 +300,22 @@ export function world() {
 		return store;
 	}
 
-	/** A fold, as the container builds one: the state FIRST, then the processor over it (ADR-0043). */
-	function specFor(version: string, weight: number) {
+	/**
+	 * A fold, as the container builds one: the state FIRST, then the processor over
+	 * it (ADR-0043), under the identity its ARRIVAL supplied.
+	 *
+	 * `marker` names some synthetic BYTES rather than a declared version (ADR-0086:
+	 * an author cannot state an identity), and `identityOf` is what a deployment
+	 * handed those bytes would have derived. It is the SAME expression in both
+	 * factories, because ADR-0053's namespace is named before the processor exists
+	 * and must be the namespace the registered generation owns.
+	 */
+	function specFor(marker: string, weight: number) {
 		return {
 			createState: (context: {stream: string}) =>
-				storeFor(generationDigestOf({stream: context.stream, processor: version})),
-			createProcessor: (state: MemoryStore) => foldingProcessor(version, state, weight),
+				storeFor(generationDigestOf({stream: context.stream, processor: identityOf(marker)})),
+			createProcessor: (state: MemoryStore) => foldingProcessor(marker, state, weight),
+			processorIdentity: identityOf(marker),
 		};
 	}
 
@@ -310,7 +328,7 @@ export function world() {
 	const reorgs: {blockNumber: number}[] = [];
 
 	/** A CONTAINER over this world: a new object graph every time, over the same durable rows. */
-	function open(version: string, weight: number): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
+	function open(marker: string, weight: number): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
 		return openReceivingIndexer<TestABI, string[], MemoryStore>({
 			port,
 			source: SOURCE,
@@ -320,7 +338,7 @@ export function world() {
 			recordReorg: async (reorg) => {
 				reorgs.push({blockNumber: reorg.blockNumber});
 			},
-			generation: specFor(version, weight),
+			generation: specFor(marker, weight),
 		});
 	}
 
@@ -331,8 +349,10 @@ export function world() {
 		specFor,
 		open,
 		reorgs,
-		rowsIn: (version: string, streamDigest: string) =>
-			storeFor(generationDigestOf({stream: streamDigest, processor: version})).rows,
+		/** The rows a fold built from `bundleBytes(marker)` folded into. */
+		rowsIn: (marker: string, streamDigest: string) => rowsUnder(identityOf(marker), streamDigest),
+		/** The same rows, addressed by the IDENTITY itself, which is what a registry record carries. */
+		rowsUnder,
 	};
 }
 
@@ -388,5 +408,8 @@ export async function canonicalAnswers(
 ): Promise<string[]> {
 	const canonical = await indexer.canonical();
 	if (!canonical) throw new Error('no canonical generation');
-	return [...w.rowsIn(canonical.processor, canonical.stream)];
+	// By IDENTITY, because that is what the record carries: nothing may map a
+	// registered identity back to the marker that produced it except a test that
+	// already knows the marker.
+	return [...w.rowsUnder(canonical.processor, canonical.stream)];
 }
