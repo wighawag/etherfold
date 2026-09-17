@@ -4,6 +4,7 @@ slug: a-processor-artifact-is-bytes-a-hash-and-a-loader
 spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
 blockedBy: []
 covers: [5, 11]
+needsAnswers: true
 ---
 
 ## What to build
