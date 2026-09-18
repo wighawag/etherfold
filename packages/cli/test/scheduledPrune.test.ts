@@ -12,6 +12,7 @@ import {
 } from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, entityModule, fakeChain, nftProcessor, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -96,9 +97,19 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The subject is the PRUNE a host schedules and the floor it measures from; the
+ * injected module arrival stays and is named, so nothing here rests on the
+ * author-DECLARED identity the contract task deletes.
+ */
+const ARRIVAL = identityOf('the-fold-this-deployment-prunes');
+
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: RunDependencies = {}): RunDependencies {
 	return {
 		importModule: async () => entityModule,
+		processorIdentity: ARRIVAL,
 		provider: chain.provider,
 		createDB: () => db,
 		sleep: async () => {

@@ -19,6 +19,19 @@ import {processorArtifactIdentity} from '@etherfold/utils';
 // from a path use the committed fixture instead
 // (`test/fixtures/processor-bundle/`), because there the bytes have to RUN.
 //
+// HOW IT REACHES A DEPLOYMENT depends on how that deployment was stood up, and
+// there are exactly two shapes in this package. A suite that builds a container
+// itself passes it as `processorIdentity` on the generation spec and as
+// `identity` on the processor. A suite that drives a COMMAND -- `run`, `build`,
+// `index` -- substitutes its arrival through `deps.importModule` and names it
+// through `deps.processorIdentity` beside it, which is one seam with two halves:
+// stating what comes back for a path and stating what that thing is called. A
+// command given the first and not the second has an arrival that derived NO
+// identity, so it falls back on the author-DECLARED one, which is the remainder
+// `no-suite-or-example-still-rests-on-the-declared-identity` removed and which
+// the contract task is about to delete. Bytes on a disk always win over the
+// injected value, so this can only supply a derivation and never overrule one.
+//
 // The derivation is IMPORTED rather than re-spelled, unlike the copies in
 // `@etherfold/core`, `@etherfold/processor-entities` and
 // `@etherfold/processor-sqlite`: this package already depends on

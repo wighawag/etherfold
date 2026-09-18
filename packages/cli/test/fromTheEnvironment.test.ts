@@ -6,6 +6,7 @@ import {prepareIndexing} from '../src/index.js';
 import {serve} from '../src/serve.js';
 import type {Options} from '../src/types.js';
 import {abi, ALICE, CONTRACT, entityModule, fakeChain, noChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -32,6 +33,16 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The subject is which INPUT a flag falls back to, so the injected module arrival
+ * stays and is named. A processor path is not one of the inputs under test here,
+ * and nothing reads this beyond keeping the deployments off the author-DECLARED
+ * identity the contract task deletes.
+ */
+const ARRIVAL = identityOf('the-fold-configured-from-the-environment');
+
 describe('`build`, configured from the environment', () => {
 	it('opens the database DB names, and indexes the chain ETH_NODE_URI names', async () => {
 		const chain = fakeChain().serve(LOGS, TIP);
@@ -41,6 +52,7 @@ describe('`build`, configured from the environment', () => {
 		const prepared = await prepareIndexing('build', IMAGE, {
 			env: {DB: 'file:./from-the-environment.db', ETH_NODE_URI: 'http://node.from.env'},
 			importModule: async () => entityModule,
+			processorIdentity: ARRIVAL,
 			provider: chain.provider,
 			createDB: (url) => {
 				opened.push(url);
@@ -72,6 +84,7 @@ describe('`build`, configured from the environment', () => {
 				}),
 			},
 			importModule: async () => entityModule,
+			processorIdentity: ARRIVAL,
 			provider: chain.provider,
 			createDB: () => oneDatabase(),
 			sleep: async () => {},

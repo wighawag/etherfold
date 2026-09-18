@@ -5,6 +5,7 @@ import {describe, expect, it} from 'vitest';
 import {main, prepareIndexing, type IndexingDependencies} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, entityModule, fakeChain, nftProcessor, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -47,9 +48,19 @@ async function transfersIn(db: RemoteSQL): Promise<number | undefined> {
 	return (await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value;
 }
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The subject here is where a one-shot STOPS and what it leaves behind, so the
+ * injected module arrival stays and is simply named -- rather than falling
+ * through to the author-DECLARED identity the contract task deletes.
+ */
+const ARRIVAL = identityOf('the-fold-this-one-shot-built');
+
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: IndexingDependencies = {}) {
 	return {
 		importModule: async () => entityModule,
+		processorIdentity: ARRIVAL,
 		provider: chain.provider,
 		createDB: () => db,
 		sleep: async () => {},

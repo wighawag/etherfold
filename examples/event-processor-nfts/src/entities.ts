@@ -41,17 +41,22 @@ export function readableTokenID(key: string): string {
 }
 
 export const NFTProcessor: EntityProcessor<typeof eip721> = {
-	// REQUIRED, and on its way out (ADR-0086). WHICH FOLD this is comes from the
-	// ARRIVAL that delivered it: a deployment handed a self-contained BUNDLE is named
-	// by the SHA-256 of those octets, so an edited handler is a different fold with
-	// no author action at all. This field is what names the fold only on the arrival
-	// that has no bytes -- a path the module system resolves, which is what
-	// `dist/cli.js` is until this example ships a bundle -- and there the old rules
-	// still apply: state computed by a previous version is discarded by comparing
-	// `${version}-${hash({entities, config})}`, so bump it whenever a handler
-	// changes, since a handler change is invisible to it. The entity declarations are
-	// hashed in alongside it, so a SCHEMA change invalidates on its own.
-	// `the-declared-version-and-the-drift-report-are-deleted` removes the field.
+	// REQUIRED by the entity runtimes, on its way out (ADR-0086), and DO NOT REACH
+	// FOR IT: nothing on this example's command-line path is named by it any more.
+	// WHICH FOLD this is comes from the ARRIVAL that delivered it, and the arrival
+	// `etherfold build` and `etherfold run` are given here is the self-contained
+	// BUNDLE this package emits (`pnpm build:bundle` -> `dist/cli.bundle.js`), so the
+	// fold is named by the SHA-256 of those octets and an edited handler is a
+	// different fold with no author action at all -- which is the whole reason the
+	// field is going. There is deliberately no instruction here to bump it: doing so
+	// would change nothing about which generation this example folds into, and the
+	// bundle already moved when the handler did.
+	//
+	// The TAB in `browser/` hands `@etherfold/browser` a module OBJECT, which has no
+	// bytes at all because a dev server serves unbundled ESM; how THAT arrival derives
+	// an identity is `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`,
+	// and it is not this field either.
+	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
 	version: '1.0.0',
 
 	/**

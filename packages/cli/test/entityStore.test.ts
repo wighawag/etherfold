@@ -7,6 +7,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {describe, expect, it, vi} from 'vitest';
 import {prepareIndexing} from '../src/index.js';
 import type {Options} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 import {
 	abi,
@@ -58,12 +59,24 @@ const A_100 = [
 ];
 const A_TIP = START_BLOCK + 100;
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The subject is the SQLite store arm -- versioned rows, a reorg that brings a
+ * counter down, a retention window, and the same `StreamBuilder` a split
+ * deployment receives into. None of that is about identity, so the injected
+ * module arrival stays and is NAMED, rather than falling through to the
+ * author-DECLARED identity the contract task deletes.
+ */
+const ARRIVAL = identityOf('the-fold-this-store-holds');
+
 async function indexOnce(options: Partial<Options>, chain: ReturnType<typeof fakeChain>, db: RemoteSQL) {
 	const prepared = await prepareIndexing(
 		'build',
 		{...SQLITE, ...options},
 		{
 			importModule: async () => entityModule,
+			processorIdentity: ARRIVAL,
 			provider: chain.provider,
 			createDB: () => db,
 			sleep: async () => {},
@@ -118,7 +131,12 @@ describe('--store sqlite', () => {
 			contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
 		};
 		const otherChain = fakeChain().serve(A_100, A_TIP);
-		const builder = new StreamBuilder(new EntityEventProcessor(elsewhere, nftProcessor), source);
+		// the SAME arrival as the deployment above, handed over the way a host hands one
+		// over: this side is assembled by hand, so it names its fold itself rather than
+		// letting it fall back on the author-DECLARED identity (ADR-0086)
+		const builder = new StreamBuilder(new EntityEventProcessor(elsewhere, nftProcessor, {identity: ARRIVAL}), source, {
+			processorIdentity: ARRIVAL,
+		});
 		const fetcher = new LogFetcher(otherChain.provider, source, createDirectIngestion(builder));
 		// cycles by hand, since this side has no host: the CLI's driver is what is
 		// under test, so it is deliberately not reused here
@@ -156,6 +174,7 @@ describe('--store sqlite', () => {
 			{...SQLITE, retention: '500'},
 			{
 				importModule: async () => entityModule,
+				processorIdentity: ARRIVAL,
 				provider: chain.provider,
 				createDB: () => oneDatabase(),
 				sleep: async () => {},
@@ -192,6 +211,7 @@ describe('--store sqlite', () => {
 				{...SQLITE, retention: '3'},
 				{
 					importModule: async () => entityModule,
+					processorIdentity: ARRIVAL,
 					provider: fakeChain().provider,
 					createDB: () => oneDatabase(),
 				},
