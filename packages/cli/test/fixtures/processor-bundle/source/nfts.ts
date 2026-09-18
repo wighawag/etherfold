@@ -35,7 +35,6 @@ export const NFTProcessor = {
 	 * and it is deliberately the SAME value in the edited variant, so a test that
 	 * sees two identities has seen the bytes move and not this.
 	 */
-	version: '1.0.0',
 	entities: [
 		{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},

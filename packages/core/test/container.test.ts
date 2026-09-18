@@ -66,11 +66,6 @@ function makeFold(name: string): Fold {
 	const handle: Handle = {read: () => store.name};
 	const calls = {load: 0, process: 0};
 	const processor: EventProcessor<Abi, Handle> = {
-		// The DECLARED path, still on the seam until the contract task removes it and
-		// deliberately NOT what names anything here: every spec below supplies the
-		// identity its arrival derived, so a value this thing returned would be read by
-		// nobody. See `specFor`.
-		getVersionHash: () => `declared-version-of-${name}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			calls.load++;
@@ -172,10 +167,8 @@ describe('the generation container', () => {
 		});
 
 		// ADR-0086: an author cannot STATE a processor's identity, and the engine is
-		// HANDED one and never asks where it came from. So the processor's own declared
-		// hash is a value nothing consulted.
+		// HANDED one and never asks where it came from.
 		expect(indexer.canonical.record.processor).toBe(identityOfBytes(bundleBytes('A')));
-		expect(indexer.canonical.record.processor).not.toBe(fold.processor.getVersionHash());
 		expect(await registry.canonical()).toMatchObject({
 			stream: indexer.canonical.record.stream,
 			processor: identityOfBytes(bundleBytes('A')),

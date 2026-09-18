@@ -18,6 +18,7 @@ import {
 	START_BLOCK,
 	type ProcessorStore,
 } from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE CACHE MAY BE BEHIND THE STATE OR AHEAD OF IT, NEVER HOLED
@@ -530,11 +531,17 @@ describe('a keeper that declines the batch', () => {
 		const chain = fakeChain([makeLog(101, '0xa101')], 200);
 		const declining = decliningStream();
 		const processor = fakeProcessor();
-		const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
-			stream: {finality: FINALITY},
-			keepStream: declining.keeper,
-			streamWriteRetry: {delaySeconds: 0},
-		});
+		const indexer = new IndexerGeneration<Abi, string[]>(
+			chain.provider,
+			processor.processor,
+			SOURCE,
+			{
+				stream: {finality: FINALITY},
+				keepStream: declining.keeper,
+				streamWriteRetry: {delaySeconds: 0},
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 		(indexer as any).logEventFetcher = chain.fetcher;
 		await indexer.load();
 		await indexer.indexMore();
@@ -553,11 +560,17 @@ describe('a keeper that declines the batch', () => {
 		const chain = fakeChain([makeLog(101, '0xa101')], 200);
 		const declining = decliningStream();
 		const processor = fakeProcessor();
-		const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
-			stream: {finality: FINALITY},
-			keepStream: declining.keeper,
-			streamWriteRetry: {delaySeconds: 0},
-		});
+		const indexer = new IndexerGeneration<Abi, string[]>(
+			chain.provider,
+			processor.processor,
+			SOURCE,
+			{
+				stream: {finality: FINALITY},
+				keepStream: declining.keeper,
+				streamWriteRetry: {delaySeconds: 0},
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 		(indexer as any).logEventFetcher = chain.fetcher;
 		await indexer.load();
 		await indexer.indexMore();
@@ -590,10 +603,16 @@ describe('a cancellation landing while the processor is applying a batch', () =>
 	it('does not hand the same events over again on the next cycle', async () => {
 		const chain = fakeChain([makeLog(101, '0xa101'), makeLog(102, '0xa102')], 200);
 		const processor = fakeProcessor();
-		const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
-			stream: {finality: FINALITY},
-			streamWriteRetry: {delaySeconds: 0},
-		});
+		const indexer = new IndexerGeneration<Abi, string[]>(
+			chain.provider,
+			processor.processor,
+			SOURCE,
+			{
+				stream: {finality: FINALITY},
+				streamWriteRetry: {delaySeconds: 0},
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 		(indexer as any).logEventFetcher = chain.fetcher;
 		await indexer.load();
 

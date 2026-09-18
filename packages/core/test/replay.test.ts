@@ -88,9 +88,6 @@ function logsIn(branch: LogEvent<Abi>[], fromBlock: number, toBlock: number): Lo
 function recordingProcessor() {
 	const batches: LogEvent<Abi>[][] = [];
 	const processor: any = {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
-		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (list: LogEvent<Abi>[]) => {

@@ -77,11 +77,6 @@ const SOURCE: IndexingSource<TestABI> = {
 const PROCESSOR_IDENTITY = identityOf('alpha');
 
 const entityProcessor: EntityProcessor<TestABI> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: every construction site below
-	// hands the fold the identity above, so this value is read by nobody.
-	// `assertProcessorVersion` still demands the field until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},
@@ -156,9 +151,7 @@ async function deploy(
 		// the FIRST named indexer folds into the same database the app answers over,
 		// which is the ordinary single-indexer deployment; a second one gets its own
 		const indexerDB: RemoteSQL = order === 0 ? db : new RemoteLibSQL(createClient({url: ':memory:'}));
-		const processor = new VersionedStateEventProcessor<TestABI>(indexerDB, entityProcessor, {
-			identity: PROCESSOR_IDENTITY,
-		});
+		const processor = new VersionedStateEventProcessor<TestABI>(indexerDB, entityProcessor, {});
 		// the recorder is the HOST's, exactly as it is in a deployment: this package
 		// counts nothing itself any more (ADR-0050)
 		const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
@@ -461,6 +454,7 @@ describe('several named indexers on one host', () => {
 		const deployment = await deploy({INGEST_TOKEN: TOKEN}, ['alpha', 'beta']);
 		const forBeta = new StreamBuilder<TestABI, unknown>((deployment.hosted['beta'] as Hosted).processor, SOURCE, {
 			stream: {finality: FINALITY + 1},
+			processorIdentity: PROCESSOR_IDENTITY,
 		});
 		const res = await post(
 			deployment,

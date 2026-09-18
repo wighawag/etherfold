@@ -6,7 +6,6 @@ Write a processor **once**, run it wherever its state has to live. Declare entit
 import {applyEventStream, type EntityProcessor} from '@etherfold/processor-entities';
 
 const processor: EntityProcessor<typeof abi> = {
-	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text', transferCount: 'integer'}}],
 	async onTransfer(state, event) {
 		const id = event.args.id.toString();
@@ -36,7 +35,7 @@ const view = await indexed.process(eventStream, lastSync);
 await view.getCurrent('token', {id: '1'});
 ```
 
-It owns the whole lifecycle the core expects (`load` / `process` / `reset` / `clear`, the version hash, the code fingerprint) and `prune`, which a host schedules between `process` calls. `test/entity-event-processor.test.ts` runs one processor definition through it against all four shipped backends and asserts the same state, a reorg that takes a counter back DOWN, and a sync cursor that survives a restart on each of them.
+It owns the whole lifecycle the core expects (`load` / `process` / `reset` / `clear`, plus the code fingerprint that names a module arrival) and `prune`, which a host schedules between `process` calls. `test/entity-event-processor.test.ts` runs one processor definition through it against all four shipped backends and asserts the same state, a reorg that takes a counter back DOWN, and a sync cursor that survives a restart on each of them.
 
 **The sync cursor lives in the store**, as an opaque string written in the same transaction as the block it describes (ADR-0027). That is what makes a restart safe on every backend rather than only on the one with a SQL table to write into; `serializeLastSync` / `deserializeLastSync` are here, and the store never learns what the string means.
 
@@ -65,7 +64,7 @@ The declarations are the ONE description of the data, so the read surface is gen
 import {createReadSurface, declareEntities} from '@etherfold/processor-entities';
 
 const entities = declareEntities([{name: 'token', id: 'id', fields: {owner: 'text', transferCount: 'integer'}}]);
-const processor: EntityProcessor<typeof abi> = {version: '1.0.0', entities /* handlers... */};
+const processor: EntityProcessor<typeof abi> = {entities /* handlers... */};
 
 const surface = createReadSurface(store, entities);
 await surface.token.getCurrent({id: '1'}); // {id: string; owner: string | null; transferCount: number | null}
@@ -83,10 +82,10 @@ import {openAndBootstrap} from '@etherfold/processor-entities';
 const {store, outcome} = await openAndBootstrap(await createBrowserStateStore(processor.entities), [
 	'https://mirror-a.example/state.json',
 	{url: 'https://mirror-b.example/state.json', head: 'https://mirror-b.example/head.json'},
-], {processor: eventProcessor.getVersionHash(), finalityDepth: 64});
+], {processor: processorIdentity, finalityDepth: 64}); // the identity this fold's ARRIVAL derived
 ```
 
-The selection is the free-form path's, point for point (`keepStateOnIndexedDB(name, remote)` in `@etherfold/browser`): every location is asked how far it has got, the furthest wins, local state that is already ahead is KEPT, and an unreachable mirror is logged and skipped rather than fatal. Two differences on purpose: failover walks every remaining candidate rather than the winner plus one, and a snapshot computed by another processor version is not a candidate at all.
+The selection is the free-form path's, point for point (`keepStateOnIndexedDB(name, remote)` in `@etherfold/browser`): every location is asked how far it has got, the furthest wins, local state that is already ahead is KEPT, and an unreachable mirror is logged and skipped rather than fatal. Two differences on purpose: failover walks every remaining candidate rather than the winner plus one, and a snapshot computed by another processor identity is not a candidate at all.
 
 What has no free-form counterpart is the honesty, because a blob has no history to lie about. A snapshot carries only the rows that are LIVE at its block, so the store it lands in reports a retention window floored THERE rather than the `unbounded` a freshly migrated store would claim, refuses an as-of read below it with `BlockNotRetainedError`, and refuses a reorg reaching under it with `RevertBeyondSnapshotError` (declining a snapshot taken inside the reorg window is the other half, which is what `finalityDepth` above buys). That mechanism is at the seam, so every backend inherits it; ADR-0028 records why, and what a snapshot contains, with the measurement behind it in `docs/spikes/bootstrap-an-entity-store-from-a-snapshot/`.
 

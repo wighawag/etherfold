@@ -120,9 +120,6 @@ function recordingProcessor() {
 	const streams: LogEvent<TestABI>[][] = [];
 	let stored: LastSync<TestABI> | undefined;
 	const processor: EventProcessor<TestABI, void> = {
-		// the DECLARED path, still on the seam until the contract task removes it: the
-		// receiver below is named by the identity its ARRIVAL supplied
-		getVersionHash: () => 'declared-version-of-v1',
 		getCodeFingerprint: () => undefined,
 		load: async () => (stored ? {state: undefined as void, lastSync: stored} : undefined),
 		process: async (eventStream, lastSync) => {

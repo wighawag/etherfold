@@ -26,6 +26,7 @@ import {
 	START_BLOCK,
 	streamOf,
 } from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // FETCHING A PUBLISHED SEED, AND INSTALLING IT THROUGH THE KEEPER SEAM
@@ -785,10 +786,16 @@ describe('a generation folds the seeded stream with no node in the loop', () => 
 		// afterwards: a call that should not happen fails AT the call.
 		const {calls, provider} = nodeRefusingProvider(SOURCE.chainId);
 		const folding = fakeProcessor();
-		const generation = new IndexerGeneration<Abi, string[]>(provider, folding.processor, SOURCE, {
-			stream: {finality: FINALITY},
-			keepStream: keeper,
-		});
+		const generation = new IndexerGeneration<Abi, string[]>(
+			provider,
+			folding.processor,
+			SOURCE,
+			{
+				stream: {finality: FINALITY},
+				keepStream: keeper,
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 		(generation as any).logEventFetcher = {
 			getLogEvents: async () => {
 				throw new Error('THE NODE WAS CALLED: eth_getLogs');

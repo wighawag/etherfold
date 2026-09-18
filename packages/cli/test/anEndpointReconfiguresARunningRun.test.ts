@@ -44,33 +44,24 @@ const LOGS = [
 const TIP = START_BLOCK + 50;
 
 /**
- * THE SIBLING MODULE the entry point below imports, which is what makes it an
- * UNBUNDLED ENTRY POINT rather than a bundle.
+ * THE PROCESSOR A DEPLOYMENT SHIPS, as text, because the thing under test is what
+ * happens when the bytes on disk change.
  *
- * That distinction is load-bearing now and was not when this suite was written.
- * A processor arrives either as a PATH the module system resolves, keeping the
- * author-DECLARED identity, or as a self-contained BUNDLE, named by the hash of
- * its bytes (ADR-0086) -- and "self-contained" means exactly "expects nobody else
- * to resolve anything", so an entry point that imported nothing at all would BE a
- * bundle and would be identified by its bytes. Every case below is about the
- * declared identity: a `version` bump registering a successor, a handler edit at
- * a static version reporting drift and registering nothing. So the module ships
- * its ABI the way a real one does, in a second file, and stays on the route these
- * cases are about. Do not inline it back.
+ * It is SELF-CONTAINED -- it imports nothing, so `unresolvedImportsOf` calls it a
+ * bundle -- and that is load-bearing rather than incidental. A processor is
+ * identified by the SHA-256 of its bytes (ADR-0086), an entry point that still
+ * expects somebody else to resolve an import has no bytes that describe it and is
+ * refused (`aDeploymentRunsFromABundle.test.ts`), and every case below is about
+ * what a REBUILD at one path does to a running deployment.
  *
- * THIS FILE IS THE DECLARED ARRIVAL'S OWN END-TO-END SUITE, and it stays that way
- * deliberately while every other caller migrates. The `PROCESSOR DRIFT` report
- * and the `unchanged` message that names `version` exist ONLY on this route --
- * they are the compensation for an identity an author had to remember -- so
- * rewriting these cases onto a bundle would not migrate them, it would delete the
- * coverage of a path that must go on working until the contract task removes it.
- * The same endpoint on the BUNDLE arrival is asserted in
- * `aDeploymentRunsFromABundle.test.ts`, and
- * `the-declared-version-and-the-drift-report-are-deleted` is what retires this
- * file along with the path it describes.
+ * `credit` is the handler EDIT these cases make: crediting `from` instead of `to`
+ * is a different fold, and a save that changes it changes the bytes. `marker` is a
+ * comment, which is how a case makes a save DISTINCT without changing behaviour --
+ * the bytes moved, so the identity did, which is the whole difference between a
+ * derived identity and a declared one.
  */
-const abiModuleSource = `
-export const abi = [
+function processorModuleSource(options: {credit: 'to' | 'from'; marker?: string}): string {
+	return `${options.marker === undefined ? '' : `// ${options.marker}\n`}const abi = [
 	{
 		anonymous: false,
 		inputs: [
@@ -82,21 +73,7 @@ export const abi = [
 		type: 'event',
 	},
 ];
-`;
 
-/** What every source below opens with, so an EDIT never turns the module into a bundle. */
-const IMPORTS_ITS_ABI = `import {abi} from './abi.js';\n`;
-
-/**
- * The processor module a deployment SHIPS, as text, because the thing under test
- * is what happens when the bytes on disk change.
- *
- * The entity declarations are literals and the handler is a function, so apart
- * from the sibling ABI this is a module the real `import()` can evaluate with no
- * build step between the test and the loader.
- */
-function processorModuleSource(options: {version: string; credit: 'to' | 'from'}): string {
-	return `${IMPORTS_ITS_ABI}
 export const contractsDataPerChain = {
 	'1': [
 		{
@@ -109,7 +86,6 @@ export const contractsDataPerChain = {
 
 export function createProcessor() {
 	return {
-		version: '${options.version}',
 		entities: [{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
 			const tokenID = event.args.id.toString().padStart(78, '0');
@@ -126,7 +102,6 @@ const scratch: string[] = [];
 async function aProcessorModuleOnDisk(source: string): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), 'etherfold-reconfigure-'));
 	scratch.push(dir);
-	await writeFile(join(dir, 'abi.js'), abiModuleSource, 'utf-8');
 	const path = join(dir, 'processor.mjs');
 	await writeFile(path, source, 'utf-8');
 	return path;
@@ -224,14 +199,6 @@ type Reconfigured = {
 		message?: string;
 		indexer?: string;
 		generation?: {stream: string; processor: string; digest: string};
-		/** The SECOND OPINION on an `unchanged`: present only when the handler code moved. */
-		drift?: {
-			processorHash: string;
-			compared: string;
-			previousFingerprint: string;
-			currentFingerprint: string;
-			message: string;
-		};
 	};
 };
 
@@ -258,7 +225,7 @@ async function generationsOf(indexer: RunningIndexer): Promise<{digest: string; 
 
 describe('a watcher calls one endpoint and the running deployment picks up the edit', () => {
 	it('registers the edited processor beside the incumbent, with no restart and no read unanswered', async () => {
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path);
 		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
 		const port = indexer.port;
@@ -273,7 +240,7 @@ describe('a watcher calls one endpoint and the running deployment picks up the e
 		expect(await generationsOf(indexer)).toHaveLength(1);
 
 		// THE EDIT, and the rebuild a watcher would have done for us
-		await edit(path, processorModuleSource({version: '2.0.0', credit: 'from'}));
+		await edit(path, processorModuleSource({credit: 'from'}));
 
 		const registered = await reconfigure(indexer);
 		expect(registered.status, JSON.stringify(registered.body)).toBe(200);
@@ -315,14 +282,14 @@ describe('a watcher calls one endpoint and the running deployment picks up the e
 
 describe('a processor that does not compile leaves the deployment exactly as it was', () => {
 	it('reports WHAT went wrong, registers nothing, and goes on folding and answering', async () => {
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer, chain} = await aRunServing(path);
 		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
 		const before = await generationsOf(indexer);
 
 		// the NORMAL state between the two halves of one change: the source landed and
 		// the handlers have not, so the module throws the moment it is evaluated
-		await edit(path, `${IMPORTS_ITS_ABI}throw new Error('the deployments folder is not built yet');\n`);
+		await edit(path, `throw new Error('the deployments folder is not built yet');\n`);
 
 		const refused = await reconfigure(indexer);
 		expect(refused.status, JSON.stringify(refused.body)).toBe(409);
@@ -344,18 +311,18 @@ describe('a processor that does not compile leaves the deployment exactly as it 
 		expect((await feedOf(indexer, LOGS.length + 1)).generation).toBe(incumbent);
 
 		// the next save repairs it, on the very same running process
-		await edit(path, processorModuleSource({version: '3.0.0', credit: 'from'}));
+		await edit(path, processorModuleSource({credit: 'from'}));
 		const repaired = await reconfigure(indexer);
 		expect(repaired.status, JSON.stringify(repaired.body)).toBe(200);
 		expect(repaired.body.outcome).toBe('registered');
 	});
 
 	it('refuses a module that cannot be parsed at all, on the same shape', async () => {
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path);
 		const before = await generationsOf(indexer);
 
-		await edit(path, `${IMPORTS_ITS_ABI}export function createProcessor() { return {\n`);
+		await edit(path, `export function createProcessor() { return {\n`);
 
 		const refused = await reconfigure(indexer);
 		expect(refused.status).toBe(409);
@@ -378,7 +345,7 @@ describe('a burst of calls does not fill the registry', () => {
 		const parked = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path, {
 			sleep: async (ms, signal) => {
 				if (ms <= 0) return;
@@ -391,12 +358,12 @@ describe('a burst of calls does not fill the registry', () => {
 		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
 
 		const digests: string[] = [];
-		for (const version of ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0']) {
-			await edit(path, processorModuleSource({version, credit: 'from'}));
+		for (const save of ['save 1', 'save 2', 'save 3', 'save 4', 'save 5', 'save 6']) {
+			await edit(path, processorModuleSource({credit: 'from', marker: save}));
 			const answer = await reconfigure(indexer);
 			// EVERY call succeeds: accumulating one generation per save would have met
 			// the cap (four) on the third and been REFUSED from then on
-			expect(answer.status, `${version}: ${JSON.stringify(answer.body)}`).toBe(200);
+			expect(answer.status, `${save}: ${JSON.stringify(answer.body)}`).toBe(200);
 			expect(answer.body.outcome).toBe('registered');
 			digests.push(answer.body.generation?.digest as string);
 		}
@@ -416,9 +383,9 @@ describe('a burst of calls does not fill the registry', () => {
 describe('the trigger is the operator\u2019s, on the operator\u2019s credential', () => {
 	it('refuses a caller with no token and one holding the INGEST token, and registers nothing', async () => {
 		process.env.INGEST_TOKEN = INGEST_TOKEN;
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path);
-		await edit(path, processorModuleSource({version: '2.0.0', credit: 'from'}));
+		await edit(path, processorModuleSource({credit: 'from'}));
 
 		expect((await reconfigure(indexer, {token: undefined})).status).toBe(401);
 		// the credential a log shipper holds does not get to start a fold here either
@@ -429,79 +396,54 @@ describe('the trigger is the operator\u2019s, on the operator\u2019s credential'
 });
 
 // ---------------------------------------------------------------------------------------------------
-// `unchanged` IS TRUTHFUL AND, ON ITS OWN, USELESS
+// `unchanged` MEANS WHAT IT SAYS, because an identity is DERIVED
 // ---------------------------------------------------------------------------------------------------
-// A generation is identified by `getVersionHash()` -- the DECLARED version plus
-// the entity declarations and the config -- and never by the text of the
-// handlers, so a developer who edits a handler body, saves and calls this
-// endpoint is told that nothing changed. That answer is correct and reads
-// exactly like a save that genuinely changed nothing, which is how "I saved and
-// nothing happened" becomes an afternoon.
+// A generation is identified by the SHA-256 of the bundle it folds (ADR-0086), so
+// every handler edit moves it and a re-read that answers `unchanged` is telling
+// the truth: these are the same bytes. There is nothing an author could have
+// forgotten to declare.
 //
-// The system already knows better: `getCodeFingerprint()` is the second opinion,
-// and the module this endpoint has just re-imported carries one. So an
-// `unchanged` SAYS whether the code moved, in the `PROCESSOR DRIFT` vocabulary
-// the chain-facing indexer already uses, and names the one thing that would make
-// it a different fold.
-//
-// What it must NOT do is act on it. The fingerprint is ADVISORY (`@etherfold/core`,
-// `utils/fingerprint.ts`): registering a generation because the code drifted
-// would fold it into the identity through the back door and force a full replay
-// on a re-minification that changed no logic. So these cases assert the report
-// AND that nothing was registered.
+// That is what retired the second half of this endpoint's answer. Under the
+// author-DECLARED identity an edit to a handler body alone named the generation
+// already held, so `unchanged` read two ways and carried a drift
+// report to say which; the declared identity and the report went together
+// (`the-declared-version-and-the-drift-report-are-deleted`), and the condition
+// cannot occur.
 // ---------------------------------------------------------------------------------------------------
 
-describe('a reload that changed nothing says whether the CODE changed', () => {
-	it('reports PROCESSOR DRIFT for a handler edit at a static version, and still registers nothing', async () => {
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
+describe('a reload that changed nothing answers `unchanged`, and says why', () => {
+	it('answers `unchanged` for the same bytes re-read behind the cache breaker', async () => {
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path);
 		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
 		const before = await generationsOf(indexer);
 
-		// THE EDIT A DEVELOPER ACTUALLY MAKES: a handler body, and a `version` they did
-		// not think to touch
-		await edit(path, processorModuleSource({version: '1.0.0', credit: 'from'}));
-
-		const answer = await reconfigure(indexer);
-		expect(answer.status, JSON.stringify(answer.body)).toBe(200);
-		// STILL a successful no-op, and still the generation this deployment holds
-		expect(answer.body.outcome).toBe('unchanged');
-		expect(answer.body.generation?.digest).toBe(incumbent);
-
-		// ...but it no longer reads like a save that changed nothing
-		expect(answer.body.drift?.compared).toBe('reloaded-module');
-		expect(answer.body.drift?.previousFingerprint).not.toBe(answer.body.drift?.currentFingerprint);
-		expect(answer.body.drift?.processorHash).toBe(indexer.streamBuilder.generation.processor);
-		expect(answer.body.message).toContain('PROCESSOR DRIFT');
-		// and it names what to do about it rather than only reporting two hashes
-		expect(answer.body.message).toContain('version');
-
-		// ADVISORY, end to end: no generation was registered because the code drifted,
-		// and the deployment goes on answering from the fold it came up with
-		expect(await generationsOf(indexer)).toEqual(before);
-		expect((await feedOf(indexer, LOGS.length)).generation).toBe(incumbent);
-
-		// the condition LASTS until the author acts, so a second call says it again
-		const again = await reconfigure(indexer);
-		expect(again.body.outcome).toBe('unchanged');
-		expect(again.body.drift?.currentFingerprint).toBe(answer.body.drift?.currentFingerprint);
-
-		// ...and bumping `version` is what makes it a different fold
-		await edit(path, processorModuleSource({version: '2.0.0', credit: 'from'}));
-		const registered = await reconfigure(indexer);
-		expect(registered.body.outcome).toBe('registered');
-		expect(registered.body.drift).toBeUndefined();
-	});
-
-	it('says nothing about drift when the reload really was a no-op', async () => {
-		const path = await aProcessorModuleOnDisk(processorModuleSource({version: '1.0.0', credit: 'to'}));
-		const {indexer} = await aRunServing(path);
-
 		// no edit at all: the same bytes, re-imported behind the cache breaker
 		const answer = await reconfigure(indexer);
 
+		expect(answer.status, JSON.stringify(answer.body)).toBe(200);
 		expect(answer.body.outcome).toBe('unchanged');
-		expect(answer.body.drift).toBeUndefined();
-		expect(answer.body.message).not.toContain('PROCESSOR DRIFT');
+		expect(answer.body.generation?.digest).toBe(incumbent);
+		// and it says the one thing that is true of the save: the bytes did not move
+		expect(answer.body.message).toContain('BUNDLE');
+
+		// nothing was registered, and the deployment goes on answering from the fold it
+		// came up with
+		expect(await generationsOf(indexer)).toEqual(before);
+		expect((await feedOf(indexer, LOGS.length)).generation).toBe(incumbent);
+	});
+
+	it('answers `registered` for a handler edit, with nothing declared and nothing bumped', async () => {
+		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
+		const {indexer} = await aRunServing(path);
+
+		// THE EDIT A DEVELOPER ACTUALLY MAKES: a handler body, and no version anywhere to
+		// think about. Under the declared identity this was the trap -- an `unchanged`
+		// for an edit that really happened -- and it is now unrepresentable.
+		await edit(path, processorModuleSource({credit: 'from'}));
+
+		const answer = await reconfigure(indexer);
+		expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+		expect(answer.body.outcome).toBe('registered');
 	});
 });

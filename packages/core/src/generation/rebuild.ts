@@ -11,15 +11,12 @@ import {
 	stateMatches,
 	wireContextOf,
 } from '../internal/engine/utils.js';
-import {processorIdentityOf} from '../internal/processorIdentity.js';
-import {announceProcessorDrift, processorDriftReport} from '../processorDrift.js';
 import type {
 	EventProcessor,
 	FetchConfig,
 	IndexingSource,
 	LastSync,
 	LogEvent,
-	ProcessorDriftReport,
 	UsedStreamConfig,
 	WireContext,
 } from '../types.js';
@@ -400,29 +397,15 @@ export type GenerationRebuildOptions<ABI extends Abi> = {
 	/** Fetcher configuration, taken only for the parse side of it; nothing here ever fetches. */
 	fetch?: FetchConfig;
 	/**
-	 * BE TOLD that the checkpoint this rebuild resumed from was computed by DIFFERENT
-	 * handler code at the same declared version.
-	 *
-	 * The same option `StreamBuilder` takes and for the same reason: a fold is one of
-	 * two engine shapes (ADR-0044) and BOTH adopt a persisted cursor, so a follower
-	 * that resumed state computed by logic that no longer exists must say so too --
-	 * otherwise the report would depend on which shape a generation happens to be in,
-	 * which is a function of registration order rather than of anything an author did.
-	 */
-	onProcessorDrift?: (report: ProcessorDriftReport) => void;
-	/**
-	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one: the
-	 * processor half of the generation this rebuild advances.
+	 * THE IDENTITY THIS FOLD WAS HANDED, which its ARRIVAL derived: the processor
+	 * half of the generation this rebuild advances.
 	 *
 	 * The same option `StreamBuilder` takes and for the same reason (ADR-0086): a
 	 * fold is one of two engine shapes (ADR-0044) and BOTH read and write the same
 	 * cursor, so a follower named one way and a receiver named another would be two
 	 * answers to which generation a stored checkpoint belongs to.
-	 *
-	 * ABSENT falls back to the processor's own `getVersionHash()`, exactly as it
-	 * always did.
 	 */
-	processorIdentity?: string;
+	processorIdentity: string;
 };
 
 /**
@@ -478,11 +461,8 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 	private readonly feedBatchSize: number;
 	private readonly context: WireContext;
 	private readonly decoder: LogEventFetcher<ABI>;
-	private readonly onProcessorDrift: ((report: ProcessorDriftReport) => void) | undefined;
-	/** What the ARRIVAL supplied, held UNRESOLVED: see `processorIdentity` and `processorIdentityOf`. */
-	private readonly suppliedProcessorIdentity: string | undefined;
-	/** Whether the drift has already been said, so a per-CHUNK report does not become noise. See `StreamBuilder`. */
-	private driftReported = false;
+	/** What the ARRIVAL derived: see `processorIdentity`. */
+	private readonly suppliedProcessorIdentity: string;
 
 	constructor(
 		private readonly processor: EventProcessor<ABI, ProcessResultType>,
@@ -501,7 +481,6 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 		// their contexts the same way.
 		this.context = wireContextOf(source, options.streamConfig);
 		this.decoder = new LogEventFetcher<ABI>(NEVER_FETCHES, source.contracts, options.fetch, options.streamConfig.parse);
-		this.onProcessorDrift = options.onProcessorDrift;
 		this.suppliedProcessorIdentity = options.processorIdentity;
 	}
 
@@ -511,14 +490,13 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 	}
 
 	/**
-	 * WHAT THIS FOLD IS CALLED: the arrival's identity, or the processor's own
-	 * declared hash where no arrival derived one (ADR-0086).
+	 * WHAT THIS FOLD IS CALLED: the identity its ARRIVAL derived (ADR-0086).
 	 *
 	 * One expression, asked by the generation this rebuild reports and by the
 	 * checkpoint it resumes from, so the two can never name different folds.
 	 */
 	private processorIdentity(): string {
-		return processorIdentityOf(this.processor, this.suppliedProcessorIdentity);
+		return this.suppliedProcessorIdentity;
 	}
 
 	/**
@@ -665,11 +643,6 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 				processorHash === lastSync.context.processor &&
 				stateMatches(this.context.source, this.context.config, lastSync.lastToBlock, lastSync.context)
 			) {
-				// ADOPTED, which is the one branch where drift means anything -- the same
-				// condition, the same phrase and the same builder as the receiver's
-				// (`StreamBuilder.reportProcessorDriftIfAny`), because a fold that resumes state
-				// computed by other logic is the same fact whichever engine is advancing it.
-				this.reportProcessorDriftIfAny(lastSync, processorHash);
 				return lastSync;
 			}
 			namedLogger.info(
@@ -683,39 +656,12 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 				source: this.context.source,
 				config: this.context.config,
 				processor: processorHash,
-				processorFingerprint: this.processor.getCodeFingerprint(),
 			},
 			lastToBlock: 0,
 			lastFromBlock: 0,
 			latestBlock: 0,
 			unconfirmedBlocks: [],
 		};
-	}
-
-	/**
-	 * The checkpoint's own fingerprint against the code replaying it, said ONCE per
-	 * rebuild and never acted on.
-	 *
-	 * Nothing is refreshed and nothing is re-folded: the stored value describes the
-	 * code that PRODUCED this state, and a rebuild that re-folded on drift would be
-	 * the fingerprint deciding what gets rebuilt, which is exactly the identity it is
-	 * kept out of (`utils/fingerprint.ts`).
-	 */
-	private reportProcessorDriftIfAny(lastSync: LastSync<ABI>, processorHash: string): void {
-		if (this.driftReported) {
-			return;
-		}
-		const report = processorDriftReport({
-			processorHash,
-			compared: 'persisted-state',
-			previousFingerprint: lastSync.context.processorFingerprint,
-			currentFingerprint: this.processor.getCodeFingerprint(),
-		});
-		if (!report) {
-			return;
-		}
-		this.driftReported = true;
-		announceProcessorDrift(report, this.onProcessorDrift);
 	}
 }
 

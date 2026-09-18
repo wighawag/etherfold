@@ -33,7 +33,6 @@ export const NFTProcessor = {
 	 * (ADR-0086). It is NOT what identifies this artifact -- that is the hash of
 	 * the bytes -- and nothing in the artifact unit reads it.
 	 */
-	version: '1.0.0',
 	entities: [{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}],
 	onTransfer(state: Mutations, event: TransferEvent): void {
 		state.set('nft', tokenKey(event.args.tokenID), {owner: event.args.to});

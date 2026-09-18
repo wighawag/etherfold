@@ -49,10 +49,8 @@ const CHAIN_ID_HEX = '0x2105'; // 8453, the chain the capture is from
  *
  * The subject here is the PUBLICATION -- which entity names a reader is told
  * about, per applied block -- so the fold's name is only ever the thing a
- * notification quotes. It is supplied rather than left to the declared `version`
- * the stratagems processor still carries, because a deployment that supplies
- * nothing is named by a value `the-declared-version-and-the-drift-report-are-deleted`
- * removes.
+ * notification quotes, but it has to be supplied: a deployment that supplies
+ * nothing has no name at all and is refused.
  */
 const PROCESSOR_IDENTITY = identityOf('stratagems-fold-publication');
 

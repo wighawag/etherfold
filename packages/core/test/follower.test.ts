@@ -728,9 +728,13 @@ describe('the follower decides on the emissions themselves', () => {
 				throw new Error(`unexpected ${method}`);
 			},
 		};
-		return new FollowerUnderTest(provider as any, fakeProcessor().processor as any, SOURCE, {
-			stream: {finality: FINALITY},
-		});
+		return new FollowerUnderTest(
+			provider as any,
+			fakeProcessor().processor as any,
+			SOURCE,
+			{stream: {finality: FINALITY}},
+			{processorIdentity: identityOf('the-follower')},
+		);
 	}
 
 	it('is FOLDED only when the slice is emission-for-emission what it folded', () => {
@@ -861,10 +865,16 @@ describe('a provider that changes chain mid-cycle', () => {
 				return stream.keeper.saveNewEvents(source, data);
 			},
 		};
-		const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
-			stream: {finality: FINALITY},
-			keepStream: keeper,
-		});
+		const indexer = new IndexerGeneration<Abi, string[]>(
+			chain.provider,
+			processor.processor,
+			SOURCE,
+			{
+				stream: {finality: FINALITY},
+				keepStream: keeper,
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 		(indexer as any).logEventFetcher = chain.fetcher;
 		return {indexer, processor, stream};
 	}

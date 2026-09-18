@@ -485,10 +485,10 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	 * store record on, so the name the registry files and the name the scheduled
 	 * prune looks a store up by cannot be two different values.
 	 *
-	 * ABSENT is a real answer and still the common one: no bytes describe this
-	 * processor, so the identity falls back to the processor's own
-	 * `getVersionHash()` exactly as it always did. That fallback is what
-	 * `the-declared-version-and-the-drift-report-are-deleted` removes.
+	 * ABSENT says only that no arrival named this fold before it was built: a tab
+	 * handed a MODULE derives one from the module's handler sources the moment
+	 * `createProcessor` has returned (`moduleProcessorIdentity`), and a module that
+	 * cannot be named that way is refused rather than left nameless.
 	 *
 	 * It is PER GENERATION, which is why it sits here beside the factories rather
 	 * than among the options: two generations given one identity would be ONE
@@ -972,18 +972,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// exist: a generation is `{stream, processor identity}` and the fold's half is
 				// only settled once the processor is built.
 				//
-				// Keyed on the SAME value the container registers this generation under --
-				// resolved a line above, with the processor's own declared hash under it only
-				// where no arrival named the fold and none could be derived from it. A key that
-				// disagreed with the registry record would leave every read of this
-				// generation's store looking for a name nothing filed.
+				// Keyed on the SAME value the container registers this generation under,
+				// resolved a line above. A key that disagreed with the registry record would
+				// leave every read of this generation's store looking for a name nothing filed.
 				//
 				// The FIRST one wins here too: overwriting would point this at a store nothing
 				// writes to and quietly stop pruning the one that is growing.
-				const key = generationKey({
-					stream: context.stream,
-					processor: spec.processorIdentity ?? built.getVersionHash(),
-				});
+				const key = generationKey({stream: context.stream, processor: spec.processorIdentity});
 				if (!statesByGeneration.has(key)) {
 					statesByGeneration.set(key, state as WritableStateStore);
 				}
@@ -992,9 +987,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
 				(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
 			// Handed STRAIGHT to the container, which registers the generation under it and
-			// never asks where it came from. `undefined` is a real answer and reads as the
-			// absence the core's own fallback takes: no arrival named this fold, and its
-			// handlers had no readable source to derive one from either.
+			// never asks where it came from. `undefined` here means only that no arrival
+			// named this fold BEFORE it was built: `createProcessor` above fills the field in
+			// from the module itself, and the container reads it afterwards.
 			processorIdentity,
 			// PER GENERATION, and a parameter rather than something a caller merges into
 			// the returned object: see the note above on why this spec must not be spread.
@@ -2312,23 +2307,23 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				if (!indexer) {
 					throw new Error(`no indexer setup, call init`);
 				}
+				// The MODULE arrival's identity, derived HERE and never accepted from the app. A
+				// module whose handlers have no readable source is REFUSED rather than named
+				// something no edit could move (`moduleProcessorIdentity`).
+				//
+				// FIRST, before the loop is paused: this refusal is about the processor handed
+				// over and not about the deployment, so a tab that meets it is left exactly as it
+				// was -- still folding, still answering -- rather than stopped by a call that
+				// never began.
+				const arrived = moduleProcessorIdentity(newProcessor);
 				// Pause the auto-index loop so a timer tick cannot race the core reinit
 				// (which would throw `Blocked` and trigger noisy retries). Resume after.
 				const wasAutoIndexing = $syncing.autoIndexing;
 				if (wasAutoIndexing) {
 					stopAutoIndexing();
 				}
-				// The MODULE arrival's identity, derived HERE and never accepted from the app.
-				// `undefined` where the handlers have no readable source, and omitted rather
-				// than passed as `undefined` so the core reads the absence its own fallback is
-				// written against: nothing named this fold, so compare the declared hashes
-				// exactly as before this arrival had a derivation of its own.
-				const arrived = moduleProcessorIdentity(newProcessor);
 				try {
-					const outcome = await indexer.updateProcessor(newProcessor, {
-						...options,
-						...(arrived === undefined ? {} : {processorIdentity: arrived}),
-					});
+					const outcome = await indexer.updateProcessor(newProcessor, {...options, processorIdentity: arrived});
 					// On success only (option b): clear stale syncing state so setupIndexing() re-runs.
 					// Must run before resuming auto-indexing so the resumed loop does not early-return
 					// on the stale lastSync.

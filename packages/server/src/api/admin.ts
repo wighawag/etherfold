@@ -367,8 +367,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * Because "I saved the file and nothing happened" otherwise has three
 			 * indistinguishable causes. `registered` NAMES the generation (`200`);
 			 * `unchanged` is a SUCCESS that says the configuration named the generation this
-			 * deployment already holds (`200`, with the reason, and with `drift` when the
-			 * handler code moved under an unchanged `version` -- see `ReconfigureReport`);
+			 * deployment already holds (`200`, with the reason -- see `ReconfigureReport`);
 			 * `failed` refuses (`409`), names what went wrong, and promises the deployment is
 			 * exactly as it was.
 			 *
@@ -455,11 +454,6 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 						outcome: 'unchanged',
 						generation: reported(report.generation),
 						message: report.message,
-						// CARRIED VERBATIM, because the watcher reading this is the developer's own
-						// window: the message already says it in words, and the two fingerprints are
-						// what a tool compares between saves. Absent when there is nothing to say, which
-						// is what keeps "this really was a no-op" readable as itself.
-						...(report.drift ? {drift: report.drift} : {}),
 					} as const);
 				}
 

@@ -324,10 +324,6 @@ export function fakeProcessor(store: ProcessorStore = {}, options: {persist?: bo
 	const batches: LogEvent<Abi>[][] = [];
 	let throwing = false;
 	const processor: any = {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// deliberately NOT what names this fold: `makeIndexer` hands the engine
-		// `PROCESSOR_IDENTITY` instead, exactly as an arrival would.
-		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			if (!persist || !store.saved) {

@@ -49,7 +49,6 @@ describe('the shape createIndexerState takes', () => {
 			// the free-form processor the retired path produced, as a value so the
 			// refusal below lands on the CALL rather than on one property of a literal
 			const freeForm = {
-				getVersionHash: () => 'v1',
 				getCodeFingerprint: () => undefined,
 				createInitialState: () => ({count: 0}),
 				configure: () => {},

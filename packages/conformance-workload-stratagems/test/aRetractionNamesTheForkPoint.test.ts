@@ -42,9 +42,8 @@ const FINALITY = 12;
  *
  * The subject here is the RETRACTION -- the fork point a reader is told about and
  * the token that moved -- so the fold's name is only ever what a notification
- * quotes. It is supplied rather than left to the declared `version` the stratagems
- * processor still carries, because a deployment that supplies nothing is named by
- * a value `the-declared-version-and-the-drift-report-are-deleted` removes.
+ * quotes, but it has to be supplied: a deployment that supplies nothing has no
+ * name at all and is refused.
  */
 const PROCESSOR_IDENTITY = identityOf('stratagems-retraction');
 

@@ -28,19 +28,12 @@ import {
 	type SlottedGenerations,
 } from './generation/registry.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
-import {processorIdentityOf} from './internal/processorIdentity.js';
+import {requireProcessorIdentity} from './internal/processorIdentity.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import {StreamBuilder, type GenerationContainer, type LogIngestion} from './streamBuilder.js';
 import {streamDigestOf} from './stream/identity.js';
-import type {
-	EventProcessor,
-	FoldReport,
-	IndexingSource,
-	ProcessorDriftReport,
-	ProvidedStreamConfig,
-	UsedStreamConfig,
-} from './types.js';
+import type {EventProcessor, FoldReport, IndexingSource, ProvidedStreamConfig, UsedStreamConfig} from './types.js';
 
 const namedLogger = logs('@etherfold/core');
 
@@ -595,33 +588,6 @@ export class ReceivingIndexer<
 	 */
 	private readonly folds: HeldFold<ABI, ProcessResultType, unknown>[] = [];
 
-	/**
-	 * BE TOLD that a fold this container holds adopted state computed by DIFFERENT
-	 * handler code at the same declared version (`ProcessorDriftReport`).
-	 *
-	 * The same field the chain-facing container publishes, so a host wires ONE name
-	 * whichever side of the wire it runs on. What it is NOT is the only surface: the
-	 * report is logged at error level by whichever engine noticed it, so a deployment
-	 * that sets nothing here still learns from its logs.
-	 *
-	 * Reports from EVERY held fold come through, and deliberately not the canonical
-	 * one's alone as on the chain-facing side. A generation that answers no read yet
-	 * is precisely the one being built to answer them next, and a report suppressed
-	 * until it is promoted would arrive after the upgrade it was about. Which fold a
-	 * report is about is `processorHash`.
-	 */
-	public onProcessorDrift: ((report: ProcessorDriftReport) => void) | undefined;
-
-	/**
-	 * What is handed to each engine, so the field above stays LIVE: a host that sets
-	 * it after `openReceivingIndexer` returned -- which is every host, since the
-	 * container builds its opening fold before it exists -- is still heard, and a
-	 * receiver rebuilt by writer succession keeps the wiring.
-	 */
-	private readonly relayProcessorDrift = (report: ProcessorDriftReport): void => {
-		this.onProcessorDrift?.(report);
-	};
-
 	private readonly options: ReceivingIndexerOptions<ABI, ProcessResultType, State>;
 
 	/** The promotion policy this indexer runs under, with nothing left to decide. */
@@ -1057,7 +1023,6 @@ export class ReceivingIndexer<
 			...(this.options.recordReorg ? {recordReorg: this.options.recordReorg} : {}),
 			...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
 			container: this,
-			onProcessorDrift: this.relayProcessorDrift,
 			// The same name the shape being replaced answered to: succession changes which
 			// ENGINE advances this fold and never which fold it is.
 			processorIdentity: fold.record.processor,
@@ -1126,16 +1091,17 @@ export class ReceivingIndexer<
 		}
 
 		// STATE FIRST, then the fold over it (ADR-0043). The identity is the ARRIVAL's
-		// where this spec was handed one (ADR-0086) and the processor's own declared hash
-		// where it was not, resolved ONCE here and handed DOWN to whichever engine shape
-		// this fold turns out to be -- so the record, the receiver and the rebuild cannot
-		// name one generation three ways.
+		// (ADR-0086), read ONCE here -- after the factories, which is what lets an arrival
+		// with no bytes derive one from the object it just built -- and handed DOWN to
+		// whichever engine shape this fold turns out to be, so the record, the receiver
+		// and the rebuild cannot name one generation three ways. Absent is REFUSED: there
+		// is nothing left that may name a fold on its behalf.
 		const state = await spec.createState(context);
 		const processor = await spec.createProcessor(state, context);
 
 		const wanted: GenerationId = {
 			stream: context.stream,
-			processor: processorIdentityOf(processor, spec.processorIdentity),
+			processor: requireProcessorIdentity(spec.processorIdentity),
 		};
 		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
 		// this fold is a successor at all and what it displaces; the records decide which
@@ -1193,7 +1159,6 @@ export class ReceivingIndexer<
 							...(this.options.maxEmissionsPerChunk === undefined
 								? {}
 								: {maxEmissions: this.options.maxEmissionsPerChunk}),
-							onProcessorDrift: this.relayProcessorDrift,
 							// THE NAME THIS FOLD IS ALREADY REGISTERED UNDER, taken from the record rather
 							// than re-derived: `create` RESOLVES a generation already there rather than
 							// duplicating it, so the record is the authority on what this fold is called.
@@ -1208,7 +1173,6 @@ export class ReceivingIndexer<
 							// not write its stream is not handed the thing that appends to it.
 							...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
 							container: this,
-							onProcessorDrift: this.relayProcessorDrift,
 							// As above: the identity the registry recorded, so the generation this receiver
 							// ADVERTISES on the wire is the one it was registered as.
 							processorIdentity: record.processor,

@@ -91,10 +91,6 @@ export const contractsDataPerChain = {
 
 export function createProcessor() {
 	return {
-		// STILL REQUIRED and deliberately CONSTANT: this bundle is named by its bytes,
-		// so a successor below moves the handler and never this.
-		// \`the-declared-version-and-the-drift-report-are-deleted\` removes the field.
-		version: '1.0.0',
 		entities: [{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
 			const tokenID = event.args.id.toString().padStart(78, '0');

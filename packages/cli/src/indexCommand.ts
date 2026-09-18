@@ -14,7 +14,14 @@ import {openProcessorArrival} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {foldingStatusReport, openFolding, openFoldingDatabase, openExplicitSource, streamConfigFor} from './folding.js';
+import {
+	foldingStatusReport,
+	openFolding,
+	openFoldingDatabase,
+	openExplicitSource,
+	requireArrivalIdentity,
+	streamConfigFor,
+} from './folding.js';
 import {DEFAULT_PRUNE_BUDGET, DEFAULT_PRUNE_INTERVAL_SECONDS, pruneHeldMore} from './pruning.js';
 import type {IndexConfig, Options} from './types.js';
 
@@ -210,8 +217,10 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			...(deps.importModule ? {importModule: deps.importModule} : {}),
 		});
 		const declared = arrival.processor;
-		// bytes on a disk answer first; an arrival a caller SUBSTITUTED answers for itself
-		const arrivalIdentity = arrival.identity ?? deps.processorIdentity;
+		// bytes on a disk answer first; an arrival a caller SUBSTITUTED answers for
+		// itself; neither answering is a fold with no name and is refused
+		// (`requireArrivalIdentity`).
+		const arrivalIdentity = requireArrivalIdentity(config.processor, arrival.identity ?? deps.processorIdentity);
 
 		const providedStreamConfig = streamConfigFor(env);
 		const streamConfig = resolveStreamConfig(providedStreamConfig);
@@ -251,9 +260,9 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 				// addresses: one value, required here and never defaulted, because on this
 				// half it routes as well as keys (ADR-0036)
 				indexer: config.wire.indexer,
-				// the identity the ARRIVAL derived, where it derived one (ADR-0086) -- the bundle's
-				// hash, or what a caller that substituted the arrival named it
-				...(arrivalIdentity === undefined ? {} : {processorIdentity: arrivalIdentity}),
+				// the identity the ARRIVAL derived (ADR-0086) -- the bundle's hash, or what a
+				// caller that substituted the arrival named it
+				processorIdentity: arrivalIdentity,
 			},
 		);
 

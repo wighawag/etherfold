@@ -20,16 +20,15 @@ import {identityOf} from './utils/processorIdentity.js';
 // "what a test may substitute for the real world", and `importModule` is how a
 // suite states WHAT comes back for a `--processor` path. What it could not state
 // until now is WHAT THAT ARRIVAL IS CALLED, so every deployment stood up that way
-// fell through to `getVersionHash()` -- the author-DECLARED identity that
-// `the-declared-version-and-the-drift-report-are-deleted` removes.
+// fell through to the author-DECLARED identity, which is now deleted -- an
+// injected arrival that names itself nothing is REFUSED.
 //
 // `deps.processorIdentity` is the other half of that one seam: a suite that
 // injects an arrival names it too, exactly as a real arrival does when it reads
 // bytes off a disk. This file is the guard on it, and it exists because the
-// failure it prevents is SILENT: if the value stopped reaching the registry, the
-// dozen suites in this package that now pass it would quietly go back to the
-// declared identity and go on passing, which is precisely the remainder this
-// batch was written to remove.
+// failure it prevents was SILENT while a declared identity still existed to fall
+// back on: a value that stopped reaching the registry left a dozen suites in this
+// package quietly naming their folds the author's way and still passing.
 //
 // What it is NOT is a way to DECLARE an identity. It is not a flag, it is not an
 // environment variable and no configuration reaches it; and where the path names

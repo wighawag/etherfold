@@ -35,7 +35,6 @@ export const abi = [
 export type TestABI = typeof abi;
 
 export const processor: SQLProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},

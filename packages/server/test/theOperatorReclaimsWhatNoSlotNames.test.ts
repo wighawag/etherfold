@@ -80,10 +80,6 @@ function freshDatabase(): RemoteSQL {
  */
 function foldAt(marker: string, source?: IndexingSource<TestABI>) {
 	const declared: EntityProcessor<TestABI> = {
-		// STILL REQUIRED and deliberately NAMING NOTHING: the identity below is what
-		// names this generation. `assertProcessorVersion` still demands the field until
-		// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-		version: '1.0.0',
 		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
 			state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
@@ -93,7 +89,7 @@ function foldAt(marker: string, source?: IndexingSource<TestABI>) {
 	return {
 		...(source ? {source} : {}),
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, declared, {identity}),
+		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, declared),
 		processorIdentity: identity,
 	};
 }

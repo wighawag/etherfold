@@ -3,6 +3,7 @@ import {describe, expect, it} from 'vitest';
 import {UnexpectedChainError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {ADDRESS, fakeChain, fakeProcessor, FINALITY, makeLog, SOURCE, START_BLOCK} from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // A CHAIN-IDENTITY REFUSAL NAMES THE CHAIN IT EXPECTED AND THE ONE IT GOT
@@ -67,9 +68,15 @@ function refusalFrom(call: Promise<unknown>): Promise<any> {
 
 function indexerOn(provider: ReturnType<typeof providerOnChain>, source = SOURCE_ON_CHAIN_1) {
 	const processor = fakeProcessor();
-	const indexer = new IndexerGeneration<Abi, string[]>(provider, processor.processor, source, {
-		stream: {finality: FINALITY},
-	});
+	const indexer = new IndexerGeneration<Abi, string[]>(
+		provider,
+		processor.processor,
+		source,
+		{
+			stream: {finality: FINALITY},
+		},
+		{processorIdentity: identityOf('the-fold')},
+	);
 	return {indexer, processor};
 }
 
@@ -116,9 +123,15 @@ describe('the RECONFIGURE path, handed a provider on a different chain', () => {
 	async function loadedOnChain1() {
 		const chain = fakeChain(LOGS, TIP);
 		const processor = fakeProcessor();
-		const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE_ON_CHAIN_1, {
-			stream: {finality: FINALITY},
-		});
+		const indexer = new IndexerGeneration<Abi, string[]>(
+			chain.provider,
+			processor.processor,
+			SOURCE_ON_CHAIN_1,
+			{
+				stream: {finality: FINALITY},
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 		(indexer as any).logEventFetcher = chain.fetcher;
 		await indexer.load();
 		return {indexer, processor, chain};

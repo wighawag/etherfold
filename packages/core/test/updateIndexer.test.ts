@@ -16,6 +16,7 @@ import {
 	memoryStream,
 	START_BLOCK,
 } from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * A RECONFIGURE THAT CHANGED NOTHING COSTS NOTHING.
@@ -100,11 +101,17 @@ async function indexedToTip(stream?: ProvidedStreamConfig, options: WorldOptions
 	const chain = fakeChain(LOGS, TIP);
 	const streamCache = memoryStream();
 	const processor = fakeProcessor();
-	const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, options.source ?? SOURCE, {
-		...(stream ? {stream} : {}),
-		...(options.cache === false ? {} : {keepStream: streamCache.keeper}),
-		streamWriteRetry: {delaySeconds: 0},
-	});
+	const indexer = new IndexerGeneration<Abi, string[]>(
+		chain.provider,
+		processor.processor,
+		options.source ?? SOURCE,
+		{
+			...(stream ? {stream} : {}),
+			...(options.cache === false ? {} : {keepStream: streamCache.keeper}),
+			streamWriteRetry: {delaySeconds: 0},
+		},
+		{processorIdentity: identityOf('the-fold')},
+	);
 	attach(indexer, chain);
 	await indexToTip(indexer);
 	return {

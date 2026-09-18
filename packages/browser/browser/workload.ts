@@ -54,7 +54,6 @@ export type TestABI = typeof abi;
  * SQLite, which is the claim the tests around it are checking.
  */
 export const processor: EntityProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},
@@ -89,10 +88,9 @@ export const processor: EntityProcessor<TestABI> = {
  * `{force: true}` exists for, and is asserted as such. When a case needs an edit
  * the derivation CAN see, it uses `editedProcessorVariant` below.
  */
-export function processorVariant(options: {version?: string; countBy?: number} = {}): EntityProcessor<TestABI> {
+export function processorVariant(options: {countBy?: number} = {}): EntityProcessor<TestABI> {
 	const countBy = options.countBy ?? 1;
 	return {
-		version: options.version ?? '1.0.0',
 		entities: [
 			{name: 'token', id: ['id'], fields: {owner: 'text'}},
 			{name: 'counter', id: ['name'], fields: {value: 'integer'}},
@@ -116,15 +114,10 @@ export function processorVariant(options: {version?: string; countBy?: number} =
  * writes are swapped for the token write here, which folds to the same rows in
  * the same blocks -- so a test can hold BEHAVIOUR still and move the IDENTITY, or
  * the other way round, and say which it is asserting.
- *
- * It declares the same `version` as its sibling by default, because a declared
- * version names nothing (ADR-0086) and a fixture that bumped one would suggest it
- * did.
  */
-export function editedProcessorVariant(options: {version?: string; countBy?: number} = {}): EntityProcessor<TestABI> {
+export function editedProcessorVariant(options: {countBy?: number} = {}): EntityProcessor<TestABI> {
 	const countBy = options.countBy ?? 1;
 	return {
-		version: options.version ?? '1.0.0',
 		entities: [
 			{name: 'token', id: ['id'], fields: {owner: 'text'}},
 			{name: 'counter', id: ['name'], fields: {value: 'integer'}},

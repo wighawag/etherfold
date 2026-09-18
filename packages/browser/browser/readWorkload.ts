@@ -66,7 +66,6 @@ export type ReadFixtureSurface = ReadSurface<StateStore, typeof readEntities>;
  * logs of one block.
  */
 export const readProcessor: EntityProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: readEntities,
 	async onTransfer(state, event) {
 		const id = event.args.id.toString();

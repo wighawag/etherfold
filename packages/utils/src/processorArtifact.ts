@@ -15,10 +15,10 @@ import {instantiateProcessor, type ProcessorModule} from './processorSetup.js';
  *
  * ## Why an artifact exists at all
  *
- * A processor's identity used to be AUTHOR-DECLARED (`version`, hashed with the
- * declarations into `getVersionHash()`), so an author who edited a handler and
- * forgot to bump it got state computed by the previous logic, served for ever
- * and silently. ADR-0086 makes that unrepresentable: a processor IS a bundle and
+ * A processor's identity used to be AUTHOR-DECLARED (a `version` field, hashed
+ * with the declarations), so an author who edited a handler and forgot to bump it
+ * got state computed by the previous logic, served for ever and silently.
+ * ADR-0086 makes that unrepresentable: a processor IS a bundle and
  * the hash of its octets IS its name, so an author cannot state an identity and
  * cannot fail to.
  *

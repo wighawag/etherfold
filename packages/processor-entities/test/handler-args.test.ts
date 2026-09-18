@@ -88,7 +88,6 @@ const upgradedArgsAreAUnion: IsExactly<
 const ENTITIES = [{name: 'token', id: ['id'], fields: {owner: 'text', memoed: 'integer'}}] as const;
 
 const upgraded: EntityProcessor<UpgradedABI> = {
-	version: '1.0.0',
 	entities: [...ENTITIES],
 	async onTransfer(state, event) {
 		// Every version carries these, so they read without narrowing.
@@ -116,7 +115,6 @@ const upgraded: EntityProcessor<UpgradedABI> = {
  * the single-version author anything: no narrowing, no cast, no widened field.
  */
 const ordinary: EntityProcessor<SingleVersionABI> = {
-	version: '1.0.0',
 	entities: [...ENTITIES],
 	async onTransfer(state, event) {
 		const from: `0x${string}` = event.args.from;

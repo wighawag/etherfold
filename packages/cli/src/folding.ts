@@ -2,7 +2,6 @@ import {
 	SERVER_GENERATION_CAPS,
 	generationDigestOf,
 	openReceivingIndexer,
-	processorCodeFingerprint,
 	type Abi,
 	type EventProcessor,
 	type GenerationId,
@@ -261,55 +260,30 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
 	 * The processor half of the generation identity this declaration WILL have,
 	 * computable before the processor exists (ADR-0053).
 	 *
-	 * WHERE IT CAME FROM is the ARRIVAL's business and not this module's
-	 * (ADR-0086). A deployment whose `--processor` path named a self-contained
-	 * BUNDLE is identified by the SHA-256 of those bytes, which the arrival supplied
-	 * and which no author can state or fail to state. A deployment whose path named
-	 * an unbundled module has no bytes that describe it, so it keeps the
-	 * author-DECLARED identity `EntityEventProcessor.getVersionHash()` answers with
-	 * (`version` plus a hash of the entity declarations and the config) -- unchanged,
-	 * because four migrate batches and a contract task are still to land.
+	 * WHERE IT CAME FROM is the ARRIVAL's business and not this module's (ADR-0086):
+	 * a deployment's `--processor` path names a self-contained BUNDLE, and the
+	 * SHA-256 of those bytes -- which no author can state or fail to state -- is what
+	 * the arrival hands over and what this holds.
 	 *
-	 * Renamed from `versionHash`, which now describes only one of the two: a field
-	 * whose name says DECLARED VERSION while it holds a hash of bytes is the kind of
-	 * quiet re-meaning that costs a reader an afternoon.
+	 * Renamed from `versionHash`, which described the author-declared value this
+	 * replaced: a field whose name says DECLARED VERSION while it holds a hash of
+	 * bytes is the kind of quiet re-meaning that costs a reader an afternoon.
 	 *
 	 * It is a string the registry compares for equality and renders into messages.
-	 * NOTHING reads it to work out which arrival produced it, which is exactly what
-	 * lets two derivations coexist through the migration and after it.
+	 * NOTHING reads it to work out which arrival produced it, which is what lets an
+	 * arrival derive one however it must.
 	 */
 	processorIdentity: string;
-	/**
-	 * The ADVISORY second opinion this declaration answers with: a digest of the
-	 * HANDLER SOURCE, and the very value `EntityEventProcessor.getCodeFingerprint()`
-	 * returns -- taken here, from the same declared object, for the reason
-	 * `processorIdentity` is (one formula, one spelling).
-	 *
-	 * `undefined` is a real answer and means "cannot tell", never "unchanged": a
-	 * processor whose handlers are all bound or proxied has no readable source.
-	 *
-	 * It is NOT part of any identity and nothing branches on it. It exists so that a
-	 * RE-READ can say whether the module it just imported differs from the fold this
-	 * process is running (`reconfigure.ts`), which is the question a developer who
-	 * saved a file is actually asking and the one a DECLARED identity cannot answer.
-	 * A deployment folding a BUNDLE has no such question -- its identity moves with
-	 * every edit -- so this is the declared path's affordance and goes with it.
-	 */
-	codeFingerprint: string | undefined;
 	/**
 	 * The two factories, in ADR-0043's order: state FIRST, then the fold over it --
 	 * plus the IDENTITY they are both built under, stated rather than left to be asked
 	 * for.
 	 *
 	 * The identity is on the SPEC because the container is HANDED one and never asks
-	 * where it came from (ADR-0086). Left off, `processorIdentityOf` falls back on
-	 * `EventProcessor.getVersionHash()`, which answers the same string today on both
-	 * arrivals -- a bundle's fold was constructed with it, and a declared one computes
-	 * it through the very function `processorIdentity` above calls -- but which is a
-	 * question a processor built from bytes cannot answer, and a method this family
-	 * removes. So it is `processorIdentity` above, restated nowhere: ONE value reaching
-	 * the table namespace, the fold and the registry record, which is what stops any
-	 * two of them spelling it differently.
+	 * where it came from (ADR-0086), and there is nothing left for it to ask: a fold
+	 * cannot name itself. So it is `processorIdentity` above, restated nowhere: ONE
+	 * value reaching the table namespace, the fold and the registry record, which is
+	 * what stops any two of them spelling it differently.
 	 */
 	generation: Pick<
 		ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>,
@@ -327,14 +301,10 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
  * ALREADY HOLDS -- so the namespace is computable BEFORE the processor exists
  * (ADR-0053) and the state-then-processor build order (ADR-0043) still holds.
  *
- * It holds it either way, which is what keeps that true across both arrivals
- * (ADR-0086). Where the arrival derived one, it was handed in as `identity` and
- * is passed unchanged to the namespace, to the fold and to the registry. Where it
- * did not -- an unbundled module, which has no bytes that describe it --
- * `entityProcessorVersionHash` is the very function
- * `EntityEventProcessor.getVersionHash()` answers with, so the two cannot
- * diverge. Either way the identity the container OBSERVES afterwards is the one
- * the tables were named from.
+ * It holds it because the ARRIVAL derived it (ADR-0086) and handed it in as
+ * `identity`, and it is passed unchanged to the namespace, to the fold and to the
+ * registry -- so the identity the container OBSERVES afterwards is the one the
+ * tables were named from.
  *
  * The imports are dynamic so that a command which never opens a database does not
  * pay for libSQL, matching how `serve` keeps the server's dependency tree off
@@ -347,19 +317,17 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 	/** The stream's own resolved finality, which the retention window is validated against. */
 	finalityDepth: number,
 	/**
-	 * The identity the ARRIVAL derived, where it derived one: the SHA-256 of the
-	 * bundle this deployment was configured with (ADR-0086).
+	 * The identity the ARRIVAL derived: the SHA-256 of the bundle this deployment was
+	 * configured with (ADR-0086).
 	 *
-	 * ABSENT is a real answer and means the path named an unbundled module, which has
-	 * no bytes that describe it -- so the identity falls back to the author's own
-	 * declaration, exactly as it always did. It is deliberately an OVERRIDE of the
-	 * declared value rather than a special case of it: the two derivations are peers
-	 * and the contract task removes the declared one, at which point this parameter
-	 * stops being optional rather than the branch changing shape.
+	 * REQUIRED, because nothing else can name this fold: the author-declared version
+	 * it used to fall back to is gone, and a processor built from bytes cannot state
+	 * what it is. A caller resolves it through `openProcessorArrival`
+	 * (`@etherfold/utils`) and REFUSES a path that produced none.
 	 */
-	identity?: string,
+	identity: string,
 ): Promise<FoldParts<ABI, ProcessResultType>> {
-	const [{EntityEventProcessor, entityProcessorVersionHash}, {VersionedStateStore}] = await Promise.all([
+	const [{EntityEventProcessor}, {VersionedStateStore}] = await Promise.all([
 		import('@etherfold/processor-entities'),
 		import('@etherfold/state-store-sqlite'),
 	]);
@@ -387,20 +355,13 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 			retention: target.retention,
 			finalityDepth,
 		});
-	// the ARRIVAL's identity where there is one, and the author's declaration where
-	// there is not. `entityProcessorVersionHash` is not called at all for a bundle:
-	// asking a processor built from bytes to state its own version is the question
-	// ADR-0086 says it cannot answer.
-	const processorIdentity = identity ?? entityProcessorVersionHash(declared);
+	// THE ARRIVAL'S, and nothing else: asking a processor built from bytes to state
+	// its own version is the question ADR-0086 says it cannot answer.
+	const processorIdentity = identity;
 
 	return {
 		stateFor,
 		processorIdentity,
-		// The AUTHOR'S OWN OBJECT is fingerprinted, exactly as `EntityEventProcessor`
-		// fingerprints it: its `on<Event>` handlers and `handleUnparsedEvent` ARE the
-		// logic, and the wrapper around them is this package's code, which no author edit
-		// moves.
-		codeFingerprint: processorCodeFingerprint(declared),
 		generation: {
 			// STATED, so the container takes it rather than asking the fold for it: the
 			// registry record, the table namespace above and the processor below are then one
@@ -414,19 +375,50 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 			// The CLI intentionally constructs the processor with NO factory argument (the
 			// server passes its folder); see MEDIUM-3.
 			//
-			// The fold is HANDED the arrival's identity where there is one, rather than
-			// computing one (ADR-0086). That is what keeps ONE answer to "which generation is
-			// this" everywhere below: the container registers what the fold answers, the
-			// receiver advertises it on the feed, and the stored cursor records it -- so the
-			// table namespace named above from `processorIdentity` and the identity the
-			// registry files cannot be two different values.
+			// The fold computes NO identity of its own (ADR-0086), which is what keeps ONE
+			// answer to "which generation is this" everywhere below: the container registers
+			// what this spec states, the receiver advertises it on the feed and the stored
+			// cursor records it, so the table namespace named above from `processorIdentity`
+			// and the identity the registry files cannot be two different values.
 			createProcessor: (state) =>
 				new EntityEventProcessor<ABI, any>(state, declared, {
 					finalityDepth,
-					...(identity === undefined ? {} : {identity}),
 				}) as unknown as EventProcessor<ABI, ProcessResultType>,
 		},
 	};
+}
+
+/**
+ * THE IDENTITY THIS ARRIVAL DERIVED, or a refusal naming the path that produced
+ * none.
+ *
+ * A processor's identity is derived from what it IS (ADR-0086): a `--processor`
+ * path names a self-contained BUNDLE and the SHA-256 of those octets is the
+ * generation's name. A path that resolves through the MODULE SYSTEM instead has no
+ * bytes that describe it, and since the author-declared `version` it used to fall
+ * back to is gone, such a deployment has no name for its fold at all.
+ *
+ * So it is REFUSED, here, before a database is opened or a generation registered.
+ * It is the structural refusal and deliberately not the kind one:
+ * `a-path-naming-an-unbundled-entry-point-is-refused` moves this to CONFIGURATION
+ * RESOLUTION, in the shape ADR-0048 gives every other command input, and names the
+ * command that produces a bundle. What it may not do is leave an unnameable
+ * deployment running in the meantime.
+ *
+ * The one non-bundle arrival that still resolves is a SUBSTITUTED one: a test that
+ * injects `importModule` states what comes back for a path, and
+ * `IndexingDependencies.processorIdentity` states what that thing is called. No
+ * flag and no environment variable reaches it.
+ */
+export function requireArrivalIdentity(processorPath: string, identity: string | undefined): string {
+	if (identity !== undefined) {
+		return identity;
+	}
+	throw new Error(
+		`the processor at ${processorPath} is not a self-contained bundle, so this deployment has no identity for its ` +
+			`fold: a processor is identified by the SHA-256 of its bytes (ADR-0086) and an entry point that still resolves ` +
+			`imports at run time has no bytes that describe it. Point --processor at a bundle that imports nothing.`,
+	);
 }
 
 /** Everything a folding command holds over its one database handle. */
@@ -515,11 +507,11 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 */
 		promotion?: PromotionConfig;
 		/**
-		 * The identity the ARRIVAL derived, where it derived one -- the hash of the
-		 * bundle this deployment was configured with (ADR-0086). Passed straight through
-		 * to `foldPartsFor`, which documents what absent means.
+		 * The identity the ARRIVAL derived -- the hash of the bundle this deployment was
+		 * configured with (ADR-0086). Passed straight through to `foldPartsFor`, and
+		 * REQUIRED there, because nothing else can name this fold.
 		 */
-		processorIdentity?: string;
+		processorIdentity: string;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([

@@ -29,27 +29,28 @@ import {
 // A bundle is a module that expects NOBODY ELSE to resolve anything, and
 // `unresolvedImportsOf` is this repository's only definition of that. It is the
 // judgement the artifact loader refuses on, and it is the one the CLI's
-// unbundled-path refusal will refuse on when the declared path is deleted. So it
-// decides here too: bytes this process can read, with nothing left to resolve,
-// ARE a bundle and are named by their hash; anything else -- a specifier that is
-// not a readable file, a directory, an entry point that still imports its ABI --
-// takes the module route it has always taken and keeps the identity its author
-// declared.
+// unbundled-path refusal refuses on. So it decides here too: bytes this process
+// can read, with nothing left to resolve, ARE a bundle and are named by their
+// hash; anything else -- a specifier that is not a readable file, a directory, an
+// entry point that still imports its ABI -- takes the module route, and DERIVES NO
+// IDENTITY AT ALL.
 //
 // The consequence worth stating rather than discovering: a hand-written entry
 // point that happens to import NOTHING is a bundle by that definition, and is
-// identified by its bytes. That is the same answer the end state gives it, it is
-// honest about what the file is, and the alternative -- a second, stricter test
-// for "was this really produced by a bundler" -- would be two answers to one
-// question that disagree in the middle of a migration.
+// identified by its bytes. That is honest about what the file is, and the
+// alternative -- a second, stricter test for "was this really produced by a
+// bundler" -- would be two answers to one question.
 //
-// ## WHY BOTH, TODAY
+// ## WHY THE MODULE ROUTE IS STILL HERE, with no identity to offer
 //
-// This is the EXPAND step of a wide refactor (`work/protocol/TASKING-PROTOCOL.md`
-// 3a). The declared route is not a legacy branch to be tolerated here: four
-// migrate batches and a contract task follow, and every one of them depends on it
-// working UNCHANGED while they land. What eventually deletes it is the contract
-// task, at which point this function loses an arm rather than gaining one.
+// Because resolving a path through the module system is a separate capability
+// from NAMING what came back, and this unit does the first. The author-declared
+// identity the module route used to fall back on is gone, so a caller that gets
+// an arrival with no `identity` has a fold it cannot name: the CLI REFUSES such a
+// deployment (`requireArrivalIdentity`, `etherfold`), and a TEST that substituted
+// the arrival states what it is called instead
+// (`IndexingDependencies.processorIdentity`). Refusing in here would take that
+// second case with it, and would put a configuration decision in a loader.
 // ---------------------------------------------------------------------------------------------------
 
 /**

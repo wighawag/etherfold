@@ -4,13 +4,12 @@ An `EventProcessor` whose derived state is versioned rows in [`@etherfold/state-
 
 The processor object below is **not** a SQLite thing. The authoring API (`EntityProcessor`, the `on<EventName>` handler map, `MutationContext`) is defined in [`@etherfold/processor-entities`](https://github.com/wighawag/etherfold/tree/main/packages/processor-entities) and re-exported here, so the same object runs unchanged against any other `StateStore` backend; `SQLProcessor` remains as a deprecated alias. See ADR-0018.
 
-So is the indexing. `VersionedStateEventProcessor` is a thin SQLite flavour of `EntityEventProcessor`: it builds the store from your `RemoteSQL` handle and hands back the SQL read tier, and everything else -- revert-then-apply, the block grouping, the version hash, the sync cursor -- lives once, in `@etherfold/processor-entities`, written against the seam. If you already have a `StateStore`, use `EntityEventProcessor` directly and skip this package.
+So is the indexing. `VersionedStateEventProcessor` is a thin SQLite flavour of `EntityEventProcessor`: it builds the store from your `RemoteSQL` handle and hands back the SQL read tier, and everything else -- revert-then-apply, the block grouping, the sync cursor -- lives once, in `@etherfold/processor-entities`, written against the seam. If you already have a `StateStore`, use `EntityEventProcessor` directly and skip this package.
 
 ```ts
 import {VersionedStateEventProcessor} from '@etherfold/processor-sqlite';
 
 const processor = new VersionedStateEventProcessor(db, {
-	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
 		state.set('token', {id: event.args.id.toString()}, {owner: event.args.to});

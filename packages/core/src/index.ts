@@ -25,22 +25,6 @@ export * from './stateMoved.js';
 export * from './indexer.js';
 export * from './streamBuilder.js';
 /**
- * WHAT A DIFFERENCE BETWEEN TWO CODE FINGERPRINTS MEANS, exported because the
- * second question it answers is asked OUTSIDE this package.
- *
- * The `persisted-state` comparison is made in here, by the two engines that adopt
- * a cursor. The `reloaded-module` one can only be made where a module is
- * RE-IMPORTED, which is the CLI's reconfigure endpoint (`@etherfold/cli`), and a
- * message assembled there would be a second `PROCESSOR DRIFT` phrasing for an
- * operator to grep for and a second report shape for a host to route. So the
- * BUILDER is published and the wording is not anybody's to restate.
- *
- * `announceProcessorDrift` deliberately stays internal: WHERE a report goes is
- * this package's business on the engines that own a logger and a listener, and a
- * caller outside has its own logger and its own answer to hand it back on.
- */
-export {processorDriftReport, type ProcessorDriftInputs} from './processorDrift.js';
-/**
  * THE REORG COUNTERS: what a fold says about the reverts it concluded.
  *
  * Exported from here, rather than from whichever package happens to hold a

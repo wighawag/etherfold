@@ -76,11 +76,6 @@ const pkgRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
 /** The FOLD. WHICH fold it is comes from the arrival, not from anything in here. */
 const entityProcessor: EntityProcessor<TestABI> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: `foldAt` hands the fold the
-	// identity its ARRIVAL derived (ADR-0086), so this value is read by nobody.
-	// `assertProcessorVersion` still demands the field until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
 		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
@@ -96,8 +91,7 @@ function foldAt(marker: string) {
 	const identity = identityOf(marker);
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) =>
-			new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity}),
+		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: identity,
 	};
 }

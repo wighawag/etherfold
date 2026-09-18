@@ -71,10 +71,6 @@ export function reportingFold(name: string, entitiesOf: (block: number, hash: st
 	/** What this fold HOLDS, per entity: the rows a reader would re-read. */
 	const rows: {block: number; entity: string; row: string}[] = [];
 	const processor: EventProcessor<Abi, string[]> = {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// deliberately NOT what names this fold: `specFor` hands the container the
-		// identity its ARRIVAL derived.
-		getVersionHash: () => `declared-version-of-${name}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (eventStream: LogEvent<Abi>[]) => {

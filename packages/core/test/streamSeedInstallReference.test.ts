@@ -102,9 +102,6 @@ function countingProcessor() {
 	return {
 		seen,
 		processor: {
-			// the DECLARED path, still on the seam until the contract task removes it: the
-			// generation below is named by the identity its ARRIVAL supplied
-			getVersionHash: () => 'declared-version-of-reference-install-test',
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async (eventStream: LogEvent<Abi>[]) => {

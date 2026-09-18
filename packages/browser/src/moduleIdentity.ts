@@ -61,18 +61,41 @@ import type {Abi, EventProcessor} from '@etherfold/core';
  * deployed build are different generations either way. Nothing here reaches a
  * non-browser runtime, and nothing here is a general rule.
  *
- * ## `undefined` IS A REAL ANSWER
+ * ## A MODULE THAT CANNOT BE NAMED IS REFUSED
  *
- * A processor whose handlers have no readable source (all bound, or behind a
- * proxy) cannot be named this way, and saying so is better than hashing
- * `[native code]` into a constant. The caller then falls back to the declared hash
- * exactly as it did before this arrival had a derivation of its own -- the last
- * place that fallback is reachable in this package, and one
- * `the-declared-version-and-the-drift-report-are-deleted` has to answer for when
- * it removes it.
+ * A processor whose handlers have no readable source -- all `bind`-ed, or behind a
+ * proxy -- cannot be named this way: `Function.prototype.toString` answers
+ * `[native code]` for every one of them, and hashing that would produce a CONSTANT
+ * no edit could ever move, which is the silent lie ADR-0086 exists to remove. So
+ * the derivation DECLINES (`getCodeFingerprint()` answers `undefined`) and this
+ * throws.
+ *
+ * It used to fall back to the author's DECLARED hash, and that fallback died with
+ * the declared identity itself
+ * (`the-declared-version-and-the-drift-report-are-deleted`). The three things that
+ * could stand in its place were weighed: naming the fold by a CONSTANT is the lie
+ * again, taking a name from the APPLICATION is the author-declared identity coming
+ * back through the one door ADR-0086 leaves open, and registering a generation
+ * called `undefined` is neither. A refusal is the only one of the four that is
+ * true, it is LOUD, it happens before anything is registered or any state is
+ * claimed, and the two ways out are both in the message.
+ *
+ * It is a genuinely narrow case: an ordinary module object, which is what a dev
+ * server hands a tab, answers perfectly well. What reaches this is a processor
+ * somebody wrapped.
  */
 export function moduleProcessorIdentity<ABI extends Abi, ProcessResultType>(
 	processor: EventProcessor<ABI, ProcessResultType>,
-): string | undefined {
-	return processor.getCodeFingerprint();
+): string {
+	const identity = processor.getCodeFingerprint();
+	if (identity === undefined) {
+		throw new Error(
+			`this processor arrived as a MODULE, which has no bytes to hash, and its handlers have no readable source ` +
+				`either -- they are all bound, or behind a proxy -- so there is nothing to derive an identity from and the ` +
+				`generation cannot be named (ADR-0086). Hand over the processor object itself rather than a wrapper around ` +
+				`it, or name this fold by BYTES: fetch the self-contained bundle it was built from and pass the SHA-256 of ` +
+				`those octets as \`processorIdentity\`.`,
+		);
+	}
+	return identity;
 }

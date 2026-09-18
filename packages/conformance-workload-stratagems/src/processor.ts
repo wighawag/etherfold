@@ -81,12 +81,6 @@ async function dropPlacement(state: MutationContext, ordinal: string): Promise<v
 }
 
 export const stratagemsProcessor: EntityProcessor<StratagemsABI> = {
-	/**
-	 * Pinned to the stratagems commit the oracle was taken from, because that is
-	 * what this processor's output is compared against. It is a FIXTURE's
-	 * version, so it names the snapshot rather than moving with this repository.
-	 */
-	version: 'conformance-workload-stratagems/port@3d5a0b3f',
 	entities: stratagemsEntities,
 
 	async onCommitmentRevealed(state, event) {

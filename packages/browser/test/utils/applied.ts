@@ -24,7 +24,6 @@ import type {TestABI} from '../../browser/workload.js';
  */
 export function applyingProcessor(control: {failFromBlock?: number} = {}): EntityProcessor<TestABI> {
 	return {
-		version: '1.0.0',
 		entities: [{name: 'applied', id: ['bucket', 'at'], fields: {key: 'text', times: 'integer'}}],
 		async onTransfer(state, event) {
 			if (control.failFromBlock !== undefined && event.blockNumber >= control.failFromBlock) {

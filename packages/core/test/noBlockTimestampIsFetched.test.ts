@@ -140,9 +140,6 @@ function freshLastSync(): LastSync<TestABI> {
 
 function makeIndexer(provider: never) {
 	const processor = {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
-		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async () => undefined,

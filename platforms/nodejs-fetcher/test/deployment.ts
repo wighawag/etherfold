@@ -86,7 +86,6 @@ export const SOURCE: IndexingSource<TestABI> = {
 };
 
 const entityProcessor: EntityProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},
@@ -180,9 +179,9 @@ export type RunningReceiver = {
 /** The indexer-server on a real port, with a real processor over a real database. */
 export async function startReceiver(): Promise<RunningReceiver> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	// HANDED, not computed, at BOTH halves: the fold is told which fold it is, and
-	// the stream-builder the core asks is told the same thing (ADR-0086).
-	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {identity: PROCESSOR_IDENTITY});
+	// HANDED, not computed: the ENGINE is told which fold it drives, and the fold
+	// itself states nothing about what it is called (ADR-0086).
+	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor);
 	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
 		stream: {finality: FINALITY},
 		processorIdentity: PROCESSOR_IDENTITY,

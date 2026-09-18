@@ -25,8 +25,6 @@ export const abi = [
 export type TokenABI = typeof abi;
 
 /**
- * The version is REQUIRED by the type and it NAMES NOTHING. Do not reach for it.
- *
  * ## AN AUTHOR DOES NOT STATE THEIR PROCESSOR'S IDENTITY (ADR-0086)
  *
  * An engine is HANDED one and never asks where it came from, and which derivation
@@ -40,6 +38,8 @@ export type TokenABI = typeof abi;
  * be the author-declared identity re-entering through the one door left open, and
  * it would be silent whenever it was wrong.
  *
+ * There is no field here to declare one with, and that is the point.
+ *
  * ## What that means for you TODAY
  *
  * Edit the reducer below, save, and the edit RUNS: a different handler source is a
@@ -52,10 +52,7 @@ export type TokenABI = typeof abi;
  * changed, or behaviour decided by a value the handler captured. Pass
  * `{force: true}` when you know better; it costs the same rebuild.
  */
-export const PROCESSOR_VERSION = '1.0.0';
-
 export const tokenProcessor: EntityProcessor<TokenABI> = {
-	version: PROCESSOR_VERSION,
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},

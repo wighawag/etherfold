@@ -75,7 +75,7 @@ async function indexedWith(definition = processor, chain = fakeChain()) {
 describe('axis one: swapping in an edited processor', () => {
 	/**
 	 * The trap REMOVED, stated as a test: an edited handler is a different fold,
-	 * with no `version` bumped and nothing for an author to remember.
+	 * with nothing for an author to declare and nothing to remember.
 	 *
 	 * What makes the rebuild assertable is that every block is re-indexed under the
 	 * edited handler, so the counter is 5 * 10 and not 5 + something. A swap that had
@@ -83,14 +83,13 @@ describe('axis one: swapping in an edited processor', () => {
 	 * behaviour this used to assert, the edited module never executing at all, would
 	 * show 5.
 	 */
-	it('applies an edited handler that bumped no version, and rebuilds under the new logic', async () => {
+	it('applies an edited handler and rebuilds under the new logic', async () => {
 		const {store, indexer, chain} = await indexedWith();
 		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
 		const rangesBefore = chain.ranges.length;
 
-		// the developer edited the handler (now counts 10 per transfer) and did NOT
-		// touch `version`, which is the default state of an edited file.
-		const edited = editedProcessorVariant({version: '1.0.0', countBy: 10});
+		// the developer edited the handler, which now counts 10 per transfer
+		const edited = editedProcessorVariant({countBy: 10});
 		const outcome = await indexer.updateProcessor(entityProcessorOver(store, edited));
 		expect(outcome.stateDiscarded).toBe(true);
 
@@ -253,7 +252,6 @@ describe('axis two: a new implementation behind the same address', () => {
 
 		/** The same processor, taught where the implementation changed underneath it. */
 		const spanningUpgrade: EntityProcessor<TestABI> = {
-			version: '2.0.0',
 			entities: processor.entities,
 			async onTransfer(state, event) {
 				state.set('token', {id: event.args.id.toString()}, {owner: event.args.to});

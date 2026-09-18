@@ -162,9 +162,6 @@ function freshLastSync(): LastSync<TestABI> {
 
 function aProcessor(): EventProcessor<TestABI, undefined> {
 	return {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
-		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async () => undefined,
@@ -309,8 +306,12 @@ describe('the receiving half of a split deployment makes zero chain calls', () =
 		// ZERO by construction rather than by counting: there is no parameter to
 		// hand a node to, so the receiving half cannot make a call to get wrong.
 		function refusal() {
-			// @ts-expect-error the receiving half is chain-free: there is no provider to give it
-			return new StreamBuilder<TestABI>(aProcessor() as never, SOURCE, {stream: {finality: 12}, provider: {}});
+			return new StreamBuilder<TestABI>(aProcessor() as never, SOURCE, {
+				processorIdentity: PROCESSOR_IDENTITY,
+				stream: {finality: 12},
+				// @ts-expect-error the receiving half is chain-free: there is no provider to give it
+				provider: {},
+			});
 		}
 		expect(typeof refusal).toBe('function');
 
@@ -322,7 +323,10 @@ describe('the receiving half of a split deployment makes zero chain calls', () =
 				return undefined;
 			},
 		};
-		const builder = new StreamBuilder<TestABI>(processor as never, SOURCE, {stream: {finality: 12}});
+		const builder = new StreamBuilder<TestABI>(processor as never, SOURCE, {
+			processorIdentity: PROCESSOR_IDENTITY,
+			stream: {finality: 12},
+		});
 
 		// A node the receiver could reach for if it had anywhere to keep one. It is
 		// never handed over, and its record stays empty: the timestamps that crossed

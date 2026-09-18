@@ -123,7 +123,7 @@ function specFor(db: RemoteSQL, identity: string, source?: IndexingSource<typeof
 				}),
 			),
 		createProcessor: (state: WritableStateStore) =>
-			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY, identity}),
+			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
 		processorIdentity: identity,
 	};
 }

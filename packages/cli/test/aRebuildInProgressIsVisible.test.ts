@@ -78,15 +78,11 @@ const V1 = {declared: nftProcessor as EntityProcessor<typeof abi>, identity: ide
  * THE UPGRADE: the same logs, a different fold, so the two answer observably
  * differently.
  *
- * Its identity is the hash of the bytes it arrived as (ADR-0086) and not the
- * `version` below, which no longer moves for anybody.
+ * Its identity is the hash of the bytes it arrived as (ADR-0086), and there is
+ * nothing in the declaration below that could name it.
  */
 const V2 = {
 	declared: {
-		// STILL REQUIRED and deliberately NAMING NOTHING: `specFor` hands this fold the
-		// identity above. `the-declared-version-and-the-drift-report-are-deleted`
-		// removes the field.
-		version: '1.0.0',
 		entities: nftEntities,
 		async onTransfer(state, event) {
 			const tokenID = event.args.id.toString().padStart(78, '0');
@@ -128,7 +124,7 @@ function specFor(db: RemoteSQL, fold: {declared: EntityProcessor<typeof abi>; id
 				}),
 			),
 		createProcessor: (state: WritableStateStore) =>
-			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY, identity}),
+			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
 		processorIdentity: identity,
 	};
 }

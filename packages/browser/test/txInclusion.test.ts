@@ -28,10 +28,6 @@ type State = {count: number};
 function makeProcessor(): EntityEventProcessorLike<Abi, State, undefined> {
 	let count = 0;
 	return {
-		// The DECLARED path, still on the seam until the contract task removes it and
-		// deliberately NOT what names anything here: the spec below supplies the
-		// identity its arrival derived, so this value is read by nobody.
-		getVersionHash: () => 'declared-version-never-read',
 		getCodeFingerprint: () => undefined,
 		state: {count: 0},
 		configure: () => {},

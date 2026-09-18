@@ -25,7 +25,6 @@ export const abi = [
 export type TestABI = typeof abi;
 
 export const processor: EntityProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text', transferCount: 'integer'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},

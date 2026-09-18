@@ -72,9 +72,6 @@ const BRANCH_C = [makeLog(101, '0xc101'), makeLog(103, '0xc103')];
 function markedFold(name: string) {
 	let state: string[] = [];
 	const processor = {
-		// The DECLARED path, still on the seam until the contract task removes it: what
-		// NAMES each generation here is the identity its spec's arrival supplied.
-		getVersionHash: () => `declared-version-of-${name}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (events: LogEvent<Abi>[]) => {

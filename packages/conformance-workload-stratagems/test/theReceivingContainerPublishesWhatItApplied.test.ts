@@ -52,10 +52,8 @@ const FINALITY = 12;
  * (ADR-0086: derived from bytes, never declared by the author).
  *
  * The subject here is what the RECEIVING container publishes, so the fold's name
- * is only ever what a notification quotes. It is supplied rather than left to the
- * declared `version` the stratagems processor still carries, because a deployment
- * that supplies nothing is named by a value
- * `the-declared-version-and-the-drift-report-are-deleted` removes.
+ * is only ever what a notification quotes -- but it has to be supplied, because a
+ * deployment that supplies nothing has no name at all and is refused.
  */
 const PROCESSOR_IDENTITY = identityOf('stratagems-receiving-container');
 

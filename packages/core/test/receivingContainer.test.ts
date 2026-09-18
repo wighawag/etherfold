@@ -5,14 +5,7 @@ import {createMemoryGenerationRegistryPort} from '../src/generation/memory.js';
 import {GenerationCapReachedError, type GenerationRegistryPort} from '../src/generation/registry.js';
 import {openReceivingIndexer, SERVER_GENERATION_CAPS} from '../src/receivingContainer.js';
 import {StreamBuilder} from '../src/streamBuilder.js';
-import type {
-	EventProcessor,
-	IndexingSource,
-	LastSync,
-	LogEvent,
-	ProcessorDriftReport,
-	WireBatch,
-} from '../src/types.js';
+import type {EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
 import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -119,13 +112,6 @@ function substrate() {
 		/** WHICH synthetic bundle this fold ARRIVED as: `identityOf` is what a host handed those bytes derives. */
 		marker: string,
 		namespace: 'own' | {shared: string},
-		/**
-		 * The `getCodeFingerprint()` this fold answers with, which is what a drift report
-		 * compares. `undefined` is a real answer -- a processor whose handlers are all
-		 * bound or proxied cannot read its own source -- and the default here, so every
-		 * case that is not about drift keeps saying nothing about it.
-		 */
-		options: {fingerprint?: string} = {},
 	) {
 		return {
 			createState: (context: {stream: string}) =>
@@ -140,10 +126,9 @@ function substrate() {
 			processorIdentity: identityOf(marker),
 			createProcessor: (state: {rows: string[]; lastSync?: LastSync<TestABI>}): EventProcessor<TestABI, void> => {
 				const processor: EventProcessor<TestABI, void> = {
-					// The DECLARED path, still on the seam until the contract task removes it and
-					// read by nobody here.
-					getVersionHash: () => `declared-version-of-${marker}`,
-					getCodeFingerprint: () => options.fingerprint,
+					// Answered because the seam requires it, and read by nothing on this side: it
+					// names the browser's module arrival and no other (ADR-0086).
+					getCodeFingerprint: () => undefined,
 					load: async () => (state.lastSync ? {state: undefined as void, lastSync: state.lastSync} : undefined),
 					process: async (eventStream, lastSync) => {
 						for (const event of eventStream) {
@@ -177,12 +162,12 @@ function substrate() {
 type Substrate = ReturnType<typeof substrate>;
 
 /** The container the server/CLI runtime builds: one substrate, one fold, its caps. */
-function open(world: Substrate, version: string, options: {fingerprint?: string} = {}) {
+function open(world: Substrate, version: string) {
 	return openReceivingIndexer({
 		port: world.port,
 		source: SOURCE,
 		stream: {finality: FINALITY},
-		generation: world.specFor(version, 'own', options),
+		generation: world.specFor(version, 'own'),
 	});
 }
 
@@ -485,170 +470,5 @@ describe('a receiver built WITHOUT a container', () => {
 		expect(await bare.expectedFromBlock()).toBe(START_BLOCK);
 		expect(world.cleared).toEqual(['v2']);
 		expect(world.rowsIn(namespace)).toEqual([]);
-	});
-});
-
-// ---------------------------------------------------------------------------------------------------
-// THE SECOND OPINION, ON THE RECEIVING SIDE: `PROCESSOR DRIFT`
-// ---------------------------------------------------------------------------------------------------
-// The receiving side WROTE the code fingerprint into every cursor it opened and
-// never once compared one, so a deployment folding through this container served
-// state computed by logic that no longer exists and said nothing. The
-// chain-facing `IndexerGeneration` has reported exactly this since ADR-0008's
-// 2026-08-21 amendment (`packages/core/test/processorDrift.test.ts`); these are
-// the same claims at the receiving container's own seam.
-//
-// The comparison here is the BOOT question -- "the persisted state was computed
-// by different logic" -- which is the stored cursor's fingerprint against the
-// code loaded now, and deliberately not the reload question the reconfigure
-// endpoint answers (`packages/cli/src/reconfigure.ts`).
-// ---------------------------------------------------------------------------------------------------
-
-/** A fold that has folded block 101 with handlers that fingerprint to `fingerprint`. */
-async function aFoldComputedBy(world: Substrate, fingerprint: string) {
-	const indexer = await open(world, 'v1', {fingerprint});
-	await indexer.ingestion.receive(
-		batch(indexer.ingestion, {fromBlock: 100, toBlock: 105, latestBlock: 105, logs: [transfer(101, '0xa101', 1n)]}),
-	);
-	return indexer;
-}
-
-/** A restart of that deployment, whose handlers now fingerprint to `fingerprint`. */
-async function restartedWith(world: Substrate, fingerprint: string | undefined) {
-	const indexer = await open(world, 'v1', fingerprint === undefined ? {} : {fingerprint});
-	const reports: ProcessorDriftReport[] = [];
-	indexer.onProcessorDrift = (report) => reports.push(report);
-	return {indexer, reports};
-}
-
-describe('the receiving container reports PROCESSOR DRIFT in its own right', () => {
-	it('reports when the persisted state was computed by DIFFERENT handler code at the same version', async () => {
-		const world = substrate();
-		await aFoldComputedBy(world, 'fp-A');
-
-		// the author edited a handler and did not bump `version`, so the identity is the
-		// same fold and the code underneath it is not
-		const {indexer, reports} = await restartedWith(world, 'fp-B');
-		await indexer.ingestion.expectedFromBlock();
-
-		expect(reports).toHaveLength(1);
-		expect(reports[0].processorHash).toBe(identityOf('v1'));
-		expect(reports[0].previousFingerprint).toBe('fp-A');
-		expect(reports[0].currentFingerprint).toBe('fp-B');
-		// WHICH question this answers, said rather than left to be guessed from where
-		// the report came out
-		expect(reports[0].compared).toBe('persisted-state');
-		expect(reports[0].message).toContain('PROCESSOR DRIFT');
-		// it names what to DO about it, which is the only thing that moves the identity
-		expect(reports[0].message).toContain('version');
-	});
-
-	it('keeps the fingerprint ADVISORY: nothing is registered, nothing is discarded, nothing re-folds', async () => {
-		const world = substrate();
-		const incumbent = await aFoldComputedBy(world, 'fp-A');
-		const namespace = generationDigestOf(incumbent.generation);
-
-		const {indexer, reports} = await restartedWith(world, 'fp-B');
-		expect(await indexer.ingestion.expectedFromBlock()).toBe(102);
-
-		expect(reports).toHaveLength(1);
-		// ONE generation still: drift is not an identity, so it registers none
-		expect((await indexer.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
-		// and it discards nothing: the state is adopted exactly as it would have been
-		expect(world.cleared).toEqual([]);
-		expect(world.rowsIn(namespace)).toEqual(['v1@101']);
-	});
-
-	it('does not REFRESH the stored fingerprint, so the report repeats until the author bumps `version`', async () => {
-		const world = substrate();
-		const incumbent = await aFoldComputedBy(world, 'fp-A');
-		const namespace = generationDigestOf(incumbent.generation);
-
-		const first = await restartedWith(world, 'fp-B');
-		await first.indexer.ingestion.receive(
-			batch(first.indexer.ingestion, {fromBlock: 102, toBlock: 108, latestBlock: 108}),
-		);
-		// the cursor goes on describing THE CODE THAT PRODUCED THE STATE
-		expect(world.stores.get(namespace)?.lastSync?.context.processorFingerprint).toBe('fp-A');
-
-		const second = await restartedWith(world, 'fp-B');
-		await second.indexer.ingestion.expectedFromBlock();
-
-		expect(first.reports).toHaveLength(1);
-		expect(second.reports).toHaveLength(1);
-	});
-
-	it('says it ONCE per receiver, because a receiver reads its cursor on every batch', async () => {
-		const world = substrate();
-		await aFoldComputedBy(world, 'fp-A');
-
-		const {indexer, reports} = await restartedWith(world, 'fp-B');
-		await indexer.ingestion.expectedFromBlock();
-		await indexer.ingestion.receive(batch(indexer.ingestion, {fromBlock: 102, toBlock: 108, latestBlock: 108}));
-		await indexer.ingestion.expectedFromBlock();
-
-		// a per-batch report is a report nobody reads; a per-BOOT one is the condition
-		// itself, and the case above is what makes "per boot" true
-		expect(reports).toHaveLength(1);
-	});
-
-	it('says nothing when the code really is identical, so the signal does not cry wolf', async () => {
-		const world = substrate();
-		await aFoldComputedBy(world, 'fp-A');
-
-		const {indexer, reports} = await restartedWith(world, 'fp-A');
-		await indexer.ingestion.expectedFromBlock();
-
-		expect(reports).toEqual([]);
-	});
-
-	it('says nothing when either side is UNKNOWN, and specifically never reads absence as drift', async () => {
-		// a cursor written before the field existed
-		const legacy = substrate();
-		const written = await open(legacy, 'v1');
-		await written.ingestion.receive(
-			batch(written.ingestion, {fromBlock: 100, toBlock: 105, latestBlock: 105, logs: [transfer(101, '0xa101', 1n)]}),
-		);
-		expect(
-			legacy.stores.get(generationDigestOf(written.generation))?.lastSync?.context.processorFingerprint,
-		).toBeUndefined();
-		const upgraded = await restartedWith(legacy, 'fp-B');
-		await upgraded.indexer.ingestion.expectedFromBlock();
-		expect(upgraded.reports).toEqual([]);
-
-		// ...and a processor that cannot fingerprint itself at all
-		const unreadable = substrate();
-		await aFoldComputedBy(unreadable, 'fp-A');
-		const bound = await restartedWith(unreadable, undefined);
-		await bound.indexer.ingestion.expectedFromBlock();
-		expect(bound.reports).toEqual([]);
-	});
-
-	it('says nothing when the version WAS bumped, because a deliberate bump is never a drift', async () => {
-		const world = substrate();
-		await aFoldComputedBy(world, 'fp-A');
-
-		const successor = await open(world, 'v2', {fingerprint: 'fp-B'});
-		const reports: ProcessorDriftReport[] = [];
-		successor.onProcessorDrift = (report) => reports.push(report);
-		await successor.ingestion.expectedFromBlock();
-
-		expect(reports).toEqual([]);
-		expect((await successor.generations()).map((record) => record.processor)).toEqual([
-			identityOf('v1'),
-			identityOf('v2'),
-		]);
-	});
-
-	it('survives a listener that throws, because a drift report must not break a batch', async () => {
-		const world = substrate();
-		await aFoldComputedBy(world, 'fp-A');
-
-		const indexer = await open(world, 'v1', {fingerprint: 'fp-B'});
-		indexer.onProcessorDrift = () => {
-			throw new Error('listener blew up');
-		};
-
-		await expect(indexer.ingestion.expectedFromBlock()).resolves.toBe(102);
 	});
 });

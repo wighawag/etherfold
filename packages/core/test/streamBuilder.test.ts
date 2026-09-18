@@ -80,10 +80,6 @@ function recordingProcessor(marker = 'v1') {
 	let stored: LastSync<TestABI> | undefined;
 	let cleared = 0;
 	const processor: EventProcessor<TestABI, void> = {
-		// The DECLARED path, still on the seam until the contract task removes it.
-		// `builderOn` hands the receiver the identity its ARRIVAL derived instead, so
-		// this is read only by the one case below that pins the fallback.
-		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => (stored ? {state: undefined as void, lastSync: stored} : undefined),
 		process: async (eventStream, lastSync) => {
@@ -231,30 +227,6 @@ describe('the receiver says WHICH GENERATION it is', () => {
 		const builder = builderOn(target.processor, 'v1');
 
 		expect(builder.generation).toEqual({stream: builder.streamDigest, processor: identityOf('v1')});
-		// ...and NOT anything the processor says about itself (ADR-0086)
-		expect(builder.generation.processor).not.toBe(target.processor.getVersionHash());
-	});
-
-	it('reads the DECLARED fallback live, so a processor reconfigured after construction is not misreported', () => {
-		// The one case here that deliberately supplies NO arrival identity, because it
-		// pins the fallback every un-migrated caller still rests on: `getVersionHash()`
-		// covers a processor's CONFIG as well as its version, and `configure()` can move
-		// it after this object was built, so a value snapshotted in the constructor
-		// would advertise a fold that is no longer running. An identity the arrival
-		// supplied has no such problem -- the config a bundle was built with is IN the
-		// bundle -- and `the-declared-version-and-the-drift-report-are-deleted` retires
-		// this case along with the path it describes.
-		let version = 'v1';
-		const target = recordingProcessor();
-		const builder = new StreamBuilder<TestABI, void>({...target.processor, getVersionHash: () => version}, SOURCE, {
-			stream: {finality: FINALITY},
-		});
-		expect(builder.generation.processor).toBe('v1');
-
-		version = 'v2';
-
-		expect(builder.generation.processor).toBe('v2');
-		expect(builder.generation.stream).toBe(builder.streamDigest);
 	});
 });
 
@@ -443,9 +415,15 @@ describe('reorgs are derived here, from raw logs alone', () => {
 		const viaWire = recordingProcessor();
 		const builder = builderOn(viaWire.processor);
 		const viaEngine = recordingProcessor();
-		const indexer = new IndexerGeneration<TestABI, void>(noChain(), viaEngine.processor, SOURCE, {
-			stream: {finality: FINALITY},
-		});
+		const indexer = new IndexerGeneration<TestABI, void>(
+			noChain(),
+			viaEngine.processor,
+			SOURCE,
+			{
+				stream: {finality: FINALITY},
+			},
+			{processorIdentity: identityOf('the-fold')},
+		);
 
 		const rounds: {fromBlock: number; toBlock: number; latestBlock: number; logs: LogEvent<TestABI>[]}[] = [
 			{
@@ -528,6 +506,7 @@ describe('the stream is written before the state advances', () => {
 		const writes = journal();
 		const target = watchedProcessor(writes.order);
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: writes.append,
 		});
@@ -567,6 +546,7 @@ describe('the stream is written before the state advances', () => {
 		const writes = journal();
 		const target = recordingProcessor();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: writes.append,
 		});
@@ -594,6 +574,7 @@ describe('the stream is written before the state advances', () => {
 		const target = watchedProcessor(order);
 		let refuse = true;
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: async () => {
 				if (refuse) throw new Error('no such table: _emissions');
@@ -626,6 +607,7 @@ describe('the stream is written before the state advances', () => {
 		const appended: readonly EmittedLog[][] = [];
 		let refuse = true;
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: async ({emissions}) => {
 				if (refuse) throw new Error('the database went away');
@@ -659,6 +641,7 @@ describe('the stream is written before the state advances', () => {
 		const writes = journal();
 		const target = recordingProcessor();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: writes.append,
 		});
@@ -681,6 +664,7 @@ describe('the stream is written before the state advances', () => {
 		const writes = journal();
 		const storing = recordingProcessor();
 		const withAppender = new StreamBuilder<TestABI, void>(storing.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: writes.append,
 		});
@@ -705,6 +689,7 @@ describe('the stream is written before the state advances', () => {
 	it('hashes no appender into the wire identity: where a stream is stored is not what a sender asserts', () => {
 		const plain = builderOn(recordingProcessor().processor);
 		const storing = new StreamBuilder<TestABI, void>(recordingProcessor().processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			appendEmissions: async () => undefined,
 		});
@@ -744,6 +729,7 @@ describe('a concluded reorg is counted exactly once, by whoever owns the store',
 		const target = recordingProcessor();
 		const journal = recorder();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			recordReorg: journal.record,
 		});
@@ -764,6 +750,7 @@ describe('a concluded reorg is counted exactly once, by whoever owns the store',
 		const target = recordingProcessor();
 		const journal = recorder();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			recordReorg: journal.record,
 		});
@@ -781,6 +768,7 @@ describe('a concluded reorg is counted exactly once, by whoever owns the store',
 		// re-send a batch which was in fact applied.
 		const target = recordingProcessor();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			recordReorg: () => {
 				throw new Error('no such table: _meta');
@@ -801,6 +789,7 @@ describe('a concluded reorg is counted exactly once, by whoever owns the store',
 	it('rejects nothing when a recorder rejects ASYNCHRONOUSLY either', async () => {
 		const target = recordingProcessor();
 		const builder = new StreamBuilder<TestABI, void>(target.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			recordReorg: async () => {
 				throw new Error('the database went away');
@@ -817,6 +806,7 @@ describe('a concluded reorg is counted exactly once, by whoever owns the store',
 		const counted = recordingProcessor();
 		const journal = recorder();
 		const withRecorder = new StreamBuilder<TestABI, void>(counted.processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			recordReorg: journal.record,
 		});
@@ -841,6 +831,7 @@ describe('a concluded reorg is counted exactly once, by whoever owns the store',
 	it('hashes no recorder into the wire identity: where a count goes is not what a sender asserts', () => {
 		const plain = builderOn(recordingProcessor().processor);
 		const counting = new StreamBuilder<TestABI, void>(recordingProcessor().processor, SOURCE, {
+			processorIdentity: identityOf('v1'),
 			stream: {finality: FINALITY},
 			recordReorg: () => undefined,
 		});

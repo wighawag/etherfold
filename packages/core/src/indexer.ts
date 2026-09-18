@@ -10,7 +10,6 @@ import type {
 	UsedIndexerConfig,
 	LastSync,
 	ContextIdentifier,
-	ProcessorDriftReport,
 	ProvidedStreamConfig,
 	SourceHashEntry,
 	UsedStreamConfig,
@@ -38,8 +37,6 @@ import {
 	wait,
 } from './internal/engine/utils.js';
 import {sourceHashesOf} from './internal/engine/eventRanges.js';
-import {processorIdentityOf} from './internal/processorIdentity.js';
-import {announceProcessorDrift, processorDriftReport} from './processorDrift.js';
 import {CancellablePromiseCancelled, CancelOperations, createAction} from './internal/utils/promises.js';
 import {storedLastSyncOf, storedStreamOf} from './internal/stream/strip.js';
 import {
@@ -292,7 +289,7 @@ export type ReconfigureOutcome = {
  */
 export type IndexerGenerationOptions = {
 	/**
-	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one.
+	 * THE IDENTITY THIS FOLD WAS HANDED, which the ARRIVAL derived.
 	 *
 	 * ADR-0086: an author cannot STATE a processor's identity, and this engine is
 	 * HANDED one and never asks where it came from. A deployment that read a
@@ -303,16 +300,13 @@ export type IndexerGenerationOptions = {
 	 * persisted cursor and WRITTEN onto the next one, and nothing in this package
 	 * parses it.
 	 *
-	 * ABSENT is a real answer and still the common one: no bytes describe this
-	 * processor, so the identity falls back to its own `getVersionHash()` exactly as
-	 * it always did. `the-declared-version-and-the-drift-report-are-deleted` removes
-	 * that fallback once every caller has moved.
-	 *
-	 * A container ALWAYS supplies it, because it has already registered the
-	 * generation under that name and the fold advancing it must answer to the same
-	 * one.
+	 * REQUIRED, and that is the whole of ADR-0086's contract step: there is no
+	 * declared identity left to fall back on, so a fold with no name is not
+	 * expressible rather than being silently named by something an author typed.
+	 * A container always has one, because it has already registered the generation
+	 * under that name and the fold advancing it must answer to the same one.
 	 */
-	readonly processorIdentity?: string;
+	readonly processorIdentity: string;
 };
 
 /**
@@ -344,17 +338,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	public onLoad: ((state: LoadingState) => Promise<void>) | undefined;
 	public onStateUpdated: ((state: ProcessResultType) => void) | undefined;
 	public onLastSyncUpdated: ((lastSync: LastSync<ABI>) => void) | undefined;
-	/**
-	 * Called when the processor's declared version is unchanged but its code is
-	 * not: the "author edited a handler and forgot to bump `version`" case.
-	 *
-	 * The report is ALSO logged at error level through `named-logs`, so a host
-	 * that sets nothing is never silent; this exists because a log line is hard to
-	 * alert on, and routing a drift to a pager or a CI failure is a decision only
-	 * the host can make. Set `strictProcessorDrift` in the config to refuse to
-	 * start instead.
-	 */
-	public onProcessorDrift: ((report: ProcessorDriftReport) => void) | undefined;
 
 	// ------------------------------------------------------------------------------------------------------------------
 	// INTERNAL VARIABLES
@@ -511,34 +494,30 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		provider: EIP1193ProviderWithoutEvents,
 		protected processor: EventProcessor<ABI, ProcessResultType>,
 		source: IndexingSource<ABI>,
-		config: ProvidedIndexerConfig<ABI> = {},
-		options: IndexerGenerationOptions = {},
+		config: ProvidedIndexerConfig<ABI>,
+		options: IndexerGenerationOptions,
 	) {
 		this.suppliedProcessorIdentity = options.processorIdentity;
 		this.reinit(provider, source, config);
 	}
 
 	/**
-	 * What the ARRIVAL supplied, held UNRESOLVED and beside `processor` rather than
-	 * folded into it.
+	 * WHAT THIS FOLD IS CALLED: the identity its ARRIVAL derived (ADR-0086), held
+	 * beside `processor` rather than asked of it.
 	 *
 	 * It travels WITH the processor: `updateProcessor` replaces both together, so a
 	 * fold and the name it answers to cannot come apart. Not `readonly` for exactly
-	 * that reason, and not resolved at construction for the reason
-	 * `processorIdentityOf` gives.
-	 */
-	protected suppliedProcessorIdentity: string | undefined;
-
-	/**
-	 * WHAT THIS FOLD IS CALLED: the arrival's identity, or the processor's own
-	 * declared hash where no arrival derived one (ADR-0086).
+	 * that reason.
 	 *
-	 * Every place this engine needs the fold half of a generation asks here, so the
-	 * cursor it writes, the invalidation it decides and the swap it declines all
-	 * speak of one value.
+	 * Every place this engine needs the fold half of a generation reads this field,
+	 * so the cursor it writes, the invalidation it decides and the swap it declines
+	 * all speak of one value.
 	 */
+	protected suppliedProcessorIdentity: string;
+
+	/** See `suppliedProcessorIdentity`: the arrival's identity, answered as given. */
 	protected processorIdentity(): string {
-		return processorIdentityOf(this.processor, this.suppliedProcessorIdentity);
+		return this.suppliedProcessorIdentity;
 	}
 
 	reinit(provider: EIP1193ProviderWithoutEvents, source: IndexingSource<ABI>, config: ProvidedIndexerConfig<ABI>) {
@@ -994,7 +973,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 
 	async updateProcessor(
 		newProcessor: EventProcessor<ABI, ProcessResultType>,
-		options?: {force?: boolean; processorIdentity?: string},
+		options: {force?: boolean; processorIdentity: string},
 	): Promise<ReconfigureOutcome> {
 		// Align with updateIndexer: disable processing first so a racing index/feed tick cannot
 		// interleave with the swap, then decide, then re-enable.
@@ -1004,15 +983,15 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		// WHAT EACH FOLD IS CALLED, each taken from its OWN arrival (ADR-0086): the one
 		// running here, and the one the caller is handing over. Comparing identities and
 		// never the objects is the same rule as before, sourced differently.
-		const identityChanged = this.processorIdentity() != processorIdentityOf(newProcessor, options?.processorIdentity);
+		const identityChanged = this.processorIdentity() != options.processorIdentity;
 
-		if (identityChanged || options?.force) {
+		if (identityChanged || options.force) {
 			// Only swap once we have decided a change is needed; do not replace the running instance
 			// on a no-op path.
 			this.processor = newProcessor;
 			// TOGETHER with the processor, because the two are one fact: an identity left
 			// behind by a swap would name the fold that was replaced.
-			this.suppliedProcessorIdentity = options?.processorIdentity;
+			this.suppliedProcessorIdentity = options.processorIdentity;
 			this._feed.reset();
 			this._index.reset();
 			this._load.reset();
@@ -1031,21 +1010,16 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 			// Same identity and not forced: nothing to reset/reload, so we keep the running
 			// processor instance.
 			//
-			// WHICH ADVICE IS TRUE depends on which ARRIVAL supplied the identity, and the
-			// branch asks the arrival rather than reading the string -- nothing here parses an
-			// identity and this does not start. An author whose identity came from BYTES
-			// cannot bump anything and must not be told to: for them the honest reading is
-			// that the bytes really are the same. An author still on the declared path may
-			// simply have edited a handler and forgotten to bump, which is the condition
-			// ADR-0086 makes unrepresentable and the reason the declared half of this message
-			// goes with `the-declared-version-and-the-drift-report-are-deleted`.
+			// ONE reading, because there is now one kind of identity: it was DERIVED from the
+			// processor this deployment was handed (ADR-0086), so it saying "the same fold"
+			// means the code this arrival describes really is the code already running. There
+			// is nothing an author could have forgotten to bump, which is the whole point of
+			// deriving it, and `{force: true}` is what an integrator reaches for when they know
+			// the fold changed in a way its arrival cannot see.
 			namedLogger.warn(
 				`updateProcessor: the new processor has the same identity as the current one; the swap was skipped. ` +
-					(options?.processorIdentity === undefined
-						? `If this is unexpected, bump the processor's version hash or call ` +
-							`updateProcessor(newProcessor, {force: true}).`
-						: `That identity was derived from the processor this deployment was handed, so it says the fold ` +
-							`did not change. Call updateProcessor(newProcessor, {force: true}) to swap anyway.`),
+					`That identity was derived from the processor this deployment was handed, so it says the fold ` +
+					`did not change. Call updateProcessor(newProcessor, {force: true}) to swap anyway.`,
 			);
 			this.reenableProcessing();
 			return {stateDiscarded: false};
@@ -1261,12 +1235,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 				processorHash === loadedLastSync.context.processor &&
 				this.stateMatches(loadedLastSync.lastToBlock, loadedLastSync.context)
 			) {
-				// The state is about to be ADOPTED, which is the only branch where drift can
-				// matter: a differing version hash discards the state anyway (a deliberate
-				// bump is never a drift), and no persisted state means nothing stale to
-				// serve. Checked BEFORE adopting, so strict mode refuses without ever
-				// handing the stale state to a listener.
-				this.reportProcessorDriftIfAny(loadedLastSync.context, processorHash);
 				currentLastSync = loadedLastSync;
 				// The state is valid under the CURRENT source, so record it as such. Without
 				// this an absorbed append would be re-judged on every reload against the
@@ -1979,35 +1947,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		return streamMatches(this.sourceHashes, this.streamConfigHash, lastToBlock, context);
 	}
 
-	/**
-	 * Compare the fingerprint of the code that computed the persisted state with
-	 * the code loaded now, and report if they differ.
-	 *
-	 * This is the BOOT question (`persisted-state`), and the comparison, the
-	 * message and the two "unknown" rules are `processorDrift.ts`'s, so that this
-	 * side and the receiving side say ONE thing. What is local to this class is what
-	 * happens NEXT: the stored fingerprint is deliberately NOT refreshed afterwards,
-	 * because it describes the code that produced the state, so the report repeats
-	 * every boot until the author bumps `version` (which discards the state) rather
-	 * than going quiet after being seen once -- and `strictProcessorDrift` turns the
-	 * report into a refusal to start, which is this container's own opt-in fail-stop.
-	 */
-	protected reportProcessorDriftIfAny(context: ContextIdentifier, processorHash: string): void {
-		const report = processorDriftReport({
-			processorHash,
-			compared: 'persisted-state',
-			previousFingerprint: context.processorFingerprint,
-			currentFingerprint: this.processor.getCodeFingerprint(),
-		});
-		if (!report) {
-			return;
-		}
-		announceProcessorDrift(report, this.onProcessorDrift);
-		if (this.config.strictProcessorDrift) {
-			throw new Error(report.message);
-		}
-	}
-
 	protected freshLastSync(processorHash: string): LastSync<ABI> {
 		if (!this.sourceHashes || !this.streamConfigHash) {
 			throw new Error(`no sourceHashes or configHash computed, please load first`);
@@ -2017,10 +1956,6 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 				source: this.sourceHashes,
 				config: this.streamConfigHash,
 				processor: processorHash,
-				// Recorded on the FRESH cursor, so that the state this run computes carries
-				// the identity of the code that computed it, and the next boot has something
-				// to compare against.
-				processorFingerprint: this.processor.getCodeFingerprint(),
 			},
 			lastToBlock: 0,
 			lastFromBlock: 0,

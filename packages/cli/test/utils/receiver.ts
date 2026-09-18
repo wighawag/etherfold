@@ -46,10 +46,8 @@ export const INDEXER = 'alpha';
  *
  * This harness builds its fold by hand rather than through a command, so it hands
  * the identity over the way a host does -- the engine is GIVEN one and never asks
- * where it came from. Without it the fold would take the author-DECLARED identity
- * `nftProcessor.version` computes, which is what
- * `the-declared-version-and-the-drift-report-are-deleted` deletes, and the `fetch`
- * suite that drives a real wire into this receiver would go dark with it.
+ * where it came from. Without it this fold would have no name at all and the
+ * receiver could not be built.
  */
 const ARRIVAL = identityOf('the-fold-on-the-other-end-of-the-wire');
 
@@ -66,10 +64,7 @@ export type RunningReceiver = {
 export async function startReceiver(): Promise<RunningReceiver> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
 	const store = await openForWriting(new VersionedStateStore(db, nftProcessor.entities, {finalityDepth: FINALITY}));
-	const processor = new EntityEventProcessor<typeof abi>(store, nftProcessor, {
-		finalityDepth: FINALITY,
-		identity: ARRIVAL,
-	});
+	const processor = new EntityEventProcessor<typeof abi>(store, nftProcessor, {finalityDepth: FINALITY});
 	// the APPENDER is the host's, exactly as it is in `etherfold index`: the route
 	// writes nothing, and a fold is stored by whoever owns the store (ADR-0052)
 	const builder = new StreamBuilder<typeof abi, unknown>(processor, SOURCE, {

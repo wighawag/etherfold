@@ -101,11 +101,6 @@ const PROCESSOR_IDENTITY = identityOf('shared-fold');
 
 /** The fold BOTH named indexers run, byte for byte. */
 const entityProcessor: EntityProcessor<TestABI> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: the construction site below
-	// hands the fold the identity above, so this value is read by nobody.
-	// `assertProcessorVersion` still demands the field until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
 		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
@@ -134,7 +129,6 @@ function openingFoldIn(db: RemoteSQL) {
 		createState: () =>
 			new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {
 				finalityDepth: FINALITY,
-				identity: PROCESSOR_IDENTITY,
 			}),
 		createProcessor: (state: VersionedStateEventProcessor<TestABI>) => state,
 		processorIdentity: PROCESSOR_IDENTITY,

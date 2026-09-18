@@ -43,21 +43,15 @@ type State = {count: number};
  * none from the caller, which is why `generationOf` is given no identity here
  * and one is never passed to `updateProcessor`.
  *
- * `getVersionHash` still ANSWERS -- it is on the seam until
- * `the-declared-version-and-the-drift-report-are-deleted` removes it -- and
- * nothing here reads what it answers, which is why it returns a constant no
- * assertion mentions. It used to be the string these cases MOVED to ask for a
- * swap; the marker is what moves now, so the swap is decided by what the fold IS
- * rather than by what it declares.
+ * The marker is what MOVES to ask for a swap, so the swap is decided by what the
+ * fold IS rather than by anything it declares.
  */
 function makeProcessor(marker = 'the-handlers-as-served'): EntityEventProcessorLike<Abi, State, undefined> {
 	return {
-		getVersionHash: () => 'declared-version-nobody-reads',
 		// required on `EventProcessor`, and load-bearing HERE: it is the module
 		// arrival's whole derivation, so a fake that answered `undefined` would be a
-		// module with no readable source -- the one case that still falls through to
-		// the declared hash, which `aModuleIsIdentifiedByItsHandlerSources.test.ts`
-		// keeps as this package's labelled witness
+		// module with no readable source -- which is REFUSED, and is what
+		// `aModuleIsIdentifiedByItsHandlerSources.test.ts` pins
 		getCodeFingerprint: () => `fp-${marker}`,
 		state: {count: 0},
 		configure: () => {},
@@ -203,7 +197,7 @@ function recordingIndexer() {
 	// the fifth argument is the identity this generation was REGISTERED under, and
 	// forwarding it is what keeps the engine answering to the name the registry
 	// filed (ADR-0086)
-	const createIndexer = (provider: any, processor: any, source: any, config: any, processorIdentity?: string) => {
+	const createIndexer = (provider: any, processor: any, source: any, config: any, processorIdentity: string) => {
 		const real = new IndexerGeneration<Abi, State>(provider, processor, source, config, {processorIdentity});
 
 		const realUpdateIndexer = real.updateIndexer.bind(real);
