@@ -140,6 +140,7 @@ import {
 	BRANCH_A_TIP,
 	BRANCH_B,
 	BRANCH_B_TIP,
+	editedProcessorVariant,
 	entityProcessorOver,
 	EXPECTED_A,
 	EXPECTED_A_FROM_LATER_BLOCK,
@@ -149,7 +150,6 @@ import {
 	indexerForProcessor,
 	indexToTip,
 	processor,
-	processorVariant,
 	readState,
 	runWorkload,
 	SOURCE,
@@ -333,9 +333,11 @@ async function readPhase(params: Params, timings: Timing[]): Promise<Record<stri
 /**
  * AXIS ONE: the developer edited the reducer.
  *
- * Three swaps in one page, because the interesting part is that they differ:
- * the same edit is a no-op, a rebuild, or a rebuild, depending only on a string
- * the author controls.
+ * Two swaps in one page, because the interesting part is that they differ: an
+ * edited handler is a different fold and rebuilds, and saving again with nothing
+ * changed is the same fold and does not. Neither depends on a string an author
+ * controls -- a module handed to a tab is named by a derivation over its handler
+ * sources (ADR-0086).
  */
 async function hotProcessorCase(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
 	const chain = fakeChain();
@@ -348,27 +350,27 @@ async function hotProcessorCase(params: Params, timings: Timing[]): Promise<Reco
 	await timed('initial-index', timings, () => indexToTip(indexer));
 	const before = await readState(indexer.state.$state);
 
-	// (1) the edit, with `version` left alone: the core cannot see it
-	const unbumped = await indexer.updateProcessor(
-		entityProcessorOver(store, processorVariant({version: '1.0.0', countBy: 10})),
+	// (1) THE SAVE: an edited handler, with `version` left alone. A different fold,
+	// so it is discarded and recomputed under the new logic.
+	const edited = await timed('edited-swap', timings, () =>
+		indexer.updateProcessor(entityProcessorOver(store, editedProcessorVariant({countBy: 10}))),
 	);
 	await indexToTip(indexer);
-	const afterUnbumped = await readState(indexer.state.$state);
+	const afterEdited = await readState(indexer.state.$state);
 
-	// (2) the same edit with `version` bumped: discarded and recomputed
-	const bumped = await timed('bumped-swap', timings, () =>
-		indexer.updateProcessor(entityProcessorOver(store, processorVariant({version: '2.0.0', countBy: 10}))),
-	);
+	// (2) THE SAVE THAT CHANGED NOTHING: a new module object over the same sources,
+	// which is the same fold. Nothing is discarded and the warm state stands.
+	const unchanged = await indexer.updateProcessor(entityProcessorOver(store, editedProcessorVariant({countBy: 10})));
 	await indexToTip(indexer);
-	const afterBumped = await readState(indexer.state.$state);
+	const afterUnchanged = await readState(indexer.state.$state);
 
 	indexer.dispose();
 	return {
 		before,
-		unbumpedDiscarded: unbumped.stateDiscarded,
-		afterUnbumped,
-		bumpedDiscarded: bumped.stateDiscarded,
-		afterBumped,
+		editedDiscarded: edited.stateDiscarded,
+		afterEdited,
+		unchangedDiscarded: unchanged.stateDiscarded,
+		afterUnchanged,
 	};
 }
 

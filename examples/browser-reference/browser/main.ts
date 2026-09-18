@@ -209,21 +209,17 @@ async function start() {
 	 * AXIS ONE: the developer edited the reducer, and the bundler handed this tab
 	 * a new processor module.
 	 *
-	 * THE TRAP: the core decides whether the state survives by comparing VERSION
-	 * HASHES, and a version hash is `${version}-${hash({entities, config})}`.
-	 * Handler code is in none of that. So an edited handler under an unchanged
-	 * `version` is NOT a change the core can see: `updateProcessor` skips the swap
-	 * entirely and keeps the OLD processor object running. Your edit does not take
-	 * effect, and the only complaint is a `named-logs` warning most apps never
-	 * route anywhere.
+	 * There is nothing to remember and no `version` to bump (ADR-0086). A module a
+	 * dev server hands this tab has no bytes to hash, so it is named by a derivation
+	 * over its HANDLER SOURCES: an edited handler is a different fold and the swap is
+	 * APPLIED, and a save that changed nothing is the same fold and is answered as
+	 * such. The state is DISCARDED and rebuilt from the start block when it is
+	 * applied, because the core cannot know which part of the state your edit
+	 * invalidated, and "all of it" is the only answer that cannot be wrong.
 	 *
-	 * Two ways to make an edit land, and they cost the same thing:
-	 *   - bump `version` in the processor (the honest one -- see src/processor.ts)
-	 *   - `updateProcessor(next, {force: true})` (when you cannot bump it)
-	 *
-	 * Either way the state is DISCARDED and rebuilt from the start block, because
-	 * the core cannot know which part of the state your edit invalidated, and
-	 * "all of it" is the only answer that cannot be wrong.
+	 * `updateProcessor(next, {force: true})` is for the edit that derivation cannot
+	 * see -- a helper edited in another module, behaviour decided by a captured value
+	 * -- and it costs the same rebuild.
 	 */
 	if (import.meta.hot) {
 		import.meta.hot.accept('../src/processor.js', async (module) => {
@@ -232,7 +228,7 @@ async function start() {
 			const outcome = await indexer.updateProcessor(fromEntityProcessor(next)(store));
 			el('reload').textContent = outcome.stateDiscarded
 				? 'processor swapped: state discarded, rebuilding'
-				: 'processor NOT swapped: same version hash, so the edit is not running. Bump `version`.';
+				: 'nothing changed: the handlers are the same fold, so the warm state was kept.';
 		});
 	}
 
@@ -253,11 +249,11 @@ async function start() {
 	 * changed what its events MEAN while keeping their signatures -- does not,
 	 * because it cannot happen without a PROCESSOR change. New meaning has to be
 	 * implemented by new handler code, and writing that is the developer's job.
-	 * So it travels AXIS ONE: bump `version`, and the swap discards and re-indexes.
+	 * So it travels AXIS ONE: edit the handler, and the swap discards and re-indexes.
 	 * There is no `reset()` special case and nothing for this function to detect.
 	 *
 	 *   - ABI changed at the same address .......... updateIndexer({source})
-	 *   - event MEANING changed ..................... edit the processor, bump `version`
+	 *   - event MEANING changed ..................... edit the processor's handler
 	 *   - genesis hash changed (a different chain) . reload the page
 	 *
 	 * That last one is why a template's deployments store forces `location.reload()`

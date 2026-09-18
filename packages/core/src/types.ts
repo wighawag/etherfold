@@ -244,12 +244,22 @@ export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	 * A hash of the processor's own handler SOURCE, or `undefined` when it cannot
 	 * be derived.
 	 *
-	 * Advisory, and deliberately NOT part of `getVersionHash()`: it moves when a
-	 * minifier or a transpiler re-emits the same behaviour differently, and
+	 * Advisory HERE, and deliberately NOT part of `getVersionHash()`: it moves when
+	 * a minifier or a transpiler re-emits the same behaviour differently, and
 	 * folding that into the version hash would force a full state rebuild on a
 	 * deploy that changed no logic. The core only compares it, reports when it
 	 * differs at an UNCHANGED version hash (the "forgot to bump" case), and never
 	 * discards state because of it.
+	 *
+	 * **IT IS AN IDENTITY IN ONE ARRIVAL, so this seam outlives the advisory role.**
+	 * ADR-0086 derives identity PER ARRIVAL, and the browser's is a MODULE OBJECT a
+	 * dev server handed the tab: no bytes, so `@etherfold/browser` names that fold
+	 * with exactly this value (`moduleProcessorIdentity`), which is the ADR's own
+	 * "kept for this one arrival in a different role". Nothing else changes -- the
+	 * bytes arrivals hash bytes, and core still only COMPARES what it is handed --
+	 * but `the-declared-version-and-the-drift-report-are-deleted` retires the DRIFT
+	 * REPORT and must leave this method answering, or the one arrival with no bytes
+	 * has no name at all.
 	 *
 	 * REQUIRED, unlike the value it returns. An optional method is a hole with a
 	 * polite name: an implementation that simply never wrote one would lose drift

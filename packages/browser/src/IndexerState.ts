@@ -40,6 +40,7 @@ import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './h
 import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
 import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
+import {moduleProcessorIdentity} from './moduleIdentity.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {withClaimPatience, type ClaimPatience} from './utils/claim.js';
 import {createRootStore, createStore} from './utils/stores.js';
@@ -932,8 +933,21 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		createProcessor: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createProcessor'],
 		processorConfig?: ProcessorConfig,
 		processorIdentity?: string,
+		source?: IndexingSource<ABI>,
 	) {
-		return {
+		// WHAT NAMES THIS GENERATION, filled in by `createProcessor` below where the
+		// arrival supplied nothing.
+		//
+		// THE READ ORDER IS THE CONTRACT and it is `Indexer.add`'s own: it builds the
+		// state, builds the processor, and only THEN resolves the identity -- which is
+		// what makes a MODULE arrival expressible at all, since a fold with no bytes
+		// cannot be named before the object exists (`moduleProcessorIdentity`). So this
+		// spec must reach the container WHOLE: spreading it into another object literal
+		// would copy this field at spread time, when it is still `undefined`, and the
+		// generation would quietly fall back to the declared hash. That is why a
+		// per-generation `source` is a parameter here rather than a property a caller
+		// merges in.
+		const spec = {
 			createState: (context: GenerationContext) =>
 				withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience)),
 			createProcessor: async (state: unknown, context: GenerationContext) => {
@@ -941,28 +955,34 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				if (built.configure && processorConfig) {
 					built.configure(processorConfig);
 				}
-				// Recorded HERE and not in `createState`, because this is the first moment
-				// both halves exist: a generation is `{stream, processor identity}` and the
-				// fold's half is only settled once the processor is built, which is why the
-				// factories run in this order at all -- an ARRIVAL-supplied identity is known
-				// before either factory runs, but the DECLARED fallback under it is not.
+				// THE MODULE ARRIVAL'S OWN DERIVATION, where no other arrival named this
+				// fold: a dev server hands a tab a module OBJECT and there are no bytes to
+				// hash, so the identity comes from the handler sources (ADR-0086, and
+				// `moduleProcessorIdentity` for what that survives and why it is sound in
+				// the only runtime it can happen in). Nothing an application passed reaches
+				// it -- an app that could state one would be back on the author-declared
+				// identity ADR-0086 deletes.
 				//
-				// The FIRST one wins, because that is what the container does with the
+				// The FIRST build wins, because that is what the container does with the
 				// generation itself: naming a generation it already holds RESOLVES to the one
-				// it is folding rather than adding a second engine over it, and the state that
-				// is being folded into is the one built alongside THAT processor. Overwriting
-				// would point this at a store nothing writes to and quietly stop pruning the
-				// one that is growing.
+				// it is folding rather than adding a second engine over it.
+				spec.processorIdentity ??= processorIdentity ?? moduleProcessorIdentity(built);
+				// THE STATE THIS GENERATION FOLDS INTO, recorded HERE and not in
+				// `createState`, because this is the first moment both halves of the name
+				// exist: a generation is `{stream, processor identity}` and the fold's half is
+				// only settled once the processor is built.
 				//
-				// The identity the ARRIVAL supplied, and the processor's own declared hash
-				// only where no arrival derived one (ADR-0086). It is resolved with the same
-				// expression the container resolves it with (`processorIdentityOf`,
-				// `@etherfold/core`) rather than a second opinion about it, because a key that
-				// disagreed with the registry record would leave every read of this generation's
-				// store looking for a name nothing filed.
+				// Keyed on the SAME value the container registers this generation under --
+				// resolved a line above, with the processor's own declared hash under it only
+				// where no arrival named the fold and none could be derived from it. A key that
+				// disagreed with the registry record would leave every read of this
+				// generation's store looking for a name nothing filed.
+				//
+				// The FIRST one wins here too: overwriting would point this at a store nothing
+				// writes to and quietly stop pruning the one that is growing.
 				const key = generationKey({
 					stream: context.stream,
-					processor: processorIdentity ?? built.getVersionHash(),
+					processor: spec.processorIdentity ?? built.getVersionHash(),
 				});
 				if (!statesByGeneration.has(key)) {
 					statesByGeneration.set(key, state as WritableStateStore);
@@ -972,10 +992,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
 				(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
 			// Handed STRAIGHT to the container, which registers the generation under it and
-			// never asks where it came from. Omitted rather than passed as `undefined` so
-			// that "no arrival derived one" is the absence the core's own fallback reads.
-			...(processorIdentity === undefined ? {} : {processorIdentity}),
+			// never asks where it came from. `undefined` is a real answer and reads as the
+			// absence the core's own fallback takes: no arrival named this fold, and its
+			// handlers had no readable source to derive one from either.
+			processorIdentity,
+			// PER GENERATION, and a parameter rather than something a caller merges into
+			// the returned object: see the note above on why this spec must not be spread.
+			// `undefined` is what the container reads as "this generation folds the stream
+			// the container already has".
+			source,
 		};
+		return spec;
 	}
 
 	/**
@@ -1997,13 +2024,19 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				}
 				const open = indexer;
 				const before = open.generations.map((generation) => generation.record);
-				const held = await open.add({
-					// The ABI is NARROWED here and nowhere else, exactly as the worker hosts
-					// narrow it: the envelope is not generic, and a tab and its host come out of
-					// ONE build.
-					source: source as IndexingSource<ABI>,
-					...generationSpecFor(spec.createState, spec.createProcessor, processorConfigUsed, spec.processorIdentity),
-				});
+				const held = await open.add(
+					generationSpecFor(
+						spec.createState,
+						spec.createProcessor,
+						processorConfigUsed,
+						spec.processorIdentity,
+						// The ABI is NARROWED here and nowhere else, exactly as the worker hosts
+						// narrow it: the envelope is not generic, and a tab and its host come out of
+						// ONE build. Handed to the builder rather than spread over what it returns,
+						// because a spread would freeze the identity it fills in (see there).
+						source as IndexingSource<ABI>,
+					),
+				);
 				// A promotion may already have happened (`immediate`), and the generation list
 				// an app renders has moved either way.
 				reportGenerationProgress();
@@ -2235,11 +2268,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 *
 		 * It takes the same shape the hook does, so a live-reload that rebuilds a
 		 * processor does not have to unwrap it by hand. The core is handed the
-		 * `EventProcessor` and decides whether the state survives by comparing VERSION
-		 * HASHES -- which are author-declared, so an edited handler under an unchanged
-		 * `version` is not a change the core can see, and the swap is SKIPPED rather
-		 * than applied. Bump the processor's `version`, or pass `{force: true}`, to
-		 * make an edit take effect.
+		 * `EventProcessor` and decides whether the state survives by comparing the two
+		 * folds' IDENTITIES -- the one running here, and the one derived from the module
+		 * being handed over. An edited handler is therefore a different fold and the swap
+		 * is APPLIED, with no `version` to bump and nothing for an author to remember;
+		 * a save that changed nothing is the same fold and is SKIPPED, which the outcome
+		 * says (`stateDiscarded: false`) rather than leaving a developer guessing.
 		 *
 		 * When the core does discard, `$state` is republished at that moment rather
 		 * than left holding the old value until the next event overwrites it -- a wait
@@ -2254,9 +2288,16 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * MODULE OBJECT a dev server handed the tab: there are no bytes to hash, so an
 		 * app cannot supply what a bundle's arrival supplies, and letting it state one
 		 * anyway would be the author-declared identity coming back through the one door
-		 * left open. The derivation this arrival needs is over its HANDLER SOURCES and is
-		 * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`; until it lands,
-		 * this call compares the declared hashes described above.
+		 * left open -- silent, by construction, whenever it is wrong. So this call derives
+		 * the identity ITSELF, from the module's handler sources
+		 * (`moduleProcessorIdentity`, which records what that derivation survives and why
+		 * a dev server is the only runtime it is sound in), and takes nothing from the
+		 * caller but the processor and `{force}`.
+		 *
+		 * `{force: true}` is what an integrator reaches for when they know the fold
+		 * changed in a way the SOURCE TEXT does not carry -- an edited helper the handler
+		 * imports, or behaviour decided by a captured value. It costs the same full
+		 * rebuild a different identity costs.
 		 */
 		updateProcessor(
 			newProcessor: EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>,
@@ -2277,8 +2318,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				if (wasAutoIndexing) {
 					stopAutoIndexing();
 				}
+				// The MODULE arrival's identity, derived HERE and never accepted from the app.
+				// `undefined` where the handlers have no readable source, and omitted rather
+				// than passed as `undefined` so the core reads the absence its own fallback is
+				// written against: nothing named this fold, so compare the declared hashes
+				// exactly as before this arrival had a derivation of its own.
+				const arrived = moduleProcessorIdentity(newProcessor);
 				try {
-					const outcome = await indexer.updateProcessor(newProcessor, options);
+					const outcome = await indexer.updateProcessor(newProcessor, {
+						...options,
+						...(arrived === undefined ? {} : {processorIdentity: arrived}),
+					});
 					// On success only (option b): clear stale syncing state so setupIndexing() re-runs.
 					// Must run before resuming auto-indexing so the resumed loop does not early-return
 					// on the stale lastSync.

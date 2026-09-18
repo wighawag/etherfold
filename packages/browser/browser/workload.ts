@@ -77,10 +77,17 @@ export const processor: EntityProcessor<TestABI> = {
  * the edited logic is distinguishable from a run under the old logic by reading
  * it, with no instrumentation.
  *
- * `version` is separate because it is the thing the author must remember to
- * change and the thing the core actually compares. Holding them apart is what
- * lets a test drive the two combinations that matter: edited logic with a bumped
- * version, and edited logic WITHOUT one.
+ * `version` is separate because it is what an author used to have to remember.
+ * It NAMES NOTHING now (ADR-0086), and holding it apart is what lets a test show
+ * that: the same handlers under two declared versions are ONE fold.
+ *
+ * ## WHAT `countBy` DOES **NOT** MOVE, which is the point of the pair below
+ *
+ * It is a CAPTURED VALUE and not source text, so every `processorVariant` shares
+ * ONE handler source whatever number is passed. A tab that derives its identity
+ * from the handler sources therefore cannot see it -- which is exactly the shape
+ * `{force: true}` exists for, and is asserted as such. When a case needs an edit
+ * the derivation CAN see, it uses `editedProcessorVariant` below.
  */
 export function processorVariant(options: {version?: string; countBy?: number} = {}): EntityProcessor<TestABI> {
 	const countBy = options.countBy ?? 1;
@@ -94,6 +101,38 @@ export function processorVariant(options: {version?: string; countBy?: number} =
 			state.set('token', {id: event.args.id.toString()}, {owner: event.args.to});
 			const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
 			state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + countBy});
+		},
+	};
+}
+
+/**
+ * `processorVariant` AFTER A SAVE: the same fold, with its handler body WRITTEN
+ * differently.
+ *
+ * This is what a developer's edit actually is, and it is what a tab's own arrival
+ * can see: a module handed to a tab is identified by a derivation over its
+ * handler SOURCES, so a fixture that changes only a captured value (`countBy`)
+ * changes no identity at all, however differently it behaves. The two counter
+ * writes are swapped for the token write here, which folds to the same rows in
+ * the same blocks -- so a test can hold BEHAVIOUR still and move the IDENTITY, or
+ * the other way round, and say which it is asserting.
+ *
+ * It declares the same `version` as its sibling by default, because a declared
+ * version names nothing (ADR-0086) and a fixture that bumped one would suggest it
+ * did.
+ */
+export function editedProcessorVariant(options: {version?: string; countBy?: number} = {}): EntityProcessor<TestABI> {
+	const countBy = options.countBy ?? 1;
+	return {
+		version: options.version ?? '1.0.0',
+		entities: [
+			{name: 'token', id: ['id'], fields: {owner: 'text'}},
+			{name: 'counter', id: ['name'], fields: {value: 'integer'}},
+		],
+		async onTransfer(state, event) {
+			const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
+			state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + countBy});
+			state.set('token', {id: event.args.id.toString()}, {owner: event.args.to});
 		},
 	};
 }

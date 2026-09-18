@@ -118,14 +118,19 @@ test('reclaims the versions a retention floor no longer covers, and only those',
 /**
  * AXIS ONE, in an engine: an edited reducer swapped into a running tab.
  *
- * Hot Contract Replacement's sibling, and the one with a trap in it. The core
- * decides whether the state survives by comparing VERSION HASHES, and a version
- * hash is author-declared: it contains the `version` string, the entity
- * declarations and the config, and nothing derived from handler code. So the
- * same edit is a no-op or a full rebuild depending only on whether a human
- * remembered to change a string.
+ * Hot Contract Replacement's sibling, and the one that used to have a trap in it.
+ * A module handed to a tab has no bytes to hash, so it is named by a derivation
+ * over its HANDLER SOURCES (ADR-0086): an edit is a different fold and takes
+ * effect, and a save that changed nothing is the same fold and says so. Neither
+ * answer depends on whether a human remembered to change a string.
+ *
+ * Worth noting about THIS run in particular: it is the derivation under a real
+ * bundler, where identifiers may be renamed. That is exactly the case the
+ * derivation does not survive ACROSS builds -- and it does not have to here,
+ * because both folds are compared inside ONE page from one build, which is the
+ * only comparison a tab ever makes.
  */
-test('an edited processor takes effect only when its version says so', async ({page}) => {
+test('an edited processor takes effect, and a save that changed nothing does not', async ({page}) => {
 	const harness = await harnessFor(page);
 	try {
 		const run = await harness.run({phase: 'once', params: {case: 'hot-processor', tag: tag('hot-processor')}});
@@ -133,16 +138,15 @@ test('an edited processor takes effect only when its version says so', async ({p
 		expect(run.errors).toEqual([]);
 		expect(run.results.before).toEqual(EXPECTED_A);
 
-		// the edit with `version` untouched: not a change the core can see, so the
-		// swap is SKIPPED and the old handler keeps running. The counter stays at the
-		// old logic's 5 rather than becoming the edited logic's 50.
-		expect(run.results.unbumpedDiscarded).toBe(false);
-		expect(run.results.afterUnbumped).toEqual(EXPECTED_A);
+		// the edit, with `version` untouched: a different fold, so the state is
+		// discarded and every block is replayed through the NEW handler.
+		expect(run.results.editedDiscarded).toBe(true);
+		expect((run.results.afterEdited as {transfers: number}).transfers).toBe(EXPECTED_A.transfers * 10);
 
-		// the same edit with the version bumped: the state is discarded and every
-		// block is replayed through the NEW handler.
-		expect(run.results.bumpedDiscarded).toBe(true);
-		expect((run.results.afterBumped as {transfers: number}).transfers).toBe(EXPECTED_A.transfers * 10);
+		// saved again with nothing changed: the same fold, so nothing is discarded and
+		// the state the rebuild produced stands.
+		expect(run.results.unchangedDiscarded).toBe(false);
+		expect((run.results.afterUnchanged as {transfers: number}).transfers).toBe(EXPECTED_A.transfers * 10);
 	} finally {
 		await harness.dispose();
 	}

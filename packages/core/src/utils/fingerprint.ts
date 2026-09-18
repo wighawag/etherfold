@@ -18,6 +18,21 @@ import {simple_hash} from './hash.js';
  * positive a log line instead of a multi-hour rebuild. (This deviates from
  * `docs/adr/0008`, which asks for the folding-in; see the task record.)
  *
+ * ## IT HAS A SECOND ROLE NOW, in exactly one arrival
+ *
+ * ADR-0086 moves identity onto the ARRIVAL and deletes the advisory role above
+ * along with the declared version it was a second opinion about. It keeps THIS
+ * derivation, in a different role, for the one arrival that has no bytes to hash:
+ * a browser tab handed a MODULE OBJECT by a dev server names its fold with it
+ * (`moduleProcessorIdentity`, `@etherfold/browser`), because there is nothing
+ * else to be. The measurements below are that decision's whole licence -- the
+ * cases it does NOT survive are a bundler's and a minifier's, and neither exists
+ * between a dev server and the page it is serving.
+ *
+ * So the sentence above stands where it was written (a PRODUCTION identity, which
+ * is now the hash of a bundle's octets) and does not reach the browser's module
+ * arrival, where a spurious re-fold is a developer's own save.
+ *
  * ## What it survives, and what it does not
  *
  * The source is `Function.prototype.toString()`, normalised by collapsing every
