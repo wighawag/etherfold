@@ -164,7 +164,21 @@ export function createSnapshot<ABI extends Abi>(snapshot: {
 	readonly rows: readonly Mutation[];
 	/** The cursor those rows belong to. Serialized here, installed with them as one unit. */
 	readonly lastSync: LastSync<ABI>;
-	/** WHICH FOLD computed the rows: its identity, compared for equality and never parsed. */
+	/**
+	 * WHICH FOLD computed the rows: its identity, compared for equality and never
+	 * parsed.
+	 *
+	 * It is the identity the producing deployment's ARRIVAL derived and that its
+	 * generation is REGISTERED under (ADR-0086) -- the SHA-256 of the bundle's
+	 * octets where a deployment read one off disk -- and it is HANDED here rather
+	 * than computed, because the bytes a fold ran are the producer's fact and not
+	 * this module's. Take it from the fold that wrote these rows (the canonical
+	 * generation's `processor`) rather than deriving it a second way beside it: a
+	 * label that names an artifact other than the one that folded is the silent
+	 * wrong-state condition ADR-0086 exists to delete, arriving at a client that
+	 * cannot detect it -- a snapshot-seeded generation is a LEAF with no stream to
+	 * re-fold and no way to recover by re-indexing.
+	 */
 	readonly processor: string;
 	readonly savedAt?: string;
 }): StateSnapshot {

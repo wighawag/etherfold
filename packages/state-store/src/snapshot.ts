@@ -78,6 +78,35 @@ import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.j
  * unknown format is refused (`SnapshotFormatError`) rather than parsed for the
  * fields that happen to be recognisable, because a snapshot half-understood is
  * state a client would accept and act on.
+ *
+ * ## It did NOT move when `processor` stopped being a declared version hash
+ *
+ * ADR-0086 changed where a `processor` label COMES FROM -- the identity the
+ * producing deployment's arrival derived, rather than a hash of a field its
+ * author wrote -- and that is a VALUE change, not a FORMAT change. It is worth
+ * saying here because the opposite reading is reasonable: a consumer cannot tell
+ * the two kinds of label apart by looking, and this repo's habit is to REFUSE a
+ * document it cannot read rather than half-parse it (ADR-0040).
+ *
+ * What that habit protects against is a document whose SHAPE this build would
+ * misread, and neither shape nor meaning moved: `processor` is the same field,
+ * saying the same thing (WHICH FOLD computed these rows), carried the same way,
+ * and it is opaque on both sides -- compared for EQUALITY and never parsed, which
+ * is the invariant ADR-0086 rests on. So a label derived the old way is not
+ * half-understood by a new reader; it simply is not this client's fold, and the
+ * candidate rule already has the right answer for that: NOT A CANDIDATE
+ * (`processor-mismatch`), or `SnapshotProcessorMismatchError` at install. A bump
+ * would convert that precise refusal into `unreadable-format`, which tells a user
+ * their app or the publisher is out of date when the truth is that the snapshot
+ * is for another processor -- strictly less information, on the path where a
+ * snapshot-seeded client has no stream to re-fold and nothing else to fall back
+ * on.
+ *
+ * And nothing is published (`CONTEXT.md`), so no such document exists to be
+ * refused either way: a bump would buy a distinction with no reader on either
+ * side of it. Bump this when a FIELD appears, disappears or changes meaning --
+ * which is what `a-snapshot-is-labelled-with-the-identity-it-was-computed-under`
+ * weighed and decided against.
  */
 export const ENTITY_SNAPSHOT_FORMAT = 1;
 
