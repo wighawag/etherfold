@@ -6,6 +6,7 @@ import {createClient} from '@libsql/client';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {abi, nftProcessor, SOURCE} from './chain.js';
+import {identityOf} from './processorIdentity.js';
 
 export {SOURCE};
 
@@ -40,6 +41,18 @@ export const FINALITY = 3;
  */
 export const INDEXER = 'alpha';
 
+/**
+ * WHAT THE RECEIVER'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * This harness builds its fold by hand rather than through a command, so it hands
+ * the identity over the way a host does -- the engine is GIVEN one and never asks
+ * where it came from. Without it the fold would take the author-DECLARED identity
+ * `nftProcessor.version` computes, which is what
+ * `the-declared-version-and-the-drift-report-are-deleted` deletes, and the `fetch`
+ * suite that drives a real wire into this receiver would go dark with it.
+ */
+const ARRIVAL = identityOf('the-fold-on-the-other-end-of-the-wire');
+
 export type RunningReceiver = {
 	/** The in-process wire a test hands the command, in place of the runtime's own `fetch`. */
 	fetch: FetchLike;
@@ -53,12 +66,19 @@ export type RunningReceiver = {
 export async function startReceiver(): Promise<RunningReceiver> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
 	const store = await openForWriting(new VersionedStateStore(db, nftProcessor.entities, {finalityDepth: FINALITY}));
-	const processor = new EntityEventProcessor<typeof abi>(store, nftProcessor, {finalityDepth: FINALITY});
+	const processor = new EntityEventProcessor<typeof abi>(store, nftProcessor, {
+		finalityDepth: FINALITY,
+		identity: ARRIVAL,
+	});
 	// the APPENDER is the host's, exactly as it is in `etherfold index`: the route
 	// writes nothing, and a fold is stored by whoever owns the store (ADR-0052)
 	const builder = new StreamBuilder<typeof abi, unknown>(processor, SOURCE, {
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
+		// STATED rather than asked for, the way a host states it: the receiver advertises
+		// this generation and resumes from its cursor, and both must name the fold the
+		// same way the processor above was built under (ADR-0086)
+		processorIdentity: ARRIVAL,
 	});
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,

@@ -296,10 +296,24 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
 	 * every edit -- so this is the declared path's affordance and goes with it.
 	 */
 	codeFingerprint: string | undefined;
-	/** The two factories, in ADR-0043's order: state FIRST, then the fold over it. */
+	/**
+	 * The two factories, in ADR-0043's order: state FIRST, then the fold over it --
+	 * plus the IDENTITY they are both built under, stated rather than left to be asked
+	 * for.
+	 *
+	 * The identity is on the SPEC because the container is HANDED one and never asks
+	 * where it came from (ADR-0086). Left off, `processorIdentityOf` falls back on
+	 * `EventProcessor.getVersionHash()`, which answers the same string today on both
+	 * arrivals -- a bundle's fold was constructed with it, and a declared one computes
+	 * it through the very function `processorIdentity` above calls -- but which is a
+	 * question a processor built from bytes cannot answer, and a method this family
+	 * removes. So it is `processorIdentity` above, restated nowhere: ONE value reaching
+	 * the table namespace, the fold and the registry record, which is what stops any
+	 * two of them spelling it differently.
+	 */
 	generation: Pick<
 		ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>,
-		'createState' | 'createProcessor'
+		'createState' | 'createProcessor' | 'processorIdentity'
 	>;
 };
 
@@ -388,6 +402,10 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 		// moves.
 		codeFingerprint: processorCodeFingerprint(declared),
 		generation: {
+			// STATED, so the container takes it rather than asking the fold for it: the
+			// registry record, the table namespace above and the processor below are then one
+			// value handed to three places (ADR-0086).
+			processorIdentity,
 			// CLAIMED here, which is the ONE place this process takes the store: folding is
 			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A
 			// second process pointed at this database takes the claim and this one's next

@@ -1,4 +1,5 @@
 import {prepareIndexing, run} from 'etherfold';
+import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
 
 // ---------------------------------------------------------------------------------------------------
@@ -15,7 +16,27 @@ import {describe, expect, it} from 'vitest';
 // (`LogFetcher` -> `createDirectIngestion` -> `StreamBuilder` ->
 // `EntityEventProcessor` -> a real libSQL database), and the processor object is
 // the one the browser demo imports.
+//
+// ## IT RUNS FROM THE BUNDLE THIS EXAMPLE SHIPS, and that is load-bearing
+//
+// `--processor` names `dist/cli.bundle.js`, the artifact `pnpm build:bundle`
+// produces, and NO importer is injected -- because the bytes are what a
+// deployment actually reads, and because the hash of those bytes IS this
+// deployment's identity (ADR-0086). This example used to hand the command a
+// module object instead, which derives no identity at all, so the fold fell back
+// on the `version` field in `src/entities.ts` -- the author-DECLARED identity
+// `the-declared-version-and-the-drift-report-are-deleted` removes. An example is
+// EVIDENCE, so it has to be evidence of the arrival a reader is being taught.
+//
+// The build runs as this package's `pretest`, so the bytes are there whether the
+// suite is run on its own or as part of the whole tree.
 // ---------------------------------------------------------------------------------------------------
+
+/**
+ * THE ARTIFACT, by absolute path, so the suite does not depend on which directory
+ * the runner happened to start in.
+ */
+const BUNDLE = fileURLToPath(new URL('../dist/cli.bundle.js', import.meta.url));
 
 const CONTRACT = '0x0000000000000000000000000000000000000099';
 const ALICE = '0x0000000000000000000000000000000000000011';
@@ -24,8 +45,9 @@ const ZERO = '0x0000000000000000000000000000000000000000';
 const START_BLOCK = 1_000_000;
 const TIP = START_BLOCK + 100;
 
-// read by `src/cli.ts` at import time, so the fake chain and the module agree on
-// what is being indexed
+// read by `src/cli.ts` at import time -- which for a bundle is the moment the CLI
+// evaluates the bytes it just read, inside `prepareIndexing` -- so the fake chain
+// and the artifact agree on what is being indexed
 process.env.NFT_CONTRACT = CONTRACT;
 process.env.NFT_START_BLOCK = String(START_BLOCK);
 
@@ -98,15 +120,12 @@ describe('etherfold build --store sqlite, over src/entities.ts', () => {
 		const prepared = await prepareIndexing(
 			'build',
 			{
-				processor: './dist/cli.js',
+				processor: BUNDLE,
 				nodeUrl: 'http://localhost:0',
 				store: 'sqlite',
 				db: ':memory:',
 			},
 			{
-				// the module the CLI would import; imported here directly so the test does
-				// not depend on the build output's location
-				importModule: async () => import('../src/cli.js'),
 				provider: fakeChain(),
 				sleep: async () => {},
 			},
@@ -138,7 +157,7 @@ describe('etherfold run, over the same src/entities.ts', () => {
 	it('follows the chain, folds the browser demo\u2019s processor and answers HTTP, unchanged', async () => {
 		const running = await run(
 			{
-				processor: './dist/cli.js',
+				processor: BUNDLE,
 				nodeUrl: 'http://localhost:0',
 				store: 'sqlite',
 				db: ':memory:',
@@ -147,7 +166,6 @@ describe('etherfold run, over the same src/entities.ts', () => {
 				port: '0',
 			},
 			{
-				importModule: async () => import('../src/cli.js'),
 				provider: fakeChain(),
 				sleep: async () => {
 					await new Promise((resolve) => setTimeout(resolve, 1));

@@ -7,6 +7,7 @@ import {describe, expect, it} from 'vitest';
 import {openFolding} from '../src/folding.js';
 import type {StoreTarget} from '../src/types.js';
 import {abi, nftProcessor, SOURCE} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN ENTITY CANNOT BE NAMED AFTER A FIXED TABLE, BECAUSE THEY SHARE ONE DATABASE
@@ -47,6 +48,17 @@ function declaring(name: string): EntityProcessor<typeof abi, any> {
 	} as unknown as EntityProcessor<typeof abi, any>;
 }
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The subject is the reserved-identifier refusal and the fact that the fixed
+ * tables and a generation's tables share ONE database, so the identity here is
+ * only what NAMES the namespace the second set lands in. It is handed over the way
+ * every folding command hands one over -- the arrival derived it -- rather than
+ * left to fall through to the author-DECLARED identity the contract task deletes.
+ */
+const ARRIVAL = identityOf('the-fold-beside-the-fixed-tables');
+
 /** The combined shape: one handle, the server's fixed schema on it, a generation folding into it. */
 async function foldInto(handle: RemoteSQL, declared: EntityProcessor<typeof abi, any>) {
 	await applySchema(handle);
@@ -54,6 +66,7 @@ async function foldInto(handle: RemoteSQL, declared: EntityProcessor<typeof abi,
 		source: SOURCE,
 		stream: {},
 		finalityDepth: FINALITY,
+		processorIdentity: ARRIVAL,
 		// the name the stored emission stream and the generation records are keyed on,
 		// which every folding command resolves before it gets here (ADR-0052): required,
 		// so that no shape can fold into a database without saying under which name it

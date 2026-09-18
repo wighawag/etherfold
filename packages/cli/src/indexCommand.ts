@@ -85,6 +85,17 @@ export type ServerStart = (options: StartOptions) => Promise<RunningServer>;
 export type IndexDependencies = {
 	/** Loads the processor module. Defaults to a dynamic `import()`. */
 	importModule?: (specifier: string) => Promise<any>;
+	/**
+	 * What the arrival substituted through `importModule` is CALLED, on the same terms
+	 * the combined shapes take it (`IndexingDependencies.processorIdentity`, which
+	 * documents it): bytes on a disk win, and this only supplies a derivation where the
+	 * injected arrival made none.
+	 *
+	 * It is here rather than left to the combined commands because one `--processor`
+	 * path must not name two different generations depending on which command was
+	 * pointed at it, and this half of the wire resolves its arrival itself.
+	 */
+	processorIdentity?: string;
 	/** Builds the libSQL handle for the store. Defaults to `createNodeDB`. */
 	createDB?: (url: string) => RemoteSQL;
 	/** Substituted by a test; a deployment uses the Node adapter. */
@@ -199,6 +210,8 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			...(deps.importModule ? {importModule: deps.importModule} : {}),
 		});
 		const declared = arrival.processor;
+		// bytes on a disk answer first; an arrival a caller SUBSTITUTED answers for itself
+		const arrivalIdentity = arrival.identity ?? deps.processorIdentity;
 
 		const providedStreamConfig = streamConfigFor(env);
 		const streamConfig = resolveStreamConfig(providedStreamConfig);
@@ -238,8 +251,9 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 				// addresses: one value, required here and never defaulted, because on this
 				// half it routes as well as keys (ADR-0036)
 				indexer: config.wire.indexer,
-				// the identity the ARRIVAL derived, where it derived one (ADR-0086)
-				...(arrival.identity === undefined ? {} : {processorIdentity: arrival.identity}),
+				// the identity the ARRIVAL derived, where it derived one (ADR-0086) -- the bundle's
+				// hash, or what a caller that substituted the arrival named it
+				...(arrivalIdentity === undefined ? {} : {processorIdentity: arrivalIdentity}),
 			},
 		);
 

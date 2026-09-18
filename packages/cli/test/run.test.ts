@@ -6,6 +6,7 @@ import {run, runMain, type RunDependencies, type RunningIndexer} from '../src/in
 import {DEFAULT_INDEXER_NAME} from '../src/config.js';
 import type {StoreCursorReport} from '../src/cursorReport.js';
 import type {Options} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 import {
 	ALICE,
@@ -71,9 +72,21 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The suite's subject is the `run` COMMAND -- following, folding, answering,
+ * exiting -- and nothing in it is about identity. It stays on the injected module
+ * arrival for exactly that reason, and names it rather than letting it fall
+ * through to `nftProcessor.version`, which is the declared identity
+ * `the-declared-version-and-the-drift-report-are-deleted` deletes.
+ */
+const ARRIVAL = identityOf('the-fold-this-run-came-up-with');
+
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: RunDependencies = {}): RunDependencies {
 	return {
 		importModule: async () => entityModule,
+		processorIdentity: ARRIVAL,
 		provider: chain.provider,
 		createDB: () => db,
 		// a follower waits between cycles, and a test must not: one tick instead of
@@ -489,6 +502,7 @@ describe('every input is resolved through the shared configuration path', () => 
 				{processor: './nfts.js', store: 'sqlite', db: ':memory:'},
 				{
 					importModule: async () => entityModule,
+					processorIdentity: ARRIVAL,
 					provider: chain.provider,
 					handleSignals: false,
 					createDB: () => {
@@ -516,7 +530,10 @@ describe('every input is resolved through the shared configuration path', () => 
 			// handlers ON, as a deployment runs it: a configuration this command refuses
 			// never starts a loop, so there must be nothing left listening for a signal
 			// to stop
-			run({processor: './nfts.js', store: 'sqlite', db: ':memory:'}, {importModule: async () => entityModule, env: {}}),
+			run(
+				{processor: './nfts.js', store: 'sqlite', db: ':memory:'},
+				{importModule: async () => entityModule, processorIdentity: ARRIVAL, env: {}},
+			),
 		).rejects.toThrow(/--node-url/);
 
 		expect(process.listenerCount('SIGTERM')).toBe(before);
@@ -524,7 +541,10 @@ describe('every input is resolved through the shared configuration path', () => 
 
 	it('refuses a flag `run` does not own, naming what it is instead', async () => {
 		await expect(
-			run({...RUN, ingestEndpoint: 'http://elsewhere'}, {importModule: async () => entityModule}),
+			run(
+				{...RUN, ingestEndpoint: 'http://elsewhere'},
+				{importModule: async () => entityModule, processorIdentity: ARRIVAL},
+			),
 		).rejects.toThrow(/--ingest-endpoint \(INGEST_ENDPOINT\) is not accepted by `etherfold run`/);
 	});
 });

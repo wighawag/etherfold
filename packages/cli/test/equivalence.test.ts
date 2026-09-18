@@ -77,6 +77,21 @@ const V2: EntityProcessor<typeof abi> = {
 	},
 };
 
+/**
+ * The identity the INCUMBENT arrived as, and the one thing every shape in this
+ * file must agree about (ADR-0086).
+ *
+ * Every command here is driven through an injected module arrival, which derives
+ * no identity of its own, so each is told what its arrival is CALLED. It is ONE
+ * value across `run`, `index` and `build` deliberately: this file's whole claim is
+ * that the three shapes land on the same generation, in the same table namespace,
+ * and two arrivals with two names would be two generations before a single log was
+ * folded. It used to be the author-DECLARED identity, shared because the shapes
+ * shared one `nftProcessor` -- which is exactly the dependency
+ * `the-declared-version-and-the-drift-report-are-deleted` removes.
+ */
+const V1_IDENTITY = identityOf('the-incumbent-fold');
+
 /** The identity the REBUILT bundle arrived as, which is what names the successor (ADR-0086). */
 const V2_IDENTITY = identityOf('the-successor-fold');
 
@@ -381,6 +396,7 @@ async function startCombined(
 		},
 		{
 			importModule: async () => entityModule,
+			processorIdentity: V1_IDENTITY,
 			provider: chain.provider,
 			// a follower waits between cycles, and a test must not
 			sleep: async () => {
@@ -400,6 +416,7 @@ async function startReceiver(db: string): Promise<RunningReceiver> {
 		{processor: './nfts.js', store: 'sqlite', db, port: '0', indexer: INDEXER, ingestToken: TOKEN},
 		{
 			importModule: async () => entityModule,
+			processorIdentity: V1_IDENTITY,
 			handleSignals: false,
 			log: () => {},
 			env: DEPLOYMENT,
@@ -716,6 +733,7 @@ describe('`build` emits a database carrying the reorgs it concluded', () => {
 		const options: Options = {processor: './nfts.js', store: 'sqlite', db: artifact, nodeUrl: 'http://localhost:0'};
 		const deps = {
 			importModule: async () => entityModule,
+			processorIdentity: V1_IDENTITY,
 			provider: chain.provider,
 			sleep: async () => {},
 			env: DEPLOYMENT,
@@ -827,6 +845,7 @@ describe('a `build` artifact and a `run` database, on the generation axis', () =
 				{processor: './nfts.js', store: 'sqlite', db: artifact, nodeUrl: 'http://localhost:0', indexer: INDEXER},
 				{
 					importModule: async () => entityModule,
+					processorIdentity: V1_IDENTITY,
 					provider: buildChain.provider,
 					sleep: async () => {},
 					env: DEPLOYMENT,

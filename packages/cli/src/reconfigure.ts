@@ -151,6 +151,17 @@ export type ReconfigureContext<ABI extends Abi = Abi, ProcessResultType = unknow
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/** Substituted by a test; a deployment reloads through the cache-busting importer below. */
 	importModule?: (specifier: string) => Promise<any>;
+	/**
+	 * What the SUBSTITUTED arrival is called, carried through unchanged from
+	 * `IndexingDependencies.processorIdentity`, which documents it.
+	 *
+	 * It travels with `importModule` because the two are one seam: a re-read that
+	 * resolved the module the caller stated and then named it a different way would
+	 * register a successor on every call, which is the opposite of what this endpoint
+	 * is for. Bytes on a disk still win here exactly as they do at start-up, so a
+	 * REBUILT bundle is still a new identity.
+	 */
+	processorIdentity?: string;
 };
 
 /**
@@ -237,6 +248,9 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 				{importModule: importFresh},
 			);
 			fromBundle = arrival.identity !== undefined;
+			// the same order as start-up: the disk answers first, and a substituted arrival
+			// answers for itself (`prepareIndexing`)
+			const arrivalIdentity = arrival.identity ?? held.processorIdentity;
 			source = await openIndexingSource<ABI, ProcessResultType>(
 				resolved.source,
 				arrival.processorModule,
@@ -247,7 +261,7 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 				resolved.destination,
 				held.db,
 				streamConfig.finality,
-				arrival.identity,
+				arrivalIdentity,
 			);
 			wanted = {stream: streamDigestOf(source, streamConfig), processor: parts.processorIdentity};
 		} catch (err) {

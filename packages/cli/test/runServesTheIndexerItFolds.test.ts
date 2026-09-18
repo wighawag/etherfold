@@ -5,6 +5,7 @@ import {afterEach, describe, expect, it} from 'vitest';
 import {run, type RunDependencies, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, entityModule, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE COMBINED PROCESS SERVES THE NAMED INDEXER IT FOLDS, AND STILL TAKES NO PUSHES
@@ -56,9 +57,19 @@ afterEach(async () => {
 	delete process.env.ADMIN_TOKEN;
 });
 
+/**
+ * WHAT THIS SUITE'S ARRIVAL IS CALLED (ADR-0086).
+ *
+ * The subject is WHICH NAME a `run` process serves the read tier under and what
+ * it refuses; the injected module arrival stays and is named, so no deployment
+ * here falls through to the author-DECLARED identity the contract task deletes.
+ */
+const ARRIVAL = identityOf('the-fold-this-run-serves');
+
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: RunDependencies = {}): RunDependencies {
 	return {
 		importModule: async () => entityModule,
+		processorIdentity: ARRIVAL,
 		provider: chain.provider,
 		createDB: () => db,
 		sleep: async () => {

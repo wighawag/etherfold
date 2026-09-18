@@ -95,14 +95,28 @@ This is the modelling rule the spec states as *"key children by something natura
 The claim this example exists to make is that `src/entities.ts` names no backend. Here is that claim as a command: the file the tab runs, folded by `etherfold build` into SQLite, with **not one line of it changed**.
 
 ```sh
-pnpm --filter event-processor-nfts build
+pnpm --filter event-processor-nfts build:bundle
 NFT_CONTRACT=0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d NFT_START_BLOCK=21000000 \
   pnpm --filter event-processor-nfts build:db -n https://rpc.mevblocker.io
 ```
 
-(`build` is `tsc`, which is what `build:db` needs first; `build:db` is the `etherfold build` that produces `nfts.db`.)
+(`build:bundle` is the esbuild step below, which is what `build:db` needs first; `build:db` is the `etherfold build` that produces `nfts.db`.)
 
 `src/cli.ts` is the whole difference, and it adds no indexing logic: it imports `NFTProcessor` as-is and says what to index per chain. A browser page needs neither, because `browser/main.ts` passes both at the call site.
+
+### A processor IS a bundle, and that is why there is a bundling step
+
+`--processor` is given `dist/cli.bundle.js`, not `dist/cli.js`. A `tsc` output still imports its ABI and its sibling modules, so its dependency closure is not in it: it is an entry point rather than a unit, it cannot be handed to another process or re-instantiated after a restart, and there is nothing to hash. A bundle is all three, and **the hash of its bytes IS the identity of the fold it produces** ([ADR-0086](../../docs/adr/0086-a-processors-identity-is-derived-from-its-code-and-never-declared.md)). Edit a handler and the bytes move, so the identity moves, so it is a new generation: there is no field to remember to bump, which is what this example used to be teaching.
+
+One command produces it, and it is the command the rest of the repository uses:
+
+```sh
+esbuild src/cli.ts --bundle --format=esm --minify --outfile=dist/cli.bundle.js
+```
+
+`--minify` is not a size preference. Un-minified esbuild output carries a `// <path>` banner per module, so the **building machine's directory layout** ends up in the bytes and two machines building one source disagree about which generation they are. For the same reason the bundler version belongs in your lockfile: a non-deterministic build gives every deploy a new identity and re-folds for ever.
+
+This package's `build:bundle` script runs that command through the workspace's own copy of esbuild, so the example adds no dependency of its own. In your project, install esbuild and run it directly.
 
 What you should see: block counters climbing (`21000123 / 21456789`), then the process **exits 0** at the tip — it is a one-shot, not a server. What lands is `nfts.db`, holding the same two entities the tab keeps in IndexedDB:
 
@@ -124,7 +138,7 @@ Stop it with `Ctrl-C` half way and run it again: it continues from the cursor in
 ```sh
 NFT_CONTRACT=0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d NFT_START_BLOCK=21000000 \
   pnpm --filter event-processor-nfts exec etherfold run \
-  -p ./dist/cli.js --store sqlite --db file:./nfts.db --port 2000 \
+  -p ./dist/cli.bundle.js --store sqlite --db file:./nfts.db --port 2000 \
   -n https://rpc.mevblocker.io
 ```
 
@@ -137,7 +151,7 @@ The processor file is still not one line different, which is the point: which de
 | file | |
 | --- | --- |
 | `entities.ts` | the processor: an `EntityProcessor` (`@etherfold/processor-entities`), declared entities written through a `MutationContext`, kept in whichever `StateStore` the deployment chose |
-| `cli.ts` | the entry `etherfold build` loads. Not a second processor: it imports `entities.ts` unchanged and adds only what to index per chain |
+| `cli.ts` | the entry the bundle is built FROM. Not a second processor: it imports `entities.ts` unchanged and adds only what to index per chain |
 | `eip721.ts` | the ABI |
 
 `entities.ts` is what the browser app runs, and it is the same object a server runs against SQLite: nothing in it names a backend.
@@ -157,6 +171,7 @@ Drives the built app in a real Chromium against the live chain, over six scenari
 ## Building
 
 ```sh
-pnpm --filter event-processor-nfts build          # the processor, to dist/
+pnpm --filter event-processor-nfts build:bundle   # the processor BUNDLE the CLI runs, to dist/cli.bundle.js
+pnpm --filter event-processor-nfts build          # tsc, for type declarations and the browser app's imports
 pnpm --filter event-processor-nfts browser:build  # the browser app, to dist/browser/
 ```

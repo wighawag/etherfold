@@ -25,13 +25,18 @@
     "vitest": "^4.1.8"
   },
   "scripts": {
-    "build": "tsc",
+    "---- BUILD: tsc for the types and the browser app's imports, then the BUNDLE the CLI is pointed at. One script, because `build:db` needs the second and nothing should have to remember that. ----": "",
+    "build": "tsc && pnpm build:bundle",
     "watch": "as-soon -w src pnpm build",
     "browser": "vite",
     "browser:build": "vite build",
     "verify:browser": "node verify/verify.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
-    "build:db": "etherfold build -p ./dist/cli.js --store sqlite --db file:./nfts.db",
+    "---- BUNDLE: what `etherfold build` and `etherfold run` are pointed at. A processor IS a bundle and the hash of its bytes IS its identity (ADR-0086), so this is not an optimisation: an entry point that still imports its ABI has no identity to be named by. The command is the one the repo documents; the binary is the WORKSPACE's own copy, because nothing in this example bundles at run time and a devDependency here would be one a reader copying this example then carries. Building your own, run `esbuild` from anywhere it is installed. ----": "",
+    "build:bundle": "../../packages/utils/node_modules/.bin/esbuild src/cli.ts --bundle --format=esm --minify --outfile=dist/cli.bundle.js",
+    "build:db": "etherfold build -p ./dist/cli.bundle.js --store sqlite --db file:./nfts.db",
+    "---- TEST: the suite drives the real arrival, so it needs the real bytes on disk first ----": "",
+    "pretest": "pnpm build:bundle",
     "test": "vitest run"
   }
 }

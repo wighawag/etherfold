@@ -11,6 +11,12 @@ import {NFTProcessor} from './entities.js';
  * which a browser page needs, since an app passes both at the call site
  * (`browser/main.ts`).
  *
+ * THIS FILE IS NOT WHAT THE CLI IS POINTED AT. It is what the BUNDLE is built
+ * FROM: it imports its ABI and its sibling module, so its dependency closure is
+ * not in it and there is nothing to hash. `pnpm build:bundle` flattens it into
+ * `dist/cli.bundle.js`, whose bytes ARE this deployment's identity (ADR-0086),
+ * and that is the path `--processor` names.
+ *
  * ```sh
  * pnpm --filter event-processor-nfts build
  * NFT_CONTRACT=0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d NFT_START_BLOCK=21000000 \
