@@ -15,7 +15,6 @@ import {
 } from '@etherfold/core';
 import {
 	createSnapshot,
-	entityProcessorVersionHash,
 	openAndBootstrap,
 	type EntityProcessor,
 	type EntityStateView,
@@ -47,6 +46,21 @@ import {
 	streamOf,
 } from '../browser/workload.js';
 import {appliedIn, applyingProcessor, indexerOver, keysOf} from './utils/applied.js';
+import {identityOf} from './utils/processorIdentity.js';
+
+/**
+ * THE LABEL A PUBLISHER WROTE ON ITS SNAPSHOT, and the identity the client says
+ * it is running.
+ *
+ * An author cannot STATE an identity (ADR-0086), so this does what an ARRIVAL
+ * does: it has BYTES and it hashes them. It used to be taken from the runtime, by
+ * asking the definition for its declared version hash -- a value
+ * `the-declared-version-and-the-drift-report-are-deleted` removes. Nothing here
+ * parses it; the candidate rule is an EQUALITY between what a producer wrote and
+ * what a client says it runs, and the one case in this file that bootstraps is
+ * about the STREAM SEED being refused while the SNAPSHOT still installs.
+ */
+const APP_IDENTITY = identityOf('stream-seeding-app');
 
 /**
  * STORY 10: THE SEEDING OUTCOME REACHES THE SURFACE AN APP ALREADY SUBSCRIBES
@@ -411,7 +425,7 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 			takenAt: {number: SNAPSHOT_TIP, hash: `0xsnap${SNAPSHOT_TIP.toString(16)}`, timestamp: timestampOf(SNAPSHOT_TIP)},
 			rows,
 			lastSync,
-			processor: entityProcessorVersionHash(definition),
+			processor: APP_IDENTITY,
 		});
 	}
 
@@ -434,7 +448,7 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 		const {store: bootstrapped, outcome} = await openAndBootstrap(
 			await createBrowserStateStore(definition.entities, {databaseName: name}),
 			mirror.url,
-			{processor: entityProcessorVersionHash(definition), fetch: mirror.fetch},
+			{processor: APP_IDENTITY, fetch: mirror.fetch},
 		);
 		// the snapshot-aware handle is what `openAndBootstrap` hands back; the CLAIM
 		// over it is what a generation folds through (ADR-0077).

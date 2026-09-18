@@ -41,6 +41,11 @@ import {identityOf} from './utils/processorIdentity.js';
  * ONE value for both, which is this file's claim restated: where the state lives
  * is a deployment's choice and nothing the processor sees, so the fold's name
  * cannot depend on the backend underneath it either.
+ *
+ * It reaches BOTH halves -- the fold (`identity` / `getVersionHash`) and the
+ * `IndexerGeneration` driving it (`processorIdentity`) -- because the engine asks
+ * the second one, and a generation handed nothing there falls through to the
+ * declared computation however carefully the fold underneath was named.
  */
 const PROCESSOR_IDENTITY = identityOf('deployment-shapes');
 
@@ -548,9 +553,15 @@ const shapes: Shape[] = [
 		async start(backend) {
 			const chain = fakeChain();
 			const {processor: eventProcessor, read} = backend.make();
-			const indexer = new IndexerGeneration<TestABI, any>(chain.provider, eventProcessor, SOURCE, {
-				stream: STREAM_CONFIG,
-			});
+			const indexer = new IndexerGeneration<TestABI, any>(
+				chain.provider,
+				eventProcessor,
+				SOURCE,
+				{stream: STREAM_CONFIG},
+				// the same value the fold itself was handed: the engine is TOLD which fold it
+				// drives rather than asking the processor to state one (ADR-0086)
+				{processorIdentity: PROCESSOR_IDENTITY},
+			);
 			return {
 				async advanceTo(fixture) {
 					const branch = chainOf(fixture);
@@ -578,9 +589,13 @@ const shapes: Shape[] = [
 			// called, because it starts with an `eth_chainId` round-trip and this half
 			// has no node to ask; the fetcher asserts `{source, config}` instead.
 			await eventProcessor.load(SOURCE, STREAM_CONFIG);
-			const indexer = new IndexerGeneration<TestABI, any>(server.provider, eventProcessor, SOURCE, {
-				stream: STREAM_CONFIG,
-			});
+			const indexer = new IndexerGeneration<TestABI, any>(
+				server.provider,
+				eventProcessor,
+				SOURCE,
+				{stream: STREAM_CONFIG},
+				{processorIdentity: PROCESSOR_IDENTITY},
+			);
 			const wire: WireBatch[] = [];
 			// one fetcher across every advance, so the runs also exercise what it does
 			// and does not carry between cycles
@@ -727,9 +742,13 @@ describe('the split seam is still open', () => {
 		const server = noChain();
 		const backend = backends[0].make();
 		await backend.processor.load(SOURCE, STREAM_CONFIG);
-		const indexer = new IndexerGeneration<TestABI, any>(server.provider, backend.processor, SOURCE, {
-			stream: STREAM_CONFIG,
-		});
+		const indexer = new IndexerGeneration<TestABI, any>(
+			server.provider,
+			backend.processor,
+			SOURCE,
+			{stream: STREAM_CONFIG},
+			{processorIdentity: PROCESSOR_IDENTITY},
+		);
 
 		const sent: WireBatch[] = [];
 		const fetcher = fetcherOn(chain.provider, ingestionInto(indexer, sent));

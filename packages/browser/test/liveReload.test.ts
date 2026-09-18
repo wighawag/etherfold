@@ -30,23 +30,35 @@ function makeProvider(chainIdHex: string = CHAIN_ID_HEX) {
 type State = {count: number};
 
 /**
- * A fake fold, and the VERSION it declares.
+ * A fake fold, and the HANDLER SOURCES it reports.
  *
- * The declared hash names nothing where a spec supplies an identity (ADR-0086:
- * an author cannot state one). It is still what `updateProcessor` compares,
- * because the arrival there is a MODULE a dev server handed the tab and the
- * derivation for that one is
- * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`; the cases
- * below that swap a processor therefore still move this string to ask for a
- * swap, and they are this package's witness that the declared path goes on
- * working while the migration runs.
+ * The arrival here is a MODULE a dev server handed the tab, which has no bytes to
+ * hash, so it is named by its handler sources --
+ * `moduleProcessorIdentity(processor)`, which is `getCodeFingerprint()` and
+ * nothing else (ADR-0086,
+ * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`). A fake has no
+ * handlers to fingerprint, so the marker below stands in for them: two markers
+ * are two folds and one marker is always the same fold, which is the only
+ * property these cases need. The hook derives that identity ITSELF and takes
+ * none from the caller, which is why `generationOf` is given no identity here
+ * and one is never passed to `updateProcessor`.
+ *
+ * `getVersionHash` still ANSWERS -- it is on the seam until
+ * `the-declared-version-and-the-drift-report-are-deleted` removes it -- and
+ * nothing here reads what it answers, which is why it returns a constant no
+ * assertion mentions. It used to be the string these cases MOVED to ask for a
+ * swap; the marker is what moves now, so the swap is decided by what the fold IS
+ * rather than by what it declares.
  */
-function makeProcessor(versionHash = 'declared-version-v1'): EntityEventProcessorLike<Abi, State, undefined> {
+function makeProcessor(marker = 'the-handlers-as-served'): EntityEventProcessorLike<Abi, State, undefined> {
 	return {
-		getVersionHash: () => versionHash,
-		// required on `EventProcessor`: a fake that omits it is a fake that would
-		// lose drift detection without anybody noticing
-		getCodeFingerprint: () => undefined,
+		getVersionHash: () => 'declared-version-nobody-reads',
+		// required on `EventProcessor`, and load-bearing HERE: it is the module
+		// arrival's whole derivation, so a fake that answered `undefined` would be a
+		// module with no readable source -- the one case that still falls through to
+		// the declared hash, which `aModuleIsIdentifiedByItsHandlerSources.test.ts`
+		// keeps as this package's labelled witness
+		getCodeFingerprint: () => `fp-${marker}`,
 		state: {count: 0},
 		configure: () => {},
 		load: async () => undefined,
@@ -188,8 +200,11 @@ function recordingIndexer() {
 		return gates[key];
 	}
 
-	const createIndexer = (provider: any, processor: any, source: any, config: any) => {
-		const real = new IndexerGeneration<Abi, State>(provider, processor, source, config);
+	// the fifth argument is the identity this generation was REGISTERED under, and
+	// forwarding it is what keeps the engine answering to the name the registry
+	// filed (ADR-0086)
+	const createIndexer = (provider: any, processor: any, source: any, config: any, processorIdentity?: string) => {
+		const real = new IndexerGeneration<Abi, State>(provider, processor, source, config, {processorIdentity});
 
 		const realUpdateIndexer = real.updateIndexer.bind(real);
 		real.updateIndexer = (async (update: any) => {
@@ -203,12 +218,16 @@ function recordingIndexer() {
 		}) as any;
 
 		const realUpdateProcessor = real.updateProcessor.bind(real);
-		real.updateProcessor = (async (p: any) => {
+		// `opts` is forwarded rather than dropped: it carries the identity the MODULE
+		// arrival derived for the processor being handed over (ADR-0086), and a wrapper
+		// that swallowed it would make the engine see an unnamed fold that no deployment
+		// ever hands it.
+		real.updateProcessor = (async (p: any, opts: any) => {
 			trace.push('updateProcessor:enter');
 			if (gates['updateProcessor']) {
 				await gates['updateProcessor'].promise;
 			}
-			const r = await realUpdateProcessor(p);
+			const r = await realUpdateProcessor(p, opts);
 			trace.push('updateProcessor:exit');
 			return r;
 		}) as any;
@@ -232,7 +251,7 @@ describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure c
 		await Promise.resolve();
 
 		// while it is in flight, a processor change event arrives (user fixed handlers for new ABI)
-		const p2 = indexer.updateProcessor(makeProcessor('declared-version-v2'));
+		const p2 = indexer.updateProcessor(makeProcessor('the-handlers-after-the-save'));
 		await Promise.resolve();
 
 		// release the first; let both settle
@@ -255,7 +274,7 @@ describe('createIndexerState - live reload (MEDIUM #4: overlapping reconfigure c
 
 		// keep the processor change in flight
 		const g = gate('updateProcessor');
-		const p1 = indexer.updateProcessor(makeProcessor('declared-version-v2'));
+		const p1 = indexer.updateProcessor(makeProcessor('the-handlers-after-the-save'));
 		await Promise.resolve();
 
 		// while it is in flight, the (slow) deploy completes and a source change arrives
@@ -301,8 +320,8 @@ describe('createIndexerState - live reload (#5: updateProcessor force option pas
 	it('forwards the {force} option to the core updateProcessor', async () => {
 		let receivedOptions: any;
 		const indexer = createIndexerState<Abi, State>(generationOf(makeProcessor()), {
-			createIndexer: (provider, processor, source, config) => {
-				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config);
+			createIndexer: (provider, processor, source, config, processorIdentity) => {
+				const real = new IndexerGeneration<Abi, State>(provider, processor, source, config, {processorIdentity});
 				const realUpdateProcessor = real.updateProcessor.bind(real);
 				real.updateProcessor = (async (p: any, opts: any) => {
 					receivedOptions = opts;
@@ -314,12 +333,16 @@ describe('createIndexerState - live reload (#5: updateProcessor force option pas
 		await indexer.init({provider: makeProvider(), source: SOURCE});
 		await indexer.indexMore();
 
-		// same DECLARED hash + force:true should still be forwarded so the core performs
-		// the swap. This generation deliberately takes no arrival identity: what it is
-		// about is the swap comparison `updateProcessor` makes, which is the module
-		// arrival's and is `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`.
+		// The SAME fold again -- same marker, so the same handler sources and the same
+		// module identity -- plus `force: true`, which is what an integrator reaches for
+		// when the fold changed in a way the source text does not carry. It must still be
+		// forwarded so the core performs the swap it would otherwise decline.
 		await indexer.updateProcessor(makeProcessor(), {force: true});
 
-		expect(receivedOptions).toEqual({force: true});
+		// `{force}` reaches the core, beside the identity the hook derived for the module
+		// itself -- which the hook takes from the processor and never from this caller
+		// (ADR-0086), so it is asserted as what `makeProcessor` reports rather than as a
+		// literal.
+		expect(receivedOptions).toEqual({force: true, processorIdentity: makeProcessor().getCodeFingerprint()});
 	});
 });

@@ -89,6 +89,14 @@ describe('a module handed to a tab is identified by its handler sources', () => 
 	/**
 	 * The declared field names NOTHING and the handler sources name EVERYTHING,
 	 * asserted as the pair, because either half alone is satisfiable by accident.
+	 *
+	 * DECLARED-PATH WITNESS. `declared()` asks a fold built with no identity for its
+	 * `getVersionHash()`, which is the author-declared computation ADR-0086 moves off
+	 * -- deliberately, because "the generation is not named by the declared hash" is a
+	 * claim that needs that hash to exist and still work. It is one of the two cases
+	 * in this package that `the-declared-version-and-the-drift-report-are-deleted`
+	 * retires: when the declared half goes, the last assertion here goes with it and
+	 * the two above it stand on their own.
 	 */
 	it('names the generation by its handler sources, with nothing declared and nothing supplied', async () => {
 		const one = await aTabRunning(processorVariant({version: '1.0.0'}));
@@ -194,6 +202,55 @@ describe('a module handed to a tab is identified by its handler sources', () => 
 
 		fromBytes.dispose();
 		asModule.indexer.dispose();
+	});
+
+	/**
+	 * DECLARED-PATH WITNESS, and the SECOND of the two this package keeps.
+	 *
+	 * `moduleProcessorIdentity` answers `undefined` for a processor whose handlers
+	 * have no readable source -- all `bind`-ed, or behind a proxy -- and says so in as
+	 * many words: hashing `[native code]` would be a constant no edit could move, so
+	 * the caller falls back to the declared hash "exactly as it did before this
+	 * arrival had a derivation of its own". That fallback is PRODUCTION code in
+	 * `@etherfold/browser`, it is the last place the declared path is reachable here,
+	 * and this case exists to prove it still works. It is
+	 * `the-declared-version-and-the-drift-report-are-deleted` that retires it: that
+	 * task has to decide what an unnameable module is called once there is no declared
+	 * hash left to fall back to, and this is the case that goes red when it does not.
+	 *
+	 * Asserted at the CONTAINER, like every other case here: what a generation is
+	 * FILED as is the only thing that matters, and the point is that such a module
+	 * still gets a name rather than none.
+	 */
+	it('falls back to the declared hash for a module whose handlers have no readable source', async () => {
+		// The AUTHOR'S object with every handler `bind`-ed, which is what a module put
+		// behind a wrapper looks like and the one shape `processorCodeFingerprint`
+		// refuses to name: `Function.prototype.toString` answers `[native code]` for all
+		// of them, so there is no source text to hash. It is the author's object and not
+		// the fold built over it, because that is what `getCodeFingerprint()` reads.
+		const bound = {...processorVariant()} as EntityProcessor<TestABI>;
+		for (const [name, value] of Object.entries(bound)) {
+			if (typeof value === 'function') {
+				(bound as Record<string, unknown>)[name] = value.bind(bound);
+			}
+		}
+
+		const store = await memoryStore(bound);
+		const chain = fakeChain();
+		const indexer = createIndexerState<TestABI, EntityStateView>({
+			createState: () => store,
+			createProcessor: (state) => entityProcessorOver(state, bound),
+		});
+		await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
+
+		// the derivation really did decline, which is what makes the rest of this a
+		// statement about the FALLBACK rather than about a hash that happened to differ
+		expect(entityProcessorOver(store, bound).getCodeFingerprint()).toBeUndefined();
+		// so the generation is named by what the author DECLARED -- which is the whole of
+		// the fallback, and the whole of what goes dark when it is removed
+		expect(indexer.canonical?.record.processor).toBe(entityProcessorOver(store, bound).getVersionHash());
+
+		indexer.dispose();
 	});
 
 	/**

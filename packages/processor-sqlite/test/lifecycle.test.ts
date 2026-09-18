@@ -111,6 +111,15 @@ describe('the sync cursor', () => {
 });
 
 describe('the identity this fold answers with', () => {
+	// DECLARED-PATH WITNESS (two of the three cases below). They are about the
+	// ARRIVAL's identity, and they establish it by CONTRASTING it with the declared
+	// one -- a second fold built with no identity, asked for `getVersionHash()`. That
+	// contrast is deliberate and is why they are not migrated: ADR-0086 says an author
+	// cannot STATE an identity, and "the arrival's is not the declared one" is a claim
+	// that needs both values. So these exist to prove the DECLARED path still works,
+	// and `the-declared-version-and-the-drift-report-are-deleted` is what retires
+	// them: when the fallback goes, the `declared` half of each case goes with it and
+	// what is left is the arrival assertion above it, which stands on its own.
 	it('is the one the ARRIVAL handed it, where a host had one', () => {
 		// ADR-0086: an author cannot STATE their processor's identity, and where a host
 		// read a self-contained BUNDLE off disk it hands over the hash of those bytes.
@@ -171,11 +180,13 @@ async function innerFoldOf(p: VersionedStateEventProcessor<TestABI, any>): Promi
 }
 
 describe('getVersionHash, the DECLARED fallback', () => {
-	// RETAINED on the declared path on purpose. Every other identity in this package
-	// now comes from an arrival, but the declared `version` must still WORK until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it, and a batch
-	// that left no assertion of that inside this package would be trusting a sibling
-	// package to notice. These three go with the field they describe.
+	// DECLARED-PATH WITNESS, retained on purpose. ADR-0086 moves identity off the
+	// author's declaration and onto the ARRIVAL, and every other identity in this
+	// package now comes from one -- but the declared `version` must still EXIST AND
+	// WORK until `the-declared-version-and-the-drift-report-are-deleted` removes it,
+	// and a batch that left no assertion of that inside this package would be trusting
+	// a sibling package to notice. These three exist to prove the declared path still
+	// works, and they go with the field they describe, in that task.
 	it('changes when the processor version changes', () => {
 		const v2: SQLProcessor<TestABI> = {...processor, version: '2.0.0'};
 		const a = new VersionedStateEventProcessor(createTestDB(), processor);

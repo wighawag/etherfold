@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {serve} from '@hono/node-server';
 import {createClient} from '@libsql/client';
 import {StreamBuilder, type Abi, type IndexingSource} from '@etherfold/core';
@@ -50,6 +51,34 @@ export const TOKEN = 'the-node-fetchers-shared-secret';
  * envelope (ADR-0036).
  */
 export const INDEXER = 'alpha';
+
+// ---------------------------------------------------------------------------
+// HOW THIS DEPLOYMENT GIVES ITS FOLD AN IDENTITY: it supplies BYTES.
+// ---------------------------------------------------------------------------
+// ADR-0086's invariant is that an author cannot STATE a processor's identity and
+// that the engine is HANDED one and never asks where it came from. So this
+// harness does what an ARRIVAL does: it has bytes, it hashes them, and it hands
+// the result to BOTH halves of the receiver -- the fold
+// (`VersionedStateEventProcessor`'s `identity`) and the stream-builder that
+// drives it (`StreamBuilderOptions.processorIdentity`) -- so there is one answer
+// to "which fold is this" and never two. What it does NOT do is lean on the
+// `version` the definition below still declares: nothing here reads it.
+//
+// The bytes are SYNTHETIC and that is correct rather than a shortcut. An identity
+// is a hash of octets and nothing in this tree parses one; what these suites
+// assert is a fetch LOOP over real HTTP, which never mentions the fold's name at
+// all. Spelled here rather than imported for the reason `@etherfold/browser`'s
+// and `@etherfold/processor-sqlite`'s test copies are: what is under test is that
+// a fold takes WHATEVER it is handed, so the derivation is the test's business.
+// ---------------------------------------------------------------------------
+
+/** Bytes that stand in for the bundle this receiver was deployed from. */
+const BUNDLE_BYTES = new TextEncoder().encode(
+	`export const createProcessor=()=>({marker:"the-node-fetchers-receiver"});\n`,
+);
+
+/** `sha256:<64 lowercase hex>`, the way every arrival that HAS bytes derives one. */
+export const PROCESSOR_IDENTITY = `sha256:${createHash('sha256').update(BUNDLE_BYTES).digest('hex')}`;
 
 export const SOURCE: IndexingSource<TestABI> = {
 	chainId: '1',
@@ -151,8 +180,13 @@ export type RunningReceiver = {
 /** The indexer-server on a real port, with a real processor over a real database. */
 export async function startReceiver(): Promise<RunningReceiver> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor);
-	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {stream: {finality: FINALITY}});
+	// HANDED, not computed, at BOTH halves: the fold is told which fold it is, and
+	// the stream-builder the core asks is told the same thing (ADR-0086).
+	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {identity: PROCESSOR_IDENTITY});
+	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
+		stream: {finality: FINALITY},
+		processorIdentity: PROCESSOR_IDENTITY,
+	});
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),

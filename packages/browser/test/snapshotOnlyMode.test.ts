@@ -2,7 +2,6 @@ import 'fake-indexeddb/auto';
 import {resolveStreamConfig, type LastSync} from '@etherfold/core';
 import {
 	createSnapshot,
-	entityProcessorVersionHash,
 	openAndBootstrap,
 	type EntityProcessor,
 	type Mutation,
@@ -29,6 +28,7 @@ import {
 	type TestABI,
 } from '../browser/workload.js';
 import {appliedIn, applyingProcessor, indexerOver, keysOf} from './utils/applied.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * THE SNAPSHOT-ONLY MODE: a snapshot-seeded generation that keeps NO stream.
@@ -66,6 +66,25 @@ let counter = 0;
 const freshName = () => `snapshot-only-${counter++}-${Math.random().toString(36).slice(2, 8)}`;
 
 const CONFIG = {stream: {finality: FINALITY}};
+
+/**
+ * THE LABEL A PUBLISHER WROTE ON ITS SNAPSHOT, and the identity the client says
+ * it is running.
+ *
+ * An author cannot STATE an identity (ADR-0086), so this does what an ARRIVAL
+ * does: it has BYTES and it hashes them. It used to be taken from the runtime, by
+ * asking the definition for its declared version hash -- a value
+ * `the-declared-version-and-the-drift-report-are-deleted` removes, which would
+ * have left this mode's cases with no label at all. Nothing here parses the
+ * result: the candidate rule is an EQUALITY between what a producer wrote and what
+ * a client says it runs, which is exactly what this value is on both sides.
+ *
+ * ONE value for every case in this file, because they all fold the same
+ * `applyingProcessor` and the question asked is never "is this a different fold".
+ * The DERIVATION a producer should use for that label is
+ * `a-snapshot-is-labelled-with-the-identity-it-was-computed-under`.
+ */
+const APP_IDENTITY = identityOf('snapshot-only-app');
 
 /**
  * The block the published snapshot is taken at, and it is deliberately BELOW the
@@ -140,7 +159,7 @@ async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<St
 
 	expect(lastSync.lastToBlock).toBe(SNAPSHOT_TIP);
 	expect(rows).toHaveLength(IN_SNAPSHOT);
-	return snapshotOf(definition, lastSync, rows, PUBLISHER_OBSERVED_TIP);
+	return snapshotOf(lastSync, rows, PUBLISHER_OBSERVED_TIP);
 }
 
 /**
@@ -154,12 +173,7 @@ async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<St
  * its own tip. A real publisher reads its rows as-of a block below the tip; this
  * fixture states the same relationship directly, which is what the check reads.
  */
-function snapshotOf(
-	definition: EntityProcessor<TestABI>,
-	lastSync: LastSync<TestABI>,
-	rows: Mutation[],
-	observedTip: number,
-): StateSnapshot {
+function snapshotOf(lastSync: LastSync<TestABI>, rows: Mutation[], observedTip: number): StateSnapshot {
 	return createSnapshot<TestABI>({
 		takenAt: {
 			number: lastSync.lastToBlock,
@@ -168,7 +182,7 @@ function snapshotOf(
 		},
 		rows,
 		lastSync: {...lastSync, latestBlock: observedTip},
-		processor: entityProcessorVersionHash(definition),
+		processor: APP_IDENTITY,
 	});
 }
 
@@ -236,7 +250,7 @@ async function seededFromTheSnapshot(options: ClientOptions) {
 		// `insideReorgWindow` is skipped entirely when the option is absent, so a
 		// snapshot taken at its producer's own tip would install. It is the same
 		// finality the indexer runs under, which is what the guide tells an author.
-		{processor: entityProcessorVersionHash(options.definition), fetch: remote.fetch, finalityDepth: FINALITY},
+		{processor: APP_IDENTITY, fetch: remote.fetch, finalityDepth: FINALITY},
 	);
 	// the snapshot-aware handle comes back too: `snapshotOrigin` is ITS report, and a
 	// claimed handle delegates the seam and nothing else (ADR-0077).
@@ -446,7 +460,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		// the one thing that differs from `publishSnapshot`: this publisher reports the
 		// snapshot's OWN block as the tip it had seen, which is what indexing straight
 		// to the tip and publishing produces
-		const atTheTip = snapshotOf(definition, lastSync, rows, SNAPSHOT_TIP);
+		const atTheTip = snapshotOf(lastSync, rows, SNAPSHOT_TIP);
 		const soloName = freshName();
 		const before = await streamKeyspace();
 
@@ -467,7 +481,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 
 		// the SAME publisher, one block deeper, is admitted: the refusal is about the
 		// depth and not about anything else in the document
-		const legal = snapshotOf(definition, lastSync, rows, SNAPSHOT_TIP + FINALITY);
+		const legal = snapshotOf(lastSync, rows, SNAPSHOT_TIP + FINALITY);
 		const admittedName = freshName();
 		const admitted = await snapshotOnlyClient({
 			databaseName: admittedName,
