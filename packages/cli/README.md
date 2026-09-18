@@ -9,6 +9,8 @@ etherfold --help
 
 Every run names its intent: there is no default command, so a bare `etherfold` prints this help and indexes nothing.
 
+Every command that folds is pointed at a processor BUNDLE rather than at a module: its bytes are what names the generation (ADR-0086), and [Producing the processor bundle](#producing-the-processor-bundle) is the one command that produces one, with the rule about its flags that an author only gets one chance to get wrong.
+
 ## When you want this, and when you do not
 
 | you want | use |
@@ -121,9 +123,33 @@ A flag combination that names no store is REFUSED rather than ignored: an accept
 
 The processor module hands back the AUTHORING object (declarations plus handlers) and never picks a store; that is what makes the SAME module file the one a browser tab runs. A module still returning the retired `{kind, processor}` tag is refused by name (ADR-0037).
 
-**`-p` names a self-contained BUNDLE, and its hash identifies the generation** (ADR-0086). A path is still how a deployment names its processor; what changes is what the path must point at. Where the file at it expects nobody else to resolve anything -- what `esbuild <entry> --bundle --format=esm --minify` produces -- these commands read it, name it `sha256:<hex>` over its octets and register a generation under that name. An edited handler is then a different generation with no author action, and the same source built on two machines is the same generation whatever directory either checked out into. Nothing here bundles anything: reading a file and hashing it is not bundling, and the author runs the build.
+**`-p` names a self-contained BUNDLE, and its hash identifies the generation** (ADR-0086). A path is still how a deployment names its processor; what changes is what the path must point at. Where the file at it expects nobody else to resolve anything, these commands read it, name it `sha256:<hex>` over its octets and register a generation under that name. An edited handler is then a different generation with no author action, and the same source built on two machines is the same generation whatever directory either checked out into. Nothing here bundles anything: reading a file and hashing it is not bundling, and the author runs the build -- with the one command the next section states.
 
-**A path naming an ENTRY POINT -- one that still imports its ABI or a sibling -- is REFUSED**, at configuration resolution, before a database is opened or a generation registered. There is nothing left to name such a fold: an author cannot declare an identity any more, and a file whose dependency closure is not in it has no bytes that describe it. The refusal names the path, what it still imports, and the command that fixes it:
+## Producing the processor bundle
+
+Every command that folds is pointed at a bundle, so this is the step before all of them. **One command produces one, and it is the same command the refusal below hands you**:
+
+<!-- bundle-command: the line in the fence below is CHECKED against the refusal `refuseUnbundledProcessor` emits, by `packages/cli/test/theDocsAndTheRefusalNameOneBuildCommand.test.ts`. The tool, the flags and their order must match it, because an author meets the refusal first and this second. Change one and change the other, in the same commit. -->
+
+```sh
+esbuild ./src/processor.ts --bundle --format=esm --minify --outfile=dist/processor.bundle.js
+```
+
+A single minified ESM file, which your entry point exports `createProcessor` from (a factory, or the processor object itself). `esbuild` is the documented default because one invocation with no configuration file produces exactly that.
+
+**`--minify` is MANDATORY, and the reason is IDENTITY rather than size.** Un-minified, esbuild opens each bundled module with a `// <path>` banner naming that module RELATIVE TO THE DIRECTORY THE BUNDLER RAN IN -- so the building machine's directory layout is in the bytes, and the bytes are the generation's name. Measured: one source built from a checkout root and from its package directory hashed `f2d21373…` and `bce77ea9…` un-minified, and `bfbbcd68…` both times minified ([the measurement](https://github.com/wighawag/etherfold/blob/main/docs/spikes/the-build-command-and-its-pinning-rule-are-documented/README.md)). Drop the flag and your laptop and your CI job do not build a bigger bundle, they disagree about which generation they are: neither reuses the state the other folded, and every deploy re-folds from the start. Stripping comments, which is the reason someone would guess the flag is there, is the lesser benefit.
+
+**PIN THE BUNDLER'S VERSION AND ITS FLAGS, not merely the tool.** The output is a function of both, and the output IS the identity, so a bundler upgrade in a refreshed lockfile and a flag somebody added to a build script are the same event: a new name for an unchanged fold. That costs a re-fold of stored data every time it happens -- bounded, visible, and pointless. So keep the bundler in your lockfile as an exact version rather than a range, and keep the command in one checked-in script (a `package.json` script is enough) rather than in a CI step that drifts from the one you run locally. A build that is not deterministic across your machines is one whose persisted state is never reused.
+
+**`rollup` is the alternative** for anyone who wants it, with `@rollup/plugin-node-resolve` and an ESM output, and the same rule applies to it: pin its version and its configuration, because they decide the bytes. **`tsup` is not recommended** -- it is esbuild with a wrapper, so it adds a version to pin and no determinism.
+
+**Source maps are the answer to a minified stack trace, and the spelling matters.** `--sourcemap=external` writes `dist/processor.bundle.js.map` beside the bundle and leaves the bundle itself byte-identical to the map-less build, so it does not move the identity (measured, in the table linked above). Plain `--sourcemap` appends a `//# sourceMappingURL=` comment to the bundle, which is deterministic across machines but a DIFFERENT identity from the same source built without it -- which is the pinning rule above in one flag.
+
+### If you already had a processor: what changed, and what to run
+
+`-p` used to accept a module ENTRY POINT and now requires the bundle built from it. The migration is that one command and a changed path: point `-p` at `dist/processor.bundle.js` instead of `dist/processor.js`. Nothing else moves -- the processor source is unchanged, and the declared `version` field it used to carry is gone rather than renamed, because an identity derived from the bytes is not something an author can state (ADR-0086).
+
+An unmigrated path is REFUSED at configuration resolution, before a database is opened or a generation registered, because a file whose dependency closure is not in it has no bytes that describe it. The refusal names the path, what it still imports, and the same command with your path already in it:
 
 ```
 -p, --processor "./dist/processor.js" names an ENTRY POINT rather than a bundle: it still imports "./abi.js",
@@ -133,7 +159,7 @@ which nothing resolves for it. A processor is ONE self-contained file, named by 
   esbuild ./dist/processor.js --bundle --format=esm --minify --outfile=dist/processor.bundle.js
 ```
 
-`--minify` is not a size preference: un-minified esbuild output carries a per-module path banner, so the BUILDING MACHINE'S directory layout ends up in the bytes and two machines building one source disagree about which generation they are.
+A path that is not a file this process can read at all -- a package name, a directory, or much the commonest, a build that has not run -- is refused in the same shape, with `--outfile=` naming the path you asked for, because writing that file is what is missing.
 
 ## `etherfold fetch` -- the chain-facing half, and the ONLY way to run a fetcher
 

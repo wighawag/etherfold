@@ -110,11 +110,13 @@ NFT_CONTRACT=0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d NFT_START_BLOCK=21000000
 
 One command produces it, and it is the command the rest of the repository uses:
 
+<!-- bundle-command: the line in the fence below is CHECKED against the refusal the CLI emits, by `packages/cli/test/theDocsAndTheRefusalNameOneBuildCommand.test.ts`. It is an INSTANCE of the documented command; the rule about its flags lives once, in `packages/cli/README.md`. -->
+
 ```sh
 esbuild src/cli.ts --bundle --format=esm --minify --outfile=dist/cli.bundle.js
 ```
 
-`--minify` is not a size preference. Un-minified esbuild output carries a `// <path>` banner per module, so the **building machine's directory layout** ends up in the bytes and two machines building one source disagree about which generation they are. For the same reason the bundler version belongs in your lockfile: a non-deterministic build gives every deploy a new identity and re-folds for ever.
+`--minify` is not a size preference: un-minified esbuild output carries a `// <path>` banner per module, so the **building machine's directory layout** ends up in the bytes and two machines building one source disagree about which generation they are. That, the rule that pins the bundler's version AND its flags, and what to do about minified stack traces are stated once, in [the CLI's own README](../../packages/cli/README.md#producing-the-processor-bundle).
 
 This package's `build:bundle` script runs that command through the workspace's own copy of esbuild, so the example adds no dependency of its own. In your project, install esbuild and run it directly.
 
