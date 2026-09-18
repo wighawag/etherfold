@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A processor's identity is DERIVED FROM ITS CODE and never DECLARED by the author
 
 **The invariant is that an author cannot STATE their processor's identity; the engine is handed one and never asks where it came from.** How it is derived belongs to the ARRIVAL: bytes are hashed where bytes exist, and the browser's HMR arrival, which has no bytes because a dev server serves unbundled modules, derives one from the handler sources instead. The engine is unaffected by the difference, and that is checked rather than assumed: `GenerationId.processor` is a `string` that is compared for equality and rendered into messages, and NOTHING in the tree parses it.
