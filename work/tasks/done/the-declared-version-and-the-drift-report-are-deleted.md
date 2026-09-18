@@ -4,7 +4,7 @@ slug: the-declared-version-and-the-drift-report-are-deleted
 spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
 blockedBy: [core-takes-its-identity-from-the-arrival, the-processor-packages-take-their-identity-from-the-arrival, the-browser-takes-its-identity-from-the-arrival, the-cli-server-and-examples-take-their-identity-from-the-arrival, no-suite-or-example-still-rests-on-the-declared-identity, the-last-four-packages-stop-resting-on-the-declared-fallback, a-module-handed-to-a-tab-is-identified-by-its-handler-sources]
 covers: [7]
-needsAnswers: true
+needsAnswers: false
 ---
 
 ## What to build
