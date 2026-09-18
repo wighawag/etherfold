@@ -2,7 +2,7 @@
 title: 'The declared `version`, the code fingerprint and the PROCESSOR DRIFT report are DELETED'
 slug: the-declared-version-and-the-drift-report-are-deleted
 spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
-blockedBy: [core-takes-its-identity-from-the-arrival, the-processor-packages-take-their-identity-from-the-arrival, the-browser-takes-its-identity-from-the-arrival, the-cli-server-and-examples-take-their-identity-from-the-arrival, no-suite-or-example-still-rests-on-the-declared-identity, a-module-handed-to-a-tab-is-identified-by-its-handler-sources]
+blockedBy: [core-takes-its-identity-from-the-arrival, the-processor-packages-take-their-identity-from-the-arrival, the-browser-takes-its-identity-from-the-arrival, the-cli-server-and-examples-take-their-identity-from-the-arrival, no-suite-or-example-still-rests-on-the-declared-identity, the-last-four-packages-stop-resting-on-the-declared-fallback, a-module-handed-to-a-tab-is-identified-by-its-handler-sources]
 covers: [7]
 needsAnswers: true
 ---
@@ -39,7 +39,9 @@ One part of the fingerprint SURVIVES, in a different role, and is not yours to d
 
 All FIVE migrate batches, plus `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`. This is the fan-in of a wide refactor: it cannot start until no caller of the old form remains, and until nothing silently RESTS on it either.
 
-The four original batches moved every site that SOURCES an identity. `no-suite-or-example-still-rests-on-the-declared-identity` moves the CLI suites and the `etherfold` example off the run-time FALLBACK, which a textual sweep cannot see. `a-module-handed-to-a-tab-is-identified-by-its-handler-sources` gives the browser's module arrival an identity of its own, which it must have before `getVersionHash()` can go, because a tab receives an already-built processor and has no bytes to hash.
+The four original batches moved every site that SOURCES an identity. `no-suite-or-example-still-rests-on-the-declared-identity` moves the CLI suites and the `etherfold` example off the run-time FALLBACK, which a textual sweep cannot see, and `the-last-four-packages-stop-resting-on-the-declared-fallback` does the same for the remaining four packages a probe found afterwards. `a-module-handed-to-a-tab-is-identified-by-its-handler-sources` gives the browser's module arrival an identity of its own, which it must have before `getVersionHash()` can go, because a tab receives an already-built processor and has no bytes to hash.
+
+**You are inheriting an INVENTORY, so do not search for one.** This task's premise has been proved false twice, both times because a remainder was invisible to a grep. The sixth batch's job was to end that: every declared-path WITNESS still standing is labelled in place with a comment naming ADR-0086 and naming this task, and its report lists them by file and case. Start from that list. The probe that produced it is recorded in `work/notes/observations/four-more-packages-still-rest-on-the-declared-identity-fallback.md`, and re-running it is how you confirm the list is still complete before you delete anything.
 
 What is deliberately NOT a blocker: `a-path-naming-an-unbundled-entry-point-is-refused` stays blocked on THIS task, and correctly so. Until the declared path is gone an unbundled entry point is a legitimate configuration and refusing it would be wrong. That edge is a real design dependency, unlike the two that were inverted.
 
