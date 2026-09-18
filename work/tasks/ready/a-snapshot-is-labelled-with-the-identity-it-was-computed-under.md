@@ -2,7 +2,7 @@
 title: 'A snapshot is labelled with the IDENTITY it was computed under, so the candidate rule keeps working'
 slug: a-snapshot-is-labelled-with-the-identity-it-was-computed-under
 spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
-blockedBy: [the-declared-version-and-the-drift-report-are-deleted]
+blockedBy: []
 covers: [9]
 ---
 
@@ -25,7 +25,9 @@ This matters more than its size suggests, because it is the thing that makes a b
 
 ## Blocked by
 
-`the-declared-version-and-the-drift-report-are-deleted`. The value this writes does not exist in its final form until the declared version is gone.
+- None. It can start immediately.
+
+> **RE-ORDERED 2026-09-18, out from behind `the-declared-version-and-the-drift-report-are-deleted`.** The stated reason for that edge was that "the value this writes does not exist in its final form until the declared version is gone". Checked against the code rather than assumed: `createSnapshot` does not COMPUTE the label, it is HANDED one by its caller (`packages/processor-entities/src/snapshot.ts`), and the four migrate batches already moved what a deployment hands it to the identity its ARRIVAL derived. So a producer running a bundle already labels with the hash today, and one still on the declared path already labels with what it actually ran under -- which is the correct value in both cases, because the label's whole job is to say which fold computed the rows. The edge was a purity argument rather than a mechanism one, and it was part of a cycle that deadlocked the family (`work/notes/observations/the-adr-0086-contract-task-is-in-a-cycle-with-the-three-leaves-behind-it.md`). Nothing about this task's subject changes: what is left to do here is to ASSERT the round trip end to end and to settle the FORMAT number deliberately, which is what its criteria already say.
 
 ## Prompt
 

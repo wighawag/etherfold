@@ -1,0 +1,58 @@
+---
+title: 'The CLI suites and the `etherfold` example stop resting on the DECLARED identity, so the contract step can delete it'
+slug: no-suite-or-example-still-rests-on-the-declared-identity
+spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
+blockedBy: [a-deployment-runs-from-a-bundle-identified-by-its-hash]
+covers: [6, 8]
+---
+
+## What to build
+
+The FIFTH migrate batch of a wide refactor (`work/protocol/TASKING-PROTOCOL.md` 3a), and the last one. It exists because the first four left a remainder that only becomes visible when you try to delete the old form.
+
+Every place that SOURCES an identity has been migrated. What has not is every place that silently RESTS on the fallback: a deployment stood up through an injected `importModule`, which supplies no identity, so `processorIdentityOf` falls through to `processor.getVersionHash()`. That is correct today and becomes a deployment with NO NAME AT ALL the moment the contract task removes the declared half.
+
+Move them off it, so that `the-declared-version-and-the-drift-report-are-deleted` really is the removal it describes.
+
+**READ THIS BEFORE CONCLUDING THE TASK IS DRIFTED.** `work/tasks/done/the-cli-server-and-examples-take-their-identity-from-the-arrival.md`, Decisions #4, says these suites were left alone and that "the contract task's sweep is unaffected (they name no identity)". That sentence is TRUE and it is not a contradiction of this task. It is a statement about a TEXTUAL sweep: grep those files for `getVersionHash` and you will find nothing, which is exactly why the batch correctly left them. The dependency is not textual, it is a FALLBACK the code takes at run time. So a grep says they are clean and the test run says otherwise, and only the second one is the truth the contract task meets. Do not stop on the strength of that sentence; it and this task are both right.
+
+**What this batch does NOT touch: the declared-path WITNESSES.** Three sites deliberately keep the old form because their subject IS the old form, and retiring them is the contract task's job rather than this one's: `packages/cli/test/anEndpointReconfiguresARunningRun.test.ts` (whole, it is the `PROCESSOR DRIFT` and `unchanged`-names-`version` suite), the two DECLARED cases inside `packages/cli/test/aDeploymentRunsFromABundle.test.ts`, and `nftProcessor.version` in `packages/cli/test/utils/chain.ts`. Batch 4 recorded each one and why. Migrating a witness does not move coverage, it deletes it while leaving the code, which is the failure that task's prompt warns about. Leave all three exactly as they are.
+
+**The example.** `examples/event-processor-nfts` runs `etherfold build -p ./dist/cli.js`, a `tsc` output that imports its ABI and so is not self-contained, and `src/entities.ts` still carries `version: '1.0.0'`. The root `test` script includes `examples/*` on purpose, because an example is EVIDENCE and evidence nothing runs is a claim. So this one is inside "the whole tree is green" and has to move here. Batch 4 assigned it to `the-build-command-and-its-pinning-rule-are-documented`; that no longer works, because the docs task runs LAST and the contract task, which runs before it, is what breaks on this example. Use the command the two committed fixtures already use (`esbuild --bundle --format=esm --minify`, see `packages/cli/test/fixtures/processor-bundle/README.md`) rather than choosing a new one, so the docs task's "the refusal and the documentation name the same command" criterion stays reachable.
+
+**`examples/browser-reference` is NOT yours.** It hands a tab a module object, and its identity comes from `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`. Leave it.
+
+Nothing is DELETED here and nothing is REFUSED here. The declared `version`, `getVersionHash()` and the code fingerprint all still exist when this batch finishes, an unbundled configuration still resolves, and no new refusal is introduced -- refusing is `a-path-naming-an-unbundled-entry-point-is-refused`, which is correctly blocked on the contract task. This batch only moves what rests on the fallback off it, which is what keeps it green on its own like the four before it.
+
+## Acceptance criteria
+
+- [ ] No suite in `packages/cli` or `packages/utils` stands a deployment up whose identity falls through to `getVersionHash()`, except the three declared-path witnesses named above, which are untouched.
+- [ ] `examples/event-processor-nfts` runs from a self-contained BUNDLE, built with the same command the committed fixtures use, and no longer depends on its declared `version` for its identity.
+- [ ] Demonstrated rather than asserted: with the declared fallback made to throw locally (a scratch edit you do NOT commit), this batch's suites and the example still pass. That is the only check that actually proves the remainder is gone, since a grep cannot see a fallback.
+- [ ] Nothing is deleted: the declared `version`, `getVersionHash()` and the fingerprint still exist and still work, and no configuration that resolves today stops resolving.
+- [ ] Nothing is refused: no new user-visible refusal is introduced, because that is another task's subject.
+- [ ] No file OUTSIDE `packages/cli`, `packages/utils` and `examples/event-processor-nfts` is edited.
+- [ ] The batch is GREEN on its own, with the rest of the tree unchanged.
+- [ ] A changeset accompanies the change (`pnpm changeset`).
+
+## Blocked by
+
+`a-deployment-runs-from-a-bundle-identified-by-its-hash`, which built the bundle arrival this batch moves onto. It is done, so this is startable now.
+
+> **ADDED 2026-09-18, after the contract task STOPPED on a false premise.** The contract task's body says "four migrate batches have already moved every caller, so this is a removal rather than a change". That was not true, and the reason is structural rather than careless: hashing bytes requires HAVING bytes, and the arrivals with no bytes were left behind by all four batches, each deferral written down at the time. Two of those remainders were handed to tasks that were themselves `blockedBy` the contract task, which deadlocked the family; those edges have been inverted. This batch is the third remainder, which had no owner at all. Measured and recorded in `work/notes/observations/the-adr-0086-contract-task-is-in-a-cycle-with-the-three-leaves-behind-it.md`, and in the surface commit `0e500dd9` on `main`.
+
+## Prompt
+
+The goal is that when the contract task deletes `getVersionHash()`, nothing goes dark.
+
+Read **ADR-0086** for the invariant (an author cannot state their identity; the engine takes one and never asks where it came from), then `work/tasks/done/the-cli-server-and-examples-take-their-identity-from-the-arrival.md` in full -- especially its Decisions, which is where these remainders were deferred and which tells you exactly what each one is and why it was left. Then `packages/core/src/internal/processorIdentity.ts`, which is the one expression the whole engine asks and therefore the exact place the fallback lives.
+
+GROUND THE BLAST RADIUS against the code before you start rather than trusting any list, including the one in this task body. The suites batch 4 named (`run.test.ts`, `indexCommand.test.ts`, `oneShot.test.ts`, `commands.test.ts`, `fixedTableNamespace.test.ts`, `generationNamespaceBesideFixedTables.test.ts` "and the rest") were named in passing, not enumerated, and there were roughly 71 `importModule` occurrences across `packages/cli` and `packages/utils` when this task was written. The criterion that matters is not "does it mention `importModule`" but "does its identity fall through to `getVersionHash()`", and the third acceptance criterion is how you find out.
+
+The decision most likely to be got wrong is deciding these suites do not need migrating, because batch 4's decision record appears to say so. Read the note in "What to build" above before you act on that: batch 4 was making a claim about a textual sweep and it was right; this task is about a run-time fallback and is also right. If you STOP here, the family stays deadlocked for a second time.
+
+The second: HOW to give an injected-module suite an identity. There are two shapes -- give the deployment real bytes (a bundle fixture, as `aDeploymentRunsFromABundle.test.ts` does), or keep the injection seam and have the arrival supply an identity explicitly. Prefer whichever keeps each suite's actual SUBJECT intact, because none of these suites is about identity: they are about namespaces, commands, one-shot behaviour and scheduling, and a migration that rewrites what they are testing has cost more than it bought. Say which you chose and why, per suite family rather than per file.
+
+The third: do not delete the injected-importer test seam itself. Whether an injected `importModule` remains an accepted arrival at all is a question `a-path-naming-an-unbundled-entry-point-is-refused` owns, and removing the affordance here would decide it silently and out of order.
+
+Done means: nothing rests on the declared fallback except the three witnesses that exist to prove it still works, the example ships a bundle, the old form is untouched, and the tree is green.

@@ -2,7 +2,7 @@
 title: 'A MODULE handed to a tab is identified by its handler sources, because a dev server has no bytes to hash'
 slug: a-module-handed-to-a-tab-is-identified-by-its-handler-sources
 spec: a-processor-is-a-bundle-and-its-hash-is-its-identity
-blockedBy: [the-browser-takes-its-identity-from-the-arrival, the-declared-version-and-the-drift-report-are-deleted]
+blockedBy: [the-browser-takes-its-identity-from-the-arrival]
 covers: [12, 13]
 ---
 
@@ -31,7 +31,9 @@ What it buys is the outcome that would otherwise be lost: a real handler edit mo
 
 ## Blocked by
 
-`the-browser-takes-its-identity-from-the-arrival` (same files, serialised to avoid a collision) and `the-declared-version-and-the-drift-report-are-deleted` (which removes the fingerprint's OLD role, and must not remove the derivation this needs).
+`the-browser-takes-its-identity-from-the-arrival` (same files, serialised to avoid a collision). That batch is done, so this task is startable now.
+
+> **RE-ORDERED 2026-09-18, ahead of `the-declared-version-and-the-drift-report-are-deleted` rather than behind it.** This task previously also listed the contract task in `blockedBy`, for a reason that was entirely PROTECTIVE: it "must not remove the derivation this needs". Running FIRST satisfies that concern strictly better than running second, because the derivation is then certainly present -- and the edge as written deadlocked the family, since the contract task cannot delete `getVersionHash()` while the browser's module arrival has nothing else to name itself with. That is this task. Two things confirm the inversion is safe rather than convenient: this task's own Prompt already contemplates either order ("if it still exists at the point you start"), and what it actually needs is `processorCodeFingerprint`, which is exported from `packages/core/src/utils/fingerprint.ts` today and is NOT the seam method `getCodeFingerprint()` that the contract task removes. The contract task now lists THIS task in its `blockedBy`, which is the dependency the right way round. Measured and recorded in `work/notes/observations/the-adr-0086-contract-task-is-in-a-cycle-with-the-three-leaves-behind-it.md`.
 
 ## Prompt
 
