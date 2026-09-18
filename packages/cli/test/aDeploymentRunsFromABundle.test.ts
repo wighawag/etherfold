@@ -45,10 +45,11 @@ import {canonicalStoreIn} from './utils/reads.js';
 //
 // The author-declared identity an unbundled entry point used to fall back on is
 // gone (`the-declared-version-and-the-drift-report-are-deleted`), so such a
-// configuration has no name for its fold and is refused before a database is
-// opened. This asserts the refusal EXISTS and that it names the path;
-// `a-path-naming-an-unbundled-entry-point-is-refused` is what moves it to
-// configuration resolution and makes it actionable.
+// configuration has no name for its fold. It is refused at CONFIGURATION
+// RESOLUTION, with the build command in it (`refuseUnbundledProcessor`,
+// `src/config.ts`, asserted in `configuration.test.ts`); what is asserted here is
+// the end-to-end consequence a deployment cares about -- that the refusal lands
+// before the module is EVALUATED and before this database is so much as migrated.
 //
 // ## What "a BUNDLE" means here, which is one definition and not a new one
 //
@@ -188,9 +189,12 @@ describe('the identity follows the BYTES, with no author action either way', () 
 });
 
 describe('a path that names no bundle is refused, because nothing can name its fold', () => {
-	it('refuses a module that expects somebody else to resolve an import, naming the path', async () => {
+	it('refuses a module that expects somebody else to resolve an import, BEFORE evaluating it', async () => {
 		const dir = await aScratchDirectory();
-		await writeFile(join(dir, 'entities.js'), `export const entities = ${JSON.stringify(nftProcessor.entities)};\n`);
+		// the sibling THROWS the moment it is evaluated, which is how this case tells the
+		// two refusals apart: a configuration refusal never imports the entry point at
+		// all, and one made from inside a loader would hand the author this instead
+		await writeFile(join(dir, 'entities.js'), `throw new Error('the entry point was EVALUATED');\n`);
 		const entry = join(dir, 'processor.mjs');
 		await writeFile(
 			entry,
@@ -204,11 +208,14 @@ export const createProcessor = () => ({entities, onTransfer() {}});
 
 		const db = oneDatabase();
 		const chain = fakeChain().serve([], TIP);
-		await expect(prepareIndexing('build', optionsFor(entry), depsFor(chain, db))).rejects.toThrow(
-			/is not a self-contained bundle/,
-		);
-		// the refusal NAMES what the operator typed, which is the only thing they can fix
-		await expect(prepareIndexing('build', optionsFor(entry), depsFor(chain, db))).rejects.toThrow(entry);
+		const refused = prepareIndexing('build', optionsFor(entry), depsFor(chain, db));
+		await expect(refused).rejects.toThrow(/names an ENTRY POINT rather than a bundle/);
+		// ...and it is about the CONFIGURATION rather than about module syntax
+		await expect(refused).rejects.not.toThrow(/EVALUATED/);
+		// the refusal NAMES what the operator typed, which is the only thing they can
+		// fix, and the command that fixes it
+		await expect(refused).rejects.toThrow(entry);
+		await expect(refused).rejects.toThrow(/esbuild .*--bundle --format=esm --minify/);
 		// and NOTHING was registered -- the refusal lands so early that this database was
 		// never even migrated, which is why there is no registry to read here at all
 		await expect(canonicalGenerationIn(db)).rejects.toThrow(/_generations/);

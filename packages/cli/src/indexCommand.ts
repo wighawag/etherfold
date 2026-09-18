@@ -13,7 +13,7 @@ import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-ent
 import {openProcessorArrival} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
-import {resolveCommandConfig} from './config.js';
+import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
 import {
 	foldingStatusReport,
 	openFolding,
@@ -206,6 +206,10 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 	try {
 		// FIRST, and pure: nothing is imported, opened or bound before this returns.
 		const config: IndexConfig<ABI> = resolveCommandConfig<'index', ABI>('index', options, env);
+		// ...and the one part of it that is a FILE: a `--processor` path naming an
+		// unbundled entry point is refused with the build command that fixes it, before
+		// a module is imported, a database is opened or a port is bound (ADR-0086).
+		await refuseUnbundledProcessor('index', config.processor, {substitutedArrival: deps.importModule !== undefined});
 		logger.info({store: config.destination.store, source: config.source.from, port: config.serving.port});
 
 		// WHAT THE `--processor` PATH TURNS OUT TO BE: a self-contained BUNDLE, read and

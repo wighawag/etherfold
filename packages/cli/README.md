@@ -26,7 +26,7 @@ Every run names its intent: there is no default command, so a bare `etherfold` p
 
 ```sh
 etherfold run \
-  -p ./dist/processor.js \
+  -p ./dist/processor.bundle.js \
   --store sqlite --db file:./etherfold.db \
   -n https://rpc.example --port 2000
 ```
@@ -89,12 +89,12 @@ How many a named indexer may accumulate is BOUNDED and refuses at the bound rath
 
 ```sh
 etherfold build \
-  -p ./dist/processor.js \
+  -p ./dist/processor.bundle.js \
   --store sqlite --db file:./etherfold.db \
   -n https://rpc.example
 ```
 
-Named for what it PRODUCES: a database. What it does: load the processor module, open the store, resolve the source, then fetch and fold until it reaches the chain tip it observed, and exit. Exit code 0 on success, 1 on failure, so a CI job can depend on it.
+Named for what it PRODUCES: a database. What it does: read the processor bundle, open the store, resolve the source, then fetch and fold until it reaches the chain tip it observed, and exit. Exit code 0 on success, 1 on failure, so a CI job can depend on it.
 
 **It is `run` without the serving, stopping at the tip**, and that is true of the code rather than of this sentence: both commands assemble through one function and differ by whether the loop aborts on the first report that reached the tip.
 
@@ -106,7 +106,7 @@ Named for what it PRODUCES: a database. What it does: load the processor module,
 
 | flag | |
 | --- | --- |
-| `-p, --processor <path>` | the processor module. It must export `createProcessor` (a factory, or the processor object itself) |
+| `-p, --processor <path>` | the processor BUNDLE. It must export `createProcessor` (a factory, or the processor object itself), and it must be self-contained -- see below |
 | `--store <sqlite>` | REQUIRED and never defaulted. It names where the state goes, and it is the axis a second backend would arrive on |
 | `--db <url>` | libSQL url: `file:./etherfold.db`, `:memory:`, or `libsql://<host>`. Required with `--store sqlite`, so no run writes a database nobody named |
 | `--retention <blocks\|revert-only\|unbounded>` | how far back superseded versions are kept, in BLOCK numbers and no other unit (ADR-0019). Default `unbounded`. What falls outside it is refused on read AND dropped from storage, because this command schedules the prune its retention implies |
@@ -121,9 +121,19 @@ A flag combination that names no store is REFUSED rather than ignored: an accept
 
 The processor module hands back the AUTHORING object (declarations plus handlers) and never picks a store; that is what makes the SAME module file the one a browser tab runs. A module still returning the retired `{kind, processor}` tag is refused by name (ADR-0037).
 
-**`-p` may name a self-contained BUNDLE, and then its hash identifies the generation** (ADR-0086). A path is still how a deployment names its processor; what changes is what the path may point at. Where the file at it expects nobody else to resolve anything -- what `esbuild <entry> --bundle --format=esm --minify` produces -- these commands read it, name it `sha256:<hex>` over its octets and register a generation under that name. An edited handler is then a different generation with no author action, and the same source built on two machines is the same generation whatever directory either checked out into. Nothing here bundles anything: reading a file and hashing it is not bundling, and the author runs the build.
+**`-p` names a self-contained BUNDLE, and its hash identifies the generation** (ADR-0086). A path is still how a deployment names its processor; what changes is what the path must point at. Where the file at it expects nobody else to resolve anything -- what `esbuild <entry> --bundle --format=esm --minify` produces -- these commands read it, name it `sha256:<hex>` over its octets and register a generation under that name. An edited handler is then a different generation with no author action, and the same source built on two machines is the same generation whatever directory either checked out into. Nothing here bundles anything: reading a file and hashing it is not bundling, and the author runs the build.
 
-A path naming an ordinary module -- one that still imports its ABI or a sibling -- resolves exactly as it always has and keeps the identity its author declared in `version`. Both shapes work today; the declared one is on its way out (ADR-0086) and the migration is deliberately staged.
+**A path naming an ENTRY POINT -- one that still imports its ABI or a sibling -- is REFUSED**, at configuration resolution, before a database is opened or a generation registered. There is nothing left to name such a fold: an author cannot declare an identity any more, and a file whose dependency closure is not in it has no bytes that describe it. The refusal names the path, what it still imports, and the command that fixes it:
+
+```
+-p, --processor "./dist/processor.js" names an ENTRY POINT rather than a bundle: it still imports "./abi.js",
+which nothing resolves for it. A processor is ONE self-contained file, named by the sha256 of its bytes
+(ADR-0086). Build one, and point `etherfold build` at it:
+
+  esbuild ./dist/processor.js --bundle --format=esm --minify --outfile=dist/processor.bundle.js
+```
+
+`--minify` is not a size preference: un-minified esbuild output carries a per-module path banner, so the BUILDING MACHINE'S directory layout ends up in the bytes and two machines building one source disagree about which generation they are.
 
 ## `etherfold fetch` -- the chain-facing half, and the ONLY way to run a fetcher
 
@@ -158,7 +168,7 @@ Everything else a fetcher deployment tunes -- `SUSPECT_RESULT_COUNT` (**read tha
 
 ```sh
 etherfold index \
-  -p ./dist/processor.js \
+  -p ./dist/processor.bundle.js \
   --store sqlite --db file:./etherfold.db \
   -d ./deployments --indexer my-indexer --port 2000
 ```
@@ -169,7 +179,7 @@ etherfold index \
 
 | flag | |
 | --- | --- |
-| `-p, --processor <path>` | the processor module. It must export `createProcessor` |
+| `-p, --processor <path>` | the processor BUNDLE. It must export `createProcessor`, and it must be self-contained, exactly as on `build` |
 | `--store <sqlite>` / `--db <url>` | REQUIRED, exactly as on `build`: this command owns the database |
 | `--retention <blocks\|revert-only\|unbounded>` | as on `build`, with one difference: this command schedules NO prune. It is fed over the wire and has no cycle of its own to prune between, and a prune inside the ingest path is exactly what ADR-0022 refuses -- so a bounded retention here bounds what a read may ask about without yet reclaiming the versions below it |
 | `-d, --deployments <folder>` | what to index, or `INDEXING_SOURCE` as JSON. REQUIRED here in one form or the other -- see below |

@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {afterEach, describe, expect, it} from 'vitest';
-import {openProcessorArrival} from '../src/processorArrival.js';
+import {openProcessorArrival, readProcessorPath} from '../src/processorArrival.js';
 import {processorArtifactIdentity} from '../src/processorArtifact.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -102,6 +102,46 @@ describe('a path naming something that is NOT a bundle', () => {
 		const bundle = await aFileHolding('nested.js', readFileSync(FIXTURE_BUNDLE, 'utf-8'));
 		const arrival = await openProcessorArrival('./nested.js', {cwd: dirname(bundle)});
 		expect(arrival.identity).toBe(processorArtifactIdentity(readFileSync(FIXTURE_BUNDLE)));
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// WHAT IS AT A PATH, WITHOUT LOADING IT
+// ---------------------------------------------------------------------------------------------------
+// The half of the arrival a CONFIGURATION layer needs on its own: a caller that
+// refuses an unbundled `--processor` path (`refuseUnbundledProcessor`,
+// `etherfold`) must say WHICH of the two it met and WHAT is still unresolved,
+// where the arrival itself needs only "bundle or not". One function answers both,
+// so the check that refuses a path and the arrival that opens it cannot mean two
+// different files or two different verdicts about one.
+// ---------------------------------------------------------------------------------------------------
+
+describe('reading a path without loading it', () => {
+	it('hands back the BYTES where they are self-contained', async () => {
+		const contents = await readProcessorPath(FIXTURE_BUNDLE);
+		expect(contents.kind).toBe('bundle');
+		expect(contents.kind === 'bundle' && processorArtifactIdentity(contents.bundle)).toBe(
+			processorArtifactIdentity(readFileSync(FIXTURE_BUNDLE)),
+		);
+	});
+
+	it('names what an ENTRY POINT still expects somebody else to resolve', async () => {
+		const path = await aFileHolding(
+			'entry.mjs',
+			`import {entities} from './entities.js';\nimport 'viem';\nexport const createProcessor = () => ({entities});\n`,
+		);
+
+		const contents = await readProcessorPath(path);
+		expect(contents.kind).toBe('entry-point');
+		expect(contents.kind === 'entry-point' && contents.unresolvedImports).toEqual(['./entities.js', 'viem']);
+	});
+
+	it('says a path it cannot read is unreadable, with the reason, rather than guessing at why', async () => {
+		// a bare package specifier, a directory and a build that has not run are all the
+		// same no: the question asked is "can I have these bytes"
+		const contents = await readProcessorPath('a-package-nobody-installed', {cwd: here});
+		expect(contents.kind).toBe('unreadable');
+		expect(contents.kind === 'unreadable' && contents.why).toMatch(/ENOENT/);
 	});
 });
 
