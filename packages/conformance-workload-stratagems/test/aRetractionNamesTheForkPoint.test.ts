@@ -31,9 +31,22 @@ import {MemoryStateStore, type EntityId} from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
 import {BASE_ABANDONED, loadStream, replayIntoStore, stratagemsProcessor, type TouchedIds} from '../src/index.js';
 import type {StratagemsABI} from '../vendor/stratagems/abi.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 const CHAIN_ID_HEX = '0x2105'; // 8453, the chain the capture is from
 const FINALITY = 12;
+
+/**
+ * The identity this fold runs under, HANDED over the way an arrival hands one
+ * (ADR-0086: derived from bytes, never declared by the author).
+ *
+ * The subject here is the RETRACTION -- the fork point a reader is told about and
+ * the token that moved -- so the fold's name is only ever what a notification
+ * quotes. It is supplied rather than left to the declared `version` the stratagems
+ * processor still carries, because a deployment that supplies nothing is named by
+ * a value `the-declared-version-and-the-drift-report-are-deleted` removes.
+ */
+const PROCESSOR_IDENTITY = identityOf('stratagems-retraction');
 
 /**
  * The block the chain takes back, the fork point that leaves, and the height its
@@ -93,6 +106,7 @@ async function foldThroughAReorg() {
 			{
 				createState: () => openForWriting(new MemoryStateStore(stratagemsProcessor.entities)),
 				createProcessor: (store) => new EntityEventProcessor(store, stratagemsProcessor),
+				processorIdentity: PROCESSOR_IDENTITY,
 				stateOf: (processor) => (processor as EntityEventProcessor<StratagemsABI>).state,
 			},
 		],

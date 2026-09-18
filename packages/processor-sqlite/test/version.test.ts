@@ -18,7 +18,7 @@ import {finality, freshProcessor, lastSync, processor, SOURCE, transfer, type Te
 // fingerprint rides along in the context" is a claim that has to be tested
 // rather than assumed.
 //
-// THIS WHOLE FILE IS THE DECLARED PATH'S OWN SUITE, and it is RETAINED here
+// THIS WHOLE FILE IS A DECLARED-PATH WITNESS, and it is RETAINED here
 // deliberately rather than migrated. ADR-0086 moves identity off the author's
 // declaration and onto the ARRIVAL, and every fold in this package that is HANDED
 // an identity now takes it from there (`lifecycle.test.ts`,
@@ -29,6 +29,15 @@ import {finality, freshProcessor, lastSync, processor, SOURCE, transfer, type Te
 // say so. Rewriting them onto an arrival identity would not migrate the declared
 // path, it would delete its test coverage while leaving the code. They go with the
 // field they describe, in that task.
+//
+// WHAT IS A WITNESS HERE, so the contract task inherits a list rather than a
+// search: every case under `getVersionHash` (five), `the code fingerprint`'s
+// "changes when a handler changes at an unchanged version", and all five under
+// `drift, end to end`. The last group reaches the fallback through a REAL
+// `IndexerGeneration` given no `processorIdentity` (`processorIdentityOf`,
+// `@etherfold/core`) rather than through this class, which is the second half of
+// what that task removes. The remaining cases here touch neither and are
+// untroubled by the removal.
 // ---------------------------------------------------------------------------
 
 /** The same processor with an edited handler and a DELIBERATELY unchanged version. */
