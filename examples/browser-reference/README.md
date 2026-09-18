@@ -16,7 +16,7 @@ pnpm --filter browser-reference verify:browser  # drive it in a real Chromium
 - **The store**: one line, and the only place a backend is named.
 - **The hook**, and the two subscriptions that draw the page — attached last, because a subscription fires synchronously and a callback that reaches forward throws.
 - **`checkTxInclusion`**: whether the indexed state already accounts for a transaction you sent, which your own receipt cannot tell you.
-- **Hot reload, both axes**: an edited processor (author-declared version hash, so an edit is invisible unless you bump it) and a redeployed contract (same address behind a proxy, new ABI).
+- **Hot reload, both axes**: an edited processor (a module a dev server hands the tab is named by a derivation over its handler sources, so an edit takes effect and a save that changed nothing says so) and a redeployed contract (same address behind a proxy, new ABI).
 
 ## What it does not cover
 

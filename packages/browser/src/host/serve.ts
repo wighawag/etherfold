@@ -24,6 +24,7 @@ import {type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerState.js';
+import {moduleProcessorIdentity} from '../moduleIdentity.js';
 import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
 import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
 import {executionScopeName, type HostAccess} from './endpoint.js';
@@ -560,7 +561,9 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		// rather than leaving the call hanging.
 		const opened = await openContainer();
 		const before = opened.generations.map((generation) => generation.record);
-		const held = await opened.add({source, ...generationSpecOf(spec, recordState)});
+		// The spec is handed the SOURCE rather than spread into an object carrying one:
+		// spreading would freeze the identity it fills in (see `generationSpecOf`).
+		const held = await opened.add(generationSpecOf(spec, recordState, source));
 		// WAKE A RESTING DRIVER. The generation just added has a whole history to fetch,
 		// and the driver is resting precisely BECAUSE everything was level a moment ago.
 		// Without this it would sit out the remainder of the tip interval before giving
@@ -707,8 +710,20 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
 	recordState: (id: {stream: string; processor: string}, state: WritableStateStore) => void,
+	source?: IndexingSource<ABI>,
 ) {
-	return {
+	// WHAT NAMES THIS GENERATION, filled in by `createProcessor` below where the
+	// arrival supplied nothing. The read order is `Indexer.add`'s: state, processor,
+	// THEN identity -- which is what makes a MODULE arrival expressible, since a fold
+	// with no bytes cannot be named before the object exists. So this spec must reach
+	// the container WHOLE: a spread would copy the field while it is still
+	// `undefined` and the generation would quietly fall back to the declared hash,
+	// which is why a per-generation `source` is a parameter rather than something a
+	// caller merges in.
+	//
+	// The caller's own `spec` is NEVER written to: it is the application's object and
+	// may be reused for the next generation this host builds.
+	const generationSpec = {
 		createState: (context: GenerationContext) =>
 			withClaimPatience(spec.claimWithinSeconds, (patience) => spec.createState(context, patience)),
 		createProcessor: async (state: unknown, context: GenerationContext) => {
@@ -716,19 +731,23 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 			if (built.configure && spec.processorConfig) {
 				built.configure(spec.processorConfig);
 			}
+			// THE MODULE ARRIVAL'S OWN DERIVATION, where no other arrival named this fold:
+			// a dev server hands a tab -- or the worker it started -- a module OBJECT and
+			// there are no bytes to hash, so the identity comes from the handler sources
+			// (`moduleProcessorIdentity`, ADR-0086). The same expression `createIndexerState`
+			// uses, because the three hosting shapes run ONE implementation and an app must
+			// not be named differently for having moved its fold off the UI thread.
+			generationSpec.processorIdentity ??= spec.processorIdentity ?? moduleProcessorIdentity(built);
 			// Recorded HERE and not in `createState`, because this is the first moment
 			// both halves of a generation's identity exist: the stream is known up
-			// front, the fold's half only once the processor is built -- an
-			// ARRIVAL-supplied identity is known before either factory runs, but the
-			// DECLARED fallback under it is not.
+			// front, the fold's half only once the processor is built.
 			//
-			// The identity is the one the ARRIVAL handed this host, and the processor's
-			// own declared hash only where no arrival derived one (ADR-0086). It is the
-			// same expression the container resolves the registry record with
-			// (`processorIdentityOf`, `@etherfold/core`), because a store recorded under a
-			// name the registry did not file is a read this host cannot answer.
+			// Keyed on the SAME value the container registers this generation under, with
+			// the processor's own declared hash under it only where no arrival named the
+			// fold and none could be derived from it: a store recorded under a name the
+			// registry did not file is a read this host cannot answer.
 			recordState(
-				{stream: context.stream, processor: spec.processorIdentity ?? built.getVersionHash()},
+				{stream: context.stream, processor: generationSpec.processorIdentity ?? built.getVersionHash()},
 				state as WritableStateStore,
 			);
 			return built;
@@ -736,8 +755,11 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 		stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
 			(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
 		// Handed STRAIGHT to the container, which registers the generation under it and
-		// never asks where it came from. Omitted rather than passed as `undefined` so
-		// that "no arrival derived one" is the absence the core's own fallback reads.
-		...(spec.processorIdentity === undefined ? {} : {processorIdentity: spec.processorIdentity}),
+		// never asks where it came from. `undefined` reads as the absence the core's own
+		// fallback takes: no arrival named this fold, and its handlers had no readable
+		// source to derive one from either.
+		processorIdentity: spec.processorIdentity,
+		source,
 	};
+	return generationSpec;
 }

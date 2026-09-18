@@ -4,8 +4,7 @@ import {describe, expect, it} from 'vitest';
 import type {EntityProcessor, EntityStateView} from '@etherfold/processor-entities';
 import {createBrowserStateStore, createIndexerState, keepStreamOnIndexedDB} from '../src/index.js';
 import {
-	BRANCH_A_EXTENDED,
-	BRANCH_A_EXTENDED_TIP,
+	editedProcessorVariant,
 	entityProcessorOver,
 	EXPECTED_A,
 	fakeChain,
@@ -60,68 +59,38 @@ async function indexedWith(definition = processor, chain = fakeChain()) {
 // processor module.
 // ---------------------------------------------------------------------------
 //
-// THIS AXIS IS STILL ON THE AUTHOR-DECLARED IDENTITY, deliberately. ADR-0086
-// moves identity onto the ARRIVAL, and every OTHER path in this package now takes
-// the one it was handed (`BrowserGenerationSpec.processorIdentity`). What arrives
-// HERE is a module OBJECT from a dev server, which has no bytes to hash, so its
-// identity is derived from the handler sources instead -- and that derivation is
-// `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`, which is
-// blocked on this batch and owns `updateProcessor`. Until it lands these cases
-// declare versions and compare declared hashes, which is also what keeps this
-// package honest about the old form still WORKING while the migration runs.
+// WHAT NAMES THE FOLD ON THIS AXIS is the arrival, like everywhere else, and what
+// arrives here is a MODULE OBJECT from a dev server: there are no bytes to hash,
+// so the identity is derived from the HANDLER SOURCES
+// (`moduleProcessorIdentity`, `src/moduleIdentity.ts`; ADR-0086). So a handler
+// edit is a different fold with nothing for an author to remember, and the trap
+// this axis used to assert -- an edit under an unchanged `version` that silently
+// never ran -- is gone rather than documented.
+//
+// The fixtures hold the two halves apart on purpose. `editedProcessorVariant` is
+// an edit the derivation CAN see (the handler body is written differently), and
+// `countBy` is a captured value it CANNOT, which is what the `{force: true}` case
+// below is about.
 
 describe('axis one: swapping in an edited processor', () => {
 	/**
-	 * The trap, stated as a test: the version hash is AUTHOR-DECLARED, so editing
-	 * a handler does not move it.
+	 * The trap REMOVED, stated as a test: an edited handler is a different fold,
+	 * with no `version` bumped and nothing for an author to remember.
 	 *
-	 * `getVersionHash()` is `${version}-${hash({entities, config})}`. Handler code
-	 * is in none of those three. An edit to a reducer therefore produces a
-	 * processor the core considers IDENTICAL, and `updateProcessor` skips the swap
-	 * entirely -- not "keeps the state and adopts the new logic", which is what an
-	 * integrator reading the doc would assume, but keeps the OLD PROCESSOR OBJECT
-	 * running. The edited module never executes.
+	 * What makes the rebuild assertable is that every block is re-indexed under the
+	 * edited handler, so the counter is 5 * 10 and not 5 + something. A swap that had
+	 * kept the old rows and merely continued would show 50 nowhere -- and the
+	 * behaviour this used to assert, the edited module never executing at all, would
+	 * show 5.
 	 */
-	it('does nothing at all when the version did not move, and the edit never runs', async () => {
-		const {store, indexer, chain} = await indexedWith();
-		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
-
-		// the developer edited the handler (now counts 10 per transfer) and did NOT
-		// touch `version`, which is the default state of an edited file.
-		const edited = processorVariant({version: '1.0.0', countBy: 10});
-		const outcome = await indexer.updateProcessor(entityProcessorOver(store, edited));
-
-		// and it SAYS it kept the state, which is what a caller branches on
-		expect(outcome.stateDiscarded).toBe(false);
-		// the stored rows are untouched...
-		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
-
-		// ...and so is the logic. The chain moves on by one event; under the edited
-		// handler the counter would go 5 -> 15, under the old one 5 -> 6.
-		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
-		await indexToTip(indexer);
-
-		const after = await readState(indexer.state.$state);
-		expect(after.transfers).toBe(6);
-		expect(after.transfers).not.toBe(15);
-
-		indexer.dispose();
-	});
-
-	/**
-	 * The same edit with the version bumped: the state is discarded and rebuilt by
-	 * the NEW logic, from the start block.
-	 *
-	 * Note what makes this assertable: every block is re-indexed under the edited
-	 * handler, so the counter is 5 * 10 and not 5 + something. A rebuild that had
-	 * kept the old rows and merely continued would show 50 nowhere.
-	 */
-	it('rebuilds the whole state under the new logic when the version was bumped', async () => {
+	it('applies an edited handler that bumped no version, and rebuilds under the new logic', async () => {
 		const {store, indexer, chain} = await indexedWith();
 		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
 		const rangesBefore = chain.ranges.length;
 
-		const edited = processorVariant({version: '2.0.0', countBy: 10});
+		// the developer edited the handler (now counts 10 per transfer) and did NOT
+		// touch `version`, which is the default state of an edited file.
+		const edited = editedProcessorVariant({version: '1.0.0', countBy: 10});
 		const outcome = await indexer.updateProcessor(entityProcessorOver(store, edited));
 		expect(outcome.stateDiscarded).toBe(true);
 
@@ -138,18 +107,53 @@ describe('axis one: swapping in an edited processor', () => {
 	});
 
 	/**
-	 * `{force: true}` is the escape hatch for an integrator who knows the logic
-	 * changed and cannot make the author bump a string.
+	 * The save that changed NOTHING, which is the outcome the derivation makes
+	 * reachable and the one a developer must be told about plainly.
 	 *
-	 * It costs the same full rebuild a bump costs, because the core cannot know
-	 * which parts of the state the edit invalidated -- so it invalidates all of
-	 * it, which is the only answer that cannot be wrong.
+	 * A hot update hands the page a NEW module object every time, so this rebuilds
+	 * the definition rather than passing the running one back in: what must be equal
+	 * is the SOURCE, not the object. Nothing is discarded, the answer SAYS so, and
+	 * the fold stays warm -- the next round resumes inside the reorg window instead
+	 * of walking back to the start block.
 	 */
-	it('force rebuilds even when the version did not move', async () => {
-		const {store, indexer} = await indexedWith();
+	it('says nothing changed when the save changed nothing, and keeps the warm fold', async () => {
+		const {store, indexer, chain} = await indexedWith(processorVariant());
+		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
+		const rangesBefore = chain.ranges.length;
 
-		const edited = processorVariant({version: '1.0.0', countBy: 10});
-		const outcome = await indexer.updateProcessor(entityProcessorOver(store, edited), {force: true});
+		const outcome = await indexer.updateProcessor(entityProcessorOver(store, processorVariant()));
+		expect(outcome.stateDiscarded).toBe(false);
+		expect(await readState(indexer.state.$state)).toEqual(EXPECTED_A);
+
+		await indexToTip(indexer);
+		expect(chain.ranges.slice(rangesBefore)[0].from).toBeGreaterThan(START_BLOCK);
+
+		indexer.dispose();
+	});
+
+	/**
+	 * `{force: true}` is the escape hatch for an integrator who knows the fold
+	 * changed in a way the SOURCE TEXT does not carry.
+	 *
+	 * That is a real limit rather than a hypothetical one, and this is exactly its
+	 * shape: `countBy` is a value the handler CAPTURES, so both definitions below
+	 * hash to the same handler source however differently they count. An edited
+	 * helper the handler imports is the same case in an application.
+	 *
+	 * It costs the same full rebuild a different identity costs, because the core
+	 * cannot know which parts of the state the edit invalidated -- so it invalidates
+	 * all of it, which is the only answer that cannot be wrong.
+	 */
+	it('force rebuilds for an edit the handler sources do not carry', async () => {
+		const {store, indexer} = await indexedWith(processorVariant());
+
+		const editedInvisibly = processorVariant({countBy: 10});
+		// unforced, this is the same fold and the swap is skipped: the derivation cannot
+		// see a captured value, and says so by not moving
+		const skipped = await indexer.updateProcessor(entityProcessorOver(store, editedInvisibly));
+		expect(skipped.stateDiscarded).toBe(false);
+
+		const outcome = await indexer.updateProcessor(entityProcessorOver(store, editedInvisibly), {force: true});
 		expect(outcome.stateDiscarded).toBe(true);
 		await indexToTip(indexer);
 
@@ -362,13 +366,13 @@ describe('the state a subscriber is holding, after a discard', () => {
 		indexer.dispose();
 	});
 
-	/** The same, reached through the other axis: an edited processor, bumped. */
+	/** The same, reached through the other axis: an edited processor. */
 	it('does not keep publishing the old state after a processor swap with nothing to replay', async () => {
 		const {indexer, chain, store} = await indexerOnBranchA();
 		expect((await readState(indexer.state.$state)).transfers).toBe(5);
 
 		chain.serve([], 120);
-		await indexer.updateProcessor(entityProcessorOver(store, processorVariant({version: '2.0.0', countBy: 10})));
+		await indexer.updateProcessor(entityProcessorOver(store, editedProcessorVariant({countBy: 10})));
 		await indexToTip(indexer);
 
 		expect(await readState(indexer.state.$state)).toEqual(EMPTY);
@@ -387,7 +391,7 @@ describe('the state a subscriber is holding, after a discard', () => {
 		const {indexer, store} = await indexerOnBranchA();
 		const woken = publications(indexer);
 
-		await indexer.updateProcessor(entityProcessorOver(store, processorVariant({version: '2.0.0', countBy: 10})));
+		await indexer.updateProcessor(entityProcessorOver(store, editedProcessorVariant({countBy: 10})));
 
 		expect(await readState(indexer.state.$state)).toEqual(EMPTY);
 		// and the subscriber was TOLD, which the rows above cannot see: a UI that is
@@ -402,16 +406,17 @@ describe('the state a subscriber is holding, after a discard', () => {
 	 * And the converse, which is what stops the fix from being "blank it on every
 	 * reconfigure": a reconfigure that kept the state must not blank it.
 	 *
-	 * A same-version swap is skipped by the core, so the state is still valid and
-	 * still on screen. Re-seeding here would be its own silent bug -- a UI that
-	 * empties itself when a developer saves a file that changed nothing.
+	 * A swap the core skips leaves the state valid and still on screen. Re-seeding
+	 * here would be its own silent bug -- a UI that empties itself when a developer
+	 * saves a file that changed nothing.
 	 */
 	it('leaves the state alone when the reconfigure did not discard it', async () => {
 		const {indexer, store} = await indexerOnBranchA();
 		const woken = publications(indexer);
 
-		// same version: the core skips the swap and keeps the running processor
-		await indexer.updateProcessor(entityProcessorOver(store, processorVariant({version: '1.0.0', countBy: 10})));
+		// the same handler sources arriving again: the same fold, so the core skips the
+		// swap and keeps the running processor
+		await indexer.updateProcessor(entityProcessorOver(store, processorVariant({countBy: 10})));
 		expect((await readState(indexer.state.$state)).transfers).toBe(5);
 
 		// a source that hashes the same: no reset, so no discard
@@ -457,10 +462,8 @@ describe('the state a subscriber is holding, after a discard', () => {
 		const fetchesBefore = chain.ranges.length;
 		const woken = publications(indexer);
 
-		// the edited processor, version bumped: the state goes, the stream stays
-		const outcome = await indexer.updateProcessor(
-			entityProcessorOver(store, processorVariant({version: '2.0.0', countBy: 10})),
-		);
+		// the edited processor: a different fold, so the state goes and the stream stays
+		const outcome = await indexer.updateProcessor(entityProcessorOver(store, editedProcessorVariant({countBy: 10})));
 		expect(outcome.stateDiscarded).toBe(true);
 
 		// rebuilt under the NEW logic, from the cache, before the call returned

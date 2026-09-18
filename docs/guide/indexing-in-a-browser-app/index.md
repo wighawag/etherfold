@@ -314,18 +314,21 @@ A template with hot contract replacement has **two** things that get replaced wh
 
 ### Axis one — the processor was edited
 
-`updateProcessor` decides whether your state survives by comparing **version hashes**, and a version hash is `${version}-${hash({entities, config})}`. **Handler code is in none of that.**
+`updateProcessor` decides whether your state survives by comparing the two folds' **identities**, and you do not get to state one ([ADR-0086](https://github.com/wighawag/etherfold/blob/main/docs/adr/0086-a-processors-identity-is-derived-from-its-code-and-never-declared.md)). A processor your dev server handed the tab arrives as a **module object** and has no bytes to hash, so it is named by a derivation over its **handler sources**.
 
-So editing a reducer and leaving `version` alone is not a change the core can see: the swap is **skipped**, the old processor object keeps running, and your edit never executes. The only complaint is a `named-logs` warning most apps never route anywhere.
+So editing a reducer is a different fold whether or not you touched `version`: the swap is applied, the state is rebuilt under the new logic, and there is nothing to remember. Saving a file you did not change is the same fold, and the outcome says so.
 
 ```ts
 const outcome = await indexer.updateProcessor(next);
-outcome.stateDiscarded; // false => the swap was SKIPPED, your edit is not running
+outcome.stateDiscarded; // true  => your edit is running, over state rebuilt for it
+                        // false => nothing changed, and your warm fold was kept
 ```
 
-Make the edit land by bumping `version` in the processor, or by passing `{force: true}`. Both cost the same thing: the state is discarded and rebuilt from the start block, because the core cannot know which part of the state your edit invalidated, and "all of it" is the only answer that cannot be wrong.
+A rebuild replays from the start block, because the core cannot know which part of the state your edit invalidated, and "all of it" is the only answer that cannot be wrong. (`addGeneration`, below, is how to pay that without a blank app.)
 
-Generating the version (a content hash, a build id, a git sha) is the way to stop relying on memory.
+**What the derivation can and cannot see.** It is taken over the handler **source text**, so it survives reformatting and re-ordering your handlers, and it does **not** survive minification or a change of transpiler — which is exactly why it names a module a dev server handed you and never a deployed build. A production app arrives as a self-contained bundle and is named by the SHA-256 of those octets, so the same code has a different identity as a module than as a bundle: a dev iteration and a deployed build are different generations either way.
+
+In the other direction, it does not move for a change the source text does not carry — an edited helper your handler imports, an entity declaration you changed, behaviour decided by a value the handler captured. Pass `{force: true}` when you know better; it costs the same rebuild.
 
 ### The same edit, without the blank app
 
