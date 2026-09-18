@@ -1,6 +1,18 @@
 import {PROMOTION_POLICIES} from '@etherfold/core';
-import {describe, expect, it} from 'vitest';
-import {DEFAULT_INDEXER_NAME, INPUTS, OWNERSHIP, resolveCommandConfig, type ConfigInput} from '../src/config.js';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {afterEach, describe, expect, it} from 'vitest';
+import {
+	DEFAULT_INDEXER_NAME,
+	INPUTS,
+	OWNERSHIP,
+	refuseUnbundledProcessor,
+	resolveCommandConfig,
+	type ConfigInput,
+	type ProcessorBundleOptions,
+} from '../src/config.js';
 import type {CommandName, Options} from '../src/types.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -172,6 +184,167 @@ describe('a required input that is missing is refused, naming the flag and the v
 		expect(message).not.toMatch(/Bearer|secret-value/);
 	});
 });
+
+// ---------------------------------------------------------------------------------------------------
+// --processor MUST NAME A BUNDLE, AND THE MESSAGE IS THE DELIVERABLE
+// ---------------------------------------------------------------------------------------------------
+// A processor IS a self-contained bundle and the sha256 of its bytes is its
+// identity (ADR-0086), so a configuration naming an unbundled entry point names
+// nothing this deployment can fold. It is refused HERE, with the other input
+// refusals, and not from inside a loader: by the time a loader has the bytes a
+// database may be open and a generation part-way registered, and the author gets
+// an error about module syntax rather than about their configuration.
+//
+// This is the ONE input whose value is a PATH and whose refusal is therefore
+// about the FILE rather than about the string, so it is the one check in this
+// module that reads a disk. It still imports nothing, opens no database and
+// dials nothing, which is the property that matters: it is a function a test
+// calls, like every other refusal here (ADR-0048).
+//
+// WHAT DECIDES is `unresolvedImportsOf` (`@etherfold/utils`), which is this
+// repository's only definition of self-contained and the same judgement the
+// artifact loader refuses on. A second heuristic for "is this a bundle" would be
+// two answers to one question, disagreeing exactly where a migration is half
+// done.
+// ---------------------------------------------------------------------------------------------------
+
+/** A REAL bundle, built by the documented command and committed (`fixtures/processor-bundle/README.md`). */
+const FIXTURE_BUNDLE = fileURLToPath(new URL('./fixtures/processor-bundle/nfts.bundle.js', import.meta.url));
+
+/** The scratch directories these cases write processor files into, outside the repository. */
+const scratch: string[] = [];
+
+afterEach(async () => {
+	for (const dir of scratch.splice(0)) {
+		await rm(dir, {recursive: true, force: true}).catch(() => undefined);
+	}
+});
+
+async function aFileHolding(name: string, source: string): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), 'etherfold-config-'));
+	scratch.push(dir);
+	const path = join(dir, name);
+	await writeFile(path, source, 'utf-8');
+	return path;
+}
+
+/** The message, so a case can read the whole of it rather than match twice. */
+async function refusalOf(
+	command: CommandName,
+	processorPath: string,
+	options: ProcessorBundleOptions = {},
+): Promise<string> {
+	try {
+		await refuseUnbundledProcessor(command, processorPath, options);
+	} catch (err) {
+		return (err as Error).message;
+	}
+	return '';
+}
+
+describe('a --processor path that names no bundle is refused, with the command that makes one', () => {
+	it('accepts a REAL bundle, so nobody who has migrated can meet the refusal', async () => {
+		await expect(refuseUnbundledProcessor('build', FIXTURE_BUNDLE)).resolves.toBeUndefined();
+	});
+
+	it('refuses an entry point that still imports, naming the path AND what it still imports', async () => {
+		const entry = await aFileHolding(
+			'processor.mjs',
+			`import {entities} from './entities.js';\nexport const createProcessor = () => ({entities});\n`,
+		);
+
+		const message = await refusalOf('build', entry);
+		expect(message).toContain('--processor');
+		expect(message).toContain(entry);
+		// the SPECIFIER, because "this is not a bundle" is not actionable and "you still
+		// import ./entities.js" is
+		expect(message).toContain('./entities.js');
+		expect(message).toMatch(/entry point/i);
+	});
+
+	it('gives the ONE build command, with the path the operator typed already in it', async () => {
+		const entry = await aFileHolding(
+			'processor.mjs',
+			`import './abi.js';\nexport const createProcessor = () => ({});\n`,
+		);
+
+		// the command an author copies out of the message must be the command the
+		// documentation names, or the two disagree at the one moment somebody is stuck
+		expect(await refusalOf('build', entry)).toContain(`esbuild ${entry} --bundle --format=esm --minify`);
+	});
+
+	it('refuses a path that is not a file this process can read, which is the build that has not run', async () => {
+		const missing = join(await aScratchDirectory(), 'dist', 'processor.bundle.js');
+
+		const message = await refusalOf('run', missing);
+		expect(message).toContain('--processor');
+		expect(message).toContain(missing);
+		// ...and the command WRITES the file they named, because that is the thing they
+		// are missing
+		expect(message).toContain(`--outfile=${missing}`);
+	});
+
+	it('does NOT refuse a bundle that merely MENTIONS a package name in a string', async () => {
+		// the check is about module references and not about text: a bundle that carries
+		// a package name in a log line, a comment or a datum is a bundle
+		const bundle = await aFileHolding(
+			'bundle.js',
+			`const built = 'viem';\nconsole.log('bundled with viem, and it imports nothing');\n` +
+				`export const createProcessor = () => ({entities: [], built});\n`,
+		);
+
+		await expect(refuseUnbundledProcessor('build', bundle)).resolves.toBeUndefined();
+	});
+
+	it('accepts a node BUILTIN, which a --platform=node bundle legitimately keeps', async () => {
+		// measured rather than assumed, and the judgement belongs to the artifact unit:
+		// a builtin RESOLVES from bytes with no directory, so refusing one would refuse
+		// an artifact that runs
+		const bundle = await aFileHolding(
+			'bundle.js',
+			`import {createHash} from 'node:crypto';\nexport const createProcessor = () => ({entities: [], createHash});\n`,
+		);
+
+		await expect(refuseUnbundledProcessor('build', bundle)).resolves.toBeUndefined();
+	});
+
+	it('resolves a RELATIVE path against the cwd the loader resolves it against', async () => {
+		// one `--processor ./dist/index.js` must mean one file: the check and the arrival
+		// disagreeing about which would refuse a deployment that runs, or admit one that
+		// does not
+		const bundle = await aFileHolding('bundle.js', `export const createProcessor = () => ({entities: []});\n`);
+
+		await expect(refuseUnbundledProcessor('build', './bundle.js', {cwd: dirname(bundle)})).resolves.toBeUndefined();
+		await expect(refuseUnbundledProcessor('build', './bundle.js', {cwd: tmpdir()})).rejects.toThrow(/--processor/);
+	});
+
+	it('says nothing at all about a SUBSTITUTED arrival, which named no file to read', async () => {
+		// `IndexingDependencies.importModule` states what comes back for a path, so there
+		// is no file on a disk for this to have an opinion about. No flag and no
+		// environment variable reaches it, which is why it cannot be a way round the
+		// refusal for a deployment.
+		await expect(
+			refuseUnbundledProcessor('build', './nothing-is-here.js', {substitutedArrival: true}),
+		).resolves.toBeUndefined();
+	});
+
+	it('refuses the same way on every command that folds one', async () => {
+		const entry = await aFileHolding(
+			'processor.mjs',
+			`import './abi.js';\nexport const createProcessor = () => ({});\n`,
+		);
+
+		for (const command of ['run', 'build', 'index'] as const) {
+			expect(await refusalOf(command, entry)).toContain(`etherfold ${command}`);
+		}
+	});
+});
+
+async function aScratchDirectory(): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), 'etherfold-config-'));
+	scratch.push(dir);
+	return dir;
+}
 
 // ---------------------------------------------------------------------------------------------------
 // NOTHING IS ACCEPTED AND IGNORED

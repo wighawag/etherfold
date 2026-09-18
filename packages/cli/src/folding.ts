@@ -399,16 +399,18 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
  * back to is gone, such a deployment has no name for its fold at all.
  *
  * So it is REFUSED, here, before a database is opened or a generation registered.
- * It is the structural refusal and deliberately not the kind one:
- * `a-path-naming-an-unbundled-entry-point-is-refused` moves this to CONFIGURATION
- * RESOLUTION, in the shape ADR-0048 gives every other command input, and names the
- * command that produces a bundle. What it may not do is leave an unnameable
- * deployment running in the meantime.
+ * It is the STRUCTURAL refusal and deliberately not the kind one: the refusal an
+ * author meets is made at CONFIGURATION RESOLUTION, in the shape ADR-0048 gives
+ * every other command input and with the command that produces a bundle in it
+ * (`refuseUnbundledProcessor`, `config.ts`). What is left here is the guarantee
+ * that no fold is ever registered without a name, whatever route the arrival took.
  *
- * The one non-bundle arrival that still resolves is a SUBSTITUTED one: a test that
- * injects `importModule` states what comes back for a path, and
- * `IndexingDependencies.processorIdentity` states what that thing is called. No
- * flag and no environment variable reaches it.
+ * Two arrivals can still reach it. A SUBSTITUTED one, which is the ordinary case:
+ * a test that injects `importModule` states what comes back for a path, and
+ * `IndexingDependencies.processorIdentity` states what that thing is called -- no
+ * flag and no environment variable reaches either. And a path whose BYTES MOVED
+ * between the configuration check and the read, where a half-landed rebuild fails
+ * closed rather than being folded under a name nothing derived.
  */
 export function requireArrivalIdentity(processorPath: string, identity: string | undefined): string {
 	if (identity !== undefined) {

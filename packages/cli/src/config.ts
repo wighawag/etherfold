@@ -7,6 +7,7 @@ import {
 } from '@etherfold/core';
 import {parseIndexingSource, type EnvRecord} from '@etherfold/fetcher-host';
 import type {RetentionSetting} from '@etherfold/processor-entities';
+import {readProcessorPath} from '@etherfold/utils';
 import type {
 	CommandName,
 	ConfigFor,
@@ -148,10 +149,10 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 	processor: {
 		flag: '-p, --processor <path>',
 		describe:
-			'the event processor (it must export a field named "createProcessor"). A path is how a deployment ' +
-			'names it, and the file at that path may be an ordinary module, which keeps the identity its author ' +
-			'declared, or a SELF-CONTAINED BUNDLE, which is read and named by the sha256 of its own bytes -- so ' +
-			'an edited handler is a different generation with nobody having to remember to say so (ADR-0086)',
+			'the event processor, as a path to a SELF-CONTAINED BUNDLE exporting "createProcessor". A path is how ' +
+			'a deployment names it, and the file at that path is read and named by the sha256 of its own bytes -- so ' +
+			'an edited handler is a different generation with nobody having to remember to say so (ADR-0086). A path ' +
+			'naming an entry point that still imports something is REFUSED, naming the command that bundles it',
 	},
 	source: {
 		flag: '-d, --deployments <folder>',
@@ -646,6 +647,115 @@ export function refuseUnownedInputs(command: CommandName, options: Options): voi
 }
 
 // ---------------------------------------------------------------------------------------------------
+// THE ONE INPUT WHOSE VALUE IS A FILE
+// ---------------------------------------------------------------------------------------------------
+// Every other refusal in this module is about a STRING: a store nobody
+// implements, a retention that is not blocks, a port that is not a number.
+// `--processor` is a PATH, and what is wrong with a bad one is a property of the
+// FILE at it -- so this is the one check here that reads a disk, and the reason
+// it still belongs here rather than in a loader is the ORDER.
+//
+// A processor IS a self-contained bundle and the sha256 of its bytes is its
+// identity (ADR-0086), so a path naming an unbundled entry point names nothing a
+// deployment can fold. Refusing it where the bytes are already being IMPORTED
+// would be too late twice over: a database may be open and a generation part-way
+// registered, and what the author is handed is an error about module resolution
+// rather than about their configuration. So it is refused with the other input
+// refusals, before anything is imported, opened or dialled.
+//
+// It is NOT a second heuristic. `unresolvedImportsOf` (`@etherfold/utils`) is
+// this repository's only definition of self-contained -- it is what the artifact
+// loader refuses on and what the arrival chooses between its two routes with --
+// and `readProcessorPath` is the one place a `--processor` path is resolved to
+// bytes, so a refusal here and an arrival there cannot mean two different files
+// or two different verdicts about one.
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * The ONE command that produces a bundle, written once.
+ *
+ * An author meets the REFUSAL first and the documentation second, so the two must
+ * name the same command down to the flags: `--minify` is not a size preference
+ * but part of the identity (un-minified esbuild output carries a per-module path
+ * banner, so the building machine's directory layout ends up in the bytes and two
+ * machines disagree about which generation they are). The documentation that
+ * repeats it lives in `packages/cli/README.md` and in the example's own README.
+ */
+function bundleCommand(entry: string, outfile: string): string {
+	return `esbuild ${entry} --bundle --format=esm --minify --outfile=${outfile}`;
+}
+
+/** Where the refusal points an author who has not bundled yet, when they named no output file. */
+const A_BUNDLE_PATH = 'dist/processor.bundle.js';
+
+export type ProcessorBundleOptions = {
+	/** Working directory a relative `--processor` resolves against. Defaults to `process.cwd()`. */
+	cwd?: string;
+	/**
+	 * The caller SUBSTITUTED the arrival, so there is no file on a disk to have an
+	 * opinion about and this check says nothing at all.
+	 *
+	 * It is the other half of `IndexingDependencies.importModule`, which is what a
+	 * TEST substitutes to state what comes back for a path. No flag and no
+	 * environment variable reaches it, so it is not a way for a DEPLOYMENT to get
+	 * round the refusal: a deployment has only the path, and the path is read.
+	 */
+	substitutedArrival?: boolean;
+};
+
+/**
+ * REFUSE A `--processor` PATH THAT NAMES NO BUNDLE, naming the path, what it is
+ * instead, and the command that produces one.
+ *
+ * The message is the deliverable here rather than the check. An author meeting
+ * this has a configuration that worked yesterday and a migration they have not
+ * made, and the difference between five minutes of work and an afternoon is
+ * whether the refusal hands them a command to run. So it names the PATH it read
+ * (the only thing they can fix), says in one sentence what that file is, and
+ * gives `esbuild` with the path already substituted in.
+ *
+ * Two ways to meet it, one remedy:
+ *
+ *  - an ENTRY POINT, which still expects somebody else to resolve a module. The
+ *    refusal names the specifiers, because "this is not a bundle" is not
+ *    actionable and "you still import ./abi.js" is.
+ *  - a path this process cannot read at all: a package name, a directory, or --
+ *    much the commonest -- the OUTPUT of a build that has not run. There the
+ *    command's `--outfile` is the path they named, because writing that file is
+ *    exactly what is missing.
+ *
+ * A node BUILTIN is not an unresolved import and never reaches this: the artifact
+ * unit measured that a `data:` URL resolves `node:crypto` and bare `crypto`, so a
+ * `--platform=node` bundle that keeps them is self-contained and a refusal would
+ * be one an author cannot act on.
+ */
+export async function refuseUnbundledProcessor(
+	command: CommandName,
+	processorPath: string,
+	options: ProcessorBundleOptions = {},
+): Promise<void> {
+	if (options.substitutedArrival) return;
+	const contents = await readProcessorPath(processorPath, options.cwd === undefined ? {} : {cwd: options.cwd});
+	if (contents.kind === 'bundle') return;
+	if (contents.kind === 'unreadable') {
+		throw new Error(
+			`${nameOf('processor')} ${JSON.stringify(processorPath)} is not a file this process can read: ` +
+				`${contents.why}. It names ONE self-contained bundle on disk, whose bytes are the generation's ` +
+				`identity (ADR-0086) -- not a package name, a directory, or a build that has not run yet. Build it, ` +
+				`and point \`etherfold ${command}\` at the output:\n\n  ` +
+				`${bundleCommand('<your entry point>', processorPath)}`,
+		);
+	}
+	throw new Error(
+		`${nameOf('processor')} ${JSON.stringify(processorPath)} names an ENTRY POINT rather than a bundle: it still ` +
+			`imports ${contents.unresolvedImports.map((specifier) => JSON.stringify(specifier)).join(', ')}, which ` +
+			`nothing resolves for it. A processor is ONE self-contained file, named by the sha256 of its bytes ` +
+			`(ADR-0086). Build one, and point \`etherfold ${command}\` at it:\n\n  ` +
+			`${bundleCommand(processorPath, A_BUNDLE_PATH)}`,
+	);
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Resolving each column of the table
 // ---------------------------------------------------------------------------------------------------
 
@@ -908,6 +1018,13 @@ export function parsePruneInterval(value: string | undefined): number | undefine
  * chain-free command cannot reach is therefore refused before the chain is
  * touched or a database is opened.
  *
+ * ONE input's refusal cannot be made here and is made immediately after, by
+ * `refuseUnbundledProcessor`: `--processor` is a PATH, and whether it names a
+ * BUNDLE is a fact about the file rather than about the string. It is still part
+ * of resolving this configuration -- it runs before a module is imported, a
+ * database is opened or the chain is dialled -- and it is separate only because
+ * reading a file is neither pure nor synchronous.
+ *
  * The three commands that do not exist yet resolve here already. That is
  * deliberate: they must CONSUME this rather than extend it, and a row that could
  * not be expressed would be a design fault to fix now rather than a later
@@ -1042,7 +1159,8 @@ function requireProcessor(command: CommandName, options: Options, env: EnvRecord
 		command,
 		options,
 		env,
-		'the module this command folds: it must export a field named "createProcessor"',
+		'the bundle this command folds: a self-contained file exporting "createProcessor", whose bytes name the ' +
+			'generation it registers (ADR-0086)',
 	);
 }
 

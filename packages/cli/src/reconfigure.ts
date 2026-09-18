@@ -8,7 +8,7 @@ import {logs} from 'named-logs';
 import {isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
-import {resolveCommandConfig} from './config.js';
+import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
 import {foldPartsFor, openIndexingSource, requireArrivalIdentity, streamConfigFor} from './folding.js';
 import type {Options, RunConfig} from './types.js';
 
@@ -176,6 +176,12 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 			const resolved = resolveCommandConfig<'run', ABI>('run', held.options, held.env) as RunConfig<ABI>;
 			const refusal = refuseAMovedDeployment(resolved, held);
 			if (refusal) return refusal;
+			// A RE-READ meets the same refusal a start-up does, in the same words: a rebuild
+			// that emitted an entry point instead of a bundle is reported as `failed` with the
+			// build command in it, and the live fold is untouched (ADR-0086).
+			await refuseUnbundledProcessor('run', resolved.processor, {
+				substitutedArrival: held.importModule !== undefined,
+			});
 
 			providedStreamConfig = streamConfigFor(held.env);
 			// RESOLVED once, and both identities are taken over the same object: the stream

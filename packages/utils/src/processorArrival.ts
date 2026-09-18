@@ -47,7 +47,8 @@ import {
 // from NAMING what came back, and this unit does the first. The author-declared
 // identity the module route used to fall back on is gone, so a caller that gets
 // an arrival with no `identity` has a fold it cannot name: the CLI REFUSES such a
-// deployment (`requireArrivalIdentity`, `etherfold`), and a TEST that substituted
+// deployment, at configuration resolution and before it ever gets here
+// (`refuseUnbundledProcessor`, `etherfold`), and a TEST that substituted
 // the arrival states what it is called instead
 // (`IndexingDependencies.processorIdentity`). Refusing in here would take that
 // second case with it, and would put a configuration decision in a loader.
@@ -69,10 +70,13 @@ export type ProcessorArrival<ABI extends Abi, ProcessResultType, EntityProcessor
 	/**
 	 * `sha256:<hex>` over the bundle's octets, where the path named a BUNDLE.
 	 *
-	 * ABSENT means the path named a module the module system resolved, whose
-	 * identity is still the author's declared one -- and absent is a real answer
-	 * rather than a missing value, which is why a caller reads it as "did the
-	 * arrival supply one" and never as a string to inspect. Nothing in the tree
+	 * ABSENT means the path named a module the module system resolved, which this
+	 * unit can offer NO identity for -- there are no bytes that describe it and the
+	 * declaration it used to fall back on is gone. Absent is a real answer rather
+	 * than a missing value, which is why a caller reads it as "did the arrival supply
+	 * one" and never as a string to inspect; what a caller does with the absence is
+	 * its own (the CLI refuses such a path at configuration resolution, and a test
+	 * that substituted the arrival states what it is called). Nothing in the tree
 	 * parses `GenerationId.processor` (ADR-0086), and a helper asking whether an
 	 * identity LOOKS like a hash would be the first thing to.
 	 */
@@ -154,32 +158,75 @@ export async function openProcessorArrival<
 }
 
 /**
- * The BUNDLE at this path, or nothing at all where the path does not name one.
+ * WHAT IS AT A PROCESSOR PATH, as data, before anything is evaluated: the BUNDLE,
+ * the ENTRY POINT it is instead, or nothing this process can read.
  *
- * Two ways to be nothing and they are deliberately not distinguished, because the
- * answer to both is the same: take the module route. The path may not name a file
- * this process can read (a bare package specifier, a directory, a file that is not
- * there) -- and a rejection of any kind is caught rather than sniffed for
- * `ENOENT`, because the question asked is "can I have these bytes" and every no is
- * the same no. Or the bytes may still expect somebody else to resolve a module, in
- * which case they are an ENTRY POINT rather than an artifact and their dependency
- * closure is not in them.
+ * Three cases rather than two, because two callers want different halves of the
+ * same answer and neither should ask the question a second way. `bundleAt` below
+ * needs only "bundle or not", since the answer to both other cases is the same
+ * one: take the module route. A CONFIGURATION layer refusing the path needs to
+ * say WHICH it met and WHAT is still unresolved, because a refusal reading "this
+ * is not a bundle" is not actionable and one naming `./abi.js` is.
+ */
+export type ProcessorPathContents =
+	| {readonly kind: 'bundle'; readonly bundle: Uint8Array}
+	| {
+			readonly kind: 'entry-point';
+			readonly bundle: Uint8Array;
+			/** Every module these bytes still expect somebody else to resolve, in the order they carry them. */
+			readonly unresolvedImports: readonly string[];
+	  }
+	| {readonly kind: 'unreadable'; readonly why: string};
+
+export type ReadProcessorPathOptions = Pick<OpenProcessorArrivalOptions, 'cwd' | 'readBundle'>;
+
+/**
+ * READ THE BYTES A PATH NAMES and say what they are, without importing anything.
  *
  * The path is resolved against `cwd` exactly as `loadProcessorModule` resolves a
- * relative specifier, so the two arrivals cannot disagree about which file one
- * `--processor ./dist/index.js` means.
+ * relative specifier, and this is the ONE place that resolution is written for
+ * the bundle arm, so an arrival and a caller that refuses the same path cannot
+ * disagree about which file one `--processor ./dist/index.js` means.
+ *
+ * A rejection of any kind is `unreadable` rather than sniffed for `ENOENT`: the
+ * question asked is "can I have these bytes", and a bare package specifier, a
+ * directory and a build that has not run are all the same no. The reason travels
+ * in `why` so a caller can render it.
+ *
+ * What decides between the other two is `unresolvedImportsOf`, which is this
+ * repository's only definition of self-contained -- the same judgement the
+ * artifact loader refuses on.
  */
-async function bundleAt(processorPath: string, options: OpenProcessorArrivalOptions): Promise<Uint8Array | undefined> {
+export async function readProcessorPath(
+	processorPath: string,
+	options: ReadProcessorPathOptions = {},
+): Promise<ProcessorPathContents> {
 	const cwd = options.cwd ?? process.cwd();
 	const path = isAbsolute(processorPath) ? processorPath : join(cwd, processorPath);
 	const readBundle = options.readBundle ?? defaultReadBundle;
-	let bytes: Uint8Array;
+	let bundle: Uint8Array;
 	try {
-		bytes = await readBundle(path);
-	} catch {
-		return undefined;
+		bundle = await readBundle(path);
+	} catch (error) {
+		return {kind: 'unreadable', why: error instanceof Error ? error.message : String(error)};
 	}
-	return unresolvedImportsOf(bytes).length === 0 ? bytes : undefined;
+	const unresolvedImports = unresolvedImportsOf(bundle);
+	return unresolvedImports.length === 0 ? {kind: 'bundle', bundle} : {kind: 'entry-point', bundle, unresolvedImports};
+}
+
+/**
+ * The BUNDLE at this path, or nothing at all where the path does not name one.
+ *
+ * Two ways to be nothing and they are deliberately not distinguished HERE,
+ * because the answer to both is the same: take the module route. The path may not
+ * name a file this process can read (a bare package specifier, a directory, a
+ * file that is not there), or the bytes may still expect somebody else to resolve
+ * a module, in which case they are an ENTRY POINT rather than an artifact and
+ * their dependency closure is not in them.
+ */
+async function bundleAt(processorPath: string, options: OpenProcessorArrivalOptions): Promise<Uint8Array | undefined> {
+	const contents = await readProcessorPath(processorPath, options);
+	return contents.kind === 'bundle' ? contents.bundle : undefined;
 }
 
 /** Imported lazily so that a host which never resolves a path never loads `node:fs`. */

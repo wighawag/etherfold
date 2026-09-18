@@ -25,7 +25,7 @@ import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
-import {resolveCommandConfig} from './config.js';
+import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
 import {
 	openFolding,
 	openFoldingDatabase,
@@ -241,6 +241,11 @@ export async function prepareIndexing<
 		options,
 		env,
 	);
+	// ...and the one part of it that is a FILE rather than a string: a `--processor`
+	// path naming an unbundled entry point is refused HERE, with the build command an
+	// author needs, rather than from inside a loader once a database is open
+	// (ADR-0086, ADR-0048). Nothing has been imported or opened at this line.
+	await refuseUnbundledProcessor(command, resolved.processor, {substitutedArrival: deps.importModule !== undefined});
 
 	logger.info({nodeUrl: resolved.nodeUrl, store: resolved.destination.store, source: resolved.source.from});
 
