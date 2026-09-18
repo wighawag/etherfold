@@ -58,11 +58,6 @@ import {identityOf} from './utils/processorIdentity.js';
  * pass by accident.
  */
 const V2: EntityProcessor<typeof abi> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: `successorSpec` hands this
-	// fold the identity its ARRIVAL derived (`V2_IDENTITY`, ADR-0086), so this value
-	// is read by nobody. `the-declared-version-and-the-drift-report-are-deleted`
-	// removes the field.
-	version: '1.0.0',
 	entities: nftEntities,
 	async onTransfer(state, event) {
 		const id = event.args.id.toString().padStart(78, '0');
@@ -87,8 +82,7 @@ const V2: EntityProcessor<typeof abi> = {
  * that the three shapes land on the same generation, in the same table namespace,
  * and two arrivals with two names would be two generations before a single log was
  * folded. It used to be the author-DECLARED identity, shared because the shapes
- * shared one `nftProcessor` -- which is exactly the dependency
- * `the-declared-version-and-the-drift-report-are-deleted` removes.
+ * shared one `nftProcessor` -- a dependency that is gone with the declaration.
  */
 const V1_IDENTITY = identityOf('the-incumbent-fold');
 
@@ -111,8 +105,7 @@ function successorSpec(db: RemoteSQL, declared: EntityProcessor<typeof abi>, ide
 			new VersionedStateStore(db, declared.entities, {
 				tableNamespace: generationDigestOf({stream: context.stream, processor: identity}),
 			}),
-		createProcessor: (state: unknown) =>
-			new EntityEventProcessor<typeof abi>(state as never, declared, {identity}) as never,
+		createProcessor: (state: unknown) => new EntityEventProcessor<typeof abi>(state as never, declared) as never,
 		processorIdentity: identity,
 	};
 }

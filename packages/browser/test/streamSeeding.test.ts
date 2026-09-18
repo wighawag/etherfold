@@ -53,9 +53,7 @@ import {identityOf} from './utils/processorIdentity.js';
  * it is running.
  *
  * An author cannot STATE an identity (ADR-0086), so this does what an ARRIVAL
- * does: it has BYTES and it hashes them. It used to be taken from the runtime, by
- * asking the definition for its declared version hash -- a value
- * `the-declared-version-and-the-drift-report-are-deleted` removes. Nothing here
+ * does: it has BYTES and it hashes them. Nothing here
  * parses it; the candidate rule is an EQUALITY between what a producer wrote and
  * what a client says it runs, and the one case in this file that bootstraps is
  * about the STREAM SEED being refused while the SNAPSHOT still installs.

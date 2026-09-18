@@ -26,7 +26,13 @@ import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {openFolding, openFoldingDatabase, openIndexingSource, streamConfigFor} from './folding.js';
+import {
+	openFolding,
+	openFoldingDatabase,
+	openIndexingSource,
+	requireArrivalIdentity,
+	streamConfigFor,
+} from './folding.js';
 import {reconfigurerFor} from './reconfigure.js';
 import type {BuildConfig, ConfigFor, Options, RunConfig} from './types.js';
 
@@ -74,11 +80,9 @@ export type IndexingDependencies = {
 	 * It is the other half of ONE seam and is meaningless without its partner. An
 	 * arrival derives an identity (ADR-0086) and the engine is handed one and never
 	 * asks where it came from; `importModule` lets a caller state WHAT comes back for
-	 * a `--processor` path, and this lets it state what that thing is NAMED. Without
-	 * it a deployment stood up through an injected importer had no derived identity at
-	 * all and fell back on the author-DECLARED one -- which is the remainder
-	 * `no-suite-or-example-still-rests-on-the-declared-identity` removed, and which
-	 * `the-declared-version-and-the-drift-report-are-deleted` is about to take away.
+	 * a `--processor` path, and this lets it state what that thing is NAMED. There is
+	 * nothing left to fall back on: an injected arrival that names itself nothing has
+	 * no identity at all, and the deployment is REFUSED (`requireArrivalIdentity`).
 	 *
 	 * **BYTES WIN, always.** Where the path names a real self-contained bundle, the
 	 * hash of those octets is the identity and this value is not consulted -- so it can
@@ -250,10 +254,11 @@ export async function prepareIndexing<
 
 	// WHAT THE `--processor` PATH TURNS OUT TO BE. A path is still how a deployment
 	// names its processor and that has not changed (ADR-0086); what the path points
-	// AT may now be a self-contained BUNDLE, which is read and hashed here and whose
-	// hash IS the generation's processor identity. A path naming an unbundled module
-	// resolves through the module system exactly as it always did and keeps the
-	// identity its author declared. Nothing here bundles anything.
+	// AT must be a self-contained BUNDLE, which is read and hashed here and whose hash
+	// IS the generation's processor identity. A path naming an unbundled module
+	// resolves through the module system exactly as it always did and is REFUSED
+	// below, because nothing is left that could name its fold. Nothing here bundles
+	// anything.
 	//
 	// The CLI intentionally constructs the processor with NO factory argument (the
 	// server passes its folder); see MEDIUM-3.
@@ -265,9 +270,9 @@ export async function prepareIndexing<
 	// WHAT THIS DEPLOYMENT'S ARRIVAL DERIVED. Real bytes on a disk answer first and are
 	// never overruled; an arrival a caller SUBSTITUTED answers for itself, because a
 	// module object has nothing to hash (see `IndexingDependencies.processorIdentity`).
-	// Absent from both is still a real answer and still means the author's declaration,
-	// until the contract task takes it away.
-	const arrivalIdentity = arrival.identity ?? deps.processorIdentity;
+	// Absent from both is a fold with no name at all, which is refused rather than
+	// papered over (`requireArrivalIdentity`).
+	const arrivalIdentity = requireArrivalIdentity(resolved.processor, arrival.identity ?? deps.processorIdentity);
 
 	// derived ONCE and handed to both halves below: the sending fetcher host and the
 	// receiving stream builder hash this same object into the wire identity
@@ -314,10 +319,10 @@ export async function prepareIndexing<
 			// which is the whole reason this shape can store a stream at all: the emission
 			// table's key is `NOT NULL` and there was no fold-side value to put in it.
 			indexer: resolved.indexer,
-			// THE IDENTITY THE ARRIVAL DERIVED, where it derived one: a generation folded
-			// from a bundle is named by that bundle's hash, and the engine below this line
-			// cannot tell the difference and is not meant to (ADR-0086).
-			...(arrivalIdentity === undefined ? {} : {processorIdentity: arrivalIdentity}),
+			// THE IDENTITY THE ARRIVAL DERIVED: a generation folded from a bundle is named by
+			// that bundle's hash, and the engine below this line never asks where the value
+			// came from (ADR-0086).
+			processorIdentity: arrivalIdentity,
 			// WHEN a successor takes over, on the one command that can register one while it
 			// runs. Only `run` resolves the input (`OWNERSHIP`, `config.ts`): the one-shot
 			// holds exactly ONE generation and exits, so a policy there would be accepted

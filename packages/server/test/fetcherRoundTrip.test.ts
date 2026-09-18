@@ -95,11 +95,6 @@ const SOURCE: IndexingSource<TestABI> = {
 const PROCESSOR_IDENTITY = identityOf('round-trip');
 
 const entityProcessor: EntityProcessor<TestABI> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: every construction site below
-	// hands the fold the identity above, so this value is read by nobody.
-	// `assertProcessorVersion` still demands the field until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},
@@ -217,7 +212,7 @@ type TestEnv = {DEV?: string; INGEST_TOKEN?: string};
 
 async function deployReceiver(): Promise<Deployment> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor, {identity: PROCESSOR_IDENTITY});
+	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor);
 	// the recorder is the HOST's, exactly as it is in a deployment: this package
 	// counts nothing itself any more (ADR-0050)
 	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
@@ -486,7 +481,7 @@ describe('the split deployment lands where a single process lands', () => {
 
 		const singleChain = fakeChain();
 		const singleDb: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-		const single = new VersionedStateEventProcessor<TestABI>(singleDb, entityProcessor, {identity: PROCESSOR_IDENTITY});
+		const single = new VersionedStateEventProcessor<TestABI>(singleDb, entityProcessor);
 		const indexer = new IndexerGeneration<TestABI, unknown>(
 			singleChain.provider,
 			single,

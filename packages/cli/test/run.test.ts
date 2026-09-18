@@ -77,9 +77,8 @@ function oneDatabase(): RemoteSQL {
  *
  * The suite's subject is the `run` COMMAND -- following, folding, answering,
  * exiting -- and nothing in it is about identity. It stays on the injected module
- * arrival for exactly that reason, and names it rather than letting it fall
- * through to `nftProcessor.version`, which is the declared identity
- * `the-declared-version-and-the-drift-report-are-deleted` deletes.
+ * arrival for exactly that reason, and NAMES it: an injected arrival that names
+ * itself nothing has no identity at all and is refused (ADR-0086).
  */
 const ARRIVAL = identityOf('the-fold-this-run-came-up-with');
 

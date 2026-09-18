@@ -112,7 +112,6 @@ async function openIndexer(
 			createProcessor: (state: WritableStateStore) =>
 				new EntityEventProcessor<typeof abi>(state, declared, {
 					finalityDepth: FINALITY,
-					identity,
 				}) as unknown as EntityEventProcessor<typeof abi>,
 			processorIdentity: identity,
 		},

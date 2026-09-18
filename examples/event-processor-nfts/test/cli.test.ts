@@ -24,9 +24,9 @@ import {describe, expect, it} from 'vitest';
 // deployment actually reads, and because the hash of those bytes IS this
 // deployment's identity (ADR-0086). This example used to hand the command a
 // module object instead, which derives no identity at all, so the fold fell back
-// on the `version` field in `src/entities.ts` -- the author-DECLARED identity
-// `the-declared-version-and-the-drift-report-are-deleted` removes. An example is
-// EVIDENCE, so it has to be evidence of the arrival a reader is being taught.
+// on a `version` field in `src/entities.ts` -- the author-DECLARED identity that
+// is now deleted, and an unbundled path is refused. An example is EVIDENCE, so it
+// has to be evidence of the arrival a reader is being taught.
 //
 // The build runs as this package's `pretest`, so the bytes are there whether the
 // suite is run on its own or as part of the whole tree.

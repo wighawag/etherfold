@@ -3,6 +3,7 @@ import {describe, expect, it} from 'vitest';
 import {FetchRangeBelowFinalityError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {fakeChain, fakeProcessor, FINALITY, makeLog, SOURCE} from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 /**
  * A FETCH RANGE NARROWER THAN THE UNCONFIRMED WINDOW IS REFUSED, RATHER THAN
@@ -29,7 +30,9 @@ const chainConfig = (maxBlocksPerFetch: number) => ({
 function indexerWith(config: ReturnType<typeof chainConfig>) {
 	const chain = fakeChain([makeLog(100, '0xa100')], 200);
 	const processor = fakeProcessor();
-	return new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, config);
+	return new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, config, {
+		processorIdentity: identityOf('the-fold'),
+	});
 }
 
 describe('a fetch range that could never clear the unconfirmed window', () => {
@@ -71,9 +74,15 @@ describe('a fetch range that could never clear the unconfirmed window', () => {
 		const processor = fakeProcessor();
 		expect(
 			() =>
-				new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
-					stream: {finality: FINALITY},
-				}),
+				new IndexerGeneration<Abi, string[]>(
+					chain.provider,
+					processor.processor,
+					SOURCE,
+					{
+						stream: {finality: FINALITY},
+					},
+					{processorIdentity: identityOf('the-fold')},
+				),
 		).not.toThrow();
 	});
 
@@ -86,10 +95,16 @@ describe('a fetch range that could never clear the unconfirmed window', () => {
 		const processor = fakeProcessor();
 		expect(
 			() =>
-				new IndexerGeneration<Abi, string[]>(chain.provider, processor.processor, SOURCE, {
-					stream: {finality: FINALITY},
-					fetch: {numBlocksToFetchAtStart: 1, maxBlocksPerFetch: 1000},
-				}),
+				new IndexerGeneration<Abi, string[]>(
+					chain.provider,
+					processor.processor,
+					SOURCE,
+					{
+						stream: {finality: FINALITY},
+						fetch: {numBlocksToFetchAtStart: 1, maxBlocksPerFetch: 1000},
+					},
+					{processorIdentity: identityOf('the-fold')},
+				),
 		).not.toThrow();
 	});
 });

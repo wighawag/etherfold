@@ -101,9 +101,8 @@ const SOURCE: IndexingSource<TestABI> = {
  * cursor: what is being checked is that the ROWS a reader sees have caught up,
  * not that a cursor moved.
  */
-function foldAt(version: string): EntityProcessor<TestABI> {
+function foldAt(): EntityProcessor<TestABI> {
 	return {
-		version,
 		entities: [
 			{name: 'token', id: ['id'], fields: {owner: 'text'}},
 			{name: 'head', id: ['name'], fields: {block: 'integer'}},
@@ -121,7 +120,7 @@ function foldAt(version: string): EntityProcessor<TestABI> {
 	};
 }
 
-const ENTITIES = foldAt('1.0.0').entities;
+const ENTITIES = foldAt().entities;
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' as const;
 
@@ -254,7 +253,7 @@ async function openWorld() {
 	const indexer = createIndexerState<TestABI, EntityStateView>(
 		{
 			createState: () => store,
-			createProcessor: (state) => new EntityEventProcessor<TestABI>(state, foldAt('1.0.0')),
+			createProcessor: (state) => new EntityEventProcessor<TestABI>(state, foldAt()),
 			// what this app's ARRIVAL derived, which is what names the generation
 			// (ADR-0086): an author cannot state one, so the declared version above
 			// names nothing here
@@ -329,7 +328,7 @@ async function openWorld() {
 			const before = indexer.canonical?.record.processor;
 			await indexer.addGeneration({
 				createState: () => successorStore,
-				createProcessor: (state) => new EntityEventProcessor<TestABI>(state, foldAt('2.0.0')),
+				createProcessor: (state) => new EntityEventProcessor<TestABI>(state, foldAt()),
 				// a NEW build arrived, so a new identity arrived with it
 				processorIdentity: identityOf('the-edited-app'),
 			});

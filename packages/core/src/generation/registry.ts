@@ -51,15 +51,15 @@ export type GenerationId = {
 	/** The stream digest, as `streamDigestOf` renders it. */
 	readonly stream: string;
 	/**
-	 * WHAT THE FOLD IS CALLED: the identity the ARRIVAL that produced it supplied
+	 * WHAT THE FOLD IS CALLED: the identity the ARRIVAL that produced it derived
 	 * (ADR-0086) -- the SHA-256 of a bundle's octets where a deployment read one off
-	 * disk -- falling back, until the declared path is deleted, to the processor's
-	 * own `getVersionHash()`.
+	 * disk, and a derivation over the handler sources for the one arrival that has no
+	 * bytes. An author cannot state it and no part of this package computes one.
 	 *
 	 * An OPAQUE string, and that is load-bearing rather than incidental: this
 	 * registry COMPARES it for equality and RENDERS it into messages, nothing in this
-	 * tree parses it, and that is exactly what lets two derivations name generations
-	 * side by side while the migration runs.
+	 * tree parses it, and that is exactly what lets the arrivals derive one their own
+	 * way without this package knowing there is more than one way.
 	 */
 	readonly processor: string;
 };
@@ -572,7 +572,7 @@ function assertIdentity(id: GenerationId): GenerationId {
 	}
 	if (typeof id.processor !== 'string' || id.processor.length === 0) {
 		throw new TypeError(
-			`a generation's processor version hash must be a non-empty string, got ${JSON.stringify(id.processor)}`,
+			`a generation's processor identity must be a non-empty string, got ${JSON.stringify(id.processor)}`,
 		);
 	}
 	return identityOf(id);

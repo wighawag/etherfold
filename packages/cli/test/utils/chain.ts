@@ -166,17 +166,11 @@ export const nftEntities = declareEntities([
 /**
  * "Who owns this token", plus a counter that a reorg must be able to bring DOWN.
  *
- * The `version` is STILL REQUIRED and, for almost every suite, names nothing:
- * each one hands its fold the identity its ARRIVAL derived (ADR-0086,
- * `utils/processorIdentity.ts`). It is read in exactly one place on purpose --
- * `aDeploymentRunsFromABundle.test.ts`'s DECLARED-path cases, which are this
- * package's witness that a configuration naming an unbundled module still
- * resolves, registers and folds as it always did. That is what
- * `the-declared-version-and-the-drift-report-are-deleted` retires, along with
- * this field.
+ * It declares NOTHING about which fold it is, because an author cannot (ADR-0086):
+ * every suite here hands its fold the identity its ARRIVAL derived
+ * (`utils/processorIdentity.ts`).
  */
 export const nftProcessor: EntityProcessor<typeof abi> = {
-	version: '1.0.0',
 	entities: nftEntities,
 	async onTransfer(state, event) {
 		const tokenID = event.args.id.toString().padStart(78, '0');

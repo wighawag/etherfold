@@ -87,10 +87,6 @@ const V1 = {declared: nftProcessor as EntityProcessor<typeof abi>, identity: ide
  */
 const V2 = {
 	declared: {
-		// STILL REQUIRED and deliberately NAMING NOTHING: `specFor` hands this fold the
-		// identity its ARRIVAL derived (ADR-0086).
-		// `the-declared-version-and-the-drift-report-are-deleted` removes the field.
-		version: '1.0.0',
 		entities: nftEntities,
 		async onTransfer(state, event) {
 			const tokenID = event.args.id.toString().padStart(78, '0');
@@ -134,7 +130,6 @@ function specFor(db: RemoteSQL, fold: {declared: EntityProcessor<typeof abi>; id
 		createProcessor: (state: WritableStateStore) =>
 			new EntityEventProcessor<typeof abi>(state, declared, {
 				finalityDepth: FINALITY,
-				identity,
 			}) as unknown as EntityEventProcessor<typeof abi>,
 		processorIdentity: identity,
 	};

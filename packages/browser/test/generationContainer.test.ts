@@ -89,10 +89,9 @@ describe('createIndexerState takes the factories a generation is built from', ()
 	 * tab registers is named by what its ARRIVAL derived and by nothing the author
 	 * wrote.
 	 *
-	 * The two generations below are built from the SAME definition, so the declared
-	 * `version` -- and therefore `getVersionHash()` -- is identical for both. Under
-	 * the author-declared path they would have been ONE generation; here they are
-	 * two, because two bundles of bytes are two folds whatever anybody remembered to
+	 * The two generations below are built from the SAME definition. Under the
+	 * author-declared path they would have been ONE generation; here they are two,
+	 * because two bundles of bytes are two folds whatever anybody remembered to
 	 * write. That is the property the whole family exists for, and it is the only
 	 * assertion that can tell an identity that was TAKEN from one that was computed.
 	 */

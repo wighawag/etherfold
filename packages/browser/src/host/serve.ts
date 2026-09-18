@@ -742,22 +742,18 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 			// both halves of a generation's identity exist: the stream is known up
 			// front, the fold's half only once the processor is built.
 			//
-			// Keyed on the SAME value the container registers this generation under, with
-			// the processor's own declared hash under it only where no arrival named the
-			// fold and none could be derived from it: a store recorded under a name the
-			// registry did not file is a read this host cannot answer.
-			recordState(
-				{stream: context.stream, processor: generationSpec.processorIdentity ?? built.getVersionHash()},
-				state as WritableStateStore,
-			);
+			// Keyed on the SAME value the container registers this generation under,
+			// resolved a line above: a store recorded under a name the registry did not file
+			// is a read this host cannot answer.
+			recordState({stream: context.stream, processor: generationSpec.processorIdentity}, state as WritableStateStore);
 			return built;
 		},
 		stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
 			(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
 		// Handed STRAIGHT to the container, which registers the generation under it and
-		// never asks where it came from. `undefined` reads as the absence the core's own
-		// fallback takes: no arrival named this fold, and its handlers had no readable
-		// source to derive one from either.
+		// never asks where it came from. `undefined` here means only that no arrival named
+		// this fold BEFORE it was built: `createProcessor` above fills the field in from
+		// the module itself, and the container reads it afterwards.
 		processorIdentity: spec.processorIdentity,
 		source,
 	};

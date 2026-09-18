@@ -16,6 +16,7 @@ import {
 	START_BLOCK,
 	type ProcessorStore,
 } from './utils/streamCacheWorld.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // DELETING A STREAM-CONFIG FIELD DOES NOT MOVE THE DIGEST OF A STREAM THAT
@@ -162,11 +163,17 @@ function indexerOver(
 	keepStream: ExistingStream<Abi>,
 	stream: ProvidedStreamConfig,
 ) {
-	const indexer = new IndexerGeneration<Abi, string[]>(chain.provider, processor as never, SOURCE, {
-		stream,
-		keepStream,
-		streamWriteRetry: {delaySeconds: 0},
-	});
+	const indexer = new IndexerGeneration<Abi, string[]>(
+		chain.provider,
+		processor as never,
+		SOURCE,
+		{
+			stream,
+			keepStream,
+			streamWriteRetry: {delaySeconds: 0},
+		},
+		{processorIdentity: identityOf('the-fold')},
+	);
 	(indexer as unknown as {logEventFetcher: unknown}).logEventFetcher = chain.fetcher;
 	return indexer;
 }

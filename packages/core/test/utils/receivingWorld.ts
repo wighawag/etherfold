@@ -230,10 +230,6 @@ export const REPORTED_ENTITY = 'row';
 function foldingProcessor(marker: string, store: MemoryStore, weight: number): EventProcessor<TestABI, string[]> {
 	let reporter: FoldReporter | undefined;
 	return {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// deliberately NOT what names this fold: the spec hands the container the
-		// identity its ARRIVAL derived (`specFor`), so nothing reads this.
-		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => (store.lastSync ? {state: store.rows, lastSync: clone(store.lastSync)} : undefined),
 		process: async (eventStream, lastSync) => {

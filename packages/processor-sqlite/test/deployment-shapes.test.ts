@@ -9,6 +9,7 @@ import {
 	type IngestionTarget,
 	type WireBatch as PublishedWireBatch,
 	parseStreamFixture,
+	processorCodeFingerprint,
 	parseWireBatch,
 	serializeStreamFixture,
 	serializeWireBatch,
@@ -42,10 +43,9 @@ import {identityOf} from './utils/processorIdentity.js';
  * is a deployment's choice and nothing the processor sees, so the fold's name
  * cannot depend on the backend underneath it either.
  *
- * It reaches BOTH halves -- the fold (`identity` / `getVersionHash`) and the
- * `IndexerGeneration` driving it (`processorIdentity`) -- because the engine asks
- * the second one, and a generation handed nothing there falls through to the
- * declared computation however carefully the fold underneath was named.
+ * It is handed to the `IndexerGeneration` driving each shape (`processorIdentity`),
+ * which is the one thing that names a generation: a fold computes no identity of
+ * its own, so there is nothing for this value to disagree with.
  */
 const PROCESSOR_IDENTITY = identityOf('deployment-shapes');
 
@@ -463,7 +463,6 @@ async function snapshotOf(read: Reader): Promise<Snapshot> {
 function entityProcessorOver(
 	store: StateStoreBackend,
 	authored: EntityProcessor<TestABI>,
-	identity: string,
 ): EventProcessor<TestABI, void> {
 	// CLAIMED once, on first use: folding is writing, and the ability to mutate is
 	// obtained by claiming (ADR-0077). `openForWriting` migrates, which is what the
@@ -471,12 +470,10 @@ function entityProcessorOver(
 	let writer: Promise<WritableStateStore> | undefined;
 	const claimed = () => (writer ??= openForWriting(store));
 	return {
-		// HANDED, not computed: a fold is told which fold it is and never derives one
-		// from the author's declaration (ADR-0086). The seam still asks for it under the
-		// declared path's name, which `the-declared-version-and-the-drift-report-are-deleted`
-		// is what removes.
-		getVersionHash: () => identity,
-		getCodeFingerprint: () => undefined,
+		// A fold states NO identity of its own (ADR-0086): the engine driving it is
+		// handed the one its arrival derived. What this answers is the handler-source
+		// digest, which names one arrival elsewhere and nothing at all here.
+		getCodeFingerprint: () => processorCodeFingerprint(authored),
 		load: async () => {
 			await claimed();
 			return undefined;
@@ -503,13 +500,7 @@ const backends: Backend[] = [
 		// the published one: versioned rows in a REAL local libSQL database
 		name: 'sqlite',
 		make() {
-			const p = new VersionedStateEventProcessor<TestABI>(
-				new RemoteLibSQL(createClient({url: ':memory:'})),
-				processor,
-				{
-					identity: PROCESSOR_IDENTITY,
-				},
-			);
+			const p = new VersionedStateEventProcessor<TestABI>(new RemoteLibSQL(createClient({url: ':memory:'})), processor);
 			return {processor: p, read: (entity, id) => p.state.getCurrent(entity, id)};
 		},
 	},
@@ -520,7 +511,7 @@ const backends: Backend[] = [
 		make() {
 			const store = new MemoryStateStore(processor.entities);
 			return {
-				processor: entityProcessorOver(store, processor, PROCESSOR_IDENTITY),
+				processor: entityProcessorOver(store, processor),
 				read: (entity, id) => store.getCurrent(entity, id),
 			};
 		},

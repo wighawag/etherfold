@@ -119,7 +119,10 @@ describe('the fold publishes what it just changed', () => {
 		expect(published).toBeGreaterThan(0);
 
 		const after = reportingFold('B');
-		const outcome = await world.indexer.updateProcessor(after.processor, {force: true});
+		const outcome = await world.indexer.updateProcessor(after.processor, {
+			force: true,
+			processorIdentity: identityOf('B'),
+		});
 		expect(outcome.stateDiscarded).toBe(true);
 		// the fold that was replaced is detached; the one folding now is attached
 		expect(before.attached).toBe(false);
@@ -189,9 +192,6 @@ describe('the fold publishes what it just changed', () => {
 		// package has no mutation vocabulary at all. Silence is the honest answer
 		// there; the entity path is what fills it.
 		const silent: EventProcessor<Abi, string[]> = {
-			// still on the seam until the contract task removes it, and read by nobody: the
-			// spec below hands the container the identity this fold ARRIVED with
-			getVersionHash: () => 'declared-version-of-silent',
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async () => [],

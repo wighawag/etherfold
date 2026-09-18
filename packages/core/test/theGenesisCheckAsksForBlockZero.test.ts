@@ -100,9 +100,6 @@ function aNode(answers: {earliest: BlockAnswer | (() => never); zero: BlockAnswe
 
 function aProcessor(): EventProcessor<TestABI, undefined> {
 	return {
-		// The DECLARED path, still on the seam until the contract task removes it, and
-		// read by nobody here: the engine is handed `PROCESSOR_IDENTITY` instead.
-		getVersionHash: () => 'declared-version',
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async () => undefined,

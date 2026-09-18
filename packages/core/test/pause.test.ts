@@ -293,9 +293,6 @@ function labelledFold(label: string) {
 	const state: string[] = [];
 	const calls = {load: 0};
 	const processor: EventProcessor<Abi, string[]> = {
-		// The DECLARED path, still on the seam until the contract task removes it: what
-		// NAMES each generation here is the identity its spec's arrival supplied.
-		getVersionHash: () => `declared-version-of-${label}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			calls.load++;

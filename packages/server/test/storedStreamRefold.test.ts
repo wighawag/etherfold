@@ -145,16 +145,13 @@ function idOf(event: {blockNumber: number; blockHash: string; logIndex: number})
  * claim rather than one an approximate revert could pass by luck.
  *
  * The MARKER names the bytes this fold would have arrived as, and `identity` is
- * what each construction site below hands the engine (ADR-0086). The
- * `getVersionHash()` beside it is the DECLARED path, still a required member of
- * `EventProcessor` until the contract task removes it and deliberately read by
- * nobody here.
+ * what each construction site below hands the engine (ADR-0086); the fold itself
+ * states nothing about what it is called.
  */
 function foldingProcessor(marker = 'fold') {
 	let state: string[] = [];
 	let saved: {lastSync: LastSync<TestABI>; state: string[]} | undefined;
 	const processor: EventProcessor<TestABI, string[]> = {
-		getVersionHash: () => `declared-version-of-${marker}`,
 		getCodeFingerprint: () => undefined,
 		load: async () => {
 			if (!saved) return undefined;

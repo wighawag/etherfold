@@ -61,7 +61,7 @@ It is asserted end to end by [`packages/browser/test/snapshotOnlyMode.test.ts`](
 
 A snapshot carries nothing below its own block. A bootstrapped store reports its **retention** floor there and refuses a revert reaching under it ([ADR-0028](../../adr/0028-a-bootstrapped-store-reports-a-floor-at-its-snapshot-and-refuses-to-revert-under-it.md)), and with no stream keeper there is no stored stream beneath the fold either. The generation is a **leaf**, and one consequence follows that you want to know before you ship rather than at the first reconfigure.
 
-**A later processor-only change is not free.** [A generation built beside the live one](#the-same-edit-without-the-blank-app), which is how an edited processor lands without blanking the app, fetches not one log precisely because the successor re-folds the stream that is already stored. Seeded from a snapshot there is no such stream, and a snapshot is keyed to the processor version that computed it, so the successor cannot start from the snapshot you already hold either. Its state comes from a snapshot the **publisher** republishes with the new processor, and that wait is the price of the mode.
+**A later processor-only change is not free.** [A generation built beside the live one](#the-same-edit-without-the-blank-app), which is how an edited processor lands without blanking the app, fetches not one log precisely because the successor re-folds the stream that is already stored. Seeded from a snapshot there is no such stream, and a snapshot is keyed to the identity of the processor that computed it, so the successor cannot start from the snapshot you already hold either. Its state comes from a snapshot the **publisher** republishes with the new processor, and that wait is the price of the mode.
 
 **Adding `keepStream` on top does not buy it back.** That is the reach that looks obvious and leaves exactly the same hole: a stream kept by a snapshot-seeded tab starts at the snapshot's block, so a successor still has nothing to fold below it. (It is also the one combination with a known hazard under it, a follower generation that can clear the writer's stream: [the note](https://github.com/wighawag/etherfold/blob/main/a-follower-can-self-clear-the-writers-stream-through-the-read-only-view).) What buys the free re-fold, plus revert and as-of depth below the snapshot's floor, is a stream that reaches back to your source's own start block: either indexed from that block by this tab, which is the fetch a public node will not serve, or installed from a published **stream seed**, which is the next section ([ADR-0063](../../adr/0063-a-published-stream-seed-arrives-through-its-own-loader-and-installs-through-the-keeper-seam.md), [ADR-0064](../../adr/0064-a-seed-for-another-stream-is-refused-on-an-exact-digest-and-the-refusal-names-a-direction.md), [ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)).
 
@@ -84,7 +84,7 @@ Read that as the floor on the wait rather than the wait itself. It measures the 
 
 ```ts
 import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
-import {entityProcessorVersionHash, fromEntityProcessor, openAndBootstrap} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openAndBootstrap} from '@etherfold/processor-entities';
 
 // Locations in priority order, freshest first: a rolling remote your build
 // NAMES, then the copy EMBEDDED in this build at a relative path. That last one
@@ -99,7 +99,12 @@ const indexer = createIndexerState({
 		const {store, outcome} = await openAndBootstrap(
 			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `app-${CHAIN.id}-${context.stream}`}),
 			SNAPSHOT_LOCATIONS,
-			{processor: entityProcessorVersionHash(tokenProcessor), finalityDepth: 12},
+			// WHICH FOLD this snapshot has to have been computed under. An identity is
+			// derived from what a processor IS and never declared by its author
+			// (ADR-0086), so this is the value the PUBLISHER's deployment registered --
+			// the hash of the bundle it folded with -- named by your build beside the
+			// snapshot locations above.
+			{processor: SNAPSHOT_PROCESSOR_IDENTITY, finalityDepth: 12},
 		);
 		// A refusal is DATA rather than a throw, so render it instead of leaving an
 		// unexplained empty app: {status: 'bootstrapped', at, from} | {status: 'kept-local',
@@ -118,7 +123,7 @@ await indexer.init({provider, source, config: {stream: {finality: 12}}});
 
 From there it is an ordinary indexer: it starts at the cursor the snapshot carried, re-reads that cursor's finality window without applying anything twice, and indexes forward.
 
-**The locations are yours, and so is the risk.** The library fetches where it is pointed and judges nothing: there is no allowlist and no origin check, because a client cannot be offered a snapshot from somewhere it was not pointed at ([ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). So the host your build names has to be trusted the way your build pipeline is trusted, and an app that lets a URL query parameter override it (as the reference deployment's `?snapshot=` does) is accepting a state source anyone with a link can choose. Nothing downstream catches that: what is checked is the processor version, the envelope format and the reorg window, while the rows themselves are taken on trust, and a snapshot that quietly leaves some out is structurally perfect. Detecting that needs the historical logs the node will not serve ([ADR-0065](../../adr/0065-a-stream-seed-is-trusted-by-a-build-pin-and-checked-for-coherence-because-omission-cannot-be-detected.md), whose omission residue ADR-0066 leaves standing).
+**The locations are yours, and so is the risk.** The library fetches where it is pointed and judges nothing: there is no allowlist and no origin check, because a client cannot be offered a snapshot from somewhere it was not pointed at ([ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). So the host your build names has to be trusted the way your build pipeline is trusted, and an app that lets a URL query parameter override it (as the reference deployment's `?snapshot=` does) is accepting a state source anyone with a link can choose. Nothing downstream catches that: what is checked is the processor identity, the envelope format and the reorg window, while the rows themselves are taken on trust, and a snapshot that quietly leaves some out is structurally perfect. Detecting that needs the historical logs the node will not serve ([ADR-0065](../../adr/0065-a-stream-seed-is-trusted-by-a-build-pin-and-checked-for-coherence-because-omission-cannot-be-detected.md), whose omission residue ADR-0066 leaves standing).
 
 **Pass `finalityDepth`, and publish below the tip.** A snapshot taken within the reorg window of the tip its producer had seen cannot absorb a reorg reaching under its own block, since it carries no history there. That has two halves and you own both: the publisher takes the snapshot at least the finality depth behind the tip, and the client passes `finalityDepth` so a snapshot that was not is refused as `not-bootstrapped` / `inside-reorg-window` instead of installed. Omit it and the check never runs. Give it the same finality your indexer runs with.
 
@@ -316,7 +321,7 @@ A template with hot contract replacement has **two** things that get replaced wh
 
 `updateProcessor` decides whether your state survives by comparing the two folds' **identities**, and you do not get to state one ([ADR-0086](https://github.com/wighawag/etherfold/blob/main/docs/adr/0086-a-processors-identity-is-derived-from-its-code-and-never-declared.md)). A processor your dev server handed the tab arrives as a **module object** and has no bytes to hash, so it is named by a derivation over its **handler sources**.
 
-So editing a reducer is a different fold whether or not you touched `version`: the swap is applied, the state is rebuilt under the new logic, and there is nothing to remember. Saving a file you did not change is the same fold, and the outcome says so.
+So editing a reducer is a different fold, always: the swap is applied, the state is rebuilt under the new logic, and there is nothing to remember. Saving a file you did not change is the same fold, and the outcome says so.
 
 ```ts
 const outcome = await indexer.updateProcessor(next);
@@ -369,12 +374,12 @@ const outcome = await indexer.updateIndexer({source: {chainId, contracts: [next]
 
 If the ABI did *not* change, nothing is discarded — and that is correct rather than a gap. The same signatures over the same address still mean what the indexed rows say they mean.
 
-The case that looks like it needs a third branch — an implementation that changed what its events *mean* while keeping their signatures — does not, because it cannot happen without a **processor** change. New meaning has to be implemented by new handler code, and writing that is the developer's job. So it travels axis one: bump `version`, and the swap discards and re-indexes.
+The case that looks like it needs a third branch — an implementation that changed what its events *mean* while keeping their signatures — does not, because it cannot happen without a **processor** change. New meaning has to be implemented by new handler code, and writing that is the developer's job. So it travels axis one: edit the handlers, and the swap discards and re-indexes.
 
 | what changed | the response |
 | --- | --- |
 | ABI changed, same address | `updateIndexer({source})` — discards and re-indexes |
-| event *meaning* changed | edit the processor and bump `version` — axis one |
+| event *meaning* changed | edit the processor — axis one |
 | genesis hash changed (a different chain) | reload the page |
 
 That last row is why a template's deployments store forces `location.reload()` only on a genesis change: a different chain invalidates the provider, the cursor and the store at once, and no in-place reconfigure covers that. Everything else takes the reactive path.

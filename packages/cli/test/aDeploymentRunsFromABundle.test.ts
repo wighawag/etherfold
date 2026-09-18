@@ -1,5 +1,4 @@
 import {createClient} from '@libsql/client';
-import {entityProcessorVersionHash} from '@etherfold/processor-entities';
 import {processorArtifactIdentity} from '@etherfold/utils';
 import {copyFile, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
@@ -42,15 +41,14 @@ import {canonicalStoreIn} from './utils/reads.js';
 // `--processor` path names a REAL BUNDLE ON DISK and `importModule` is
 // deliberately NOT injected, because the bytes are what is under test.
 //
-// ## Both shapes work, and that is the point of this step rather than a caveat
+// ## And a path that names no bundle is REFUSED, because nothing else can name it
 //
-// This is the EXPAND step of a wide refactor. A configuration naming an
-// UNBUNDLED module -- one that still expects somebody else to resolve an import
-// -- resolves, registers and folds exactly as it did before, taking its identity
-// from `getVersionHash()`; four migrate batches and a contract task follow, and
-// each of them depends on that still being true. So the declared path is
-// asserted here beside the new one rather than left to the suites that already
-// cover it.
+// The author-declared identity an unbundled entry point used to fall back on is
+// gone (`the-declared-version-and-the-drift-report-are-deleted`), so such a
+// configuration has no name for its fold and is refused before a database is
+// opened. This asserts the refusal EXISTS and that it names the path;
+// `a-path-naming-an-unbundled-entry-point-is-refused` is what moves it to
+// configuration resolution and makes it actionable.
 //
 // ## What "a BUNDLE" means here, which is one definition and not a new one
 //
@@ -174,56 +172,60 @@ describe('the identity follows the BYTES, with no author action either way', () 
 		);
 	});
 
-	it('does so where the DECLARED identity cannot tell the two apart, which is the whole point', async () => {
-		// the pair differ in one handler line and in nothing a declared identity is
-		// computed from -- same `version`, same entity declarations -- so this is the
-		// silent wrong-state condition ADR-0008 could only report, made impossible
+	it('does so where NOTHING THE AUTHOR WROTE differs, which is the whole point', async () => {
+		// the pair differ in one handler line and in nothing an author DECLARES -- the
+		// entity declarations are identical, and there is no version field left to bump --
+		// so this is the silent wrong-state condition ADR-0008 could only report, made
+		// impossible
 		const {createProcessor: base} = await import(
 			`data:text/javascript;base64,${readFileSync(BUNDLE).toString('base64')}`
 		);
 		const {createProcessor: edited} = await import(
 			`data:text/javascript;base64,${readFileSync(EDITED_BUNDLE).toString('base64')}`
 		);
-		expect(entityProcessorVersionHash(edited())).toBe(entityProcessorVersionHash(base()));
+		expect(edited().entities).toEqual(base().entities);
 	});
 });
 
-describe('the DECLARED path is untouched', () => {
-	it('still takes its identity from getVersionHash() for a module that is not a bundle', async () => {
-		const db = oneDatabase();
-		const chain = fakeChain().serve(LOGS, TIP);
-		const prepared = await prepareIndexing('build', optionsFor('./nfts.js'), {
-			...depsFor(chain, db),
-			importModule: async () => entityModule,
-		});
-		await prepared.index();
-
-		expect(await registeredIdentityIn(db)).toBe(entityProcessorVersionHash(nftProcessor));
-	});
-
-	it('still resolves a path naming a module that expects somebody else to resolve an import', async () => {
+describe('a path that names no bundle is refused, because nothing can name its fold', () => {
+	it('refuses a module that expects somebody else to resolve an import, naming the path', async () => {
 		const dir = await aScratchDirectory();
 		await writeFile(join(dir, 'entities.js'), `export const entities = ${JSON.stringify(nftProcessor.entities)};\n`);
+		const entry = join(dir, 'processor.mjs');
 		await writeFile(
-			join(dir, 'processor.mjs'),
+			entry,
 			`import {entities} from './entities.js';
 export const contractsDataPerChain = ${JSON.stringify({
 				'1': [{abi, address: CONTRACT, startBlock: START_BLOCK}],
 			})};
-export const createProcessor = () => ({version: '9.9.9', entities, onTransfer() {}});
+export const createProcessor = () => ({entities, onTransfer() {}});
 `,
 		);
 
 		const db = oneDatabase();
 		const chain = fakeChain().serve([], TIP);
-		const prepared = await prepareIndexing('build', optionsFor(join(dir, 'processor.mjs')), depsFor(chain, db));
-		await prepared.index();
-
-		// the UNBUNDLED module took the declared route, so the identity is the one the
-		// author's own declarations produce and not a hash of the entry point's bytes
-		expect(await registeredIdentityIn(db)).toBe(
-			entityProcessorVersionHash({version: '9.9.9', entities: nftProcessor.entities} as never),
+		await expect(prepareIndexing('build', optionsFor(entry), depsFor(chain, db))).rejects.toThrow(
+			/is not a self-contained bundle/,
 		);
+		// the refusal NAMES what the operator typed, which is the only thing they can fix
+		await expect(prepareIndexing('build', optionsFor(entry), depsFor(chain, db))).rejects.toThrow(entry);
+		// and NOTHING was registered -- the refusal lands so early that this database was
+		// never even migrated, which is why there is no registry to read here at all
+		await expect(canonicalGenerationIn(db)).rejects.toThrow(/_generations/);
+	});
+
+	it('refuses an INJECTED arrival that named itself nothing either', async () => {
+		// `importModule` states what comes back for a path and
+		// `IndexingDependencies.processorIdentity` states what that thing is CALLED; the
+		// two are one seam, and half of it is a deployment with no name for its fold.
+		const db = oneDatabase();
+		const chain = fakeChain().serve(LOGS, TIP);
+		await expect(
+			prepareIndexing('build', optionsFor('./nfts.js'), {
+				...depsFor(chain, db),
+				importModule: async () => entityModule,
+			}),
+		).rejects.toThrow(/is not a self-contained bundle/);
 	});
 });
 

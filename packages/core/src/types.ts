@@ -224,51 +224,34 @@ export type FoldReporter = (report: FoldReport) => void;
 
 export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	/**
-	 * The AUTHOR-DECLARED identity of this processor's logic.
-	 *
-	 * NOT what names the generation a container registers any more. ADR-0086's
-	 * invariant is that an author cannot STATE their processor's identity, so the
-	 * engine is HANDED one by whatever ARRIVAL produced the processor
-	 * (`GenerationSpec.processorIdentity`, `StreamBuilderOptions.processorIdentity`,
-	 * `IndexerGenerationOptions.processorIdentity`) and never asks where it came
-	 * from.
-	 *
-	 * It survives only as the FALLBACK for a caller that has not supplied one yet,
-	 * which is the migrate step of a wide refactor
-	 * (`work/protocol/TASKING-PROTOCOL.md` 3a) rather than a second supported way to
-	 * name a fold. `the-declared-version-and-the-drift-report-are-deleted` removes it
-	 * from this seam once every caller has moved.
-	 */
-	getVersionHash(): string;
-	/**
 	 * A hash of the processor's own handler SOURCE, or `undefined` when it cannot
 	 * be derived.
 	 *
-	 * Advisory HERE, and deliberately NOT part of `getVersionHash()`: it moves when
-	 * a minifier or a transpiler re-emits the same behaviour differently, and
-	 * folding that into the version hash would force a full state rebuild on a
-	 * deploy that changed no logic. The core only compares it, reports when it
-	 * differs at an UNCHANGED version hash (the "forgot to bump" case), and never
-	 * discards state because of it.
+	 * **IT IS AN IDENTITY, in the one arrival that has no bytes to hash.** ADR-0086
+	 * derives identity PER ARRIVAL and the engine is HANDED one
+	 * (`GenerationSpec.processorIdentity`, `StreamBuilderOptions.processorIdentity`,
+	 * `IndexerGenerationOptions.processorIdentity`): a processor that arrived as
+	 * BYTES is named by the SHA-256 of those octets, and a processor a dev server
+	 * handed a tab as a MODULE OBJECT has no octets at all, so `@etherfold/browser`
+	 * names that fold with exactly this value (`moduleProcessorIdentity`, built by
+	 * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`, which is why
+	 * this method outlived the declared identity). Nothing in core calls it: core
+	 * only COMPARES the identity it was handed.
 	 *
-	 * **IT IS AN IDENTITY IN ONE ARRIVAL, so this seam outlives the advisory role.**
-	 * ADR-0086 derives identity PER ARRIVAL, and the browser's is a MODULE OBJECT a
-	 * dev server handed the tab: no bytes, so `@etherfold/browser` names that fold
-	 * with exactly this value (`moduleProcessorIdentity`), which is the ADR's own
-	 * "kept for this one arrival in a different role". Nothing else changes -- the
-	 * bytes arrivals hash bytes, and core still only COMPARES what it is handed --
-	 * but `the-declared-version-and-the-drift-report-are-deleted` retires the DRIFT
-	 * REPORT and must leave this method answering, or the one arrival with no bytes
-	 * has no name at all.
+	 * It used to have a SECOND role -- an advisory second opinion beside an
+	 * author-declared `version`, reported as a drift report when the two
+	 * disagreed -- and that role went with the declared identity it was a second
+	 * opinion about (`the-declared-version-and-the-drift-report-are-deleted`). What
+	 * is left is the derivation itself, as a name.
 	 *
 	 * REQUIRED, unlike the value it returns. An optional method is a hole with a
-	 * polite name: an implementation that simply never wrote one would lose drift
-	 * detection silently, and a WRAPPER (a cache, a decorator) that forgot to
-	 * forward it would take the wrapped processor's detection down with it,
-	 * invisibly. Being required makes both a compile error instead. Returning
-	 * `undefined` is still allowed, because "cannot tell" is a real answer (a
-	 * processor whose handlers are all bound or proxied has no readable source),
-	 * and the core reads it as "do not report" rather than as "unchanged".
+	 * polite name: a WRAPPER (a cache, a decorator) that forgot to forward it would
+	 * silently rename the fold underneath it -- or leave it unnameable -- and being
+	 * required makes that a compile error instead. Returning `undefined` is still
+	 * allowed, because "cannot tell" is a real answer (a processor whose handlers
+	 * are all bound or proxied has no readable source), and the arrival that asks is
+	 * what decides what to do about it: `@etherfold/browser` REFUSES such a module
+	 * rather than naming it something a later edit could not move.
 	 */
 	getCodeFingerprint(): string | undefined;
 	load: (
@@ -358,82 +341,22 @@ export type SourceHashEntry = {
 	legacyHash?: string;
 };
 
+/**
+ * WHAT A PERSISTED STATE IS A FOLD OF: the source, the stream config and the
+ * IDENTITY of the processor that computed it.
+ *
+ * `processor` is the identity the ARRIVAL derived (ADR-0086) and is COMPARED for
+ * equality and RENDERED into messages; nothing in this tree parses one. There is
+ * deliberately no second opinion beside it: an identity derived from what a
+ * processor IS cannot disagree with the code it names, which is why the code
+ * fingerprint that used to ride here (`processorFingerprint`) and the
+ * drift report it fed are both gone.
+ */
 export type ContextIdentifier = {
 	source: SourceHashEntry[];
 	config: string;
 	processor: string;
-	/**
-	 * The `getCodeFingerprint()` of the processor that computed this state.
-	 *
-	 * OPTIONAL, and it must stay optional: every cursor persisted before
-	 * fingerprints existed lacks the field, so absence has to mean "unknown, do
-	 * not report" rather than "drifted". Otherwise every existing deployment
-	 * reports drift once on upgrade and the report stops being believed.
-	 *
-	 * It rides inside `ContextIdentifier` rather than beside it because
-	 * `lastSync` is the one thing EVERY persistence path round-trips whole (the
-	 * fs / localStorage / IndexedDB keepers, the CLI snapshot envelope, and the
-	 * sync cursor a `StateStore` keeps behind the storage seam). It is NOT part of
-	 * `sourceInvalidationOf`, which decides whether to discard state.
-	 */
-	processorFingerprint?: string;
 };
-
-/**
- * What the core reports when a processor's declared version says "unchanged"
- * and its code says otherwise. Advisory: the state is still adopted, unless
- * `strictProcessorDrift` is set.
- *
- * ONE SHAPE FOR TWO QUESTIONS, and `compared` says which was asked. Both are
- * "the version hash did not move and the handler source did", and they differ in
- * WHICH pair of fingerprints was put side by side -- see
- * `ProcessorDriftComparison`. A second shape per question would give an operator
- * two things to grep for and a host two payloads to route, which is the opposite
- * of what a report exists for.
- */
-export type ProcessorDriftReport = {
-	/** The version hash both sides agree on, which is what makes this drift rather than an upgrade. */
-	processorHash: string;
-	/** WHICH two fingerprints were compared, and therefore which question this answers. */
-	compared: ProcessorDriftComparison;
-	/**
-	 * The fingerprint of the code BEHIND WHAT THIS DEPLOYMENT ALREADY HAS: the code
-	 * that computed the persisted state (`persisted-state`), or the code the fold
-	 * being run right now is made of (`reloaded-module`).
-	 *
-	 * Deliberately not called `storedFingerprint`, which it was while only the boot
-	 * question existed: on the reload question nothing about it is stored -- the
-	 * running fold's cursor may carry a THIRD value, written by whatever computed the
-	 * state before this process came up -- and a field name that meant the cursor in
-	 * one report and a loaded module in another would be a name meaning two things.
-	 */
-	previousFingerprint: string;
-	/** The fingerprint of the code AS IT IS NOW: loaded at boot, or just re-read from disk. */
-	currentFingerprint: string;
-	/** The same thing in words, as logged. */
-	message: string;
-};
-
-/**
- * WHICH pair of fingerprints a drift report compared, because the two pairs
- * answer different questions and a surface must not silently use one where the
- * other is meant.
- *
- * - `persisted-state` -- the STORED cursor's fingerprint against the code loaded
- *   now: "the state I am about to serve was computed by different logic". This is
- *   the BOOT question, and it is the one both containers ask as they adopt a
- *   cursor.
- * - `reloaded-module` -- the RUNNING fold's fingerprint against the module just
- *   re-imported: "the code I have just read differs from the code I am running".
- *   This is the RELOAD question, which is what a developer who saved a file is
- *   actually asking, and it is what `POST /{indexer}/admin/reconfigure` answers.
- *
- * They can DISAGREE, which is why neither stands in for the other: a process that
- * has been running since before an unbumped edit holds a loaded fingerprint
- * matching its stored one (nothing drifted at boot) while a freshly imported
- * module differs from both.
- */
-export type ProcessorDriftComparison = 'persisted-state' | 'reloaded-module';
 
 export type LastSync<ABI extends Abi> = {
 	context: ContextIdentifier;
@@ -770,23 +693,10 @@ export type ProvidedIndexerConfig<ABI extends Abi> = {
 	 * private chain whose genesis hash nobody has written down.
 	 *
 	 * Only has an effect where the source declares a `genesisHash`; with none
-	 * declared there is no check to skip. It sits here, beside
-	 * `strictProcessorDrift`, because it is the same kind of thing: a load-time
-	 * safety gate belonging to the deployment rather than to the processor an
-	 * author ships.
+	 * declared there is no check to skip. It is a load-time safety gate belonging
+	 * to the deployment rather than to the processor an author ships.
 	 */
 	skipGenesisCheck?: boolean;
-	/**
-	 * Turn a processor-drift report into a refusal to start (`load()` rejects).
-	 *
-	 * Off by default, because the fingerprint has real false positives: a
-	 * re-minification changes handler source without changing behaviour. Fail
-	 * loud by default, fail stop by choice. It sits here, next to
-	 * `skipGenesisCheck`, because it is the same kind of thing: a load-time
-	 * safety gate belonging to the deployment, not to the processor an author
-	 * ships.
-	 */
-	strictProcessorDrift?: boolean;
 	logLevel?: number;
 };
 

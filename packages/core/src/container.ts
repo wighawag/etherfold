@@ -24,7 +24,7 @@ import {generationDigestOf} from './generation/identity.js';
 import {streamDigestOf} from './stream/identity.js';
 import {readOnlyStream} from './stream/readOnly.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
-import {processorIdentityOf} from './internal/processorIdentity.js';
+import {requireProcessorIdentity} from './internal/processorIdentity.js';
 import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
 import type {
 	EventProcessor,
@@ -32,7 +32,6 @@ import type {
 	IndexingSource,
 	LastSync,
 	LogEvent,
-	ProcessorDriftReport,
 	ProvidedIndexerConfig,
 	ProvidedStreamConfig,
 } from './types.js';
@@ -211,8 +210,8 @@ export type GenerationSpec<ABI extends Abi, ProcessResultType = void, State = un
 		context: GenerationContext,
 	) => EventProcessor<ABI, ProcessResultType> | Promise<EventProcessor<ABI, ProcessResultType>>;
 	/**
-	 * THE IDENTITY THIS FOLD WAS HANDED, where the ARRIVAL derived one: the fold
-	 * half of the generation this spec registers.
+	 * THE IDENTITY THIS FOLD WAS HANDED, which its ARRIVAL derived: the fold half of
+	 * the generation this spec registers.
 	 *
 	 * ADR-0086: an author cannot STATE a processor's identity, so it comes from what
 	 * the processor IS. A host that read a self-contained BUNDLE off disk names its
@@ -221,10 +220,13 @@ export type GenerationSpec<ABI extends Abi, ProcessResultType = void, State = un
 	 * container never looks INSIDE the value -- it is COMPARED and RENDERED and
 	 * nothing here parses it -- so it does not care which arrival derived it.
 	 *
-	 * ABSENT is a real answer and still the common one: no bytes describe this
-	 * processor, so the identity falls back to the processor's own
-	 * `getVersionHash()` exactly as it always did. That fallback is what
-	 * `the-declared-version-and-the-drift-report-are-deleted` removes.
+	 * REQUIRED, and REFUSED when it is missing: there is no declared identity left
+	 * to fall back on, so a generation with no name is not registrable. It is typed
+	 * optional for ONE reason, which is the read ORDER `add` promises: state, then
+	 * processor, THEN identity. That is what makes a MODULE arrival expressible --
+	 * a fold with no bytes cannot be named before the object exists, so
+	 * `@etherfold/browser` hands this spec over and fills the field in from inside
+	 * `createProcessor`. By the time the factory has returned it must be there.
 	 *
 	 * It is PER GENERATION and deliberately not on `IndexerOptions.config`, which is
 	 * one value shared by every generation this container builds: two generations
@@ -589,7 +591,6 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	public onStateUpdated: ((state: ProcessResultType) => void) | undefined;
 	public onLastSyncUpdated: ((lastSync: LastSync<ABI>) => void) | undefined;
-	public onProcessorDrift: ((report: ProcessorDriftReport) => void) | undefined;
 	/**
 	 * THE POINTER MOVED. Fired for every move, whether the policy took it or a
 	 * caller asked for it.
@@ -741,11 +742,13 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		const state = await spec.createState(context);
 		const processor = await spec.createProcessor(state, context);
 
-		// THE ARRIVAL'S, where this spec was handed one (ADR-0086), and the processor's
-		// own declared hash where it was not. Resolved ONCE here and passed DOWN to the
-		// engine, so the registry record and the fold advancing it cannot name this
-		// generation two different things.
-		const processorIdentity = processorIdentityOf(processor, spec.processorIdentity);
+		// THE ARRIVAL'S, read ONCE here -- after the factories, which is what lets an
+		// arrival with no bytes derive one from the object it just built -- and passed
+		// DOWN to the engine, so the registry record and the fold advancing it cannot name
+		// this generation two different things. Absent is REFUSED and never back-filled
+		// (ADR-0086): nothing here may name a fold, and the alternative is a generation
+		// called `undefined`.
+		const processorIdentity = requireProcessorIdentity(spec.processorIdentity);
 		const wanted: GenerationId = {stream: context.stream, processor: processorIdentity};
 		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
 		// this generation is a successor at all and what it displaces; the records decide
@@ -854,11 +857,6 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			entry.lastSync = lastSync;
 			if (entry === this.current) {
 				this.onLastSyncUpdated?.(lastSync);
-			}
-		};
-		generation.onProcessorDrift = (report) => {
-			if (entry === this.current) {
-				this.onProcessorDrift?.(report);
 			}
 		};
 		generation.onStateUpdated = (published) => {
@@ -1177,7 +1175,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	async updateProcessor(
 		newProcessor: EventProcessor<ABI, ProcessResultType>,
-		options?: {force?: boolean; processorIdentity?: string},
+		options: {force?: boolean; processorIdentity: string},
 	): Promise<ReconfigureOutcome> {
 		const entry = this.requireCurrent();
 		const publishedBefore = entry.publications;

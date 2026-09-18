@@ -1,37 +1,38 @@
 import {simple_hash} from './hash.js';
 
 /**
- * ## What a code fingerprint is, and what it is deliberately NOT
+ * ## What a code fingerprint is, and the ONE arrival it names
  *
- * `getVersionHash()` is the identity of a processor's LOGIC, and the core
- * discards persisted state when it changes. That identity is author-declared:
- * an author who edits a handler and forgets to bump `version` gets state
- * computed by the previous logic, served forever, silently. The fingerprint is
- * the second opinion, derived from the handler implementations themselves, so
- * that "declared version unchanged but the code underneath it changed" becomes
- * something the core can SAY rather than something nobody can see.
+ * A processor's identity is DERIVED FROM WHAT IT IS and never declared by its
+ * author (ADR-0086), and HOW it is derived belongs to the ARRIVAL. Every arrival
+ * that has BYTES is named by the SHA-256 of those octets. Exactly one has none: a
+ * browser tab handed a MODULE OBJECT by a dev server serving unbundled ESM. That
+ * arrival names its fold with THIS derivation, over the author's handler sources
+ * (`moduleProcessorIdentity`, `@etherfold/browser`), because there is nothing else
+ * to be. That arrival was built by
+ * `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`, which is the
+ * record of what it survives and why a dev server is the only runtime it is sound
+ * in; this file is its derivation and must not be deleted out from under it.
  *
- * It is **advisory** and stays out of `getVersionHash()`. Folding it in would be
- * safer in principle and unusable in practice: a bundler or minifier that
- * re-emits the same behaviour differently would invalidate every deployment's
- * state and force a full replay with no logic change. Advisory makes that false
- * positive a log line instead of a multi-hour rebuild. (This deviates from
- * `docs/adr/0008`, which asks for the folding-in; see the task record.)
+ * ## What it USED to be, since the measurements below were taken for that role
  *
- * ## IT HAS A SECOND ROLE NOW, in exactly one arrival
+ * It was an ADVISORY second opinion sitting beside an author-declared
+ * `getVersionHash()`, reported as a drift report when the two disagreed, and it
+ * deliberately stayed OUT of the identity: folding it in "would be safer in
+ * principle and unusable in practice: a bundler or minifier that re-emits the same
+ * behaviour differently would invalidate every deployment's state and force a full
+ * replay with no logic change". (That was recorded here as a deviation from
+ * `docs/adr/0008`, which asked for the folding-in.)
  *
- * ADR-0086 moves identity onto the ARRIVAL and deletes the advisory role above
- * along with the declared version it was a second opinion about. It keeps THIS
- * derivation, in a different role, for the one arrival that has no bytes to hash:
- * a browser tab handed a MODULE OBJECT by a dev server names its fold with it
- * (`moduleProcessorIdentity`, `@etherfold/browser`), because there is nothing
- * else to be. The measurements below are that decision's whole licence -- the
- * cases it does NOT survive are a bundler's and a minifier's, and neither exists
- * between a dev server and the page it is serving.
- *
- * So the sentence above stands where it was written (a PRODUCTION identity, which
- * is now the hash of a bundle's octets) and does not reach the browser's module
- * arrival, where a spurious re-fold is a developer's own save.
+ * ADR-0086 ANSWERS that objection rather than overruling it, and the answer is why
+ * this file survived the deletion of the declared identity and of the drift report
+ * with it. A PRODUCTION identity is now the hash of a bundle's octets, so the
+ * bundler-and-minifier case never reaches this derivation at all; and the one
+ * runtime that does reach it is a dev server serving the page the source text it
+ * was written from, where a spurious re-fold is a developer's own save. The
+ * measurements below are that decision's whole licence -- the cases this does NOT
+ * survive are a bundler's and a minifier's, and neither exists between a dev server
+ * and the page it is serving.
  *
  * ## What it survives, and what it does not
  *
@@ -45,12 +46,14 @@ import {simple_hash} from './hash.js';
  * - **Does NOT survive**: minification (identifiers are renamed), a change of
  *   transpiler or target (tsc keeps comments and indents with four spaces,
  *   esbuild strips comments and indents with two), or editing a COMMENT inside a
- *   handler under a toolchain that keeps comments. Each of those reports drift
- *   with no logic change.
+ *   handler under a toolchain that keeps comments. Each of those RENAMES a fold
+ *   that did not change, which costs a re-fold of stored data and nothing else.
  *
  * ## Why it is tagged `fp-`
  *
- * So that a value found in a stored cursor says what it is. The structural
+ * So that a value found in a stored cursor says what it is: a fold named this way
+ * carries the tag into `GenerationId.processor`, where it sits beside the
+ * digest-prefixed identity of every arrival that had bytes. The structural
  * protection it used to provide (a fingerprint must never read as a `"123n"`
  * BigInt to the storage adapters that revived them) moved one level down, into
  * `simple_hash`, which prefixes every digest for that reason and so protects
@@ -63,9 +66,9 @@ import {simple_hash} from './hash.js';
  * Comments are left in rather than stripped, and that is a choice about which
  * way to be wrong. Stripping them from arbitrary source text needs a JS lexer
  * that gets regex-vs-division right; a lexer that gets it wrong deletes real
- * code from the payload, and a change inside the deleted region then reads as NO
- * drift. Over-reporting is recoverable by bumping the version; under-reporting
- * is the exact failure this exists to prevent.
+ * code from the payload, and a change inside the deleted region then reads as the
+ * SAME fold. Over-naming costs a re-fold; under-naming serves state computed by
+ * code that no longer exists, which is the exact failure this exists to prevent.
  */
 export function processorCodeFingerprint(processor: unknown): string | undefined {
 	if (!processor || (typeof processor !== 'object' && typeof processor !== 'function')) {

@@ -4,11 +4,10 @@ import {simple_hash} from '../src/utils/hash.js';
 // ---------------------------------------------------------------------------
 // simple_hash: what it must distinguish, and what it must not
 // ---------------------------------------------------------------------------
-// This is the digest behind `context.config`, `context.source` and the config
-// third of every processor's `getVersionHash()`. Two values it fails to
-// distinguish are two states the core will treat as one, which is how a
-// processor ends up serving state computed under a configuration that is no
-// longer in force.
+// This is the digest behind `context.config`, `context.source` and the handler
+// fingerprint that names a module arrival. Two values it fails to distinguish are
+// two states the core will treat as one, which is how a processor ends up serving
+// state computed under a configuration that is no longer in force.
 // ---------------------------------------------------------------------------
 
 describe('simple_hash distinguishes values that differ', () => {
@@ -59,8 +58,8 @@ describe('simple_hash ignores differences that are not differences', () => {
 describe('simple_hash survives the values a real config holds', () => {
 	it('hashes BigInts instead of throwing on them', () => {
 		// A processor config can hold a `uint256` (a price, a threshold), and plain
-		// JSON.stringify REFUSES to serialize a BigInt. Throwing here would take out
-		// `getVersionHash()` itself, which is called on every load.
+		// JSON.stringify REFUSES to serialize a BigInt. Throwing here would take out the
+		// stream config hash itself, which is computed on every load.
 		expect(() => simple_hash({threshold: 10n})).not.toThrow();
 		expect(simple_hash({threshold: 10n})).not.toBe(simple_hash({threshold: 11n}));
 		// and a BigInt is not confused with the number of the same value

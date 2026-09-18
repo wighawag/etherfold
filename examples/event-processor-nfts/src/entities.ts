@@ -40,25 +40,16 @@ export function readableTokenID(key: string): string {
 	return key.replace(/^0+(?=\d)/, '');
 }
 
+// THERE IS NOTHING HERE THAT NAMES THIS FOLD, and that is the point (ADR-0086):
+// an author cannot state a processor's identity. WHICH FOLD this is comes from the
+// ARRIVAL that delivered it -- for `etherfold build` and `etherfold run` the
+// self-contained BUNDLE this package emits (`pnpm build:bundle` ->
+// `dist/cli.bundle.js`), so the fold is named by the SHA-256 of those octets and an
+// edited handler is a different fold with no author action at all. The TAB in
+// `browser/` is handed a module OBJECT instead, which has no bytes because a dev
+// server serves unbundled ESM, and `@etherfold/browser` names it by a derivation
+// over these handlers' source.
 export const NFTProcessor: EntityProcessor<typeof eip721> = {
-	// REQUIRED by the entity runtimes, on its way out (ADR-0086), and DO NOT REACH
-	// FOR IT: nothing on this example's command-line path is named by it any more.
-	// WHICH FOLD this is comes from the ARRIVAL that delivered it, and the arrival
-	// `etherfold build` and `etherfold run` are given here is the self-contained
-	// BUNDLE this package emits (`pnpm build:bundle` -> `dist/cli.bundle.js`), so the
-	// fold is named by the SHA-256 of those octets and an edited handler is a
-	// different fold with no author action at all -- which is the whole reason the
-	// field is going. There is deliberately no instruction here to bump it: doing so
-	// would change nothing about which generation this example folds into, and the
-	// bundle already moved when the handler did.
-	//
-	// The TAB in `browser/` hands `@etherfold/browser` a module OBJECT, which has no
-	// bytes at all because a dev server serves unbundled ESM; how THAT arrival derives
-	// an identity is `a-module-handed-to-a-tab-is-identified-by-its-handler-sources`,
-	// and it is not this field either.
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
-
 	/**
 	 * `{name, id, fields}` per entity, and that is the whole schema an author
 	 * writes: the store owns the layout, the version columns, the as-of read and

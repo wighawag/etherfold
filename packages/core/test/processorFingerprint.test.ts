@@ -76,7 +76,7 @@ describe('processorCodeFingerprint', () => {
 		expect(processorCodeFingerprint(c)).not.toBe(processorCodeFingerprint(d));
 	});
 
-	it('ignores non-function properties, which getVersionHash already covers', () => {
+	it('ignores non-function properties, because only the handlers are the logic', () => {
 		// `version`, `entities` and processor config are in the version hash. Hashing
 		// them here too would make a config change read as CODE drift.
 		const a = objectFromSource(`{version: '1.0.0', entities: ['a'], onTransfer(s) { s.a++; }}`);

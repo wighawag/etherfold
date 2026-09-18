@@ -22,7 +22,6 @@ import {finality, lastSync, processor, SOURCE, transfer, type TestABI} from './u
 
 /** A processor that declares NO entities and handles nothing. */
 const declaresNothing: EntityProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [],
 };
 

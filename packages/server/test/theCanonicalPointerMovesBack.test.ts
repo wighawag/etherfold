@@ -65,11 +65,6 @@ type TestEnv = {DEV?: string; INGEST_TOKEN?: string; ADMIN_TOKEN?: string};
  */
 function entityProcessorFor(marker: string): EntityProcessor<TestABI> {
 	return {
-		// STILL REQUIRED and deliberately NAMING NOTHING: `foldAt` hands the fold the
-		// identity its ARRIVAL derived, so this value is read by nobody.
-		// `assertProcessorVersion` still demands the field until
-		// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-		version: '1.0.0',
 		entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 		async onTransfer(state, event) {
 			// the RECIPIENT under the incumbent and the SENDER under anything else: two
@@ -98,8 +93,7 @@ function foldAt(marker: string) {
 	const identity = identityOf(marker);
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) =>
-			new VersionedStateEventProcessor<TestABI>(state, entityProcessorFor(marker), {identity}),
+		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorFor(marker)),
 		processorIdentity: identity,
 	};
 }

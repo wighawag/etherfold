@@ -20,10 +20,7 @@ import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../../src/In
  *
  * The IDENTITY is SUPPLIED rather than computed, because an author cannot state
  * one (ADR-0086): the caller passes what an arrival would have derived, which in
- * these suites is `identityOf(marker)` over synthetic bytes. The processors here
- * still ANSWER `getVersionHash()` -- it is on the seam until the contract task
- * removes it -- and nothing reads what they answer, which is why those fakes
- * return a `declared-version-...` value no assertion mentions.
+ * these suites is `identityOf(marker)` over synthetic bytes.
  *
  * OMITTING it is a deliberate choice and still not an un-migrated site, but the
  * reason has changed now that

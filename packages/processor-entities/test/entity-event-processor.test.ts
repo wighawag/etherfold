@@ -1,12 +1,7 @@
 import type {StateStore, WritableStateStore} from '@etherfold/state-store';
 import {beforeEach, describe, expect, it} from 'vitest';
-import {
-	EntityEventProcessor,
-	entityProcessorVersionHash,
-	fromEntityProcessor,
-	SYNC_CURSOR_KEY,
-	type EntityProcessor,
-} from '../src/index.js';
+import {processorCodeFingerprint} from '@etherfold/core';
+import {EntityEventProcessor, fromEntityProcessor, SYNC_CURSOR_KEY, type EntityProcessor} from '../src/index.js';
 import {BACKENDS} from './utils/backends.js';
 import {finality, lastSync, processor, SOURCE, transfer, type TestABI} from './utils/fixtures.js';
 import {identityOf} from './utils/processorIdentity.js';
@@ -171,14 +166,14 @@ describe.each(BACKENDS)('the sync cursor on $name', (backend) => {
 		await p.load(SOURCE, STREAM_CONFIG);
 		await p.process(STREAM.slice(0, 3), lastSync({latestBlock: 100, lastToBlock: 100}));
 
-		// The upgrade is a DIFFERENT ARRIVAL and not a bumped `version` (ADR-0086): the
-		// same authored object, folded under the identity a host derived from other bytes.
-		// What the case is about is a stored context that does not match the fold now
-		// running, and where that mismatch came from is exactly what the engine never asks.
-		const upgraded = new EntityEventProcessor(store, processor, {identity: identityOf('v2')});
+		// The upgrade is a DIFFERENT ARRIVAL (ADR-0086): the same authored object, folded
+		// under the identity a host derived from other bytes. What the case is about is a
+		// stored context that does not match the fold now running, and where that mismatch
+		// came from is exactly what the engine never asks.
+		const upgraded = new EntityEventProcessor(store, processor);
 		const loaded = await upgraded.load(SOURCE, STREAM_CONFIG);
 		expect(loaded).toBeDefined();
-		expect(loaded!.lastSync.context.processor).not.toBe(upgraded.getVersionHash());
+		expect(loaded!.lastSync.context.processor).not.toBe(identityOf('v2'));
 
 		// ...and the core's response to that mismatch leaves nothing behind
 		await upgraded.clear();
@@ -244,60 +239,33 @@ describe.each(BACKENDS)('a reorg through the component on $name', (backend) => {
 });
 
 describe('the component itself', () => {
-	it('refuses a version-less processor at construction, naming itself', async () => {
-		const store = await BACKENDS[0].open(processor.entities);
-		// Every VARIANT here is annotated. The handler map MAPS over the ABI's event
-		// names, so `ABI` is not inferrable from an object LITERAL: a bare spread
-		// widens to the `Abi` constraint and the handlers it just copied stop matching.
-		const {version, ...rest} = processor;
-		const noVersion = rest as EntityProcessor<TestABI>;
-		expect(() => new EntityEventProcessor(store, noVersion)).toThrow(/EntityEventProcessor/);
-	});
-
 	it('refuses to process before load, because finality is not known yet', async () => {
 		const store = await BACKENDS[0].open(processor.entities);
 		const p = new EntityEventProcessor(store, processor);
 		await expect(p.process(STREAM, lastSync())).rejects.toThrow(/load\(\) must be called/);
 	});
 
-	it('hashes the declarations and the config, and NOT the backend, on the DECLARED fallback', async () => {
-		// The same declarations on two backends are the same state, which is the
-		// whole claim: hashing the store in would discard state for moving a
-		// deployment from a server to a browser and back.
-		//
-		// RETAINED on the declared path deliberately. Every identity this package's
-		// suites otherwise hand a fold now comes from an ARRIVAL, but the declared
-		// `version` must still WORK until `the-declared-version-and-the-drift-report-are-deleted`
-		// removes it, and a migrate batch that left no assertion of that inside this
-		// package would be trusting a sibling package to notice. This case goes with the
-		// field it describes.
+	it("fingerprints the AUTHOR's handlers and not the wrapper around them", async () => {
+		// The one thing this class still answers about identity, and it is not an identity
+		// of its own: `getCodeFingerprint()` is what names the ONE arrival with no bytes to
+		// hash -- a module a dev server handed a browser tab (`moduleProcessorIdentity`,
+		// `@etherfold/browser`, ADR-0086). It must read the AUTHOR's object, because this
+		// wrapper's own methods are identical for every processor ever built this way and
+		// would be a constant no edit could move.
 		const sqlite = new EntityEventProcessor(await BACKENDS[1].open(processor.entities), processor);
 		const indexeddb = new EntityEventProcessor(await BACKENDS[2].open(processor.entities), processor);
-		expect(sqlite.getVersionHash()).toBe(indexeddb.getVersionHash());
+		// the same author object on two backends: the same fold, so the same answer
+		expect(sqlite.getCodeFingerprint()).toBe(indexeddb.getCodeFingerprint());
+		expect(sqlite.getCodeFingerprint()).toBe(processorCodeFingerprint(processor));
 
-		const renamed: EntityProcessor<TestABI> = {
+		const edited: EntityProcessor<TestABI> = {
 			...processor,
-			entities: [{name: 'token', id: ['id'], fields: {holder: 'text'}}, processor.entities[1]],
+			async onTransfer(state, event, config) {
+				await processor.onTransfer!(state, event, config);
+			},
 		};
-		const changed = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), renamed);
-		expect(changed.getVersionHash()).not.toBe(sqlite.getVersionHash());
-	});
-
-	it('answers with the identity the ARRIVAL handed it, where a host had one', async () => {
-		// ADR-0086: an author cannot STATE their processor's identity, and where a host
-		// read a self-contained BUNDLE off disk it hands over the hash of those bytes.
-		// The engine takes it and never asks where it came from -- so the DECLARED hash
-		// is not consulted at all rather than compared with it, which is what lets an
-		// edited handler be a different fold with no author action.
-		const identity = identityOf('the-bundle-this-deployment-runs');
-		const handed = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), processor, {identity});
-		expect(handed.getVersionHash()).toBe(identity);
-
-		// ...and ABSENT is the ordinary case until the migrate batches land: the
-		// declared version plus the declarations, exactly as before.
-		const declared = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), processor);
-		expect(declared.getVersionHash()).toBe(entityProcessorVersionHash(processor));
-		expect(handed.getVersionHash()).not.toBe(declared.getVersionHash());
+		const changed = new EntityEventProcessor(await BACKENDS[0].open(processor.entities), edited);
+		expect(changed.getCodeFingerprint()).not.toBe(sqlite.getCodeFingerprint());
 	});
 
 	it('is built by a factory that takes the STORE, which is the deployment choice', async () => {

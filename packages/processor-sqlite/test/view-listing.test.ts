@@ -29,7 +29,6 @@ type Holding = {owner: string; id: string; since: number};
 const padded = (id: bigint) => id.toString().padStart(6, '0');
 
 const processor: SQLProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [{name: 'holding', id: ['owner', 'id'], fields: {since: 'integer'}}],
 	async onTransfer(state, event) {
 		state.delete('holding', {owner: event.args.from, id: padded(event.args.id)});

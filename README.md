@@ -142,12 +142,11 @@ const abi = [
 ] as const;
 
 export const greetings: EntityProcessor<typeof abi> = {
-	// REQUIRED, and ideally generated so it changes whenever a handler does. The indexer
-	// discards state computed by a previous version by comparing it; if you edit a handler
-	// and forget to bump it, the indexer says so at load time (an error-level drift report,
-	// plus the `onProcessorDrift` callback). Set `strictProcessorDrift: true` in the indexer
-	// config to refuse to start instead of merely reporting.
-	version: '1.0.1',
+	// There is NOTHING here that says which fold this is, and that is deliberate: a
+	// processor's identity is DERIVED from what it is and never declared (ADR-0086). A
+	// deployment that reads a bundle is named by the hash of those bytes; a tab handed a
+	// module is named by a digest of these handlers' source. Edit a handler and it is a
+	// different fold, with nothing to remember to bump.
 
 	// `{name, id, fields}` per entity is the whole schema an author writes: the store owns
 	// the layout, the version columns, the as-of read and the reorg revert.

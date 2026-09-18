@@ -107,9 +107,6 @@ const SOURCE: IndexingSource<Abi> = {
 function recordingProcessor() {
 	const batches: LogEvent<Abi>[][] = [];
 	const processor: any = {
-		getVersionHash: () => 'declared-version',
-		// required on `EventProcessor`: a fake that omits it is a fake that would
-		// lose drift detection without anybody noticing
 		getCodeFingerprint: () => undefined,
 		load: async () => undefined,
 		process: async (list: LogEvent<Abi>[]) => {
@@ -224,9 +221,6 @@ describe('feed() delivers retractions to the processor', () => {
 		// retracted block's number would rewind it below where the sync actually is.
 		const seen: number[] = [];
 		const processor: any = {
-			getVersionHash: () => 'declared-version',
-			// required on `EventProcessor`: a fake that omits it is a fake that would
-			// lose drift detection without anybody noticing
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async (_list: LogEvent<Abi>[], ls: LastSync<Abi>) => {
@@ -327,7 +321,6 @@ describe('the cursor handed to each batch is true on its own', () => {
 	it('never carries an unconfirmed block ABOVE its own lastToBlock', async () => {
 		const seen: {lastToBlock: number; window: number[]}[] = [];
 		const processor: any = {
-			getVersionHash: () => 'declared-version',
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async (_list: LogEvent<Abi>[], ls: LastSync<Abi>) => {
@@ -351,7 +344,6 @@ describe('the cursor handed to each batch is true on its own', () => {
 		// claims three blocks whose replacements are still queued behind it.
 		const seen: {removed: boolean; lastToBlock: number}[] = [];
 		const processor: any = {
-			getVersionHash: () => 'declared-version',
 			getCodeFingerprint: () => undefined,
 			load: async () => undefined,
 			process: async (list: LogEvent<Abi>[], ls: LastSync<Abi>) => {
@@ -379,7 +371,6 @@ describe('the cursor handed to each batch is true on its own', () => {
 		let retracted = false;
 		let armed = true;
 		const processor: any = {
-			getVersionHash: () => 'declared-version',
 			getCodeFingerprint: () => undefined,
 			load: async () => (persisted ? {state: {}, lastSync: persisted} : undefined),
 			process: async (list: LogEvent<Abi>[], ls: LastSync<Abi>) => {

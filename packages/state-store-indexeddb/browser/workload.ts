@@ -34,7 +34,6 @@ export const abi = [
 export type TransferABI = typeof abi;
 
 export const processor: EntityProcessor<TransferABI> = {
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text', transferCount: 'integer'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},

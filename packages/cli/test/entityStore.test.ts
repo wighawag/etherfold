@@ -134,7 +134,7 @@ describe('--store sqlite', () => {
 		// the SAME arrival as the deployment above, handed over the way a host hands one
 		// over: this side is assembled by hand, so it names its fold itself rather than
 		// letting it fall back on the author-DECLARED identity (ADR-0086)
-		const builder = new StreamBuilder(new EntityEventProcessor(elsewhere, nftProcessor, {identity: ARRIVAL}), source, {
+		const builder = new StreamBuilder(new EntityEventProcessor(elsewhere, nftProcessor), source, {
 			processorIdentity: ARRIVAL,
 		});
 		const fetcher = new LogFetcher(otherChain.provider, source, createDirectIngestion(builder));

@@ -2,7 +2,6 @@ import type {
 	GenerationId,
 	GenerationRecord,
 	LogIngestion,
-	ProcessorDriftReport,
 	ReclaimReport,
 	SlottedGenerations,
 	StateMovedDetach,
@@ -27,27 +26,21 @@ import type {RemoteSQL} from 'remote-sql';
  * this deployment already holds, so a developer reading it learns something true
  * rather than watching a no-op report success.
  *
- * ## `unchanged` READS TWO WAYS ON THE DECLARED ARRIVAL, and they stay ONE OUTCOME
+ * ## `unchanged` MEANS WHAT IT SAYS, because an identity is DERIVED
  *
  * WHERE the identity came from is the arrival's business and not this type's
- * (ADR-0086). A deployment whose `--processor` path named a BUNDLE is identified
- * by the SHA-256 of those bytes, so an edited handler moves it and `unchanged`
- * means what it says. A deployment whose path named an unbundled module still
- * carries the author-DECLARED identity `getVersionHash()` answers with (the code
- * fingerprint is advisory and stays out of it, `@etherfold/core`'s
- * `utils/fingerprint.ts`) -- and there "nothing changed" is truthful and, alone,
- * useless: an edited handler body and a save that changed nothing produce the
- * same answer, because neither moves a declared identity. So an `unchanged`
- * carries the second opinion when there is one (`drift`), and an operator can
- * tell "your `version` has not moved since the day you wrote it" from "this
- * really was a no-op". `the-declared-version-and-the-drift-report-are-deleted`
- * retires that half along with the path it describes.
+ * (ADR-0086), but every arrival derives one from what the processor IS: the
+ * SHA-256 of a bundle's bytes, or a digest of the handler sources where there are
+ * no bytes. So an edited handler always moves it, and `unchanged` is the honest
+ * answer that these are the same bytes -- there is nothing an author could have
+ * forgotten to declare, and nothing for a second opinion to disagree with.
  *
- * It is deliberately NOT a fourth outcome. Nothing was registered and nothing
- * changed, which is exactly what `unchanged` means; drift is a FACT ABOUT THE
- * ANSWER and not a different thing to have done -- and making it an outcome would
- * be the first step towards acting on it, which is the one thing an advisory
- * fingerprint may never cause (`@etherfold/core`, `utils/fingerprint.ts`).
+ * It used to read TWO ways, and the `drift` field on this arm was the answer:
+ * under an author-DECLARED identity an edited handler and a save that changed
+ * nothing produced the same `unchanged`, so the report said which. Both the
+ * declared identity and the report are gone
+ * (`the-declared-version-and-the-drift-report-are-deleted`), and the condition
+ * `drift` named cannot occur.
  *
  * It is DATA rather than an exception on the failure arm, because the failure is
  * EXPECTED: a processor that does not compile is the normal state between the
@@ -80,16 +73,6 @@ export type ReconfigureReport =
 			readonly generation: GenerationId;
 			/** WHY nothing was registered, in terms an author can act on. */
 			readonly message: string;
-			/**
-			 * The SECOND OPINION, present exactly when the module that was re-read differs
-			 * from the fold this deployment is running (`compared: 'reloaded-module'`).
-			 *
-			 * ABSENT means "nothing to say", which covers both "the code is identical" and
-			 * "one of the two sides cannot be fingerprinted at all" -- absence is never
-			 * reported as drift, because a report that fired on every deployment that cannot
-			 * answer is one nobody would believe.
-			 */
-			readonly drift?: ProcessorDriftReport;
 	  }
 	| {
 			readonly outcome: 'failed';

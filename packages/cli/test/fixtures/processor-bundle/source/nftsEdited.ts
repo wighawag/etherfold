@@ -3,9 +3,9 @@ import {abi, CONTRACT, START_BLOCK, tokenKey} from './abi.js';
 /**
  * `nfts.ts` WITH ONE HANDLER LINE CHANGED, and nothing else changed at all.
  *
- * The `version` is the same, the entity declarations are the same and the
- * contract data is the same, so `getVersionHash()` cannot tell the two apart --
- * which is the whole point of the pair. The only difference is inside
+ * The entity declarations are the same and the contract data is the same, so
+ * NOTHING an author declares can tell the two apart -- which is the whole point of
+ * the pair. The only difference is inside
  * `onTransfer`: the `nft` row is credited to the SENDER rather than to the
  * recipient, which is the shape of edit an author makes, forgets to declare, and
  * used to have served back to them for ever (ADR-0086).
@@ -29,7 +29,6 @@ export const contractsDataPerChain = {'1': [{abi, address: CONTRACT, startBlock:
 /** The AUTHORING object: declarations plus handlers, naming no backend (ADR-0037). */
 export const NFTProcessor = {
 	/** The SAME declared version as `nfts.ts`, deliberately (see the note there). */
-	version: '1.0.0',
 	entities: [
 		{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},

@@ -76,7 +76,6 @@ type CellRow = {ordinal: string; position: string};
 type PlayerRow = {ordinal: string; position: string; player: string};
 
 const processor: EntityProcessor<PlacedABI> = {
-	version: '1.0.0',
 	entities: [
 		// no `positions` CSV, no `playerCount`, no singleton holding the order:
 		// every field below is state the game has, and nothing is an index.

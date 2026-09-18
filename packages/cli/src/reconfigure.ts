@@ -1,11 +1,4 @@
-import {
-	processorDriftReport,
-	resolveStreamConfig,
-	streamDigestOf,
-	type Abi,
-	type GenerationId,
-	type ReceivingIndexer,
-} from '@etherfold/core';
+import {resolveStreamConfig, streamDigestOf, type Abi, type GenerationId, type ReceivingIndexer} from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport} from '@etherfold/server';
@@ -16,7 +9,7 @@ import {isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
-import {foldPartsFor, openIndexingSource, streamConfigFor} from './folding.js';
+import {foldPartsFor, openIndexingSource, requireArrivalIdentity, streamConfigFor} from './folding.js';
 import type {Options, RunConfig} from './types.js';
 
 const logger = logs('etherfold');
@@ -47,62 +40,25 @@ const logger = logs('etherfold');
 //     `ReconfigureReport` (`@etherfold/server`), and the section below on why
 //     `unchanged` is the one a developer will actually meet most often.
 //
-// ## WHAT MOVES THE IDENTITY, WHICH DEPENDS ON THE ARRIVAL
+// ## WHAT MOVES THE IDENTITY, AND WHY `unchanged` MEANS WHAT IT SAYS
 //
 // A generation is registered only when its IDENTITY differs, and WHERE that
 // identity comes from belongs to the ARRIVAL (ADR-0086). An author cannot state
 // it; this process is handed one and never asks where it came from.
 //
-// A deployment whose `--processor` path names a self-contained BUNDLE is
-// identified by the SHA-256 of those octets, so a re-read after a REBUILD sees a
+// A deployment's `--processor` path names a self-contained BUNDLE, so it is
+// identified by the SHA-256 of those octets and a re-read after a REBUILD sees a
 // different identity whenever the bytes moved -- which an edited handler always
-// does. There `unchanged` means what it says: these are the same bytes, and there
-// is nothing an author could have forgotten.
+// does. So `unchanged` means what it says: these are the same bytes, and there is
+// nothing an author could have forgotten. Either the edit is not in the bundle
+// yet, or the build has not run.
 //
-// A deployment whose path names an unbundled MODULE still carries the
-// author-DECLARED identity `getVersionHash()` answers with: the `version`, plus a
-// hash of the entity declarations and the processor config. It is deliberately
-// NOT a hash of the handler source -- the code fingerprint is ADVISORY and stays
-// out of it, because a bundler re-emitting the same behaviour differently would
-// otherwise invalidate every deployment's state (`@etherfold/core`,
-// `utils/fingerprint.ts`, which records that as a deviation from ADR-0008).
-//
-// So on THAT arrival an edit to a HANDLER BODY alone names the generation this
-// deployment already holds, `unchanged` is the common answer, and it is not
-// something to paper over by folding the fingerprint into the identity: the
-// author bumps `version` (or changes the entity declarations, or the source) when
-// they mean "this is a different fold", and the message this returns says exactly
-// that -- and says it only to an author who HAS a `version` to bump, so "I saved
-// the file and nothing happened" has an answer rather than three
-// indistinguishable causes. `the-declared-version-and-the-drift-report-are-deleted`
-// removes that half, and with it the section below.
-//
-// ## AND `unchanged` SAYS WHETHER THE CODE MOVED -- WHICH TWO FINGERPRINTS, AND WHY THOSE TWO
-//
-// Truthful is not the same as useful: an edited handler and a save that changed
-// nothing produce the identical answer, and the developer is left concluding the
-// endpoint is broken. The second opinion already exists (`getCodeFingerprint()`),
-// and both halves of the comparison are in hand here, so an `unchanged` carries a
-// `ProcessorDriftReport` when the code moved -- the SAME shape and the same
-// `PROCESSOR DRIFT` phrase the containers log on adopting a cursor, so an operator
-// greps for one thing.
-//
-// The two fingerprints compared here are the INCUMBENT'S LOADED one and the
-// FRESHLY IMPORTED module's (`compared: 'reloaded-module'`), and deliberately not
-// the STORED one that `Indexer.reportProcessorDriftIfAny` uses. They answer
-// different questions and can disagree: the stored one answers "the persisted
-// state was computed by different logic", which is the BOOT question and is
-// already asked by the container this process folds through, while this one
-// answers "the module I have just re-read differs from the one I am running" --
-// which is what a developer who pressed save is asking, and the only one that is
-// true of an edit made minutes after a process that had no drift came up.
-//
-// The stored fingerprint is NOT refreshed by any of this, here or in the core:
-// it describes the code that PRODUCED the state, so the boot report has to
-// survive being seen. And nothing is registered because of drift. Registering
-// would be "what the developer meant" and would fold the fingerprint into the
-// identity through the back door, which is the full-replay-on-a-re-minification
-// failure `fingerprint.ts` rejects. It reports; the author acts.
+// That is what retired the second half of this endpoint's answer. Under an
+// author-DECLARED identity an edit to a handler BODY alone named the generation
+// this deployment already held, so `unchanged` read two ways and an `unchanged`
+// carried a drift report to say which. Both the declared identity and
+// the report are gone, and the condition the report named -- an identity that did
+// not move while the code did -- cannot occur.
 //
 // ## THE MODULE CACHE, AND WHAT DEFEATING IT COSTS
 //
@@ -210,18 +166,6 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 
 	const reread = async (): Promise<ReconfigureReport> => {
 		let wanted: GenerationId;
-		/**
-		 * WHICH ARRIVAL supplied the identity, which is the only thing about it anything
-		 * here is allowed to know.
-		 *
-		 * It selects the sentence an `unchanged` explains itself with, and nothing else:
-		 * "rebuild your bundle" and "bump your `version`" are different instructions and
-		 * giving an author the wrong one is how a correct answer becomes an afternoon.
-		 * Note what this is NOT: it is the arrival ANSWERING whether it derived an
-		 * identity, never anything looking at the identity STRING to guess. Nothing in
-		 * the tree parses `GenerationId.processor` (ADR-0086) and this does not start.
-		 */
-		let fromBundle = false;
 		let parts: Awaited<ReturnType<typeof foldPartsFor<ABI, ProcessResultType>>>;
 		let providedStreamConfig: ReturnType<typeof streamConfigFor>;
 		let source: Awaited<ReturnType<typeof openIndexingSource<ABI, ProcessResultType>>>;
@@ -247,10 +191,12 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 				resolved.processor,
 				{importModule: importFresh},
 			);
-			fromBundle = arrival.identity !== undefined;
 			// the same order as start-up: the disk answers first, and a substituted arrival
-			// answers for itself (`prepareIndexing`)
-			const arrivalIdentity = arrival.identity ?? held.processorIdentity;
+			// answers for itself (`prepareIndexing`). A path that named no bundle is REFUSED
+			// here exactly as it is at start-up, and the refusal is reported as `failed` with
+			// the deployment untouched, which is what this endpoint promises about everything
+			// that can go wrong in a re-read.
+			const arrivalIdentity = requireArrivalIdentity(resolved.processor, arrival.identity ?? held.processorIdentity);
 			source = await openIndexingSource<ABI, ProcessResultType>(
 				resolved.source,
 				arrival.processorModule,
@@ -277,26 +223,8 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 		// re-folding the stream into it beside the first. So the identity is computed
 		// first and compared against what is held, which is also exactly the question
 		// the caller asked ("did my change name a different generation").
-		// The FOLD and not merely whether there is one, because the fold is one half of
-		// the comparison below: it is the code this process is RUNNING for that identity.
-		const alreadyHeld = held.container.held().find((fold) => sameIdentity(fold.record, wanted));
+		const alreadyHeld = held.container.held().some((fold) => sameIdentity(fold.record, wanted));
 		if (alreadyHeld) {
-			// THE RELOAD QUESTION, asked of the two things this function is holding: the fold
-			// that is RUNNING, and the module that was just re-imported. Either side answering
-			// `undefined` reports NOTHING rather than drift -- a processor whose handlers are
-			// all bound or proxied cannot fingerprint itself, and "cannot tell" is not
-			// "changed".
-			const drift = processorDriftReport({
-				processorHash: wanted.processor,
-				compared: 'reloaded-module',
-				previousFingerprint: alreadyHeld.processor.getCodeFingerprint(),
-				currentFingerprint: parts.codeFingerprint,
-			});
-			if (drift) {
-				// at ERROR and in its own line, because it is the news: the call SUCCEEDED and
-				// the author's edit is not running
-				logger.error(drift.message);
-			}
 			logger.info(
 				`reconfigure: the configuration names {stream: ${wanted.stream}, processor: ${wanted.processor}}, which ` +
 					`this deployment already holds, so NOTHING was registered`,
@@ -304,25 +232,15 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 			return {
 				outcome: 'unchanged',
 				generation: wanted,
-				// ONE message or the other, and never both: the drift report already says that
-				// the identity did not move, that nothing was registered and what to do about it,
-				// so appending the generic explanation would repeat the only sentence that
-				// matters. The reading an operator gets is therefore the one that is true of
-				// their save.
-				message: drift
-					? drift.message
-					: fromBundle
-						? `this deployment re-read its configuration and it named the generation it is already holding ` +
-							`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation folded ` +
-							`from a BUNDLE is identified by the hash of that bundle's bytes (ADR-0086), and the bytes at this ` +
-							`path are the ones this deployment is already folding -- so either the edit is not in them yet or ` +
-							`the build has not run.`
-						: `this deployment re-read its configuration and it named the generation it is already holding ` +
-							`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation is ` +
-							`identified by the processor's DECLARED version hash -- its \`version\` plus its entity declarations and ` +
-							`config -- and not by the source text of its handlers, so editing a handler body alone names the same ` +
-							`generation. Bump the processor's \`version\` to say that this is a different fold.`,
-				...(drift ? {drift} : {}),
+				// ONE reading, because a processor is identified by what it IS (ADR-0086): the
+				// identity this re-read derived is the one already being folded, so there is
+				// nothing an author forgot to declare and nothing a second opinion could add.
+				message:
+					`this deployment re-read its configuration and it named the generation it is already holding ` +
+					`(processor ${wanted.processor}), so nothing was registered and nothing changed. A generation folded ` +
+					`from a BUNDLE is identified by the hash of that bundle's bytes (ADR-0086), and the bytes at this ` +
+					`path are the ones this deployment is already folding -- so either the edit is not in them yet or ` +
+					`the build has not run.`,
 			};
 		}
 

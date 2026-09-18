@@ -57,7 +57,6 @@ export const SOURCE: IndexingSource<TestABI> = {
 };
 
 const entityProcessor: EntityProcessor<TestABI> = {
-	version: '1.0.0',
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},
@@ -197,7 +196,13 @@ type TestEnv = {DEV?: string; INGEST_TOKEN?: string};
 export async function deployReceiver(): Promise<Receiver> {
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
 	const processor = new VersionedStateEventProcessor<TestABI>(db, entityProcessor);
-	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {stream: {finality: FINALITY}});
+	// The identity this fold's ARRIVAL derived (ADR-0086): a test HAS bytes in the
+	// only sense that matters here -- it states what the fold is called -- and nothing
+	// in the engine parses one.
+	const builder = new StreamBuilder<TestABI, unknown>(processor, SOURCE, {
+		stream: {finality: FINALITY},
+		processorIdentity: `sha256:${'f'.repeat(64)}`,
+	});
 	const app = createServer<TestEnv>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),

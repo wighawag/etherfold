@@ -10,6 +10,7 @@ import {IndexerGeneration} from '../src/indexer.js';
 import {captureStream} from '../src/stream/capture.js';
 import {parseStreamFixture} from '../src/stream/fixture.js';
 import type {LogParseConfig} from '../src/types.js';
+import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // AN ERC-721 AND AN ERC-20 IN ONE SOURCE
@@ -485,7 +486,16 @@ describe("the conformance workload's three-contract source", () => {
 		const source = workloadSource();
 		const processor = {} as any;
 
-		expect(() => new IndexerGeneration(quietProvider, processor, source, {stream: {finality: 12}})).not.toThrow();
+		expect(
+			() =>
+				new IndexerGeneration(
+					quietProvider,
+					processor,
+					source,
+					{stream: {finality: 12}},
+					{processorIdentity: identityOf('the-fold')},
+				),
+		).not.toThrow();
 	});
 
 	it('lets captureStream get past construction and reach the node', async () => {

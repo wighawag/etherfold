@@ -124,8 +124,7 @@ async function bump(state: MutationContext, name: string): Promise<void> {
 	state.set('names', {name}, {value: (row?.value ?? 0) + 1});
 }
 
-const namesProcessor = (version: string): EntityProcessor<TestABI> => ({
-	version,
+const namesProcessor = (): EntityProcessor<TestABI> => ({
 	entities: [{name: 'names', id: ['name'], fields: {value: 'integer'}}],
 	async onTransfer(state, event) {
 		const args = event.args as {id?: bigint; tokenId?: bigint};
@@ -150,13 +149,11 @@ async function namesIn(view: EntityStateView): Promise<NamesState> {
 
 /** A store and a stream keeper under one name, indexed to the tip against branch A. */
 async function indexedWithKeptStream(tag = freshName(), chain = fakeChain()) {
-	const store = await openForWriting(
-		await createBrowserStateStore(namesProcessor('1.0.0').entities, {databaseName: tag}),
-	);
+	const store = await openForWriting(await createBrowserStateStore(namesProcessor().entities, {databaseName: tag}));
 	const indexer = createIndexerState<TestABI, EntityStateView>(
 		{
 			createState: () => store,
-			createProcessor: (state) => new EntityEventProcessor<TestABI>(state, namesProcessor('1.0.0')),
+			createProcessor: (state) => new EntityEventProcessor<TestABI>(state, namesProcessor()),
 		},
 		{keepStream: keepStreamOnIndexedDB(tag) as never},
 	);
@@ -252,12 +249,12 @@ describe('a context persisted by the SHIPPED code, read by this one', () => {
 		// a new tab, the same stores, the upgraded library
 		const rangesBefore = chain.ranges.length;
 		const reopened = await openForWriting(
-			await createBrowserStateStore(namesProcessor('1.0.0').entities, {databaseName: tag}),
+			await createBrowserStateStore(namesProcessor().entities, {databaseName: tag}),
 		);
 		const reloaded = createIndexerState<TestABI, EntityStateView>(
 			{
 				createState: () => reopened,
-				createProcessor: (state) => new EntityEventProcessor<TestABI>(state, namesProcessor('1.0.0')),
+				createProcessor: (state) => new EntityEventProcessor<TestABI>(state, namesProcessor()),
 			},
 			{keepStream: keepStreamOnIndexedDB(tag) as never},
 		);

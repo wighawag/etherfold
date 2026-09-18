@@ -135,11 +135,6 @@ const STREAM_DIGEST = streamDigestOf(SOURCE, resolveStreamConfig(STREAM_CONFIG))
 const PROCESSOR_IDENTITY = identityOf('alpha');
 
 const entityProcessor: EntityProcessor<TestABI> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: every construction site below
-	// hands the fold the identity above, so this value is read by nobody.
-	// `assertProcessorVersion` still demands the field until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
 		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
@@ -203,7 +198,6 @@ async function deploy(sources: Record<string, IndexingSource<TestABI>>): Promise
 		const processor = new VersionedStateEventProcessor<TestABI>(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessor,
-			{identity: PROCESSOR_IDENTITY},
 		);
 		// the APPENDER is the host's, closed over the name this indexer is registered
 		// under and bound to the shared database: the route is a caller of the fold and
@@ -435,7 +429,6 @@ describe('the stream column is the WIDE digest, not the wire identity', () => {
 		const processor = new VersionedStateEventProcessor<TestABI>(
 			new RemoteLibSQL(createClient({url: ':memory:'})),
 			entityProcessor,
-			{identity: PROCESSOR_IDENTITY},
 		);
 		const builder = new StreamBuilder<TestABI, unknown>(processor, DECODE_ONLY_SOURCE, {
 			stream: STREAM_CONFIG,

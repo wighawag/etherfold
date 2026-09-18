@@ -78,11 +78,6 @@ const PROCESSOR_IDENTITY = identityOf('alpha');
 
 /** The fold both streams here run. WHICH stream a generation folds is the half that differs. */
 const entityProcessor: EntityProcessor<TestABI> = {
-	// STILL REQUIRED and deliberately NAMING NOTHING: the construction site below
-	// hands the fold the identity above, so this value is read by nobody.
-	// `assertProcessorVersion` still demands the field until
-	// `the-declared-version-and-the-drift-report-are-deleted` removes it.
-	version: '1.0.0',
 	entities: [{name: 'token', id: ['id'], fields: {owner: 'text'}}],
 	async onTransfer(state, event) {
 		state.set('token', {id: (event.args as {id: bigint}).id.toString()}, {owner: event.args.to});
@@ -107,8 +102,7 @@ function freshDatabase(): RemoteSQL {
 function foldOwningItsOwnState() {
 	return {
 		createState: () => freshDatabase(),
-		createProcessor: (state: RemoteSQL) =>
-			new VersionedStateEventProcessor<TestABI>(state, entityProcessor, {identity: PROCESSOR_IDENTITY}),
+		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: PROCESSOR_IDENTITY,
 	};
 }
