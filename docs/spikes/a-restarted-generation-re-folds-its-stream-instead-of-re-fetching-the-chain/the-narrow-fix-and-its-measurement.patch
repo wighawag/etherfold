@@ -1,0 +1,967 @@
+diff --git a/packages/cli/test/aRestartReFoldsTheStoredStream.test.ts b/packages/cli/test/aRestartReFoldsTheStoredStream.test.ts
+new file mode 100644
+index 00000000..3e42d41c
+--- /dev/null
++++ b/packages/cli/test/aRestartReFoldsTheStoredStream.test.ts
+@@ -0,0 +1,238 @@
++import {createClient} from '@libsql/client';
++import {declareEntities} from '@etherfold/state-store';
++import {VersionedStateStore} from '@etherfold/state-store-sqlite';
++import {mkdtemp, rm, writeFile} from 'node:fs/promises';
++import {tmpdir} from 'node:os';
++import {join} from 'node:path';
++import type {RemoteSQL} from 'remote-sql';
++import {RemoteLibSQL} from 'remote-sql-libsql';
++import {afterEach, describe, expect, it} from 'vitest';
++import {run, type RunningIndexer} from '../src/index.js';
++import type {Options} from '../src/types.js';
++import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
++
++// ---------------------------------------------------------------------------------------------------
++// A RESTART RE-FOLDS THE STREAM IT ALREADY HAS, MEASURED ON THE WIRE
++// ---------------------------------------------------------------------------------------------------
++// ADR-0044 says a generation on a SHARED stream fetches NOTHING: it re-folds what
++// is stored. `ReceivingIndexer.add` used to decide that from the folds this process
++// happens to hold, and that list is EMPTY at `open` -- so a deployment restarted
++// with a changed processor was never a follower. It took a receiver and re-fetched
++// the whole chain from the source's `startBlock` while the stored emission stream
++// already held that history under the same digest (measured in
++// `work/notes/observations/a-restarted-run-refetches-the-whole-chain-instead-of-refolding-the-stored-stream.md`).
++//
++// The claim here is about the CHAIN READS and not about a flag, which is why the
++// seam is the whole command: a `run` stood up over a real libSQL handle, stopped,
++// and re-run over the SAME handle with an EDITED bundle -- a redeploy in every way
++// that matters -- with the fake node's `eth_getLogs` calls recorded across both
++// runs separately. A flag can be right while the behaviour is wrong; what cannot
++// be wrong is what the node was asked for.
++//
++// The container's own half -- that `follows` and `writesStream` come out of ONE
++// reading of the registry -- is asserted at that seam in
++// `packages/core/test/receivingContainer.test.ts`.
++// ---------------------------------------------------------------------------------------------------
++
++const INDEXER = 'nfts';
++const ADMIN_TOKEN = 'the-operators-own-secret';
++
++const LOGS = [
++	transfer(START_BLOCK + 10, '0xa10', ZERO, ALICE, 1n),
++	transfer(START_BLOCK + 20, '0xa20', ALICE, BOB, 1n),
++];
++const TIP = START_BLOCK + 50;
++
++/** THE BUNDLE A DEPLOYMENT SHIPS, as text: an upgrade is an EDIT to these bytes (ADR-0086). */
++function processorBundleSource(options: {credit: 'to' | 'from'}): string {
++	return `const abi = [
++	{
++		anonymous: false,
++		inputs: [
++			{indexed: true, internalType: 'address', name: 'from', type: 'address'},
++			{indexed: true, internalType: 'address', name: 'to', type: 'address'},
++			{indexed: true, internalType: 'uint256', name: 'id', type: 'uint256'},
++		],
++		name: 'Transfer',
++		type: 'event',
++	},
++];
++
++export const contractsDataPerChain = {
++	'1': [
++		{
++			abi,
++			address: '${CONTRACT}',
++			startBlock: ${START_BLOCK},
++		},
++	],
++};
++
++export function createProcessor() {
++	return {
++		entities: [{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}],
++		async onTransfer(state, event) {
++			const tokenID = event.args.id.toString().padStart(78, '0');
++			state.set('nft', {tokenID}, {owner: event.args.${options.credit}.toLowerCase()});
++		},
++	};
++}
++`;
++}
++
++const scratch: string[] = [];
++let running: RunningIndexer | undefined;
++
++afterEach(async () => {
++	await running?.stop().catch(() => undefined);
++	running = undefined;
++	for (const dir of scratch.splice(0)) {
++		await rm(dir, {recursive: true, force: true}).catch(() => undefined);
++	}
++	delete process.env.ADMIN_TOKEN;
++});
++
++/** ONE path a deployment is pointed at, whose BYTES the case below rewrites. */
++async function aProcessorBundleOnDisk(source: string): Promise<string> {
++	const dir = await mkdtemp(join(tmpdir(), 'etherfold-refold-'));
++	scratch.push(dir);
++	const path = join(dir, 'processor.bundle.js');
++	await writeFile(path, source, 'utf-8');
++	return path;
++}
++
++function oneDatabase(): RemoteSQL {
++	return new RemoteLibSQL(createClient({url: ':memory:'}));
++}
++
++function optionsFor(processor: string): Options {
++	return {
++		processor,
++		nodeUrl: 'http://localhost:0',
++		store: 'sqlite',
++		db: ':memory:',
++		port: '0',
++		indexer: INDEXER,
++	};
++}
++
++/**
++ * START a deployment over a database that may already hold generations, and hand
++ * back the NODE it was given so what it asked for can be read.
++ *
++ * The handle is the CALLER's, so stopping one and starting the next over the same
++ * `db` is a restart: the registry rows, the stored stream and every generation's
++ * state namespace are where the previous process left them, and the new process
++ * remembers nothing. The chain is a FRESH recorder per run, because the claim is
++ * about what THIS run asked for.
++ */
++async function aRunOver(db: RemoteSQL, processorPath: string) {
++	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
++	const chain = fakeChain().serve(LOGS, TIP);
++	const started = await run(optionsFor(processorPath), {
++		provider: chain.provider,
++		createDB: () => db,
++		sleep: async () => {
++			await new Promise((resolve) => setTimeout(resolve, 1));
++		},
++		handleSignals: false,
++		log: () => {},
++		env: {MAX_BLOCKS_PER_FETCH: '20'},
++	});
++	running = started;
++	return {indexer: started, chain};
++}
++
++async function stop(): Promise<void> {
++	await running?.stop().catch(() => undefined);
++	running = undefined;
++}
++
++type SlotListing = {generations: {digest: string; canonical: boolean; stream: string; processor: string}[]};
++
++async function listingOf(indexer: RunningIndexer): Promise<SlotListing> {
++	const res = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
++		headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
++	});
++	expect(res.status).toBe(200);
++	return (await res.json()) as SlotListing;
++}
++
++/** HOW FAR ONE GENERATION HAS GOT, read from its own table namespace with no engine (ADR-0053). */
++async function positionOf(indexer: RunningIndexer, digest: string): Promise<number | undefined> {
++	const target = (await listingOf(indexer)).generations.find((entry) => entry.digest === digest);
++	if (!target) throw new Error(`this deployment holds no generation ${digest}`);
++	return indexer.container.registry.readStateCursor({stream: target.stream, processor: target.processor});
++}
++
++async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, what: string): Promise<T> {
++	const deadline = Date.now() + 10_000;
++	for (;;) {
++		const value = await read();
++		if (done(value)) return value;
++		if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}; last saw ${JSON.stringify(value)}`);
++		await new Promise((resolve) => setTimeout(resolve, 5));
++	}
++}
++
++/** The single entity the bundles above declare, as a reader of the database has to name it. */
++const NFT = declareEntities([{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}]);
++
++/** WHAT ONE GENERATION'S OWN NAMESPACE ANSWERS, so which fold produced a row is readable. */
++async function ownerIn(db: RemoteSQL, digest: string, id: bigint): Promise<string | undefined> {
++	const store = new VersionedStateStore(db, NFT, {tableNamespace: digest});
++	const held = await store.getCurrent<{owner: string}>('nft', {tokenID: id.toString().padStart(78, '0')});
++	return held?.owner;
++}
++
++// ---------------------------------------------------------------------------------------------------
++
++describe('a restart with a changed processor, measured on the wire', () => {
++	it('RE-FOLDS the stored stream and asks the node for no range the stream already covers', async () => {
++		const db = oneDatabase();
++		const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
++
++		// RUN ONE: the deployment that buys the history. It fetches from the source's
++		// own start block, which is what makes the second run's reads a comparison
++		// rather than an absolute.
++		const first = await aRunOver(db, path);
++		const incumbent = (await listingOf(first.indexer)).generations.find((entry) => entry.canonical)
++			?.digest as string;
++		expect(incumbent).toBeDefined();
++		await until(() => positionOf(first.indexer, incumbent), (at) => at === TIP, `the incumbent to reach ${TIP}`);
++		expect(first.chain.logRanges.some((range) => range.from === START_BLOCK)).toBe(true);
++		await stop();
++
++		// THE REDEPLOY: one edited handler at the same path, so the bytes moved and the
++		// identity with them, with no author action (ADR-0086). Same source, same stream
++		// config -- so the same STREAM, which the database already holds in full.
++		await writeFile(path, processorBundleSource({credit: 'from'}), 'utf-8');
++		const restarted = await aRunOver(db, path);
++		const successor = (await listingOf(restarted.indexer)).generations
++			.map((entry) => entry.digest)
++			.find((one) => one !== incumbent) as string;
++		expect(successor, `the restart registered no successor beside ${incumbent}`).toBeDefined();
++
++		// it really does catch up, so the assertion below is about a fold that FINISHED
++		// rather than one that never started
++		await until(() => positionOf(restarted.indexer, successor), (at) => at === TIP, `the successor to reach ${TIP}`);
++
++		// THE MEASUREMENT: not one `eth_getLogs` for a range the stored stream already
++		// covers. Before this, the ranges this run asked for began at `START_BLOCK` --
++		// the whole history, bought a second time from a node that may not serve it.
++		const historical = restarted.chain.logRanges.filter((range) => range.from <= TIP);
++		expect(historical, JSON.stringify(restarted.chain.logRanges)).toEqual([]);
++		// AND NOTHING ELSE EITHER, which is the finding this measurement produced: the
++		// only method this whole run asked the node for is `eth_chainId`. The restarted
++		// deployment holds a FOLLOWER, a follower has no receiver, and `reconcileWriters`
++		// hands the wire only to the fold `writerOf` names -- which is the incumbent,
++		// registered and not held. So it re-folds and then stops indexing for ever.
++		expect([...new Set(restarted.chain.calls.map((call) => call.method))]).toEqual(['eth_chainId']);
++
++		// ...and the fold it did is the NEW one's, over the SAME logs: the incumbent
++		// credited the receiver of the last transfer and the successor credits the
++		// sender, both out of one stored history
++		expect(await ownerIn(db, incumbent, 1n)).toBe(BOB.toLowerCase());
++		expect(await ownerIn(db, successor, 1n)).toBe(ALICE.toLowerCase());
++	});
++});
+diff --git a/packages/core/src/indexer.ts b/packages/core/src/indexer.ts
+index b1c40e4c..250660eb 100644
+--- a/packages/core/src/indexer.ts
++++ b/packages/core/src/indexer.ts
+@@ -1648,9 +1648,56 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
+ 	/**
+ 	 * Whether the stream is at or AHEAD of the state, which is the only position
+ 	 * from which an append cannot leave a hole. See `streamLastToBlock`.
++	 *
++	 * ## An UNKNOWN POSITION REFUSES -- and "no stream" is not an unknown position
++	 *
++	 * This used to open with `if (this.streamLastToBlock === undefined || !this.lastSync)
++	 * return true`, one permissive branch over two different facts. ADR-0087 asked for
++	 * both to refuse, on the grounds that a fold which never learned where the stream
++	 * reaches takes the permissive branch and `streamRemainderOf` then has nothing to
++	 * strip against, so a fold that is BEHIND the stream stores its whole overlap a
++	 * second time -- the hand-over it measured at 4 stored rows where 2 were correct.
++	 * The two halves were separated and each was MEASURED against the tree. They do not
++	 * get the same answer.
++	 *
++	 * **No cursor REFUSES.** A fold that cannot say where it is cannot say this batch
++	 * continues anything, so permitting was only ever an accident of the `||`. It is
++	 * unreachable as things stand -- `promiseToIndex` loads before it fetches and
++	 * `load` sets `lastSync` on every branch it returns through -- which is exactly why
++	 * it costs nothing to make the safe answer the written one before something reaches
++	 * it.
++	 *
++	 * **An absent `streamLastToBlock` is NOT an unknown position: it is the DOCUMENTED
++	 * absence of a stream**, and refusing there is wrong. `forgetStoredStream` sets it
++	 * and says so in those words -- "there is no stream on disk any more, so nothing
++	 * constrains the next write" -- and `load` reaches it on every branch where the
++	 * keeper answered with no stream, including the one that CLEARED a mismatched or
++	 * unreadable one. Two things follow, and the second is the measurement:
++	 *
++	 * 1. A fresh deployment's FIRST save is that case, so a refusal there means no
++	 *    stream is ever written at all.
++	 * 2. A stream lost while its STATE survived -- a self-clear, a browser eviction --
++	 *    is re-opened by the next save at the state's resume point, and the subtree
++	 *    RECORDS that resume point as its own `startBlock`. So it is not a HOLE: a read
++	 *    from below it is answered `does-not-reach-back` rather than served, which is
++	 *    what makes the partial stream an honest artifact instead of a cursor claiming
++	 *    coverage it never received. `packages/core/test/streamSeedInstall.test.ts`
++	 *    asserts that stream must survive, by name (`locallyIndexedAbove`), and
++	 *    refusing here left it never written and that suite red in two cases.
++	 *
++	 * So this half STAYS permissive, deliberately. The duplicate the ADR measured was
++	 * not on this path at all: the hand-over it describes writes through
++	 * `StreamBuilder.storeStream` over an `EmissionAppender` (ADR-0052), which is
++	 * APPEND-ONLY, reads nothing back and has no hole guard of any kind -- and this
++	 * method is `IndexerGeneration`'s, over an `ExistingStream` that `load` always
++	 * reads first. Whoever moves the write duty guards the RECEIVING side; there is
++	 * nothing to tighten here.
+ 	 */
+ 	protected streamCanReceive(): boolean {
+-		if (this.streamLastToBlock === undefined || !this.lastSync) {
++		if (!this.lastSync) {
++			return false;
++		}
++		if (this.streamLastToBlock === undefined) {
+ 			return true;
+ 		}
+ 		return this.streamLastToBlock >= this.lastSync.lastToBlock;
+diff --git a/packages/core/src/receivingContainer.ts b/packages/core/src/receivingContainer.ts
+index 71588118..2bd703ce 100644
+--- a/packages/core/src/receivingContainer.ts
++++ b/packages/core/src/receivingContainer.ts
+@@ -102,13 +102,21 @@ const namedLogger = logs('@etherfold/core');
+  * ## FOLLOWER OR RECEIVER IS DETERMINED, NEVER CONFIGURED (ADR-0044)
+  *
+  * `add` decides it from the STREAM and from nothing else, exactly as the
+- * chain-facing container's `follows` is decided: a fold on a stream this
+- * container already holds FOLLOWS it -- it is handed a bounded rebuild over the
+- * stored stream (`GenerationRebuild`) and no receiver -- and a fold on a stream
+- * nobody here holds gets the receiver and, if it is the oldest on that stream,
+- * the append duty. A flag would be wrong in both positions: "follow a stream
+- * nobody writes" never advances, and "receive on a stream somebody else writes"
+- * is a second writer.
++ * chain-facing container's `follows` is decided: a fold on a stream the REGISTRY
++ * already carries an older generation on FOLLOWS it -- it is handed a bounded
++ * rebuild over the stored stream (`GenerationRebuild`) and no receiver -- and a
++ * fold on a stream nothing older holds gets the receiver and, with it, the append
++ * duty. A flag would be wrong in both positions: "follow a stream nobody writes"
++ * never advances, and "receive on a stream somebody else writes" is a second
++ * writer.
++ *
++ * **Of the REGISTRY, and that is the whole of it.** The question used to be asked
++ * of the folds this process happens to hold, and that array is EMPTY at `open`, so
++ * a deployment RESTARTED with a changed processor was never a follower: it took a
++ * receiver and re-fetched the chain from the source's start block while the stored
++ * stream already held that history under the same digest. The registry is durable
++ * and the fold array is not, so the same upgrade taken by restart now costs the
++ * same local re-fold it costs through the reconfigure endpoint (ADR-0087).
+  *
+  * The catch-up itself is a call the HOST SCHEDULES (`rebuildMore`, ADR-0022),
+  * never a side effect of a batch: a rebuild takes arbitrarily long and a
+@@ -161,7 +169,10 @@ const namedLogger = logs('@etherfold/core');
+  *
+  * It is DETERMINED and never configured, which is the same rule and the same
+  * reasoning as the chain-facing container's `follows`; the value it is derived
+- * from is the shared `writerOf`, not a second copy of the rule.
++ * from is the shared `writerOf`, not a second copy of the rule. It is in fact the
++ * SAME derivation: `add` asks `writerOf` once, and `follows` and `writesStream`
++ * are its two halves, so a fold that neither follows nor writes -- or that does
++ * both -- is not expressible.
+  * ------------------------------------------------------------------------- */
+ 
+ /**
+@@ -315,10 +326,17 @@ export type HeldFold<ABI extends Abi, ProcessResultType = unknown, State = unkno
+ 	/**
+ 	 * Whether this fold FOLLOWS a stream another generation on it writes.
+ 	 *
+-	 * DETERMINED by whether the stream was already held here and never configured
+-	 * (ADR-0044), which is why it is reported beside `writesStream` rather than
+-	 * taken beside the factories. A follower has NO receiver and a `rebuild`; a
+-	 * non-follower has a receiver and no rebuild.
++	 * DETERMINED and never configured (ADR-0044), which is why it is reported beside
++	 * `writesStream` rather than taken beside the factories. A follower has NO
++	 * receiver and a `rebuild`; a non-follower has a receiver and no rebuild.
++	 *
++	 * It is the exact COMPLEMENT of `writesStream`, and both come out of the one
++	 * `writerOf` reading `add` takes of the REGISTRY: a fold follows when the stream's
++	 * writer is some other generation, and writes when it is not. So a reader cannot
++	 * get a fold that neither follows nor writes, nor one that does both. Asked of the
++	 * registry rather than of the folds this process happens to hold, because that
++	 * array is EMPTY at `open` and a deployment restarted with a changed processor
++	 * would otherwise take a receiver and re-fetch a history the stream already holds.
+ 	 */
+ 	readonly follows: boolean;
+ 	/**
+@@ -345,7 +363,8 @@ export type HeldFold<ABI extends Abi, ProcessResultType = unknown, State = unkno
+ 	 * REPORTED and never set, exactly like the chain-facing container's `follows`:
+ 	 * it is a consequence of `writerOf` -- the oldest SURVIVING generation
+ 	 * registered on the stream -- and a caller that could choose it would be
+-	 * choosing to break the one-writer rule.
++	 * choosing to break the one-writer rule. It is the COMPLEMENT of `follows` and
++	 * comes out of the same single reading of the registry; see that field.
+ 	 *
+ 	 * `false` means the emission appender was NOT handed to this receiver, so this
+ 	 * fold stores nothing: the stream it folds is already stored by an older
+@@ -387,6 +406,23 @@ type FoldOrigin<ABI extends Abi> = {
+ 	level: boolean;
+ };
+ 
++/**
++ * WHAT A REGISTRATION DISPLACES, decided before any of it is carried out.
++ *
++ * See `ReceivingIndexer.displacementOf` for why the decision and the deletions are
++ * two steps. `standing` is the whole reason this is a value rather than a void
++ * call: it is the records as they will BE once this registration has taken the
++ * `successor` slot, which is the list `writerOf` has to be asked of.
++ */
++type Displacement = {
++	/** The generations this registration will DROP, in the order they go. */
++	readonly dropping: readonly GenerationRecord[];
++	/** The ones it would have dropped and does not, because a held fold still follows their stream. */
++	readonly retained: readonly GenerationRecord[];
++	/** Every record still registered afterwards, and the arriving one is NOT among them yet. */
++	readonly standing: readonly GenerationRecord[];
++};
++
+ /**
+  * A follower with no stream to follow, refused.
+  *
+@@ -798,16 +834,32 @@ export class ReceivingIndexer<
+ 	 * It is built with this container attached, which is the whole point: a
+ 	 * persisted cursor carrying another fold no longer reaches `processor.clear()`.
+ 	 *
+-	 * The opening fold is the FIRST on its stream, so it is never a follower and
+-	 * always has one; the assertion says so rather than widening every caller's type
+-	 * for a case `open` cannot produce.
++	 * ## It can be ABSENT, and that is an ordinary state rather than a broken one
++	 *
++	 * This used to assert that the opening fold always has one, "because the first
++	 * fold held on a stream is never a follower". That was a property of how `follows`
++	 * was DERIVED -- from the folds this process held in memory, which at `open` is an
++	 * empty list -- and it is gone: a deployment restarted over a registry that
++	 * already carries a generation on its stream comes up holding a FOLLOWER, which
++	 * re-folds the stored stream instead of re-fetching the chain (ADR-0044,
++	 * ADR-0087). A follower has no receiver, because a stream is ONE address on the
++	 * wire.
++	 *
++	 * So this is a CONVENIENCE for a single-fold host that knows it has one, and it
++	 * REFUSES rather than answering `undefined` so that no caller reads a missing
++	 * receiver as a missing batch. What a host that cannot know should read is
++	 * `held()[0].ingestion`, which is honestly optional, or `liveIngestions()`, which
++	 * is what the wire actually routes on.
+ 	 */
+ 	get ingestion(): StreamBuilder<ABI, ProcessResultType> {
+ 		const ingestion = this.opening.ingestion;
+ 		if (!ingestion) {
+ 			throw new Error(
+-				`the opening fold of this ReceivingIndexer has no receiver, which \`open\` cannot produce: the first fold ` +
+-					`held on a stream is never a follower.`,
++				`the opening fold of this ReceivingIndexer has no receiver: it is a FOLLOWER of the stream ` +
++					`${this.opening.streamDigest}, which an older generation registered here already writes, so it catches up ` +
++					`by re-folding what is stored rather than by being fed from the wire (ADR-0044). Read ` +
++					`\`held()[0].ingestion\`, which reports the absence, or \`liveIngestions()\`, which is what a batch is ` +
++					`routed by.`,
+ 			);
+ 		}
+ 		return ingestion;
+@@ -817,9 +869,16 @@ export class ReceivingIndexer<
+ 		return this.opening.writesStream;
+ 	}
+ 
+-	/** WHICH generation the opening fold is: the stream above, plus the fold over it. */
++	/**
++	 * WHICH generation the opening fold is: the stream above, plus the fold over it.
++	 *
++	 * Off the RECORD rather than off the receiver, because a fold has a record in
++	 * every shape it can be in and a receiver only in one: an opening fold that is a
++	 * FOLLOWER has none (see `ingestion`), and asking it for its name was how a
++	 * diagnostic about a container with no canonical generation turned into a throw.
++	 */
+ 	get generation(): GenerationId {
+-		return this.ingestion.generation;
++		return {stream: this.opening.record.stream, processor: this.opening.record.processor};
+ 	}
+ 
+ 	/** The caps in force, reported so a host can see the bound rather than re-derive the default. */
+@@ -1078,13 +1137,7 @@ export class ReceivingIndexer<
+ 		// its emissions under cannot be two different streams.
+ 		const streamConfig = resolveStreamConfig(provided);
+ 		const context: GenerationContext = {stream: streamDigestOf(source, streamConfig)};
+-		// DETERMINED, never configured: this is the receiving twin of `Indexer.add`'s
+-		// `follows`, decided from the same fact for the same reason.
+-		const follows = this.folds.some((fold) => fold.streamDigest === context.stream);
+ 		const replay = this.options.replay;
+-		if (follows && !replay) {
+-			refuseFollowerWithNoStream(context.stream);
+-		}
+ 
+ 		// STATE FIRST, then the fold over it (ADR-0043). The identity is the ARRIVAL's
+ 		// (ADR-0086), read ONCE here -- after the factories, which is what lets an arrival
+@@ -1110,7 +1163,53 @@ export class ReceivingIndexer<
+ 		// eviction: a replaced successor is dead the moment a newer one takes its place,
+ 		// whether the registry holds two generations or none to spare, and a rule that
+ 		// fired only near the bound would make a deterministic lifecycle a heuristic.
+-		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream);
++		//
++		// PLANNED here and CARRIED OUT below, which is the order the two things after it
++		// need: the derivation reads the records as they will STAND once this registration
++		// has displaced what it displaces, and the refusal under it must leave the registry
++		// exactly as it found it. Doing the drops first and refusing afterwards would
++		// delete a replaced successor on behalf of a registration that never happened.
++		const displacement = this.displacementOf(wanted, registeredBefore, slotsBefore, context.stream);
++
++		// DETERMINED, and determined HERE, in ONE derivation: `follows` and `writesStream`
++		// are the two halves of a single question, so a fold can no more both follow and
++		// write than it can do neither.
++		//
++		// Asked of the durable REGISTRY rather than of `this.folds`, which is this
++		// process's own array and is EMPTY at `open`. That in-memory question is the
++		// receiving twin of the one ADR-0071 section 1 condemned and `Indexer.add` already
++		// moved off (read that block: it is the same expression for the same reason). Its
++		// cost here was measured rather than argued: a deployment restarted with a changed
++		// processor was never a follower, so it took a receiver and re-fetched the whole
++		// chain from the source's start block while the stored stream already held that
++		// history under the same digest. ADR-0044 says a generation on a SHARED stream
++		// fetches nothing, and ADR-0087 makes this a required part of what follows it.
++		//
++		// It is asked as `writerOf` -- the same expression ADR-0044's rule itself is -- so
++		// "which generation writes this stream" has ONE home. `follows` is simply "and it
++		// is not me", and `writesStream` is its complement: the writer is the OLDEST
++		// surviving generation on the stream, so a fold that no older generation precedes
++		// is the one that writes, whether it is arriving now or was already there.
++		//
++		// The records are read as they will STAND rather than as they were at the top of
++		// this method: registering into an occupied `successor` slot can drop generations,
++		// which is a different list to ask `writerOf` of. And it is asked of the ARRIVING
++		// IDENTITY rather than of a created record, because the refusal under it must fire
++		// before anything is written -- `create` RESOLVES a generation already registered,
++		// so a reload names the record that is already there and correctly keeps the pen.
++		const writer = writerOf(displacement.standing, context.stream);
++		const follows = !!writer && !sameGeneration(writer, wanted);
++		const writesStream = !follows;
++		if (follows && !replay) {
++			// BEFORE the displacement is carried out and before the record is created, which
++			// is what "nothing partial survives a refusal" means here: no row is written and
++			// none is dropped. What it MAY leave is storage the state factory opened a few
++			// lines above, which is the cap refusal's caveat unchanged and for the same
++			// reason (ADR-0043: the identity this derivation needs is the ARRIVAL's, read
++			// after the factories so an arrival with no bytes can derive one).
++			refuseFollowerWithNoStream(context.stream);
++		}
++		await this.replaceTheSuccessor(displacement, wanted);
+ 		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
+ 		// that means for this identity: the first generation of an empty registry takes
+ 		// `canonical` instead, and a generation some slot ALREADY names stays where it is
+@@ -1124,17 +1223,13 @@ export class ReceivingIndexer<
+ 		// none. It is recorded because a later move BACK to it must be readable as a
+ 		// revert -- including the opening fold of a host that comes up already canonical.
+ 		const canonicalOnAdd = !canonicalBefore || sameGeneration(canonicalBefore, record);
+-		// AFTER the record exists, because the rule reads the records: only the WRITER
+-		// of a stream may append to it (ADR-0052/ADR-0044), and a generation registered
+-		// beside an older one on the same stream is not it.
+-		const writer = await this.registry.writerOf(context.stream);
+-		const writesStream = !!writer && sameGeneration(writer, record);
+ 		if (!writesStream) {
+ 			namedLogger.info(
+ 				`the fold {stream: ${record.stream}, processor: ${record.processor}} does NOT write its stream: ` +
+ 					`{stream: ${writer?.stream}, processor: ${writer?.processor}} is the oldest surviving generation on it and ` +
+-					`is therefore its writer. Nothing this receiver folds is appended, because the stream already holds it and ` +
+-					`appending it again would be a second history for every generation that re-folds it.`,
++					`is therefore its writer. Nothing this fold folds is appended, because the stream already holds it and ` +
++					`appending it again would be a second history for every generation that re-folds it -- which is the point: ` +
++					`this fold re-folds that stored history locally instead of fetching it from the chain again (ADR-0044).`,
+ 			);
+ 		}
+ 
+@@ -1630,34 +1725,62 @@ export class ReceivingIndexer<
+ 	 * chain-facing twin so the safety clause has ONE home; what is HERE is the part
+ 	 * that is genuinely this container's -- whether a drop would strand a follower,
+ 	 * and what stopping a fold means on this runtime.
++	 *
++	 * ## Why it is DECIDED and CARRIED OUT in two steps
++	 *
++	 * Because `add` has two things to do between them, and both need the decision
++	 * without the deletions. It DERIVES which generation writes the arriving stream
++	 * from the records as they will STAND -- the list at the top of `add` is a
++	 * different list, because a registration into an occupied `successor` slot removes
++	 * rows from it -- and it REFUSES a follower with nothing to re-fold, which must
++	 * leave the registry exactly as it found it. Dropping first and refusing afterwards
++	 * would delete a replaced successor on behalf of a registration that never happened.
+ 	 */
+-	private async replaceTheSuccessor(
++	private displacementOf(
+ 		arriving: GenerationId,
+ 		registered: readonly GenerationRecord[],
+ 		slots: SlottedGenerations,
+ 		arrivingStream: string,
+-	): Promise<void> {
++	): Displacement {
+ 		const displaced = displacedBySuccessor(arriving, registered, slots, (record) =>
+ 			this.folds.some((fold) => sameGeneration(fold.record, record)),
+ 		);
+ 
+-		const surviving = [...registered];
++		const standing = [...registered];
++		const dropping: GenerationRecord[] = [];
++		const retained: GenerationRecord[] = [];
+ 		for (const record of displaced) {
+-			if (this.wouldStrandAFollower(record, surviving, arrivingStream)) {
+-				namedLogger.info(
+-					`the replaced successor {stream: ${record.stream}, processor: ${record.processor}} is RETAINED for now: ` +
+-						`it WRITES the stream ${record.stream}, which another fold here follows, and dropping it would leave ` +
+-						`that one folding a stream nothing appends to (ADR-0044). No slot names it any more, so it goes when ` +
+-						`nothing follows its stream -- or when an operator reclaims what no slot names.`,
+-				);
++			if (this.wouldStrandAFollower(record, standing, arrivingStream)) {
++				retained.push(record);
+ 				continue;
+ 			}
+-			if (await this.dropReplaced(record, arriving)) {
+-				surviving.splice(
+-					surviving.findIndex((held) => sameGeneration(held, record)),
+-					1,
+-				);
+-			}
++			dropping.push(record);
++			// Taken out as though the drop SUCCEEDS, which is what the next record in the
++			// list is judged against and what the derivation reads. A drop that fails leaves
++			// its record registered and therefore still ahead of anything that follows it,
++			// so the only way this can be wrong is in the SAFE direction: one more generation
++			// retained than strictly had to be. It cannot make a follower of a fold that
++			// writes, because a record that writes `arrivingStream` is retained above.
++			standing.splice(
++				standing.findIndex((held) => sameGeneration(held, record)),
++				1,
++			);
++		}
++		return {dropping, retained, standing};
++	}
++
++	/** CARRY OUT what `displacementOf` decided: see that method for why this is its own step. */
++	private async replaceTheSuccessor(plan: Displacement, arriving: GenerationId): Promise<void> {
++		for (const record of plan.retained) {
++			namedLogger.info(
++				`the replaced successor {stream: ${record.stream}, processor: ${record.processor}} is RETAINED for now: ` +
++					`it WRITES the stream ${record.stream}, which another fold here follows, and dropping it would leave ` +
++					`that one folding a stream nothing appends to (ADR-0044). No slot names it any more, so it goes when ` +
++					`nothing follows its stream -- or when an operator reclaims what no slot names.`,
++			);
++		}
++		for (const record of plan.dropping) {
++			await this.dropReplaced(record, arriving);
+ 		}
+ 	}
+ 
+diff --git a/packages/core/test/receivingContainer.test.ts b/packages/core/test/receivingContainer.test.ts
+index c9f3886a..7c65fef2 100644
+--- a/packages/core/test/receivingContainer.test.ts
++++ b/packages/core/test/receivingContainer.test.ts
+@@ -7,6 +7,7 @@ import {openReceivingIndexer, SERVER_GENERATION_CAPS} from '../src/receivingCont
+ import {StreamBuilder} from '../src/streamBuilder.js';
+ import type {EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
+ import {identityOf} from './utils/processorIdentity.js';
++import {storedStream} from './utils/receivingWorld.js';
+ 
+ // ---------------------------------------------------------------------------------------------------
+ // A CHANGED CONTEXT CREATES A SUCCESSOR INSTEAD OF CALLING `processor.clear()`
+@@ -53,6 +54,12 @@ const SOURCE: IndexingSource<TestABI> = {
+ 	contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
+ };
+ 
++/** A DIFFERENT fetch filter, so `streamDigestOf` moves: a new stream, not a fork. */
++const OTHER_SOURCE: IndexingSource<TestABI> = {
++	chainId: '1',
++	contracts: [{abi, address: '0x0000000000000000000000000000000000000077', startBlock: START_BLOCK}],
++};
++
+ let logCounter = 0;
+ 
+ function transfer(blockNumber: number, blockHash: string, id: bigint): LogEvent<TestABI> {
+@@ -89,6 +96,11 @@ function substrate() {
+ 	const port: GenerationRegistryPort = createMemoryGenerationRegistryPort();
+ 	const stores = new Map<string, {rows: string[]; lastSync?: LastSync<TestABI>}>();
+ 	const cleared: string[] = [];
++	// The STORED STREAM this named indexer's folds share, imported rather than copied
++	// for the reason `receivingWorld.ts` exists: a second definition of what a
++	// coverage claim and a bounded read MEAN in a test is the one thing several of
++	// these assertions can only be made against.
++	const stream = storedStream();
+ 
+ 	function storeFor(namespace: string) {
+ 		let store = stores.get(namespace);
+@@ -155,14 +167,52 @@ function substrate() {
+ 		stores,
+ 		cleared,
+ 		specFor,
++		stream,
+ 		rowsIn: (namespace: string) => storeFor(namespace).rows,
++		/**
++		 * The two stream PORTS a real host owns over its own database: where the WRITER
++		 * appends, and where a FOLLOWER reads those same rows back (`emissionAppenderFor`
++		 * and `storedEmissionReplaySource` in `@etherfold/server`). Both, because they are
++		 * the two ends of one artifact: a container given only the first can store a
++		 * history no later generation can re-fold.
++		 */
++		streamPorts: () => ({
++			appendEmissions: (write: Parameters<ReturnType<typeof storedStream>['append']>[0]) => stream.append(write),
++			replay: stream.source(),
++		}),
+ 	};
+ }
+ 
+ type Substrate = ReturnType<typeof substrate>;
+ 
+-/** The container the server/CLI runtime builds: one substrate, one fold, its caps. */
++/**
++ * The container the server/CLI runtime builds: one substrate, one fold, its caps --
++ * and the two ends of the stored stream, which every one of those hosts owns.
++ *
++ * Called again over the SAME substrate, this is a RESTART: a fresh container with an
++ * empty memory over durable records that already name a generation.
++ */
+ function open(world: Substrate, version: string) {
++	return openReceivingIndexer({
++		port: world.port,
++		source: SOURCE,
++		stream: {finality: FINALITY},
++		...world.streamPorts(),
++		generation: world.specFor(version, 'own'),
++	});
++}
++
++/**
++ * The same host with NO stream to re-fold, which is the one thing a FOLLOWER cannot
++ * do without.
++ *
++ * Kept as its own opener rather than a flag on the one above, because it is what the
++ * refusals below are ABOUT: a fold on a stream an older generation already writes
++ * gets no receiver (a stream is ONE address on the wire) and catches up by re-folding
++ * the stored stream, so a host that supplied neither end of that stream has
++ * registered a generation that could never advance.
++ */
++function openWithNoStreamToReFold(world: Substrate, version: string) {
+ 	return openReceivingIndexer({
+ 		port: world.port,
+ 		source: SOURCE,
+@@ -206,11 +256,23 @@ describe('a changed context, with a container above the receiver', () => {
+ 		const before = [...world.rowsIn(incumbentNamespace)];
+ 
+ 		// the upgrade: the SAME source and the SAME stream config, a DIFFERENT fold,
+-		// and the database still holds what the previous fold wrote
++		// and the database still holds what the previous fold wrote. Taken by RESTART,
++		// which is a fresh container over the same records -- so under ADR-0044 this fold
++		// is a FOLLOWER of the stream the incumbent stored and re-folds those rows rather
++		// than fetching that history from the chain a second time.
+ 		const successor = await open(world, 'v2');
+-		await successor.ingestion.expectedFromBlock();
+-
+-		// THE CALL SITE, which is the outage this removes
++		const arriving = successor.held()[0];
++		expect(arriving.follows).toBe(true);
++		expect(arriving.rebuild).toBeDefined();
++		// ...so there is no receiver to ask, which is what a stream being ONE address on
++		// the wire means. This case used to call `successor.ingestion.expectedFromBlock()`
++		// here and expect an answer: that was the defect, not the contract.
++		expect(arriving.ingestion).toBeUndefined();
++
++		// THE CALL SITE, which is the outage this removes -- and on the follower path it
++		// is not merely unreached but unreachable: `GenerationRebuild` never clears a
++		// cursor it finds, because a generation's state is its own namespace (ADR-0053).
++		await successor.rebuildMore();
+ 		expect(world.cleared).toEqual([]);
+ 		// the incumbent still answers exactly what it answered before
+ 		expect(world.rowsIn(incumbentNamespace)).toEqual(before);
+@@ -233,6 +295,7 @@ describe('a changed context, with a container above the receiver', () => {
+ 			port: world.port,
+ 			source: SOURCE,
+ 			stream: {finality: FINALITY},
++			...world.streamPorts(),
+ 			generation: world.specFor('v1', {shared: 'legacy'}),
+ 		});
+ 		await incumbent.ingestion.receive(
+@@ -240,17 +303,27 @@ describe('a changed context, with a container above the receiver', () => {
+ 		);
+ 		expect(world.rowsIn('legacy')).toEqual(['v1@101']);
+ 
+-		// the branch the outage lives on: a persisted cursor written by another fold
++		// the branch the outage lives on: a persisted cursor written by another fold. It
++		// is reached from the FOLLOWER's side now (`GenerationRebuild.checkpoint`, which
++		// this fold is given because an older generation already writes this stream), and
++		// what it does there is start from scratch and clear NOTHING -- one namespace's
++		// cursor is not another's to delete, which is the whole of ADR-0053.
+ 		const successor = await openReceivingIndexer({
+ 			port: world.port,
+ 			source: SOURCE,
+ 			stream: {finality: FINALITY},
++			...world.streamPorts(),
+ 			generation: world.specFor('v2', {shared: 'legacy'}),
+ 		});
+-		expect(await successor.ingestion.expectedFromBlock()).toBe(START_BLOCK);
++		expect(successor.held()[0].follows).toBe(true);
++		await successor.rebuildMore();
+ 
+ 		expect(world.cleared).toEqual([]);
+-		expect(world.rowsIn('legacy')).toEqual(['v1@101']);
++		// what the incumbent wrote is still there. This case used to assert the same list
++		// after a call that REACHED `StreamBuilder.currentLastSync`; the reach is now the
++		// rebuild's checkpoint, and the claim -- the shared store is not wiped -- is the
++		// one that mattered either way.
++		expect(world.rowsIn('legacy')).toContain('v1@101');
+ 	});
+ 
+ 	it('RESOLVES a context it has already seen rather than registering it twice', async () => {
+@@ -270,7 +343,9 @@ describe('a changed context, with a container above the receiver', () => {
+ 		await anIndexerThatHasFolded(world);
+ 		await open(world, 'v2');
+ 
+-		// a restart is a new container over the same records
++		// a restart is a new container over the same records. Both of these opens hold a
++		// FOLLOWER of the stream `v1` writes, which is what makes the bookkeeping this
++		// case is about the same on the second restart as on the first.
+ 		const restarted = await open(world, 'v2');
+ 		expect((await restarted.generations()).map((record) => record.processor)).toEqual([
+ 			identityOf('v1'),
+@@ -293,10 +368,15 @@ describe('the generation caps, on the runtime that supplies them', () => {
+ 		const world = substrate();
+ 		await anIndexerThatHasFolded(world);
+ 
++		// the stream's two ends are supplied, so the arriving fold is a LEGITIMATE
++		// follower and the CAP is what it meets. Without them it would meet the
++		// follower-with-nothing-to-re-fold refusal one step earlier, and this case would
++		// silently stop being about the bound.
+ 		const refused = openReceivingIndexer({
+ 			port: world.port,
+ 			source: SOURCE,
+ 			stream: {finality: FINALITY},
++			...world.streamPorts(),
+ 			caps: {maxGenerations: 1, maxStreams: 1},
+ 			generation: world.specFor('v2', 'own'),
+ 		});
+@@ -317,6 +397,7 @@ describe('the generation caps, on the runtime that supplies them', () => {
+ 			port: world.port,
+ 			source: SOURCE,
+ 			stream: {finality: FINALITY},
++			...world.streamPorts(),
+ 			caps: {maxGenerations: 2, maxStreams: 1},
+ 			generation: world.specFor('v2', 'own'),
+ 		});
+@@ -329,12 +410,6 @@ describe('the generation caps, on the runtime that supplies them', () => {
+ });
+ 
+ describe('one container, SEVERAL live wire contexts', () => {
+-	/** A DIFFERENT fetch filter, so `streamDigestOf` moves: a new stream, not a fork. */
+-	const OTHER_SOURCE: IndexingSource<TestABI> = {
+-		chainId: '1',
+-		contracts: [{abi, address: '0x0000000000000000000000000000000000000077', startBlock: START_BLOCK}],
+-	};
+-
+ 	it('gives a fold on a NEW stream its own receiver, at its own address, writing its own stream', async () => {
+ 		const world = substrate();
+ 		const incumbent = await anIndexerThatHasFolded(world);
+@@ -362,7 +437,7 @@ describe('one container, SEVERAL live wire contexts', () => {
+ 
+ 	it('REFUSES a fold on a stream it already holds when it was given no stream to re-fold', async () => {
+ 		const world = substrate();
+-		const incumbent = await anIndexerThatHasFolded(world);
++		const incumbent = await openWithNoStreamToReFold(world, 'v1');
+ 
+ 		// the same source and config, another fold: a PROCESSOR change, which asserts
+ 		// the very same `{source, config}`. It gets no receiver -- a second one there
+@@ -453,6 +528,118 @@ describe('one container, SEVERAL live wire contexts', () => {
+ 	});
+ });
+ 
++// ---------------------------------------------------------------------------------------------------
++// WHICH GENERATION WRITES A STREAM IS READ FROM THE REGISTRY, NOT FROM THIS PROCESS
++// ---------------------------------------------------------------------------------------------------
++// `add` used to decide `follows` with `this.folds.some(...)` -- the folds THIS
++// process happens to hold, which at `open` is an EMPTY LIST. So a deployment
++// restarted with a changed processor was never a follower: it took a receiver and
++// re-fetched the chain from the source's start block while the stored stream
++// already held that history under the same digest. ADR-0044 says a generation on a
++// SHARED stream fetches nothing, and ADR-0071 section 1 condemned this exact
++// in-memory question on the chain-facing twin, where it was moved onto `writerOf`.
++//
++// These cases are the DERIVATION at the container's own seam. That the restart then
++// costs zero historical `eth_getLogs` is asserted where it can be measured on the
++// wire, over a real handle: `packages/cli/test/aRestartReFoldsTheStoredStream.test.ts`.
++// ---------------------------------------------------------------------------------------------------
++
++describe('FOLLOWS and WRITES, derived from the registry in one reading', () => {
++	it('makes a RESTARTED generation a FOLLOWER that re-folds, where it used to get a receiver', async () => {
++		const world = substrate();
++		const incumbent = await anIndexerThatHasFolded(world);
++
++		// a REDEPLOY: a fresh container, an empty fold list, the same durable records
++		const restarted = await open(world, 'v2');
++		const arriving = restarted.held()[0];
++
++		expect(arriving.follows).toBe(true);
++		expect(arriving.writesStream).toBe(false);
++		// the two engine shapes a fold can be in, and it is in the re-folding one
++		expect(arriving.rebuild).toBeDefined();
++		expect(arriving.ingestion).toBeUndefined();
++		// ...on the stream the incumbent already holds, which is the point: same digest,
++		// so the stored history is this fold's to re-fold
++		expect(arriving.streamDigest).toBe(incumbent.streamDigest);
++	});
++
++	it('leaves a RELOAD on the same generation the WRITER it already was', async () => {
++		const world = substrate();
++		await anIndexerThatHasFolded(world);
++
++		// the same bytes, restarted: `create` RESOLVES the record already there rather
++		// than duplicating it, so this fold IS the stream's writer and asking `writerOf`
++		// gets that answer. The set question it replaced -- "is any OTHER generation
++		// registered on this stream" -- is right only for a record that is NEW, and a
++		// reload is precisely a record that is not (ADR-0071's expired rejection, and the
++		// same trap the chain-facing twin documents at length).
++		const reloaded = await open(world, 'v1');
++		const arriving = reloaded.held()[0];
++
++		expect(arriving.follows).toBe(false);
++		expect(arriving.writesStream).toBe(true);
++		expect(arriving.ingestion).toBeDefined();
++		expect(arriving.rebuild).toBeUndefined();
++	});
++
++	it('never answers both and never answers neither, whichever shape a fold is in', async () => {
++		const world = substrate();
++		const incumbent = await anIndexerThatHasFolded(world);
++		// BOTH shapes in one container: the writer it opened with, and a follower of that
++		// same stream. Only two, because there is ONE `successor` slot (ADR-0084), so a
++		// third registration would displace the second rather than sit beside it.
++		await incumbent.add(world.specFor('v2', 'own'));
++
++		expect(incumbent.held().map((fold) => fold.writesStream)).toEqual([true, false]);
++		for (const fold of incumbent.held()) {
++			// ONE derivation, so these are two halves of one answer rather than two answers
++			expect(fold.follows).toBe(!fold.writesStream);
++			// ...and the engine shape follows it, never the other way round
++			expect(!!fold.rebuild).toBe(fold.follows);
++			expect(!!fold.ingestion).toBe(!fold.follows);
++		}
++	});
++
++	it('REFUSES a restart that supplied no stream to re-fold, rather than re-fetching the chain for it', async () => {
++		const world = substrate();
++		await anIndexerThatHasFolded(world);
++
++		// THE CASE THIS CHANGE MAKES REACHABLE, and it gets a stated answer rather than an
++		// incidental one: a host redeployed with a changed processor over records that
++		// already carry a generation on this stream holds a FOLLOWER, and a follower with
++		// neither end of the stream could never advance. It used to come up with a receiver
++		// and quietly re-fetch the whole history instead.
++		const refused = openWithNoStreamToReFold(world, 'v2');
++		await expect(refused).rejects.toThrow(/ONE address on the wire/);
++		await expect(refused).rejects.toThrow(/no `replay` source/);
++
++		// and it left NOTHING behind: no second record, and the pointer where it was
++		const after = await open(world, 'v1');
++		expect((await after.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
++		expect(await after.canonical()).toMatchObject({processor: identityOf('v1')});
++	});
++
++	it('drops nothing when it refuses, including the successor the registration would have DISPLACED', async () => {
++		const world = substrate();
++		const incumbent = await openWithNoStreamToReFold(world, 'v1');
++		// a pending successor on a stream of its OWN, so it is in the `successor` slot and
++		// is what the next registration displaces -- there is only one such slot (ADR-0084)
++		await incumbent.add({source: OTHER_SOURCE, ...world.specFor('v9', 'own')});
++		expect(await incumbent.slots()).toMatchObject({successor: {processor: identityOf('v9')}});
++
++		// ...and now a fold that is refused. The refusal fires AFTER the derivation, which
++		// reads the records as they will STAND, and BEFORE any of the displacement is
++		// carried out -- so a registration that did not happen deletes nothing.
++		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/no `replay` source/);
++
++		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
++			identityOf('v1'),
++			identityOf('v9'),
++		]);
++		expect(await incumbent.slots()).toMatchObject({successor: {processor: identityOf('v9')}});
++	});
++});
++
+ describe('a receiver built WITHOUT a container', () => {
+ 	it('still discards a persisted cursor written by another fold, exactly as before', async () => {
+ 		const world = substrate();
