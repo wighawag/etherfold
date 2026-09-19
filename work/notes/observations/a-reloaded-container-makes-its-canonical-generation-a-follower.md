@@ -2,7 +2,15 @@
 title: 'A reloaded chain-facing container makes its canonical generation a FOLLOWER, so nothing fetches'
 slug: a-reloaded-container-makes-its-canonical-generation-a-follower
 observed: 2026-09-16
+triaged: 'FIXED 2026-09-18 -- kept only as ADR-0071''s cited evidence, not as a live signal.'
+needsAnswers: false
 ---
+
+> **TRIAGED 2026-09-18: this is FIXED, and the note is retained for one reason only.** `follows` no longer asks "is any OTHER generation already registered on this stream". It derives from `writerOf`, which names the canonical generation correctly on a reload -- see the block in `packages/core/src/container.ts` recording that ADR-0071's rejection of that form has EXPIRED, twice over, now that ADR-0072 made `createdAt` strictly increasing within a registry. That is exactly the unification this note argued for. It landed with `the-chain-facing-container-holds-its-generations-in-slots` and is pinned by the reload test in `@etherfold/browser`, which asserts the reloaded container still FETCHES rather than merely that its slots read right.
+>
+> It would otherwise be deleted as a spent signal. It stays because `docs/adr/0071-one-rule-has-one-home-the-writer-and-the-unreadable-snapshot.md` cites it BY PATH as the failure that forced its decision, so this note is that ADR's evidence and deleting it would orphan the citation.
+>
+> The sibling it did NOT fix -- what happens when the generation `writerOf` names is not HELD, so nothing appends at all -- is `work/tasks/ready/a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge.md`.
 
 2026-09-16, noticed while porting slots to the chain-facing container (`the-chain-facing-container-holds-its-generations-in-slots`). Recorded rather than fixed: it is `follows`, not slots, and ADR-0071 decided the rule deliberately.
 
