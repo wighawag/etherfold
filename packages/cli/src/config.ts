@@ -465,11 +465,22 @@ const NOTHING_TO_PRUNE_SERVE =
 // accepted flag away is breaking.
 // ---------------------------------------------------------------------------------------------------
 
+// It says "takes no input" and no longer says "holds exactly ONE generation and
+// so never promotes", for the reason the `index` message beneath it was corrected
+// for and in the same shape: the second half stopped being true. A re-run `build`
+// over a database it already wrote with CHANGED processor bytes registers a
+// successor at start-up, folds it, and settles the pointer onto it before exiting
+// -- otherwise the artifact it publishes serves the fold the PREVIOUS build left
+// behind. WHETHER this command should also take the flag is a question about its
+// inputs that nothing has answered; refusing it stays the honest answer under
+// ADR-0048, where refusal -> optional is additive and the reverse is breaking.
 const NEVER_PROMOTES_BUILD =
-	'the one-shot holds exactly ONE generation and exits -- no reconfigure, no successor beside a live fold, ' +
-	'and so it never promotes and never moves the canonical pointer on its own. A policy here would be ' +
-	'accepted and never applied. The shape that promotes is `run`, which re-reads its configuration on ' +
-	'POST /{indexer}/admin/reconfigure and carries the successor to level between fetch cycles.';
+	'this command takes no promotion input. A one-shot wires no reconfigure route, so the only successor it ' +
+	'can hold is the one its own configuration named at start-up -- a re-run over a database it already wrote, ' +
+	'with changed processor bytes -- and that one is folded and settled under the DEFAULT policy before the ' +
+	'process exits. Choosing a different value for it is a question about this command\u2019s inputs that ' +
+	'nothing has answered yet; `run` is the shape that takes the flag today, and it is also the shape that can ' +
+	'be RE-configured while it runs (POST /{indexer}/admin/reconfigure).';
 
 const NEVER_PROMOTES_FETCH =
 	'a fetcher holds no generations at all -- no processor, no state and no canonical pointer (ADR-0003) -- so ' +

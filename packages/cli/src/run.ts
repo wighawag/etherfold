@@ -98,8 +98,13 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	db: RemoteSQL;
 	store: WritableStateStore;
 	processor: EventProcessor<ABI, ProcessResultType>;
-	/** The receiving half. Present so a caller can assert WHICH engine folds, rather than trust it. */
-	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	/**
+	 * The OPENING fold's receiving half. Present so a caller can assert WHICH engine
+	 * folds, rather than trust it -- and ABSENT where that fold has none, which under
+	 * ADR-0087 is an ordinary state rather than a crash (`FoldingAssembly`). What this
+	 * process FEEDS is resolved per ask from the container, never from here.
+	 */
+	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
 	/**
 	 * THE GENERATIONS THIS PROCESS HOLDS: the registry, the canonical pointer, and
 	 * the folds over them.
@@ -293,7 +298,7 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			db: prepared.db,
 			store: prepared.store,
 			processor: prepared.processor,
-			streamBuilder: prepared.streamBuilder,
+			...(prepared.streamBuilder ? {streamBuilder: prepared.streamBuilder} : {}),
 			container: prepared.container,
 			host: prepared.host,
 			stopped,

@@ -152,6 +152,65 @@ export class WireContextMismatchError extends Error {
 }
 
 /**
+ * A `{source, config}` that NO LIVE RECEIVER under this container holds right now.
+ *
+ * The in-process twin of the ingest route's `context-mismatch` refusal
+ * (`@etherfold/server`), and it names EVERY live context rather than picking one,
+ * for that route's own reason: naming them all is information, and picking one is
+ * a policy this has no basis for. It exists because a container holds several
+ * folds and only SOME of them have a receiver -- a FOLLOWER re-folds a stored
+ * stream and is deliberately not addressable on the wire (ADR-0044) -- so
+ * "which receiver does this sender feed" is a question with a real empty answer.
+ *
+ * ## Why `retryable` is a FACT about the instance rather than a constant
+ *
+ * The two shapes this covers are not the same fact, and collapsing them would
+ * make one of them wrong:
+ *
+ * - **live receivers exist and none is yours** is a MISCONFIGURATION, exactly
+ *   like `WireContextMismatchError`: this process folds other streams and no
+ *   block number and no waiting makes a foreign `{source, config}` right. NOT
+ *   retryable, so a host stops rather than pushing for ever at something that
+ *   will never accept it.
+ * - **nothing is live at all** is a fact about the MOMENT. It is what a
+ *   container whose every held fold is a follower answers, and the container's
+ *   own machinery is what closes it: a bounded rebuild advances the follower and
+ *   writer succession hands it the wire once it is level (ADR-0044's second
+ *   amendment, `reconcileWriters`). Retryable, so the process stays up and goes
+ *   on rebuilding, and a line says so every cycle -- which is that amendment's
+ *   own trade, since an unfed stream is visible and recoverable where a silently
+ *   idle one is neither.
+ *
+ * What it is deliberately NOT is an answer. Inventing an `expectedFromBlock` for
+ * a sender with nowhere to push would be a fetcher fetching ranges into nothing:
+ * a silent stall at best, and a HOLE if anything later claimed that range was
+ * covered.
+ */
+export class NoLiveReceiverError extends Error {
+	readonly name = 'NoLiveReceiverError';
+	readonly retryable: boolean;
+
+	constructor(
+		/** Every `{source, config}` this container holds a LIVE receiver for, which may be none. */
+		readonly expected: readonly WireContext[],
+		/** The `{source, config}` the sender asked about. */
+		readonly received: WireContext,
+	) {
+		super(
+			expected.length === 0
+				? `this process holds no live receiver at all, so there is nowhere to push ${JSON.stringify(received)}. ` +
+						`Every fold it holds is a FOLLOWER re-folding a stored stream, which is fed by its own bounded rebuild ` +
+						`and is deliberately not addressable on the wire (ADR-0044). The rebuild is what closes this: a follower ` +
+						`that becomes level inherits the wire when it inherits the write duty.`
+				: `this process folds no such {source, config}: it holds ${expected.length} live wire context(s), ` +
+						`${JSON.stringify(expected)}, and was asked about ${JSON.stringify(received)}. No block number makes ` +
+						`this right -- the sender's source or stream config differs from every receiver held here.`,
+		);
+		this.retryable = expected.length === 0;
+	}
+}
+
+/**
  * A batch whose envelope does not describe a contiguous, complete block range.
  *
  * The three things it catches are the three ways the wire contract can be broken

@@ -625,8 +625,14 @@ describe('an operator selects WHEN a successor takes over', () => {
 			expect(OWNERSHIP[command].promotion).toBe('refused');
 			expect(OWNERSHIP[command].dropOnPromotion).toBe('refused');
 		}
+		// It used to pin "never promotes", which stopped being true: a re-run `build`
+		// with changed processor bytes registers a successor at start-up and SETTLES the
+		// pointer onto it before exiting, or the artifact it publishes serves the fold the
+		// previous build left behind. What is pinned now is what the refusal is ABOUT --
+		// this command takes no INPUT -- which is the part ADR-0048 says may later widen
+		// from refused to optional without breaking anything.
 		expect(() => resolveCommandConfig('build', {...FOLDING, promotion: 'immediate'}, {})).toThrow(
-			/--promotion \(PROMOTION_POLICY\) is not accepted by `etherfold build`.*never promotes/s,
+			/--promotion \(PROMOTION_POLICY\) is not accepted by `etherfold build`.*takes no promotion input/s,
 		);
 		expect(() => resolveCommandConfig('build', {...FOLDING, dropOnPromotion: true}, {})).toThrow(
 			/--drop-on-promotion is not accepted by `etherfold build`/,

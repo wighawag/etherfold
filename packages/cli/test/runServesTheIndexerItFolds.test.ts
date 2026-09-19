@@ -197,7 +197,7 @@ describe('a run process serves the read tier of the indexer it folds', () => {
 		]);
 		// the stream a consumer is told about is the one THIS process's own receiver
 		// folds, which is what makes the cursor it hands back valid here
-		expect(feed.stream).toBe(indexer.streamBuilder.streamDigest);
+		expect(feed.stream).toBe(indexer.streamBuilder!.streamDigest);
 
 		const canonical = (await (await fetch(`${indexer.url}/${INDEXER}/canonical?gate=${TIP}`)).json()) as {
 			success: boolean;
@@ -251,13 +251,13 @@ describe('a run process serves the read tier of the indexer it folds', () => {
 		};
 		expect(body.indexer).toBe(INDEXER);
 		expect(body.generations).toHaveLength(1);
-		expect(body.canonical).toMatchObject(indexer.streamBuilder.generation);
+		expect(body.canonical).toMatchObject(indexer.streamBuilder!.generation);
 
 		// the MOVE, which is the same one small write in both directions
 		const moved = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
 			method: 'POST',
 			headers: {...authorized, 'Content-Type': 'application/json'},
-			body: JSON.stringify(indexer.streamBuilder.generation),
+			body: JSON.stringify(indexer.streamBuilder!.generation),
 		});
 		expect(moved.status).toBe(200);
 
