@@ -144,8 +144,16 @@ export type PreparedIndexing<
 	config: ConfigFor<C, ABI>;
 	source: IndexingSource<ABI>;
 	processor: EventProcessor<ABI, ProcessResultType>;
-	/** The receiving half. Present so a test can assert WHICH engine folds, rather than trust it. */
-	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	/**
+	 * The OPENING fold's receiving half. Present so a test can assert WHICH engine
+	 * folds, rather than trust it -- and ABSENT where that fold has none, which under
+	 * ADR-0087 is an ordinary state rather than a crash (`FoldingAssembly`).
+	 *
+	 * It is deliberately NOT what this process feeds: the fetcher below pushes into
+	 * whatever the container holds LIVE at the moment of the ask, never into a value
+	 * captured here.
+	 */
+	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
 	/**
 	 * THE GENERATIONS THIS PROCESS HOLDS, and which one answers reads.
 	 *
@@ -180,10 +188,14 @@ export type PreparedIndexing<
 	 * folds.
 	 *
 	 * `run` is the shape that EXPOSES it, and `build` deliberately does not: a
-	 * one-shot has no reconfigure, holds exactly ONE generation and exits, so it
-	 * never registers a successor and never promotes. It is handed back for both
-	 * because the assembly is shared verbatim and a conditional field would be a
-	 * type for a distinction the commands already draw.
+	 * one-shot has no HTTP surface to pull the trigger from, so it re-reads its
+	 * configuration exactly once, at start-up. That is NOT the same as holding one
+	 * generation -- a re-run `build` over a database it already wrote with changed
+	 * processor bytes registers a successor beside the canonical generation at that
+	 * single read, folds it, and settles the pointer onto it before exiting
+	 * (`driveCycles`). It is handed back for both because the assembly is shared
+	 * verbatim and a conditional field would be a type for a distinction the commands
+	 * already draw.
 	 */
 	reconfigure(): Promise<ReconfigureReport>;
 	/**
@@ -334,10 +346,11 @@ export async function prepareIndexing<
 			// that bundle's hash, and the engine below this line never asks where the value
 			// came from (ADR-0086).
 			processorIdentity: arrivalIdentity,
-			// WHEN a successor takes over, on the one command that can register one while it
-			// runs. Only `run` resolves the input (`OWNERSHIP`, `config.ts`): the one-shot
-			// holds exactly ONE generation and exits, so a policy there would be accepted
-			// and never applied, and it is refused rather than carried.
+			// WHEN a successor takes over, on the one command that TAKES the input. Only
+			// `run` resolves it (`OWNERSHIP`, `config.ts`): a one-shot's successor is settled
+			// under the DEFAULT policy before it exits, and whether it should also take the
+			// flag is a question about that command's inputs which nothing has answered --
+			// so it is refused rather than carried (`NEVER_PROMOTES_BUILD`).
 			...(resolved.command === 'run' && resolved.promotion !== undefined ? {promotion: resolved.promotion} : {}),
 		},
 	);
@@ -351,9 +364,27 @@ export async function prepareIndexing<
 		}),
 		{
 			provider,
-			// the wire with no wire: the same two components a split deployment runs, in
-			// one process, with nothing between them
-			target: createDirectIngestion(streamBuilder),
+			// THE WIRE WITH NO WIRE: the same two components a split deployment runs, in one
+			// process, with nothing between them -- and, exactly as on the HTTP side, the
+			// receiver a batch reaches is RESOLVED at the moment of the ask rather than
+			// captured here.
+			//
+			// It used to be `createDirectIngestion(container.ingestion)`, one receiver read
+			// off the container at `open`. Two things were wrong with that and only one of
+			// them was visible. The visible one: that getter THROWS for a fold with no
+			// receiver, so the whole assembly rested on the opening fold never being a
+			// FOLLOWER -- which ADR-0087 retires, since a restarted deployment over a stream
+			// the registry already carries comes up holding exactly that. The other: a
+			// captured receiver is PINNED, so a deployment whose live fold moved while it ran
+			// (a successor registered beside the incumbent, a generation deleted by another
+			// process, writer succession handing the wire on) went on feeding the one it read
+			// at start-up.
+			//
+			// `container.liveIngestions()` is the question the ingest route already asks per
+			// batch (`@etherfold/server`), answered from the REGISTRY rather than from
+			// memory, and it reconciles writer succession on the way. So the combined shape
+			// and the split shape now route on one fact.
+			target: createDirectIngestion(() => container.liveIngestions()),
 		},
 	);
 
@@ -363,7 +394,7 @@ export async function prepareIndexing<
 		config: resolved as ConfigFor<C, ABI>,
 		source,
 		processor,
-		streamBuilder,
+		...(streamBuilder ? {streamBuilder} : {}),
 		container,
 		host,
 		store,
@@ -411,6 +442,19 @@ export async function prepareIndexing<
  * by hand. What is NOT retried forever is a refusal no waiting fixes: that is a
  * `fatal`, and it stops the process with a non-zero code.
  *
+ * **There is exactly ONE retryable refusal the one-shot does not retry, and it is
+ * not a bound.** `NoLiveReceiverError` with nothing live at all says this process
+ * holds no receiver for the wire to push into, because every fold it holds is a
+ * FOLLOWER fed by its own bounded rebuild (ADR-0044). On a `run` that is worth
+ * another try and the rule above is exactly right: the rebuild in the gap between
+ * cycles is what advances the follower, and writer succession hands it the wire
+ * once it is level, so the process stays up and a line is written every cycle.
+ * On a `build` there IS no such gap -- the rebuild is a single step taken after
+ * the loop -- so nothing about waiting can change the answer, and a one-shot that
+ * retried it would hang for ever rather than exit. It is re-thrown here for the
+ * same reason a `fatal` is: a one-shot that folded nothing must not report
+ * success, and a CI job depends on the code rather than on parsing output.
+ *
  * Deliberately NOT a stop on `contended`, on either command: a yielded cycle
  * means another sender moved the cursor, and stopping there would report success
  * having landed nothing.
@@ -427,9 +471,28 @@ export async function prepareIndexing<
  * already waits between cycles is that host's own clock, so one chunk is taken
  * there -- bounded by construction, on the same thread as the fold, so it can
  * neither stall a cycle beyond a chunk nor write into the incumbent's tables
- * while it folds. A `build` schedules none: a one-shot has no reconfigure, holds
- * exactly ONE generation and exits, so there is never a second fold to advance,
- * and never a promotion.
+ * while it folds.
+ *
+ * A `build` has no such gap to spend, because it EXITS -- so it takes that same
+ * bounded step ONCE, after the loop and before it returns, beside the retention
+ * pass that is there for the identical reason. It is not that a one-shot never
+ * holds a successor: re-run a `build` over a database it already wrote with
+ * CHANGED processor bytes and it is a different identity, so the container
+ * registers a successor beside the canonical generation exactly as a restarted
+ * `run` does. What was missing was the SETTLE, so that build folded its successor
+ * to the tip and exited with the pointer still naming the OLD generation -- and
+ * the artifact it published therefore served the old fold, with a fully caught-up
+ * newer one sitting in the database beside it.
+ *
+ * WHAT THAT STEP PROMISES, and it is deliberately less than `run`'s: it advances
+ * every follower this build holds by ONE bounded chunk and settles the pointer
+ * ONCE. It does NOT promise a successor reaches level, and it must not -- a
+ * settle that WAITED for one would make the one-shot unbounded, which is the one
+ * thing a command whose exit is the point may never be. The successor a re-run
+ * `build` registers is fed by the WIRE and is level by the time the loop ends, so
+ * the settle finds it and moves the pointer; a follower that is genuinely behind
+ * is advanced by a chunk, the pointer stays where it was, and re-running the
+ * command is what carries it further.
  *
  * WHERE THE SUCCESSOR COMES FROM, in the two ways it can arrive. A generation is
  * registered when the container OPENS, from config, so a RESTART is one of them
@@ -482,6 +545,15 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 	}
 
 	const wait = deps.sleep ?? sleep;
+	/**
+	 * WHY THE ONE-SHOT GAVE UP, when it gave up on something retryable.
+	 *
+	 * Set from `onReport` and re-thrown after the loop, beside the `fatal` re-throw,
+	 * because that is where the loop's outcome is turned into this command's: the
+	 * report cannot throw from inside `runFetcherLoop` without turning an ordinary
+	 * classification into an exception the loop never contracted to handle.
+	 */
+	let nothingToFeed: unknown;
 	/**
 	 * WHAT THE HOST DOES IN THE GAP IT WAITS: one bounded rebuild chunk for every
 	 * follower held AND the pointer settled once, one bounded prune pass over the
@@ -571,6 +643,16 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 				if (stopAtTip && (report.kind === 'idle' || (report.kind === 'progress' && report.caughtUp))) {
 					controller.abort();
 				}
+				// ...and the one retryable refusal a ONE-SHOT cannot wait out: nothing here is
+				// live for the wire to feed, and this command has no gap between cycles for the
+				// rebuild that would change that. Read STRUCTURALLY rather than with
+				// `instanceof`, for the reason `isRetryable` is structural: two copies of
+				// `@etherfold/core` in one dependency tree would otherwise turn a deliberate exit
+				// into the hang it exists to prevent.
+				if (stopAtTip && report.kind === 'retry' && (report.error as {name?: string})?.name === 'NoLiveReceiverError') {
+					nothingToFeed = report.error;
+					controller.abort();
+				}
 			},
 		});
 
@@ -580,15 +662,48 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 			// code and a CI job can depend on it rather than on parsing output.
 			throw summary.error;
 		}
+		if (nothingToFeed !== undefined) {
+			// AHEAD of the exit work below, exactly as the `fatal` re-throw is: this build
+			// fetched nothing, so there is no artifact to settle a pointer on or prune to a
+			// floor, and doing either would dress a run that achieved nothing as one that
+			// finished. The error says what the state is and what closes it.
+			throw nothingToFeed;
+		}
 
-		// THE ONE-SHOT'S PRUNE, and the one place a pass is not enough: `build` exits,
-		// so "the next cycle continues" has no next cycle, and the database it exits
-		// with is a publishable ARTIFACT. The passes stay bounded and this loops them
-		// until the state is at its floor. A `build` STOPPED from outside skips it: a
-		// caller asking a process to stop is not asking it to finish a delete first,
-		// and the tip it stopped at is not the tip its retention was written for.
+		// THE ONE-SHOT'S EXIT WORK, and the one place a `run` has nothing to match:
+		// `build` exits, so "the next cycle continues" has no next cycle, and the
+		// database it exits with is a publishable ARTIFACT. A `build` STOPPED from
+		// outside skips ALL of it, and that is the same rule for both halves: a caller
+		// asking a process to stop is not asking it to finish a delete or a promotion
+		// first, and the tip it stopped at is not the tip either was written for.
 		if (stopAtTip && !deps.signal?.aborted) {
 			try {
+				// ONE call, which is TWO things and both of them bounded: every follower held is
+				// advanced by one chunk, and then the pointer is settled ONCE. It is the same
+				// call `run` makes in the gap between cycles, made here because this command has
+				// no such gap -- and it is called once rather than looped, because looping it is
+				// exactly how a one-shot stops being one.
+				await container.rebuildMore();
+			} catch (err) {
+				// `console.error` and NOT the named-logs logger, for the reason the rebuild
+				// diagnostic above already documents: on the commands that reach this loop a
+				// `logger.error` is a silent no-op, and this is the one line that says the
+				// artifact may serve a generation this build did not just fold.
+				//
+				// FAIL SOFT, like the prune below and for the same reason: the exit code is about
+				// what this command FOLDED, and it folded everything it was asked to. What is
+				// wrong is which generation the pointer names, which a re-run settles.
+				console.error(
+					`the settle of this build failed, so the canonical pointer may still name the generation this build ` +
+						`did not just fold. The state it folded is unaffected and re-running the command settles it.`,
+					err,
+				);
+			}
+			try {
+				// ...and THE PRUNE, the one place a single pass is not enough: the passes stay
+				// bounded and this loops them until the state is at its floor. AFTER the settle,
+				// so the generation the artifact now serves is pruned to the floor its retention
+				// asked for rather than one pass later.
 				await pruneHeldUntilComplete(container, {maxVersions: DEFAULT_PRUNE_BUDGET});
 			} catch (err) {
 				// It folded everything it was asked to fold, which is what the exit code is
@@ -612,15 +727,31 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
  * one stops at the tip, so it is `build`; the assembly under both is the same
  * `prepareIndexing`, and the difference is `driveCycles`'s `stopAtTip`.
  *
- * ## It holds exactly ONE generation, and that is the model at N=1
+ * ## HOW MANY GENERATIONS IT HOLDS IS THE DATABASE'S ANSWER, NOT THE COMMAND'S
  *
- * A one-shot has no reconfigure: it opens the container with one fold and exits,
- * so it never adds a second and never promotes. Run twice over the same inputs it
- * RESOLVES the same generation rather than registering another (the registry's own
- * rule), which costs a pointer read at start-up and is what makes a `build`
- * artifact indistinguishable from a `run` database on the generation axis --
- * exactly the axis it must not be distinguishable on, since the artifact's whole
- * purpose is to become somebody else's INPUT.
+ * This used to claim the one-shot "opens the container with one fold and exits, so
+ * it never adds a second and never promotes". The first half was measured FALSE
+ * and the second was true only because of it, so the claim is CORRECTED here
+ * rather than made true by refusing: a `build` that refused to register a
+ * successor would be a new refusal an operator meets on the ordinary redeploy,
+ * where the honest behaviour -- fold the new generation and publish it -- costs
+ * nothing and is what the generation model is for.
+ *
+ * Run twice over the SAME inputs it RESOLVES the same generation rather than
+ * registering another (the registry's own rule), which costs a pointer read at
+ * start-up. Run again with CHANGED processor bytes it is a different identity, so
+ * the container registers a SUCCESSOR beside the canonical generation exactly as a
+ * restarted `run` does -- and the fold it comes up holding is that successor, fed
+ * by the wire to the tip. It then SETTLES the pointer once before exiting
+ * (`driveCycles`), so the artifact serves the generation this build just folded
+ * rather than the one the previous build left behind.
+ *
+ * That is what keeps a `build` artifact indistinguishable from a `run` database on
+ * the generation axis -- exactly the axis it must not be distinguishable on, since
+ * the artifact's whole purpose is to become somebody else's INPUT. What it still
+ * does NOT do is hold a reconfigure: nothing can register a successor into a
+ * running `build`, because it has no route to ask it to, and its settle promises
+ * ONE bounded step rather than waiting for anything to catch up.
  */
 export async function build(options: Options, deps: IndexingDependencies = {}): Promise<RunSummary> {
 	logger.info(JSON.stringify(options, null, 2));

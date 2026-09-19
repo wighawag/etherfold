@@ -227,7 +227,7 @@ describe('a watcher calls one endpoint and the running deployment picks up the e
 	it('registers the edited processor beside the incumbent, with no restart and no read unanswered', async () => {
 		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path);
-		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
+		const incumbent = generationDigestOf(indexer.streamBuilder!.generation);
 		const port = indexer.port;
 
 		// THE FIRST CALL, before anything was edited: the configuration names the
@@ -251,7 +251,7 @@ describe('a watcher calls one endpoint and the running deployment picks up the e
 		// module cache being defeated: an unchanged re-import would have produced the
 		// digest above again
 		expect(registered.body.generation?.digest).not.toBe(incumbent);
-		expect(registered.body.generation?.stream).toBe(indexer.streamBuilder.generation.stream);
+		expect(registered.body.generation?.stream).toBe(indexer.streamBuilder!.generation.stream);
 
 		// BESIDE, not instead: two generations, and the incumbent still answers
 		const held = await generationsOf(indexer);
@@ -284,7 +284,7 @@ describe('a processor that does not compile leaves the deployment exactly as it 
 	it('reports WHAT went wrong, registers nothing, and goes on folding and answering', async () => {
 		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer, chain} = await aRunServing(path);
-		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
+		const incumbent = generationDigestOf(indexer.streamBuilder!.generation);
 		const before = await generationsOf(indexer);
 
 		// the NORMAL state between the two halves of one change: the source landed and
@@ -355,7 +355,7 @@ describe('a burst of calls does not fill the registry', () => {
 				]);
 			},
 		});
-		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
+		const incumbent = generationDigestOf(indexer.streamBuilder!.generation);
 
 		const digests: string[] = [];
 		for (const save of ['save 1', 'save 2', 'save 3', 'save 4', 'save 5', 'save 6']) {
@@ -415,7 +415,7 @@ describe('a reload that changed nothing answers `unchanged`, and says why', () =
 	it('answers `unchanged` for the same bytes re-read behind the cache breaker', async () => {
 		const path = await aProcessorModuleOnDisk(processorModuleSource({credit: 'to'}));
 		const {indexer} = await aRunServing(path);
-		const incumbent = generationDigestOf(indexer.streamBuilder.generation);
+		const incumbent = generationDigestOf(indexer.streamBuilder!.generation);
 		const before = await generationsOf(indexer);
 
 		// no edit at all: the same bytes, re-imported behind the cache breaker

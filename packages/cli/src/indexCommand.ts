@@ -211,12 +211,17 @@ export type RunningReceiver<ABI extends Abi = Abi, ProcessResultType = unknown> 
 	/** What it indexes, which is also half of the wire identity a sender must assert. */
 	source: IndexingSource<ABI>;
 	/**
-	 * The receiving half itself: authoritative about the cursor, deriving every
-	 * reorg, making no chain call. Exposed so a caller can assert WHICH engine
-	 * folds -- and read the `{source, config}` a sender has to match -- rather
-	 * than trust it.
+	 * The OPENING fold's receiving half: authoritative about the cursor, deriving
+	 * every reorg, making no chain call. Exposed so a caller can assert WHICH engine
+	 * folds -- and read the `{source, config}` a sender has to match -- rather than
+	 * trust it.
+	 *
+	 * ABSENT where that fold has none, which under ADR-0087 is an ordinary state
+	 * rather than a crash (`FoldingAssembly`). What the ingest ROUTE selects between
+	 * has never been this field: it is `container.liveIngestions()`, resolved per
+	 * batch from the registry.
 	 */
-	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
 	/**
 	 * THE GENERATIONS THIS PROCESS HOLDS, which is what the name it registered
 	 * resolves to: the durable registry, the canonical pointer and the folds over
@@ -584,7 +589,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			store,
 			processor,
 			source,
-			streamBuilder,
+			...(streamBuilder ? {streamBuilder} : {}),
 			container,
 			stopped,
 			stop: async () => {

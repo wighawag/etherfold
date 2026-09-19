@@ -1,7 +1,7 @@
 import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
 import {createDirectIngestion} from '../src/directIngestion.js';
-import {InvalidBatchError, UnexpectedFromBlockError} from '../src/errors.js';
+import {InvalidBatchError, NoLiveReceiverError, UnexpectedFromBlockError} from '../src/errors.js';
 import {LogFetcher} from '../src/logFetcher.js';
 import {StreamBuilder, type LogIngestion} from '../src/streamBuilder.js';
 import type {EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
@@ -342,6 +342,120 @@ describe('a cursor refusal', () => {
 
 		expect(refused).toBeInstanceOf(UnexpectedFromBlockError);
 		expect(refused.expectedFromBlock).toBe(107);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// WHICH RECEIVER, ASKED AT THE ASK AND NEVER CAPTURED
+// ---------------------------------------------------------------------------
+// A caller holding a GENERATION CONTAINER has no single receiver to hand over:
+// the container holds several folds, only some of them have one (a FOLLOWER
+// re-folds a stored stream and is not addressable on the wire, ADR-0044), and
+// WHICH of them is live MOVES while the process runs. So the resolving arm takes
+// the same function the ingest route takes on the HTTP side and asks it per ask,
+// which is what stops a combined deployment feeding a receiver it read at
+// start-up.
+// ---------------------------------------------------------------------------
+
+/** A receiver that folds nothing, distinguishable only by the `{source, config}` it answers to. */
+function receiverFolding(config: string, from: number): LogIngestion {
+	return {
+		// a REAL `WireContext` shape: the comparison is `@etherfold/core`'s own
+		// (`sameWireContext`), which reads the source list entry by entry
+		context: {source: [{startBlock: 0, hash: 'a-source'}], config} as never,
+		streamDigest: `stream-${config}`,
+		generation: {stream: `stream-${config}`, processor: `fold-${config}`},
+		expectedFromBlock: async () => from,
+		receive: async () => ({
+			expectedFromBlock: from,
+			applied: 0,
+			retracted: 0,
+			reorg: undefined,
+			emissions: [],
+			streamDigest: `stream-${config}`,
+		}),
+	} as unknown as LogIngestion;
+}
+
+describe('a target over the folds a container HOLDS', () => {
+	it('answers from the receiver whose {source, config} the asker names', async () => {
+		const mine = receiverFolding('mine', 500);
+		const target = createDirectIngestion(async () => [receiverFolding('somebody-elses', 11), mine]);
+
+		expect(await target.expectedFromBlock(mine.context)).toEqual({expectedFromBlock: 500, context: mine.context});
+	});
+
+	it('FOLLOWS a live set that changed, rather than the one it was opened over', async () => {
+		// the whole point of the resolving arm, asserted rather than left to construction:
+		// a successor registered beside the incumbent, a generation deleted by another
+		// process, or writer succession handing the wire on all move this set while the
+		// deployment runs, and none of them tells this side
+		let live = [receiverFolding('mine', 500)];
+		const context = live[0].context;
+		const target = createDirectIngestion(async () => live);
+
+		expect((await target.expectedFromBlock(context)).expectedFromBlock).toBe(500);
+
+		// the same address on the wire, a different fold behind it: the successor took
+		// over and asks from where IT got to
+		live = [receiverFolding('mine', 900)];
+		expect((await target.expectedFromBlock(context)).expectedFromBlock).toBe(900);
+
+		// ...and the batch goes to the one held NOW, resolved again rather than cached
+		await expect(
+			target.send({context, fromBlock: 900, toBlock: 910, latestBlock: 910, logs: []} as unknown as WireBatch<Abi>),
+		).resolves.toMatchObject({accepted: true, expectedFromBlock: 900});
+	});
+
+	it('refuses a {source, config} the container folds none of, and NO waiting fixes that', async () => {
+		const target = createDirectIngestion(async () => [receiverFolding('somebody-elses', 11)]);
+		const foreign = receiverFolding('mine', 500).context;
+
+		const refusal = await target.expectedFromBlock(foreign).catch((err) => err);
+
+		expect(refusal).toBeInstanceOf(NoLiveReceiverError);
+		// the same answer the ingest route gives: every live context NAMED, because
+		// naming them all is information and picking one is a policy this has no basis for
+		expect(refusal.expected).toEqual([{source: [{startBlock: 0, hash: 'a-source'}], config: 'somebody-elses'}]);
+		expect(refusal.received).toEqual(foreign);
+		// a misconfiguration, not a moment: a host that retried it would push for ever at
+		// something that will never accept it
+		expect(refusal.retryable).toBe(false);
+	});
+
+	it('refuses a process holding NO live receiver at all, and that one IS worth another try', async () => {
+		// the state a restarted deployment is in once its only fold is a FOLLOWER: the
+		// fold is advanced by its own bounded rebuild and the wire has nowhere to push.
+		// Answering a block number here would be a fetcher fetching ranges into nothing,
+		// which is a silent stall at best
+		const target = createDirectIngestion(async () => []);
+		const context = receiverFolding('mine', 500).context;
+
+		const refusal = await target.expectedFromBlock(context).catch((err) => err);
+
+		expect(refusal).toBeInstanceOf(NoLiveReceiverError);
+		expect(refusal.expected).toEqual([]);
+		// RETRYABLE, because the container's own machinery is what closes it: the rebuild
+		// advances the follower and writer succession hands it the wire once it is level
+		// (ADR-0044). A host stays up, goes on rebuilding, and says so every cycle
+		expect(refusal.retryable).toBe(true);
+		expect(refusal.message).toMatch(/no live receiver at all/);
+	});
+
+	it('leaves the ONE-RECEIVER arm exactly as it was, asker context ignored and all', async () => {
+		const {chain, builder} = combined();
+		chain.serve(BRANCH_A, 110);
+		const target = createDirectIngestion(builder);
+
+		// a context this receiver does NOT fold still gets its answer, because there is
+		// nothing to select between and the wrong-source check is made one step later,
+		// off the context handed back (`askWhereToStart`)
+		expect(
+			await target.expectedFromBlock({source: [{startBlock: 0, hash: 'elsewhere'}], config: 'other'} as never),
+		).toEqual({
+			expectedFromBlock: START_BLOCK,
+			context: builder.context,
+		});
 	});
 });
 

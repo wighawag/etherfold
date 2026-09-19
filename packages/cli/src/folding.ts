@@ -67,10 +67,12 @@ import type {ExplicitSource, SourceOrigin, StoreTarget} from './types.js';
 //                           what makes a processor upgrade cost a local scan.
 //
 // The commands then differ in EXECUTION and in nothing else: `run` follows the
-// tip and serves, `build` stops at the tip and exits holding exactly ONE
-// generation, `index` is fed over the wire. Their databases are comparable
-// generation for generation, which is what
-// `packages/cli/test/equivalence.test.ts` asserts over one fixture chain.
+// tip and serves, `build` stops at the tip and exits, `index` is fed over the
+// wire. NONE of them holds a fixed number of generations -- a re-run `build` with
+// changed processor bytes registers a successor beside the canonical generation
+// just as a restarted `run` does -- so their databases are comparable generation
+// for generation, which is what `packages/cli/test/equivalence.test.ts` asserts
+// over one fixture chain.
 // ---------------------------------------------------------------------------------------------------
 
 /**
@@ -441,8 +443,29 @@ export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
 	store: WritableStateStore;
 	/** The OPENING fold's processor. */
 	processor: EventProcessor<ABI, ProcessResultType>;
-	/** The OPENING fold's receiver, which is this process's one live wire context. */
-	streamBuilder: StreamBuilder<ABI, ProcessResultType>;
+	/**
+	 * The OPENING fold's receiver, or NOTHING where that fold has none.
+	 *
+	 * ## Why it is optional, and why nothing FEEDS through it any more
+	 *
+	 * It used to be `container.ingestion`, whose getter asserts that the opening
+	 * fold has a receiver "which `open` cannot produce: the first fold held on a
+	 * stream is never a follower". That assertion is a property of how `follows` is
+	 * currently DERIVED -- from the folds this process happens to hold in memory,
+	 * which at `open` is an empty list -- rather than of the shape, and ADR-0087
+	 * retires it: a restarted deployment whose stream the registry already carries
+	 * comes up holding a FOLLOWER, and a follower has no receiver because a stream is
+	 * ONE address on the wire (ADR-0044). Reading the getter here made THAT the
+	 * crash that stops a process starting, in an assembly three commands share.
+	 *
+	 * So it is reported, never fed through. What a combined command pushes into is
+	 * resolved PER ASK from `container.liveIngestions()` (`prepareIndexing`), which is
+	 * the same question the ingest route asks on the HTTP side, and what a serving
+	 * command registers is that function itself. This field is what a CALLER reads to
+	 * say which engine the process came up folding, and `undefined` is a true answer
+	 * rather than a missing one.
+	 */
+	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
 };
 
 /**
@@ -575,12 +598,18 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		generation: parts.generation,
 	});
 
+	const opening = container.held()[0];
 	return {
 		container,
 		db,
 		store: container.state,
 		processor: container.processor,
-		streamBuilder: container.ingestion,
+		// OFF THE HELD FOLD rather than off `container.ingestion`: that getter THROWS for
+		// a fold with no receiver, and under ADR-0087 an opening fold that is a FOLLOWER
+		// is an ordinary state. A `HeldFold` already reports its receiver as optional,
+		// which is the honest shape, so this reads the fact instead of the assertion over
+		// it.
+		...(opening?.ingestion ? {streamBuilder: opening.ingestion} : {}),
 	};
 }
 
