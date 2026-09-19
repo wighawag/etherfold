@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=false -->
+<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=true -->
 
 ## Q1
 
@@ -38,3 +38,20 @@
 <!-- q1 fields: id=q1 kind=stuck -->
 
 **Your answer** (write below this line):
+
+ANSWERED 2026-09-19 by **ADR-0087**, "A stream is written by whoever FETCHES it, never by a GENERATION, and it OUTLIVES every fold over it" (`docs/adr/0087-a-stream-is-written-by-whoever-fetches-it-and-outlives-every-fold-over-it.md`). Recorded by the conductor; the decision is the ADR's, not this sidecar's.
+
+The report above asked for a choice between (A) the fold catches up through the stored stream and (B) the inheriting writer continues from the stream's coverage. **(A) is taken, and the ADR goes one step further than the question did.** (B) is rejected by name: suppressing appends below an inherited coverage carries a reorg hazard -- a reorg that happened below the coverage while the deployment was down is folded into the successor's STATE but suppressed from the STREAM, so a third generation re-folding that stream derives a different state.
+
+The extra step is that the write duty comes OFF the generation entirely. The report's own suggestion 2 kept the duty a generation's and made it transferable by a durable stand-down mark; the ADR rejects that as the primary answer while agreeing it is a sound mechanism, on the ground that it "makes the duty transferable without making it correct" -- the newcomer is still BEHIND the stream, so the ahead/behind problem the report measured is untouched, and a role stays on the generation that does not belong to it. An elected-writer POINTER is rejected for the reasons the report itself would have given: it turns a derivable fact into a coordinated one, two processes can disagree, it can oscillate, and delete-succession stops being atomic with the delete.
+
+So the re-scope is FOUR tasks and not two, and this task is the LAST of them rather than the second:
+
+1. `run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver` -- the CLI restructure the report correctly identified as a blocker.
+2. `a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain` -- the `follows`-from-the-registry fix, plus making an unknown stream position REFUSE.
+3. `whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold` -- the duty moves off the generation, and the automatic stream reap goes.
+4. this task, re-scoped to the end-to-end closure of the defect on its own measured scenario.
+
+One correction to the report, measured rather than argued. It ordered the `follows` fix BEFORE the CLI restructure, and ADR-0087 repeats that order. It does not work: patching `ReceivingIndexer.add` to derive `follows` from the registry and running the suite puts **25 CLI tests red**, 17 of them on `the opening fold of this ReceivingIndexer has no receiver`. The restructure is the EXPAND step and the derivation fix is the MIGRATE step, so they are tasked in that order. (Measured in a throwaway clone and reverted.)
+
+The observation the report ended on -- that a restart re-fetches the whole chain -- was filed and is `work/notes/observations/a-restarted-run-refetches-the-whole-chain-instead-of-refolding-the-stored-stream.md`. It is discharged by task 2 above.

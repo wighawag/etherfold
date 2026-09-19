@@ -8,7 +8,7 @@ status: accepted, not yet implemented
 
 ## The defect that forced it
 
-Restart a deployment with a changed processor, over the same database, and **nothing appends to the stored stream** while the new generation folds happily. No refusal, no warning, and the state looks fine (`work/tasks/ready/a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge.md`).
+Restart a deployment with a changed processor, over the same database, and **nothing appends to the stored stream** while the new generation folds happily. No refusal, no warning, and the state looks fine (the task `a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge`, named by slug rather than by path because its folder changes when it lands).
 
 The mechanism is the one-writer rule working exactly as specified, in a shape nobody considered it against. `writerOf` names the OLDEST generation registered on the stream, which is the incumbent. The process holds no fold for the incumbent, because the previous processor's code is not in the build. So the write duty belongs to a generation that is not present to discharge it, and the generation that IS present is correctly refused it. `reconcileWriters` does not repair it: `shouldWrite` is already `false` and matches, so it is a no-op rather than a hand-over.
 

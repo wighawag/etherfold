@@ -1,47 +1,63 @@
 ---
-title: 'A restarted deployment HANDS OVER the write duty it cannot discharge, so a stored stream does not silently stop growing'
+title: 'A restarted deployment goes on APPENDING to the stream it fetches, so a stored stream does not silently stop growing'
 slug: a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge
-blockedBy: []
+blockedBy: [whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold]
 covers: []
-needsAnswers: true
 ---
 
 ## What to build
 
-A data-loss defect, measured, with no feature in front of it.
+The defect this whole family exists for, closed and asserted END TO END on its own measured scenario.
 
-Restart a `run` deployment with a changed processor, over the same database. The container comes up holding exactly one fold, the successor. That fold reports `writesStream: false`, so `appendEmissions` is handed to nobody and **nothing appends to the stored emission stream**, while the successor happily consumes the wire and folds it. No refusal, no warning, and the state itself looks fine.
+> **Why the slug says "hands over".** This task launched as a defect report proposing that the write duty be HANDED OVER to the fold that is present. It was built, and it STOPPED: the diagnosis reproduced exactly, but the premise that the existing machinery could hand the duty over was false, and handing it over duplicated the whole history. ADR-0087 is the decision that came out of that stop, and under it there is no hand-over at all -- the deployment that fetches appends, so a restart never loses the pen it never held. The INTENT is unchanged and the body below is re-scoped to it. The slug is kept because it names the DEFECT (a deployment handing over a duty it cannot discharge), because two documents cite this task, and because its branch is preserved on the arbiter under it.
 
-The mechanism is the one-writer rule working exactly as specified, in a shape it was never considered against. `writerOf` names the OLDEST SURVIVING generation registered on the stream, which is the INCUMBENT: it is still registered, and it is older. The container holds no fold for the incumbent, because the old processor's code is not in the build. So the write duty belongs to a generation that is not present to discharge it, and the generation that IS present is correctly refused it. `reconcileWriters` does not repair this: `shouldWrite` is `false` and already matches `fold.writesStream`, so it is a no-op rather than a hand-over.
+**The defect, as measured.** Restart a `run` deployment with a changed processor over the same database. The container comes up holding exactly one fold, the successor. Nothing appends to the stored emission stream while that successor happily consumes the wire and folds it. No refusal, no warning, and the state itself looks fine. The mechanism was the one-writer rule working exactly as specified in a shape nobody considered it against: the duty belonged to the incumbent, which is registered but not HELD, and the fold that IS present was correctly refused it.
 
-**This is not the retention feature, and must not wait for it.** `work/specs/ready/a-generation-retains-the-code-that-folds-it.md` says so itself: retained code would dissolve this as a side effect, but it "is a defect with its own fix and should not be parked behind a feature". A deployment that loses appends is worse than one that merely fails to advance, and the fix does not need the old processor's code -- it needs the duty to follow what is actually HELD.
+Three tasks land before this one and between them they remove the cause. What is left, and what this task owns, is proving it on the original scenario and finishing the edges the earlier pieces were told not to reach into.
 
-Note the sibling that was already fixed, because it is the same family and its fix is the shape to learn from rather than to copy. `a-reloaded-container-makes-its-canonical-generation-a-follower` was the reload version of this, and it was closed by making `follows` derive from `writerOf` rather than from "is any OTHER generation already registered on this stream" (`packages/core/src/container.ts`, and ADR-0071's expired-rejection note). That unified the rule; it did not answer what happens when the generation `writerOf` names is not HELD, which is this task.
+**The numbers this must land on, because they are what the family was measured against.** On the defect's own reproduction -- a `run` stood up the way the CLI's promotion-policy test stands one up, stopped, and re-run over the SAME handle with an edited bundle:
+
+```
+today                  `_emissions` holds 2 rows and NOTHING appends afterwards.
+naive hand-over        `_emissions` holds 4 rows where 2 are correct: the whole history, stored twice.
+what this must show    the stream GROWS from 2, with no range stored a second time.
+```
+
+A test that asserts "appends happened" without asserting that nothing was stored twice does not cover this task, because the rejected option passes it.
 
 ## Acceptance criteria
 
-- [ ] A restarted deployment whose incumbent is not held APPENDS to its stored stream: the generation that is actually present takes the write duty, asserted end to end on a restart over the same database with a changed processor.
-- [ ] The one-writer rule is NOT weakened: at no point do two generations write one stream, including across the hand-over itself, and a deployment that DOES hold its incumbent is unaffected.
-- [ ] The duty follows what is HELD rather than what is merely registered, and the rule has ONE home -- `writerOf` and `reconcileWriters` agree about who writes rather than each deciding separately.
-- [ ] A generation that is registered but not held still ANSWERS reads exactly as it does today (ADR-0053: a read resolves a pointer to a table namespace, never to an engine). Nothing here makes an unheld generation less readable.
-- [ ] Whether the hand-over is permanent or is returned if the incumbent's fold ever appears again is decided deliberately and stated, since a silent re-handover would be the same class of bug in the other direction.
+- [ ] A deployment restarted over the same database with a changed processor APPENDS to its stored stream, asserted end to end through the CLI over a real handle rather than at a unit seam.
+- [ ] No range is stored twice across that restart, asserted on the stored rows against the measurement above. Both halves are required; either alone is satisfied by a behaviour this family rejected.
+- [ ] A deployment that DOES hold its own incumbent is unaffected, and the reconfigure path through the running endpoint is unaffected.
+- [ ] A generation that is registered but not HELD still ANSWERS READS exactly as it does today (ADR-0053: a read resolves a pointer to a table namespace, never to an engine). Nothing in this family makes an unheld generation less readable.
+- [ ] The stream SURVIVES the restart-and-replace end to end: after the successor replaces what the `successor` slot held, the bytes the earlier fetches bought are still there and are what the new fold re-folds.
+- [ ] The original task's criterion about whether a hand-over is permanent or returned is answered by stating that it DISSOLVED -- there is no hand-over under ADR-0087 -- rather than dropped silently. If you find a residue of transferable duty still in the code, that is a finding and this criterion is not met.
+- [ ] Operator-facing output no longer explains behaviour that no longer exists, and `/status` still reports one entry per generation held.
+- [ ] The citations of THIS task in `docs/adr/0087-...` and in the retention spec resolve after this task's done-move. See the note below; `pnpm check:refs` is part of the gate and it runs BEFORE the done-move, so a citation updated to `done/` here fails the gate while a citation left naming `ready/` breaks `main` after it. Neither is acceptable and the conductor removed the trap in advance; CHECK that it is still removed rather than assuming it.
 - [ ] Tests cover the new behaviour, mirroring the repo's existing test style.
 - [ ] A changeset accompanies the change (`pnpm changeset`).
 
 ## Blocked by
 
-- None. It can start immediately.
+`whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold`, and through it the two tasks before that. This is the family's fan-in: the three before it change the mechanism, and this one proves the defect is gone on the scenario that found it.
 
 ## Prompt
 
-The goal is that restarting a deployment with a changed processor never silently stops recording the stream it is folding.
+The goal is that restarting a deployment with a changed processor never silently stops recording the stream it is folding, and that proving it does not accept the failure the family already rejected.
 
-Read **ADR-0044** for why a follower holds a read-only view of a stream it does not own, and **ADR-0071** for the one-writer rule and where it lives -- specifically the block in `packages/core/src/container.ts` recording that ADR-0071's rejection of the `writerOf` form has EXPIRED, which is the reasoning that closed the reload sibling. Then `writerOf` in `packages/core/src/generation/registry.ts` and `reconcileWriters` / `handOverTheWire` in `packages/core/src/receivingContainer.ts`, which is the machinery that already exists for moving the duty and which currently declines to.
+Read ADR-0087, which is the decision, and its section "The defect that forced it", which is this task's subject stated by the decision itself. `work/questions/task-a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge.md` carries the full stop report and the measurements in both directions; it is the best account of the problem and it is worth reading before you write a line. ADR-0044 is why a generation on a shared stream fetches nothing; ADR-0052 and ADR-0055 are why a duplicated range is corruption rather than waste.
 
-The measurement that found this was taken while driving `promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade`, and it is worth reproducing before you change anything: stand a `run` deployment up the way `packages/cli/test/theDeploymentSelectsItsPromotionPolicy.test.ts` does, stop it, and re-run over the SAME handle with a changed processor. `writesStream` is `false` on the only fold present.
+**This is an acceptance task, and the thing most likely to go wrong is that it turns out to be VACUOUS.** Three tasks land before it and they may already have asserted some of what is above. If so, VERIFY each criterion and say which were already covered and where, rather than writing a second copy of an existing test. If you find that all of it is already covered and there is genuinely nothing to build, do NOT manufacture work: say so plainly and stop. A task that reports "already delivered, here is where, here is the evidence I checked it" is a good outcome for a fan-in; a task that pads is not.
 
-The decision most likely to be got wrong is reaching for retention. It is tempting, on finding the container cannot run the incumbent, to make it able to -- by saving the module or re-importing it. Do not: that is `a-generation-retains-the-code-that-folds-it` and it is a whole spec. The duty needs to move to a fold that is present, not the absent fold to be resurrected.
+The second thing most likely to go wrong is asserting the wrong quantity. "It appends" was true of the option this family rejected, which also stored the history a second time. Assert the stored rows, and assert the chain reads, the way every strong measurement in this family did.
 
-The second: do not simply invert the rule to "the newest generation writes". The one-writer rule's value is that the answer is stable and derivable by every reader independently, which is why it keys on registration order; a rule that depends on what one process happens to hold must still give every reader the same answer, or two processes will disagree about who writes. Say how yours does.
+The third: this task's own ADR and the retention spec both CITE it by path. The gate's reference check runs before the runner moves this file to `done/`, so the two orderings that seem obvious both fail -- one at the gate, one on `main` afterwards. The conductor changed both citations to name this task by SLUG instead of by path precisely so the move is harmless. Confirm that is still the case before you finish; if a new path citation has appeared, resolve it the same way rather than by updating the folder.
 
-Done means: a restarted deployment appends, one writer still, an unheld generation still answers reads, and the hand-over's permanence is a stated decision.
+The seam to test at is the CLI's own deployment tests, over a real handle, restarted with an edited bundle.
+
+Done means: a restarted deployment appends, nothing is stored twice, an unheld generation still answers reads, the stream survived, and the dissolved criterion is stated rather than dropped.
+
+FIRST, check this task against current reality. It is the launch snapshot of a re-scope, written before its three blockers were built, so it is MORE likely than usual to have drifted. If what landed contradicts this body, say so and do what is right. This task has already been right to stop once.
+
+RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT, including which criteria you found already covered and by what. Do not write the done record, the commit message or the PR body yourself, and do not open an observation note for a decision you made.
