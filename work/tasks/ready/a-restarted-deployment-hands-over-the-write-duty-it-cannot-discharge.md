@@ -3,6 +3,7 @@ title: 'A restarted deployment HANDS OVER the write duty it cannot discharge, so
 slug: a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
