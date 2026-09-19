@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/platform-nodejs-fetcher",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "Node host adapter for the etherfold log-fetcher: the loop that drives fetch cycles on an interval with backoff, the signals that stop it and the exit code it resolves. Configuration and scheduling only, as a library with no binary -- `etherfold fetch` is the command that runs one.",
 	"publishConfig": {
 		"access": "public"

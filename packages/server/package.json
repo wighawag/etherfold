@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/server",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Platform-agnostic indexer-server for etherfold: a Hono app that receives its database and environment by injection, so the same server runs on Node, Cloudflare Workers or anything else.",
 	"publishConfig": {
 		"access": "public"
