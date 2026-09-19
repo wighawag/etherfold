@@ -476,11 +476,19 @@ const NEVER_PROMOTES_FETCH =
 	'there is no pointer here for a policy to move. It belongs to whatever folds what this pushes: `index`, ' +
 	'or `run` in one process.';
 
+// It says "takes no input" and no longer says "has nothing to act on", because the
+// second stopped being true when `index` gained the rebuild it schedules: a
+// successor its own configuration named at start-up is now carried to level and
+// promoted here, which is the whole of what makes a split deployment upgradable by
+// restarting. WHETHER this command should also take the flag is a question about
+// its inputs that nothing has answered; refusing it stays the honest answer under
+// ADR-0048, where refusal -> optional is additive and the reverse is breaking.
 const NEVER_PROMOTES_INDEX =
-	'the receiving half registers no successor while it runs: it holds no reconfigure route and schedules no ' +
-	'rebuild, so nothing is ever added beside its live fold and the policy would have nothing to act on. ' +
-	'A policy value accepted here would be accepted and never applied. The shape that promotes on its own ' +
-	'is `run`.';
+	'this command takes no promotion input. The receiving half registers no successor WHILE IT RUNS -- it wires ' +
+	'no reconfigure route -- so the only one it can hold is what its own configuration named at start-up, and that ' +
+	'one is carried to level and promoted under the DEFAULT policy by the rebuild this command schedules. Choosing ' +
+	'a different value for a restart-registered successor is a question about this command\u2019s inputs that nothing ' +
+	'has answered yet; `run` is the shape that takes the flag today.';
 
 const NEVER_PROMOTES_SERVE =
 	'a read tier folds nothing and promotes nothing: it READS the canonical pointer that whatever wrote the ' +

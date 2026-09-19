@@ -61,7 +61,13 @@ export {
 	statesHeldBy,
 } from './pruning.js';
 export {fetch, fetchMain, prepareFetching, type FetchDependencies} from './fetch.js';
-export {index, indexMain, type IndexDependencies, type RunningReceiver} from './indexCommand.js';
+export {
+	DEFAULT_REBUILD_INTERVAL_SECONDS,
+	index,
+	indexMain,
+	type IndexDependencies,
+	type RunningReceiver,
+} from './indexCommand.js';
 export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
 import {newlyStalledFollowers} from './followers.js';
