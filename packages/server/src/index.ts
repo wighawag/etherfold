@@ -116,6 +116,18 @@ export {storedEmissionStream} from './streamReader.js';
  */
 export {storedEmissionReplaySource} from './streamReader.js';
 /**
+ * WHERE THE STREAM'S OWN POSITION IS READ, for the thing that FETCHES it
+ * (ADR-0087).
+ *
+ * The WRITER's half of the same rows. `@etherfold/core`'s `StreamWriter` is
+ * positioned from the STREAM's coverage claim and from no fold -- which is what
+ * stops a restarted deployment with an empty-state successor re-fetching history
+ * the stream already holds -- and this is where that claim, and the tail its
+ * reorg window is walked out of, come from. Supplied beside
+ * `emissionAppenderFor`, because it is the same rows read the other way.
+ */
+export {streamCursorSourceOn} from './streamReader.js';
+/**
  * THE GENERATION REGISTRY AS ROWS (ADR-0053): which generations this named
  * indexer holds, and which one is CANONICAL, so a restart comes back holding
  * what it held and pointing where it last pointed.

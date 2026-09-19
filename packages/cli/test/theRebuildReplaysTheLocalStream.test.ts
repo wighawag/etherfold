@@ -16,6 +16,7 @@ import {
 	applySchema,
 	EMISSION_STREAM_TABLE,
 	emissionAppenderFor,
+	streamCursorSourceOn,
 	generationRegistryPortOnSQL,
 	storedEmissionReplaySource,
 	STREAM_COVERAGE_TABLE,
@@ -158,6 +159,7 @@ async function openIndexer(
 		source: SOURCE,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
+		streamCursor: streamCursorSourceOn(db, INDEXER),
 		// THE READ COUNTERPART of the appender, over the same handle: this is what a
 		// follower re-folds, and it is why the upgrade costs a local scan.
 		replay: storedEmissionReplaySource(db, INDEXER),
@@ -312,6 +314,19 @@ const INCUMBENT_ANSWER = {transfers: 3, owner: CAROL};
 /** The same logs under the upgraded fold, which counts each transfer twice. */
 const SUCCESSOR_ANSWER = {transfers: 6, owner: CAROL};
 
+/**
+ * THE REPORT FOR ONE GENERATION, named rather than taken off the front.
+ *
+ * `rebuildMore` reports one entry per FOLD HELD, and since ADR-0087 that is every
+ * generation this container holds rather than the followers alone: no generation
+ * fetches, so every one of them advances by re-folding the stream the deployment
+ * stored. The first entry is the incumbent, which is level and reports `complete`
+ * at once.
+ */
+function reportFor(reports: readonly RebuildReport[], identity: string): RebuildReport | undefined {
+	return reports.find((report) => report.generation.processor === identity);
+}
+
 // ---------------------------------------------------------------------------------------------------
 
 describe('an upgraded processor catches up from disk while the old one keeps answering', () => {
@@ -322,18 +337,16 @@ describe('an upgraded processor catches up from disk while the old one keeps ans
 		const streamBefore = await streamSnapshot(db);
 
 		const successor = await incumbent.add(specFor(db, V2));
-		// DETERMINED by the stream and never configured (ADR-0044): the same fetch
-		// filter, so the same stream, so a FOLLOWER with no receiver of its own
-		expect(successor.follows).toBe(true);
-		expect(successor.ingestion).toBeUndefined();
-		expect(successor.writesStream).toBe(false);
+		// The same fetch filter, so the SAME stream -- and under ADR-0087 every
+		// generation over a stream re-folds it, so `rebuildMore` reports one entry per
+		// fold held and a test names the generation it means.
 
 		const reports: RebuildReport[] = [];
 		const answersDuring: {transfers: number; owner: string | undefined}[] = [];
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
-			if (!report) throw new Error('no follower to advance');
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), V2.identity);
+			if (!report) throw new Error('no successor to advance');
 			reports.push(report);
 			done = report.complete;
 			if (!done) answersDuring.push(await canonicalAnswers(db, incumbent));
@@ -372,7 +385,7 @@ describe('an upgraded processor catches up from disk while the old one keeps ans
 		const successorNamespace = generationDigestOf(successor.record);
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), V2.identity);
 			done = !!report?.complete;
 		}
 
@@ -390,7 +403,7 @@ describe('an upgraded processor catches up from disk while the old one keeps ans
 		const successor = await incumbent.add(specFor(db, V2));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), V2.identity);
 			done = !!report?.complete;
 		}
 
@@ -425,7 +438,7 @@ describe('resumability, through a genuinely FRESH container between every chunk'
 		while (!done) {
 			const revived = await openIndexer(db);
 			await revived.add(specFor(db, V2));
-			const [report] = await revived.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await revived.rebuildMore({maxEmissions: 1}), V2.identity);
 			if (!report) throw new Error('no follower to advance');
 			chunks++;
 			done = report.complete;
@@ -449,14 +462,14 @@ describe('resumability, through a genuinely FRESH container between every chunk'
 		await incumbent.add(specFor(db, V2));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), V2.identity);
 			done = !!report?.complete;
 		}
 		const streamAfter = await streamSnapshot(db);
 
 		const level = await openIndexer(db);
 		await level.add(specFor(db, V2));
-		const [again] = await level.rebuildMore();
+		const again = reportFor(await level.rebuildMore(), V2.identity);
 
 		expect(again).toMatchObject({complete: true, replayed: 0});
 		expect(await canonicalAnswers(db, level)).toEqual(SUCCESSOR_ANSWER);
@@ -470,7 +483,7 @@ describe('after the move: the retired generation is RETAINED, keeps folding, and
 		const successor = await incumbent.add(specFor(db, V2));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), V2.identity);
 			done = !!report?.complete;
 		}
 		return {incumbent, successor};
@@ -503,8 +516,9 @@ describe('after the move: the retired generation is RETAINED, keeps folding, and
 		// the writer is the OLDEST SURVIVING generation on the stream, registration
 		// order and never the canonical pointer (ADR-0044), so promotion does not hand
 		// the append duty to a different engine mid-flight
-		expect((await incumbent.registry.writerOf(incumbent.streamDigest))?.processor).toBe(incumbent.generation.processor);
-		expect(incumbent.writesStream).toBe(true);
+		expect((await incumbent.registry.fetcherOf(incumbent.streamDigest))?.processor).toBe(
+			incumbent.generation.processor,
+		);
 		expect((await incumbent.liveIngestions()).map((live) => live.streamDigest)).toEqual([incumbent.streamDigest]);
 
 		await push(incumbent, {

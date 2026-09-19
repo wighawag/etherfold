@@ -17,6 +17,7 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
 	indexerEntryOn,
 	storedEmissionReplaySource,
 	type IndexerRegistryEntry,
@@ -92,6 +93,7 @@ async function aRunningDeployment(): Promise<Deployment> {
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
 		generation: foldAt('the-running-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;

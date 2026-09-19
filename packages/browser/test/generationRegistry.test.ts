@@ -298,7 +298,7 @@ describe('deleting a generation drops a REAL state store, and reaps the stream w
 		expect(await get(generationAddress(name).entry(blue))).toBeUndefined();
 	});
 
-	it('reaps the stream keyspace when the last generation on it goes', async () => {
+	it('reaps the stream keyspace when the last generation on it goes AND the caller ASKED', async () => {
 		const name = freshName();
 		const keeper = keepStreamOnIndexedDB<TestABI>(name);
 		const store = new IndexedDBStateStore([TOKEN], {databaseName: freshName()});
@@ -322,7 +322,10 @@ describe('deleting a generation drops a REAL state store, and reaps the stream w
 		await keeper.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursorAt(100, 100)});
 		await keeper.saveNewEvents(SOURCE_V2 as never, {eventStream: [event(200)], lastSync: cursorAt(200, 200)});
 
-		const report = await registry.deleteGeneration(onV2);
+		// ASKED FOR, which is the operator's verb and nothing else: the reap a
+		// registration or a promotion used to fire without being asked is gone
+		// (ADR-0087), because a stream OUTLIVES every fold over it.
+		const report = await registry.deleteGeneration(onV2, {reapStream: true});
 
 		expect(report.reaped).toBe(DIGEST_V2);
 		// deleting a stream is dropping its keyspace, and that is cheap only
@@ -334,6 +337,50 @@ describe('deleting a generation drops a REAL state store, and reaps the stream w
 		const reopened = new IndexedDBStateStore([TOKEN], {databaseName: store.databaseName});
 		await reopened.migrate();
 		expect(await reopened.getCurrent('token', {id: '1'})).toBeUndefined();
+	});
+
+	it('KEEPS the stream keyspace where nobody asked for it to go, ACROSS A RELOAD', async () => {
+		// The trap ADR-0087 does not name and the one that would silently undo it: the
+		// SWEEP on registry open drops every stream subtree "claimed by no registered
+		// generation", and a kept stream is exactly that. Re-opening the registry is the
+		// only way to assert the keep survives -- a second read inside one process never
+		// goes near the sweep -- and on this runtime a reload IS a re-open.
+		const name = freshName();
+		const keeper = keepStreamOnIndexedDB<TestABI>(name);
+		const world = registryOver(name);
+		const registry = await world.open();
+		await registry.create({stream: DIGEST, processor: PROC_A});
+		const onV2 = await registry.create({stream: DIGEST_V2, processor: PROC_A});
+		await keeper.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursorAt(100, 100)});
+		await keeper.saveNewEvents(SOURCE_V2 as never, {eventStream: [event(200)], lastSync: cursorAt(200, 200)});
+
+		const report = await registry.deleteGeneration(onV2);
+		expect(report.reaped).toBeUndefined();
+
+		const reopened = await world.open();
+
+		expect(reopened.swept).toEqual([]);
+		expect((await digestsUnder(name)).sort()).toEqual([DIGEST, DIGEST_V2].sort());
+		expect(await reopened.keptStreams()).toEqual([DIGEST, DIGEST_V2].sort());
+	});
+
+	it('still SWEEPS a subtree the registry never recorded, which is what the sweep is for', async () => {
+		// A subtree written BEFORE generations existed -- under a placeholder digest, or
+		// under a digest rule a later change replaced -- has no generation whose departure
+		// could ever fire a reap for it. It was never RECORDED either, which is exactly
+		// what tells it apart from a stream kept on purpose.
+		const name = freshName();
+		const keeper = keepStreamOnIndexedDB<TestABI>(name);
+		const world = registryOver(name);
+		const registry = await world.open();
+		await registry.create({stream: DIGEST, processor: PROC_A});
+		await keeper.saveNewEvents(SOURCE, {eventStream: [event(100)], lastSync: cursorAt(100, 100)});
+		await keeper.saveNewEvents(SOURCE_V2 as never, {eventStream: [event(200)], lastSync: cursorAt(200, 200)});
+
+		const reopened = await world.open();
+
+		expect(reopened.swept).toEqual([DIGEST_V2]);
+		expect(await digestsUnder(name)).toEqual([DIGEST]);
 	});
 
 	it('refuses to delete the canonical generation or its stream', async () => {

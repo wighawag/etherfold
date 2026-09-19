@@ -17,6 +17,8 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
+	storedEmissionReplaySource,
 	indexerEntryOn,
 	singleContextEntry,
 } from '../src/index.js';
@@ -85,6 +87,8 @@ async function deploy() {
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
+		replay: storedEmissionReplaySource(db, NAME),
 		generation: {
 			createState: () => db,
 			createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
@@ -158,7 +162,9 @@ describe('a host reaches the state-moved signal through the entry it registered'
 		// CONTAINER's. Absent says so, exactly as it does for `generations` and
 		// `promote`, so a transport refuses rather than attaching to silence.
 		const db = freshDatabase();
-		const entry = singleContextEntry(db, {} as unknown as LogIngestion);
+		const entry = singleContextEntry(db, {
+			generation: {stream: 'a-stream', processor: 'a-fold'},
+		} as unknown as LogIngestion);
 
 		expect(entry.onStateMoved).toBeUndefined();
 		expect(entry.generations).toBeUndefined();

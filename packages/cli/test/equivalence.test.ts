@@ -11,7 +11,7 @@ import {
 	createServer,
 	indexerRegistry,
 	readReorgCounters,
-	singleContextEntry,
+	indexerEntryOn,
 	readSchemaState,
 	type IndexerResolver,
 } from '@etherfold/server';
@@ -913,14 +913,12 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 		// same stream. Nothing is cleared and nothing is re-fetched -- the successor
 		// re-folds the stream this process already stored.
 		const successor = await combined.container.add(successorSpec(combined.db, V2, V2_IDENTITY));
-		expect(successor.follows).toBe(true);
 		// ...and it does NOT write the stream: that duty stays with the oldest surviving
 		// generation on it (ADR-0044), so the history stays ONE history
-		expect(successor.writesStream).toBe(false);
 
 		// both are held, and the pointer has not moved: the incumbent still answers
 		expect((await combined.container.generations()).length).toBe(2);
-		expect(await combined.container.canonical()).toMatchObject(combined.streamBuilder!.generation);
+		expect(await combined.container.canonical()).toMatchObject(combined.container.generation);
 		expect(await readsOver(combinedDB)).toEqual(incumbent);
 
 		// the rebuild is driven by the RUN itself, between its own cycles: nothing here
@@ -942,20 +940,23 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 		// was, in its own tables
 		expect((await combined.container.generations()).length).toBe(2);
 		const incumbentStore = new VersionedStateStore(createNodeDB(combinedDB), nftEntities, {
-			tableNamespace: generationDigestOf(combined.streamBuilder!.generation),
+			tableNamespace: generationDigestOf(combined.container.generation),
 		});
 		expect(await incumbentStore.getCurrent('counter', {name: 'transfers'})).toMatchObject({value: 3});
 
 		// ...and `/status` says so on the page an operator already watches: two entries,
-		// one of them the follower, exactly one canonical
+		// exactly one canonical
 		const reported = (await statusOf(combined.url)).cursor?.generations ?? [];
 		expect(reported.map((entry) => entry.generation).sort()).toEqual(
-			[generationDigestOf(combined.streamBuilder!.generation), generationDigestOf(successor.record)].sort(),
+			[generationDigestOf(combined.container.generation), generationDigestOf(successor.record)].sort(),
 		);
 		expect(reported.filter((entry) => entry.canonical).map((entry) => entry.generation)).toEqual([
 			generationDigestOf(successor.record),
 		]);
-		expect(reported.find((entry) => entry.follows)?.generation).toBe(generationDigestOf(successor.record));
+		// ...and BOTH report `follows`, because on this runtime every generation folds the
+		// stream the deployment stored (ADR-0087): the field says how a fold advances,
+		// and there is one way now rather than two.
+		expect(reported.every((entry) => entry.follows)).toBe(true);
 	});
 });
 
@@ -1000,11 +1001,12 @@ describe('both feed views answer over a database `run` folded', () => {
 		const app = createServer<{INGEST_TOKEN?: string}>({
 			getDB: () => db,
 			getEnv: () => ({}),
-			// the one thing the table cannot answer: WHICH stream this name serves now.
-			// It is the combined process's own receiver, so the digest the feed validates
-			// cursors against is the digest its rows were stored under
+			// the one thing the table cannot answer: WHICH generation answers reads now.
+			// It is the combined process's own CONTAINER that says so -- under ADR-0087 the
+			// thing at a stream's address is the deployment's WRITER of that stream and has
+			// no fold behind it, so a single-context entry could not name one.
 			getIndexer: indexerRegistry({
-				[INDEXER]: singleContextEntry(db, combined.streamBuilder!),
+				[INDEXER]: indexerEntryOn(db, combined.container),
 			}) as IndexerResolver<{INGEST_TOKEN?: string}>,
 		});
 
@@ -1025,7 +1027,7 @@ describe('both feed views answer over a database `run` folded', () => {
 			[START_BLOCK + 90, '0xb90', false],
 		]);
 		// the stream a consumer is told is the one the combined receiver folds
-		expect(feed.stream).toBe(combined.streamBuilder!.streamDigest);
+		expect(feed.stream).toBe(combined.streamWriter.streamDigest);
 
 		// THE CANONICAL VIEW: the live entries only, at or below the caller's gate
 		const canonical = (await (await app.request(`/${INDEXER}/canonical?gate=${TIP_B}`)).json()) as {
@@ -1140,15 +1142,15 @@ describe('`index` plus `serve` against ONE database answer what `run` answers', 
 		// indexer this database holds and which of its generations answers reads
 		const answering = await generationsIn(splitDB);
 		expect(answering.canonical).toEqual({
-			stream: receiver.streamBuilder!.generation.stream,
-			processor: receiver.streamBuilder!.generation.processor,
+			stream: receiver.container.generation.stream,
+			processor: receiver.container.generation.processor,
 		});
 		expect(said.join('\n')).toContain(`answering from the generation ${generationDigestOf(answering.canonical!)}`);
 		expect(said.join('\n')).toContain(JSON.stringify(INDEXER));
 		// ...and the RECEIVER holds that generation in the same container `run` holds,
 		// over the same durable registry: one fold, registered, pointed at
 		expect((await receiver.container.generations()).map((record) => record.processor)).toEqual([
-			receiver.streamBuilder!.generation.processor,
+			receiver.container.generation.processor,
 		]);
 
 		// the reads: the same surface, generated from the same declarations, over the

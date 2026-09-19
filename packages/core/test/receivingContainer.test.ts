@@ -4,8 +4,11 @@ import {generationDigestOf} from '../src/generation/identity.js';
 import {createMemoryGenerationRegistryPort} from '../src/generation/memory.js';
 import {GenerationCapReachedError, type GenerationRegistryPort} from '../src/generation/registry.js';
 import {openReceivingIndexer, SERVER_GENERATION_CAPS} from '../src/receivingContainer.js';
+import type {EmissionWrite, StreamCoverage} from '../src/emissionStream.js';
+import type {ReplayRead, ReplaySource} from '../src/generation/rebuild.js';
 import {StreamBuilder} from '../src/streamBuilder.js';
-import type {EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
+import type {StreamCursorRead, StreamCursorSource, StreamWriter} from '../src/stream/writer.js';
+import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
 import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -53,8 +56,20 @@ const SOURCE: IndexingSource<TestABI> = {
 	contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}],
 };
 
+const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' as const;
+
 let logCounter = 0;
 
+/**
+ * A REAL raw log with real topics, so a REPLAY can `reparse` it.
+ *
+ * It used to carry `topics: []` and a pre-decoded `args`, which was enough while
+ * a fold was fed by the WIRE: the decoded half arrived with the batch. Since
+ * ADR-0087 every generation advances by re-folding the stream the deployment
+ * stored, and a stored row carries the RAW log alone (`args` is what SOME ABI
+ * made of those bytes, ADR-0034) -- so a fixture with no `topic0` is one no fold
+ * can decode, and the folds here would silently apply nothing.
+ */
 function transfer(blockNumber: number, blockHash: string, id: bigint): LogEvent<TestABI> {
 	logCounter++;
 	return {
@@ -64,14 +79,98 @@ function transfer(blockNumber: number, blockHash: string, id: bigint): LogEvent<
 		transactionIndex: 0,
 		removed: false,
 		address: CONTRACT,
-		data: '0x',
-		topics: [],
+		data: `0x${id.toString(16).padStart(64, '0')}`,
+		topics: [TRANSFER_TOPIC0, padded(CONTRACT), padded(CONTRACT)],
 		transactionHash: `0x${logCounter.toString(16).padStart(64, '0')}` as `0x${string}`,
 		logIndex: 0,
 		extra: undefined,
-		eventName: 'Transfer',
-		args: {from: CONTRACT, to: CONTRACT, id},
 	} as unknown as LogEvent<TestABI>;
+}
+
+function padded(address: string): string {
+	return `0x${address.slice(2).padStart(64, '0')}`;
+}
+
+/**
+ * THE STORED STREAM OF ONE NAMED INDEXER, in memory, with the three ends a host
+ * supplies (ADR-0052, ADR-0087).
+ *
+ * WRITE (`appendEmissions`), REACH (`streamCursor`, which is what positions the
+ * fetch) and READ BACK (`replay`). A container needs the first two to fetch at
+ * all and the third to hold a fold, so they are built together here exactly as
+ * the CLI builds them together over one database.
+ *
+ * Keyed by stream digest, because this container holds several: a filter change
+ * is a different stream at a different address.
+ */
+function streams() {
+	const rows = new Map<string, {seq: number; log: EmittedLog & {removed: boolean}}[]>();
+	const coverage = new Map<string, StreamCoverage & {startBlock: number}>();
+	let seq = 0;
+
+	const blockOf = (row: {log: EmittedLog}) => (row.log as unknown as {blockNumber: number}).blockNumber;
+	const eventsOf = (rowsIn: readonly {seq: number; log: EmittedLog}[]) =>
+		[...rowsIn].sort((a, b) => a.seq - b.seq).map((row) => ({...row.log}) as unknown as LogEvent<TestABI>);
+
+	return {
+		rowsOn: (stream: string) => rows.get(stream) ?? [],
+		append(write: EmissionWrite): void {
+			const held = coverage.get(write.stream);
+			coverage.set(write.stream, {
+				...write.coverage,
+				startBlock: held ? held.startBlock : write.coverage.lastFromBlock,
+			});
+			const on = rows.get(write.stream) ?? [];
+			for (const emission of write.emissions) {
+				seq++;
+				on.push({seq, log: {...emission, removed: !!(emission as {removed?: boolean}).removed} as never});
+			}
+			rows.set(write.stream, on);
+		},
+		cursor(): StreamCursorSource {
+			return {
+				async readStreamCursor({stream, finality}): Promise<StreamCursorRead | undefined> {
+					const held = coverage.get(stream);
+					if (!held) return undefined;
+					const from = Math.max(0, held.lastToBlock - finality);
+					return {
+						latestBlock: held.latestBlock,
+						lastFromBlock: held.lastFromBlock,
+						lastToBlock: held.lastToBlock,
+						tail: eventsOf((rows.get(stream) ?? []).filter((row) => blockOf(row) >= from)) as never,
+					};
+				},
+			};
+		},
+		source(): ReplaySource<TestABI> {
+			return {
+				async readChunk({stream, fromBlock, foldedThrough, maxEmissions}): Promise<ReplayRead<TestABI>> {
+					const held = coverage.get(stream);
+					if (!held) return {status: 'absent'};
+					if (held.startBlock > fromBlock) {
+						return {status: 'does-not-reach-back', startBlock: held.startBlock};
+					}
+					const on = rows.get(stream) ?? [];
+					const highWater = on.length === 0 ? 0 : (on[on.length - 1] as {seq: number}).seq;
+					const above = on
+						.filter((row) => blockOf(row) >= fromBlock)
+						.sort((a, b) => blockOf(a) - blockOf(b) || a.seq - b.seq);
+					const floor = Math.max(foldedThrough + 1, fromBlock);
+					const budgetCut = above.length > maxEmissions ? blockOf(above[maxEmissions] as never) - 1 : held.lastToBlock;
+					const lastToBlock = Math.min(held.lastToBlock, Math.max(budgetCut, floor));
+					return {
+						status: 'chunk',
+						eventStream: eventsOf(above.filter((row) => blockOf(row) <= lastToBlock)),
+						lastFromBlock: fromBlock,
+						lastToBlock,
+						latestBlock: held.latestBlock,
+						truncated: lastToBlock < held.lastToBlock,
+						highWater,
+					};
+				},
+			};
+		},
+	};
 }
 
 /**
@@ -89,6 +188,7 @@ function substrate() {
 	const port: GenerationRegistryPort = createMemoryGenerationRegistryPort();
 	const stores = new Map<string, {rows: string[]; lastSync?: LastSync<TestABI>}>();
 	const cleared: string[] = [];
+	const stream = streams();
 
 	function storeFor(namespace: string) {
 		let store = stores.get(namespace);
@@ -155,6 +255,7 @@ function substrate() {
 		stores,
 		cleared,
 		specFor,
+		stream,
 		rowsIn: (namespace: string) => storeFor(namespace).rows,
 	};
 }
@@ -167,12 +268,18 @@ function open(world: Substrate, version: string) {
 		port: world.port,
 		source: SOURCE,
 		stream: {finality: FINALITY},
+		// THE STREAM'S THREE ENDS, supplied together because a host that owns the
+		// database owns all three (ADR-0087): where it is stored, where it reaches, and
+		// how it is read back.
+		appendEmissions: (write) => world.stream.append(write),
+		streamCursor: world.stream.cursor(),
+		replay: world.stream.source(),
 		generation: world.specFor(version, 'own'),
 	});
 }
 
 function batch(
-	builder: StreamBuilder<TestABI, void>,
+	builder: StreamWriter<TestABI> | StreamBuilder<TestABI, void>,
 	over: Pick<WireBatch<TestABI>, 'fromBlock' | 'toBlock' | 'latestBlock'> & {logs?: LogEvent<TestABI>[]},
 ): WireBatch<TestABI> {
 	return {
@@ -220,11 +327,15 @@ describe('a changed context, with a container above the receiver', () => {
 		expect(records.map((record) => record.processor)).toEqual([identityOf('v1'), identityOf('v2')]);
 		// the pointer did NOT move: the successor exists beside the live one
 		expect(await successor.canonical()).toMatchObject({processor: identityOf('v1')});
-		// ADR-0052: only the INDEXING generation writes a stream, and that is the
-		// OLDEST SURVIVING one on it -- so the successor appends nothing rather than
-		// storing a second copy of a history every generation re-folds
-		expect(incumbent.writesStream).toBe(true);
-		expect(successor.writesStream).toBe(false);
+		// ADR-0052's one-writer rule, with its subject moved (ADR-0087): NEITHER
+		// generation writes the stream, so the successor cannot store a second copy of a
+		// history every generation re-folds -- not because it was refused the appender,
+		// but because no fold has one. The stream is written by the DEPLOYMENT, and this
+		// second container is a second deployment over the same rows, so what it holds at
+		// the stream's address is its own writer of the same stream.
+		expect(incumbent.held()[0]).not.toHaveProperty('writesStream');
+		expect(successor.held()[0]).not.toHaveProperty('writesStream');
+		expect(successor.ingestion.streamDigest).toBe(incumbent.ingestion.streamDigest);
 	});
 
 	it('does not clear even when the caller handed both folds ONE store, which is the pre-generation database', async () => {
@@ -233,6 +344,9 @@ describe('a changed context, with a container above the receiver', () => {
 			port: world.port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
+			appendEmissions: (write) => world.stream.append(write),
+			streamCursor: world.stream.cursor(),
+			replay: world.stream.source(),
 			generation: world.specFor('v1', {shared: 'legacy'}),
 		});
 		await incumbent.ingestion.receive(
@@ -245,9 +359,19 @@ describe('a changed context, with a container above the receiver', () => {
 			port: world.port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
+			appendEmissions: (write) => world.stream.append(write),
+			streamCursor: world.stream.cursor(),
+			replay: world.stream.source(),
 			generation: world.specFor('v2', {shared: 'legacy'}),
 		});
-		expect(await successor.ingestion.expectedFromBlock()).toBe(START_BLOCK);
+		// RE-SCOPED, and this number IS the change. It used to be `START_BLOCK`, read
+		// off the successor's EMPTY state -- which is the duplicate-history defect stated
+		// as an assertion: a restarted deployment asking for history the stream already
+		// holds, and ADR-0052 appending the re-sent range a second time. The position is
+		// the STREAM's now (ADR-0087), so an empty-state successor cannot drag it
+		// backwards: it resumes over the reorg window of what is stored and no further.
+		expect(await successor.ingestion.expectedFromBlock()).toBe(105 - FINALITY);
+		expect(await successor.ingestion.expectedFromBlock()).not.toBe(START_BLOCK);
 
 		expect(world.cleared).toEqual([]);
 		expect(world.rowsIn('legacy')).toEqual(['v1@101']);
@@ -297,6 +421,9 @@ describe('the generation caps, on the runtime that supplies them', () => {
 			port: world.port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
+			appendEmissions: (write) => world.stream.append(write),
+			streamCursor: world.stream.cursor(),
+			replay: world.stream.source(),
 			caps: {maxGenerations: 1, maxStreams: 1},
 			generation: world.specFor('v2', 'own'),
 		});
@@ -317,6 +444,9 @@ describe('the generation caps, on the runtime that supplies them', () => {
 			port: world.port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
+			appendEmissions: (write) => world.stream.append(write),
+			streamCursor: world.stream.cursor(),
+			replay: world.stream.source(),
 			caps: {maxGenerations: 2, maxStreams: 1},
 			generation: world.specFor('v2', 'own'),
 		});
@@ -344,14 +474,12 @@ describe('one container, SEVERAL live wire contexts', () => {
 		// a filter change is a new STREAM, so it is a new ADDRESS on the wire: the two
 		// receivers cannot be reached by each other's batches
 		expect(successor.streamDigest).not.toBe(incumbent.streamDigest);
-		// it is NOT a follower, so it has a receiver of its own (ADR-0044: determined by
-		// the stream, never configured)
-		expect(successor.follows).toBe(false);
-		expect(successor.ingestion?.context).not.toEqual(incumbent.ingestion.context);
-		// and it is the only generation on its stream, so it is that stream's WRITER
-		// (ADR-0044) -- unlike a processor-change successor, which re-folds one already
-		// stored
-		expect(successor.writesStream).toBe(true);
+		// so the container holds a SECOND writer, at a second address: one per stream
+		// it holds a fold on (ADR-0087), and the batches of one cannot reach the other
+		const live = await incumbent.liveIngestions();
+		expect(live.map((one) => one.streamDigest).sort()).toEqual([incumbent.streamDigest, successor.streamDigest].sort());
+		const other = live.find((one) => one.streamDigest === successor.streamDigest);
+		expect(other?.context).not.toEqual(incumbent.ingestion.context);
 		// two generations, on two streams. `createdAt` is strictly increasing since
 		// ADR-0072, so the listing's order is defined now rather than tied -- but what
 		// this case is about is MEMBERSHIP, so what is asserted is still the SET.
@@ -360,19 +488,54 @@ describe('one container, SEVERAL live wire contexts', () => {
 		);
 	});
 
-	it('REFUSES a fold on a stream it already holds when it was given no stream to re-fold', async () => {
+	it('REFUSES ANY fold when it was given no stream to re-fold', async () => {
+		// RE-SCOPED. This used to be a refusal about the SECOND fold on a stream: the
+		// first was fed by the wire and only a follower needed something to re-fold. That
+		// asymmetry went with the election (ADR-0087) -- EVERY generation here reads the
+		// stored stream the deployment fetches -- so a container with no `replay` can hold
+		// no fold at all, and the refusal is at `open` rather than on the successor.
 		const world = substrate();
-		const incumbent = await anIndexerThatHasFolded(world);
 
-		// the same source and config, another fold: a PROCESSOR change, which asserts
-		// the very same `{source, config}`. It gets no receiver -- a second one there
-		// would be reachable only by iteration order -- and catches up by re-folding the
-		// stored stream instead (ADR-0044). This container was given no `replay` source,
-		// so there is nothing to re-fold and the successor would never advance.
-		// `packages/core/test/rebuild.test.ts` is the same call with one supplied.
-		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/ONE address on the wire/);
-		await expect(incumbent.add(world.specFor('v2', 'own'))).rejects.toThrow(/no `replay` source/);
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
+		const refused = openReceivingIndexer({
+			port: world.port,
+			source: SOURCE,
+			stream: {finality: FINALITY},
+			appendEmissions: (write) => world.stream.append(write),
+			streamCursor: world.stream.cursor(),
+			generation: world.specFor('v1', 'own'),
+		});
+
+		await expect(refused).rejects.toThrow(/no `replay` source/);
+		await expect(refused).rejects.toThrow(/could never advance/);
+		expect(await world.port.read()).toMatchObject({generations: []});
+	});
+
+	it('REFUSES a container that could fetch nothing, rather than folding for ever on stale history', async () => {
+		// The failure ADR-0087's second amendment MEASURED, refused at the seam: a
+		// deployment that folds and never fetches is promoted, serves reads and reports
+		// healthy while asking the node for `["eth_chainId"]` and nothing else, for ever.
+		const world = substrate();
+
+		await expect(
+			openReceivingIndexer({
+				port: world.port,
+				source: SOURCE,
+				stream: {finality: FINALITY},
+				replay: world.stream.source(),
+				generation: world.specFor('v1', 'own'),
+			}),
+		).rejects.toThrow(/no way to write the stream it would fetch/);
+
+		await expect(
+			openReceivingIndexer({
+				port: world.port,
+				source: SOURCE,
+				stream: {finality: FINALITY},
+				appendEmissions: (write) => world.stream.append(write),
+				replay: world.stream.source(),
+				generation: world.specFor('v1', 'own'),
+			}),
+		).rejects.toThrow(/`streamCursor`/);
 	});
 
 	it('reports as LIVE exactly the folds whose generation is still registered', async () => {
@@ -437,6 +600,9 @@ describe('one container, SEVERAL live wire contexts', () => {
 			port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
+			appendEmissions: (write) => world.stream.append(write),
+			streamCursor: world.stream.cursor(),
+			replay: world.stream.source(),
 			generation: world.specFor('v1', 'own'),
 		});
 		expect(await incumbent.canonicalGeneration()).toEqual(incumbent.generation);

@@ -18,6 +18,7 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
 	indexerEntryOn,
 	storedEmissionReplaySource,
 	type IndexerRegistryEntry,
@@ -94,10 +95,21 @@ function foldAt(marker: string, source?: IndexingSource<TestABI>) {
 	};
 }
 
-/** Feed ONE fold through its own receiver, at its own address on the wire. */
-async function feed(fold: HeldFold<TestABI, unknown, unknown>, over: {to: string; id: bigint; address: string}) {
-	const receiver = fold.ingestion;
-	if (!receiver) throw new Error('this fold FOLLOWS its stream, so it has no receiver to feed');
+/**
+ * Feed ONE fold's STREAM, at that stream's address on the wire.
+ *
+ * It used to reach for the fold's own receiver. A fold has none since ADR-0087:
+ * what answers at a stream's address is the DEPLOYMENT's writer of that stream,
+ * and every generation over it reads what that writer stored -- so the thing to
+ * feed is named by the STREAM the fold folds, not by the fold.
+ */
+async function feed(
+	indexer: ReceivingIndexer<TestABI, unknown, unknown>,
+	fold: HeldFold<TestABI, unknown, unknown>,
+	over: {to: string; id: bigint; address: string},
+) {
+	const receiver = (await indexer.liveIngestions()).find((one) => one.streamDigest === fold.streamDigest);
+	if (!receiver) throw new Error(`nothing is fetching the stream ${fold.streamDigest}`);
 	const batch: WireBatch<TestABI> = {
 		context: receiver.context,
 		fromBlock: await receiver.expectedFromBlock(),
@@ -141,16 +153,17 @@ async function aDeploymentUpgradedTwice(): Promise<Deployment> {
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
 		generation: foldAt('the-first-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
-	await feed(indexer.opening, {to: ALICE, id: 1n, address: CONTRACT});
+	await feed(indexer, indexer.opening, {to: ALICE, id: 1n, address: CONTRACT});
 	const first = indexer.generation;
 
 	// a SOURCE change -- a stream of its own -- promoted, which makes the first
 	// generation the PREDECESSOR and retains it
 	const second = await indexer.add(foldAt('the-second-fold', RECONFIGURED_SOURCE));
-	await feed(second, {to: BOB, id: 2n, address: OTHER_CONTRACT});
+	await feed(indexer, second, {to: BOB, id: 2n, address: OTHER_CONTRACT});
 	await indexer.promote(idOf(second));
 
 	// ...and a PROCESSOR change over that stream, promoted in turn: `predecessor` holds

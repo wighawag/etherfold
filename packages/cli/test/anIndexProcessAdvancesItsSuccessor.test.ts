@@ -354,18 +354,35 @@ describe('an `index` process ADVANCES the successor it registered', () => {
 		expect(await ownerOf(receiver, successor, 5n)).toBe(ALICE.toLowerCase());
 	});
 
-	it('is the SCHEDULE that finishes it: with no tick the successor catches up and sits there', async () => {
-		// the defect itself, named: arming a fold that nothing advances just moves the
-		// stall one step later. `0` is the same "no schedule at all" the prune knob
-		// already means, and it is a TEST's instrument -- a deployment has no flag for it
+	it('is the SCHEDULE that advances it AND settles it: with no tick the successor sits at nothing', async () => {
+		// RE-SCOPED, and the claim got STRONGER. This used to assert that the successor
+		// CAUGHT UP with no tick and then sat there un-promoted -- because the restarted
+		// successor was the RECEIVER, so the wire fed it and only the settle was
+		// missing. ADR-0087 deletes that: no generation fetches, the deployment appends
+		// to the stream, and every generation catches up by re-folding it. So the tick
+		// is what does BOTH, and with no tick the successor does not advance at all.
+		//
+		// `0` is the same "no schedule at all" the prune knob already means, and it is a
+		// TEST's instrument -- a deployment has no flag for it.
 		const {receiver, incumbent, successor} = await aRestartWithAChangedProcessor({rebuildIntervalSeconds: 0});
 
-		await foldToTheTip(receiver, successor);
+		// the STREAM is fed regardless -- this half receives it over the wire and stores
+		// it -- and the incumbent's own namespace is where the previous run left it
+		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(await positionOf(receiver, incumbent)).toBe(TIP);
 
-		// LEVEL, and the pointer has not moved, because nothing settled it
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		// ...and the successor has got NOWHERE, so the pointer could not have moved
+		expect(await positionOf(receiver, successor)).toBeUndefined();
 		expect(await canonicalOf(receiver)).toBe(incumbent);
+
+		// it is the TICK and nothing else: driven by hand, the same container carries it
+		// to the tip off the stored stream and settles the pointer onto it
+		for (let guard = 0; guard < 50; guard++) {
+			const reports = await receiver.container.rebuildMore();
+			if (reports.every((report) => report.complete)) break;
+		}
+		expect(await positionOf(receiver, successor)).toBe(TIP);
+		expect(await canonicalOf(receiver)).toBe(successor);
 	});
 
 	it('moves no pointer when the restart changed nothing, which is the ordinary redeploy', async () => {

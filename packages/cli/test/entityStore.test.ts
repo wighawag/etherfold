@@ -1,4 +1,4 @@
-import {createDirectIngestion, LogFetcher, StreamBuilder, type IndexingSource} from '@etherfold/core';
+import {createDirectIngestion, LogFetcher, StreamBuilder, StreamWriter, type IndexingSource} from '@etherfold/core';
 import {EntityEventProcessor} from '@etherfold/processor-entities';
 import {MemoryStateStore, openForWriting, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {createClient} from '@libsql/client';
@@ -112,10 +112,15 @@ describe('--store sqlite', () => {
 		});
 	});
 
-	it('folds through the SAME StreamBuilder a split deployment receives into', async () => {
+	it('fetches through the SAME STREAM WRITER a split deployment stores with', async () => {
+		// RE-SCOPED: what a combined process holds at its stream's address is the
+		// DEPLOYMENT's writer of that stream, not a fold's receiver (ADR-0087). The
+		// claim is unchanged -- the combined and the split shapes differ in the
+		// TRANSPORT and in nothing else -- and the object it is made about moved.
 		const chain = fakeChain().serve(A_100, A_TIP);
 		const prepared = await indexOnce({}, chain, oneDatabase());
-		expect(prepared.streamBuilder).toBeInstanceOf(StreamBuilder);
+		expect(prepared.streamWriter).toBeInstanceOf(StreamWriter);
+		expect(prepared.streamWriter.streamDigest).toBe((await prepared.container.liveIngestions())[0]?.streamDigest);
 	});
 
 	it('lands on the state the same processor produces on another backend', async () => {

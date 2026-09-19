@@ -12,6 +12,7 @@ import {
 	REPORTED_ENTITY,
 	SOURCE,
 	batch,
+	reportFor,
 	transfer,
 	world,
 	type MemoryStore,
@@ -95,11 +96,18 @@ async function aContainerBeingFed(): Promise<{
 	};
 }
 
-/** Drive the follower to level, which under the default policy is what moves the pointer. */
+/**
+ * Drive the SUCCESSOR to level, which under the default policy is what moves the
+ * pointer.
+ *
+ * NAMED rather than taken off the front of the list: since ADR-0087 `rebuildMore`
+ * reports one entry per fold held, because every generation re-folds the stream
+ * the deployment stored, and the first entry is the incumbent.
+ */
 async function catchUp(indexer: ReceivingIndexer<TestABI, string[], MemoryStore>): Promise<void> {
 	for (let guard = 0; guard < 50; guard++) {
-		const [report] = await indexer.rebuildMore({maxEmissions: 1});
-		if (!report) throw new Error('no follower to advance');
+		const report = reportFor(await indexer.rebuildMore({maxEmissions: 1}), 'v2');
+		if (!report) throw new Error('no successor to advance');
 		if (report.complete) return;
 	}
 	throw new Error('the rebuild never reported itself complete');
@@ -168,6 +176,7 @@ describe('the receiving container publishes what it applied', () => {
 			source: SOURCE,
 			stream: {finality: FINALITY},
 			appendEmissions: (write) => w.stream.append(write),
+			streamCursor: w.stream.cursor(),
 			replay: w.stream.source(),
 			promotion: {policy: 'manual'},
 			generation: w.specFor('v1', 1),
@@ -222,18 +231,17 @@ describe('the receiving container publishes what it applied', () => {
 		// applied anything, so what a reader receives is the NEXT notification.
 		expect(moved.length).toBe(publishedBefore);
 
-		// One more block. It reaches the WRITER of the stream, which is still the
-		// oldest surviving generation (ADR-0044) and is no longer the one that answers
-		// reads -- so folding it publishes NOTHING...
+		// One more block. It reaches the STREAM's writer -- the DEPLOYMENT's, not either
+		// generation's (ADR-0087) -- which appends it and then OFFERS it to every fold on
+		// that stream. Both are level, so both fold it; only the CANONICAL one publishes,
+		// which is the filter under test.
 		const LATER = transfer(112, '0xa112', 5n);
 		await push({toBlock: 115, latestBlock: 115, logs: [REORGED_104, AT_106, LATER]});
-		expect(moved.length).toBe(publishedBefore);
 
-		// ...and the notification arrives when the fold that DOES answer applies it,
-		// carrying a token no reader has seen and naming the generation answering now.
-		await incumbent.rebuildMore();
+		// The notification names the fold that ANSWERS, carries a token no reader has
+		// seen, and there is exactly one of it even though two folds applied the block.
 		const after = moved[moved.length - 1];
-		expect(moved.length).toBeGreaterThan(publishedBefore);
+		expect(moved.length).toBe(publishedBefore + 1);
 		expect(appendsIn([after])[0].block).toBe(112);
 		expect(after.generation).toBe(digestOf('v2'));
 		expect(tokensBefore.has(after.coherence)).toBe(false);

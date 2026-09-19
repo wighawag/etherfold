@@ -19,7 +19,6 @@ import {
 	slotHolding,
 	SLOT_NAMES,
 	unslottedGenerations,
-	writerOf,
 	type GenerationCaps,
 	type GenerationDeletion,
 	type GenerationId,
@@ -32,8 +31,9 @@ import {resolveStreamConfig} from './internal/engine/utils.js';
 import {requireProcessorIdentity} from './internal/processorIdentity.js';
 import type {ReorgRecorder} from './reorgCounters.js';
 import {StateMovedPublisher, type StateMovedDetach, type StateMovedHandler} from './stateMoved.js';
-import {StreamBuilder, type GenerationContainer, type LogIngestion} from './streamBuilder.js';
+import type {GenerationContainer, LogIngestion} from './streamBuilder.js';
 import {streamDigestOf} from './stream/identity.js';
+import {StreamWriter, type StreamCursorSource, type StreamDelta} from './stream/writer.js';
 import type {EventProcessor, FoldReport, IndexingSource, ProvidedStreamConfig, UsedStreamConfig} from './types.js';
 
 const namedLogger = logs('@etherfold/core');
@@ -99,27 +99,35 @@ const namedLogger = logs('@etherfold/core');
  * address is a batch whose destination is decided by iteration order, so the
  * second fold on a stream is never one.
  *
- * ## FOLLOWER OR RECEIVER IS DETERMINED, NEVER CONFIGURED (ADR-0044)
+ * ## EVERY GENERATION FOLDS THE STREAM; THE DEPLOYMENT FETCHES IT (ADR-0087)
  *
- * `add` decides it from the STREAM and from nothing else, exactly as the
- * chain-facing container's `follows` is decided: a fold on a stream this
- * container already holds FOLLOWS it -- it is handed a bounded rebuild over the
- * stored stream (`GenerationRebuild`) and no receiver -- and a fold on a stream
- * nobody here holds gets the receiver and, if it is the oldest on that stream,
- * the append duty. A flag would be wrong in both positions: "follow a stream
- * nobody writes" never advances, and "receive on a stream somebody else writes"
- * is a second writer.
+ * The `follows` question DISSOLVED. It used to decide which ONE fold per stream
+ * got the receiver and the pen, and which ones re-folded what that one stored --
+ * so it was the election in another spelling, and it inherited the election's
+ * defect: the fold it named could be a generation this process holds no fold for.
+ *
+ * Under ADR-0087 there is nothing to decide. The receiver at a stream's address
+ * is the `StreamWriter` -- the DEPLOYMENT's own writer of that stream, positioned
+ * from the STREAM's stored coverage claim and from no fold -- and EVERY generation
+ * over that stream READS it. So a fold is one shape and not two: it has a
+ * `GenerationRebuild` and never a receiver.
+ *
+ * A fold advances TWO ways and they are ONE code path (`GenerationRebuild`): it
+ * takes the delta the writer just appended if it is LEVEL with it, and otherwise
+ * its bounded rebuild reads the stored rows back. The offer is made AFTER the
+ * append, so what a fold does or does not take changes nothing about what was
+ * stored -- which is the whole difference from the hand-over ADR-0087 rejects.
  *
  * The catch-up itself is a call the HOST SCHEDULES (`rebuildMore`, ADR-0022),
  * never a side effect of a batch: a rebuild takes arbitrarily long and a
  * serverless host cannot hold a loop.
  *
- * WHICH of them are LIVE is DERIVED from the registry (`liveIngestions`) rather
- * than from any rule about promotion: a context is live while its generation is
- * registered, and it stops being live when that generation is deleted (and the
- * stream reaped with it, if it was the last on it). So the question "does a
- * RETIRED-BUT-RETAINED generation go on being fed" is a policy input to the
- * registry rather than a rewrite of this routing.
+ * WHICH wire contexts are LIVE is DERIVED from the registry (`liveIngestions`)
+ * rather than from any rule about promotion: a stream's writer is live while at
+ * least one registered generation this container holds folds that stream. So a
+ * deployment whose every held fold is a SUCCESSOR re-folding stored history STILL
+ * FETCHES, which is exactly the failure this replaces -- a restarted deployment
+ * that asked the node for `["eth_chainId"]` and nothing else, for ever.
  *
  * ## Two rules of the chain-facing container that deliberately do NOT come over
  *
@@ -148,20 +156,23 @@ const namedLogger = logs('@etherfold/core');
  *    surface it already has, which on this runtime is the table namespace the
  *    canonical pointer names.
  *
- * ## What DOES come over, because ADR-0052 requires it: the ONE-WRITER RULE
+ * ## THE ONE-WRITER RULE IS KEPT AND ITS SUBJECT MOVED (ADR-0052/ADR-0044/ADR-0087)
  *
- * Only the INDEXING generation writes a stream, and `writerOf` says which one
- * that is -- the OLDEST SURVIVING generation registered on it, registration
- * order and never the canonical pointer (ADR-0044). So the emission appender is
- * handed to the WRITER and to nothing else. Without that, a successor on a
- * shared stream would append what the incumbent already stored, a second time,
- * which is exactly the double-append ADR-0052 names -- and the stream is what
- * every later generation re-folds, so a duplicate there is not an operational
- * blemish, it is a second history.
+ * A stored stream still has exactly ONE writer, and a second history on it is
+ * still the worst thing that can happen here -- the stream is what every later
+ * generation re-folds. What changed is WHICH THING: it is the deployment's
+ * `StreamWriter` for that stream, of which this container holds one per stream,
+ * so "one writer" is a fact about the object graph rather than a duty handed to
+ * one of several folds. No generation is ever given an appender at all.
  *
- * It is DETERMINED and never configured, which is the same rule and the same
- * reasoning as the chain-facing container's `follows`; the value it is derived
- * from is the shared `writerOf`, not a second copy of the rule.
+ * ## A STREAM OUTLIVES EVERY FOLD OVER IT
+ *
+ * Nothing here reaps a stream. Dropping a generation -- whether a registration
+ * displaced it or a promotion superseded it -- takes its registry row and its
+ * state namespace and leaves the stream exactly where it is, RECORDED by the
+ * registry so the sweep on the next open does not undo the keep. Deletion is a
+ * VERB: `reclaim` reaps what an operator asks for, and `deleteStream` is
+ * unchanged.
  * ------------------------------------------------------------------------- */
 
 /**
@@ -254,22 +265,38 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	/** Where a concluded reorg is counted (ADR-0050). Handed to every receiver unchanged. */
 	recordReorg?: ReorgRecorder;
 	/**
-	 * Where the emission stream is stored (ADR-0052).
+	 * Where the stream this deployment FETCHES is stored (ADR-0052, ADR-0087).
 	 *
-	 * Handed to a receiver ONLY where the fold it drives is the WRITER of its
-	 * stream. See `HeldFold.writesStream`.
+	 * Handed to the `StreamWriter` of each stream and to NO fold. It used to be
+	 * handed to whichever fold `writerOf` elected, which is the duty ADR-0087 takes
+	 * off the generation: a fold never appends, so there is no gate left to get wrong.
+	 *
+	 * One of the STREAM's THREE ENDS, supplied together by the host that owns the
+	 * database: this one WRITES, `streamCursor` says where the stream REACHES, and
+	 * `replay` READS it back in bounded slices.
 	 */
 	appendEmissions?: EmissionAppender;
 	/**
-	 * Where the STORED stream is read back, in bounded slices, so a FOLLOWER can
-	 * catch up (`storedEmissionReplaySource`, `@etherfold/server`).
+	 * WHERE THE STREAM'S OWN POSITION IS READ (`streamCursorSourceOn`,
+	 * `@etherfold/server`).
+	 *
+	 * The half that makes moving the write duty SAFE. Whatever answers
+	 * `expectedFromBlock` must be the STREAM's position rather than any one fold's,
+	 * or a restarted deployment with an empty-state successor asks for history the
+	 * stream already holds and stores it a second time (measured: 4 rows where 2 are
+	 * correct). Supplied beside `appendEmissions`, because it is the same rows read
+	 * the other way.
+	 */
+	streamCursor?: StreamCursorSource;
+	/**
+	 * Where the STORED stream is read back, in bounded slices, so a fold can catch
+	 * up (`storedEmissionReplaySource`, `@etherfold/server`).
 	 *
 	 * The read counterpart of `appendEmissions`, supplied by the same host over the
 	 * same database, and required for the same reason that one is: this package
-	 * knows no database. A container given none holds no follower -- `add` REFUSES a
-	 * fold on a stream it already holds rather than creating a successor that could
-	 * never advance, which would be a generation registered against a rebuild nobody
-	 * can drive.
+	 * knows no database. EVERY generation here folds the stored stream (ADR-0087), so
+	 * a container given none can hold no fold at all and `add` REFUSES rather than
+	 * registering a generation that could never advance.
 	 */
 	replay?: ReplaySource<ABI>;
 	/**
@@ -313,97 +340,63 @@ export type HeldFold<ABI extends Abi, ProcessResultType = unknown, State = unkno
 	/** The processor over that state. */
 	readonly processor: EventProcessor<ABI, ProcessResultType>;
 	/**
-	 * Whether this fold FOLLOWS a stream another generation on it writes.
+	 * THE BOUNDED REBUILD THAT ADVANCES THIS FOLD, which every fold here has.
 	 *
-	 * DETERMINED by whether the stream was already held here and never configured
-	 * (ADR-0044), which is why it is reported beside `writesStream` rather than
-	 * taken beside the factories. A follower has NO receiver and a `rebuild`; a
-	 * non-follower has a receiver and no rebuild.
+	 * Driven by `ReceivingIndexer.rebuildMore`, which a HOST schedules, AND by the
+	 * stream's writer offering it each delta as it is appended
+	 * (`GenerationRebuild.follow`). ONE object and ONE code path for both, so "a
+	 * generation is a stream plus a fold over it" has one implementation rather than
+	 * two that agree on the day they were written.
+	 *
+	 * It used to be present only on a FOLLOWER, beside an `ingestion` on the one fold
+	 * per stream that held the pen, and beside a `writesStream` flag saying which of
+	 * the two shapes this was. All three are gone: no generation fetches and no
+	 * generation appends (ADR-0087), so there is ONE fold shape.
 	 */
-	readonly follows: boolean;
-	/**
-	 * THE RECEIVER: the one live wire context this fold answers to.
-	 *
-	 * ABSENT on a FOLLOWER, because a stream is ONE address on the wire: a batch
-	 * carries `{source, config}` and nothing that could say which of two folds on
-	 * one stream was meant, so a second receiver there would be reachable only by
-	 * iteration order. A follower is fed by the stream instead of by the wire.
-	 */
-	readonly ingestion?: StreamBuilder<ABI, ProcessResultType>;
-	/**
-	 * THE BOUNDED REBUILD that advances this fold, present exactly when it FOLLOWS.
-	 *
-	 * Driven by `ReceivingIndexer.rebuildMore`, which a HOST schedules. It is the
-	 * same object across the catch-up and the steady state: once level, a chunk
-	 * finds nothing new and costs one read.
-	 */
-	readonly rebuild?: GenerationRebuild<ABI, ProcessResultType>;
-	/**
-	 * Whether this fold is the WRITER of its stream, and therefore the only one
-	 * that may append to it (ADR-0052).
-	 *
-	 * REPORTED and never set, exactly like the chain-facing container's `follows`:
-	 * it is a consequence of `writerOf` -- the oldest SURVIVING generation
-	 * registered on the stream -- and a caller that could choose it would be
-	 * choosing to break the one-writer rule.
-	 *
-	 * `false` means the emission appender was NOT handed to this receiver, so this
-	 * fold stores nothing: the stream it folds is already stored by an older
-	 * generation, and every generation re-folds that ONE history.
-	 *
-	 * **It can CHANGE while this fold is held**, and that is the engine half of
-	 * ADR-0044's succession rule: the writer is the oldest SURVIVING generation, so
-	 * deleting a writer makes the next-oldest one the answer, and this container
-	 * moves the wire to it (`ReceivingIndexer.liveIngestions`). It is still never
-	 * SET by a caller -- it is re-derived from the records whenever they are read.
-	 */
-	readonly writesStream: boolean;
+	readonly rebuild: GenerationRebuild<ABI, ProcessResultType>;
 };
 
 /**
- * The same fold, writable, for the ONE thing that legitimately re-derives it:
- * WRITER SUCCESSION (ADR-0044).
+ * A fold with no stream to fold, refused.
  *
- * `HeldFold` is readonly because none of it is a caller's to choose. The container
- * itself must be able to move a fold between the two shapes -- follower with a
- * rebuild, writer with a receiver -- because which one it is is a function of
- * records that change underneath it.
- */
-type MutableHeldFold<ABI extends Abi, ProcessResultType> = {
-	-readonly [K in keyof HeldFold<ABI, ProcessResultType, unknown>]: HeldFold<ABI, ProcessResultType, unknown>[K];
-};
-
-/**
- * What a fold needs REMEMBERED so its engine half can be rebuilt later.
+ * EVERY generation here advances by re-folding the stored stream (ADR-0087), so a
+ * container given no `replay` source has nowhere for any of them to read from.
+ * Creating one would register a generation that can never advance and can never be
+ * promoted -- a silent, permanent half-upgrade. Refused loudly instead, naming the
+ * port that is missing.
  *
- * The source and the stream config it was added with, because succession builds a
- * receiver for a fold that did not have one; and whether its rebuild has reported
- * LEVEL, because a fold that is still catching up must not be handed the wire (see
- * `reconcileWriters`).
+ * It used to fire only on the SECOND fold of a stream, because the first one was
+ * fed by the wire. That asymmetry went with the election.
  */
-type FoldOrigin<ABI extends Abi> = {
-	readonly source: IndexingSource<ABI>;
-	readonly provided: ProvidedStreamConfig | undefined;
-	level: boolean;
-};
-
-/**
- * A follower with no stream to follow, refused.
- *
- * A fold on a stream this container already holds is a FOLLOWER (ADR-0044): it
- * gets no receiver, because a stream is ONE address on the wire, and it advances
- * by re-folding what is stored. A host that supplied no `replay` source has
- * nowhere for it to read from, so creating it would register a generation that
- * can never advance and can never be promoted -- a silent, permanent
- * half-upgrade. Refused loudly instead, naming the port that is missing.
- */
-function refuseFollowerWithNoStream(stream: string): never {
+function refuseFoldWithNoStream(stream: string): never {
 	throw new Error(
-		`this indexer already holds a fold on the stream ${stream}, so a second one is a FOLLOWER: it gets no receiver ` +
-			`(a stream is ONE address on the wire) and catches up by re-folding the stored stream (ADR-0044). This ` +
-			`container was given no \`replay\` source, so there is nothing for it to re-fold and it could never advance. ` +
-			`Supply \`replay\` (\`storedEmissionReplaySource\` over the database this host owns), or give this fold its ` +
-			`own source or stream config so that it is a stream of its own.`,
+		`this container was given no \`replay\` source, so a fold on the stream ${stream} would have nothing to fold. ` +
+			`Every generation here READS the stored stream the deployment fetches (ADR-0087) -- no generation fetches ` +
+			`and none appends -- so a fold with no way to read that stream could never advance and could never be ` +
+			`promoted. Supply \`replay\` (\`storedEmissionReplaySource\` over the database this host owns).`,
+	);
+}
+
+/**
+ * A container asked to hold a fold with no way to STORE the stream it folds,
+ * refused.
+ *
+ * The deployment that FETCHES a stream is the thing that appends to it
+ * (ADR-0087), and it needs both ends of that: somewhere to WRITE
+ * (`appendEmissions`) and the stream's own position to write FROM
+ * (`streamCursor`). A container missing either can never fetch a block, so every
+ * fold it held would sit for ever on whatever the stream already contained --
+ * promoted, serving reads, reporting healthy, and permanently dead. That is
+ * precisely the failure ADR-0087's second amendment measured, so it is refused
+ * here rather than discovered by reading which methods a node was asked for.
+ */
+function refuseContainerThatCannotFetch(missing: string): never {
+	throw new Error(
+		`this container was given no \`${missing}\`, so it has no way to write the stream it would fetch. Under ` +
+			`ADR-0087 the DEPLOYMENT fetches a stream and appends to it, positioned from the stream's own coverage ` +
+			`claim, and every generation merely reads it -- so without both \`appendEmissions\` (where the stream is ` +
+			`stored) and \`streamCursor\` (where it reaches) nothing would ever fetch a block, while the folds went on ` +
+			`looking healthy. Supply both, over the database this host owns.`,
 	);
 }
 
@@ -581,13 +574,47 @@ export class ReceivingIndexer<
 
 	/**
 	 * THE FOLDS THIS INDEXER HOLDS, in the order they were added, at most ONE PER
-	 * STREAM.
+	 * STREAM per generation.
 	 *
-	 * Each carries a receiver, and a receiver is addressed by its stream's
-	 * `{source, config}`: that is the map the ingest route selects through once the
-	 * route segment has selected the indexer.
+	 * None of them carries a receiver. What is addressed on the wire is the STREAM,
+	 * and what answers at that address is the stream's WRITER below; a fold READS
+	 * what that writer stored (ADR-0087).
 	 */
 	private readonly folds: HeldFold<ABI, ProcessResultType, unknown>[] = [];
+
+	/**
+	 * ONE WRITER PER STREAM THIS CONTAINER HOLDS A FOLD ON -- the deployment's own,
+	 * and never a generation's (ADR-0087).
+	 *
+	 * This is what `{source, config}` resolves to on the wire, and it is where the
+	 * one-writer rule now LIVES: a stream has exactly one entry here, so "one writer"
+	 * is a fact about the object graph rather than a duty one of several folds was
+	 * elected to. Keyed on the stream digest, because that IS the address.
+	 *
+	 * A writer is built when the first fold on its stream is added and is never
+	 * rebuilt, because nothing about it depends on which folds are present: it reads
+	 * the STREAM's own coverage claim for its position and appends through the
+	 * deployment's appender.
+	 */
+	private readonly writers = new Map<string, StreamWriter<ABI>>();
+
+	/**
+	 * ONE ADVANCE AT A TIME PER FOLD, which is what stops the two ways a fold moves
+	 * from interleaving.
+	 *
+	 * A fold advances by taking a delta the writer just appended and by its own
+	 * scheduled rebuild chunk, and on a host that schedules rebuilds while it serves
+	 * ingests those two can arrive concurrently. Both read the fold's durable
+	 * checkpoint and then apply from it, so an overlap would have both decide from
+	 * the same position -- and the storage seam would refuse the second at its
+	 * duplicate-height guard, failing whichever call happened to be second for a
+	 * reason that is not its caller's fault.
+	 *
+	 * A promise chain per fold, and nothing more: the work is already serialised
+	 * within one call, this only stops two calls from overlapping, and a failure is
+	 * contained to the call that caused it rather than poisoning the chain.
+	 */
+	private readonly advancing = new WeakMap<HeldFold<ABI, ProcessResultType, unknown>, Promise<unknown>>();
 
 	private readonly options: ReceivingIndexerOptions<ABI, ProcessResultType, State>;
 
@@ -636,12 +663,6 @@ export class ReceivingIndexer<
 	 * refusal would go on refusing after they had.
 	 */
 	private readonly records = new Map<string, GenerationRecord>();
-
-	/**
-	 * What each held fold was BUILT FROM, so its engine half can be rebuilt when the
-	 * records say it is now the writer of its stream. See `FoldOrigin`.
-	 */
-	private readonly origins = new WeakMap<HeldFold<ABI, ProcessResultType, unknown>, FoldOrigin<ABI>>();
 
 	/**
 	 * WHICH held fold the canonical pointer names, as of the last time this container
@@ -792,34 +813,33 @@ export class ReceivingIndexer<
 		return this.opening.processor;
 	}
 	/**
-	 * THE RECEIVER of the opening fold, and the live wire context a single-fold
-	 * host has.
+	 * THE WRITER of the stream the opening fold folds: the live wire context a
+	 * single-stream host has.
 	 *
-	 * It is built with this container attached, which is the whole point: a
-	 * persisted cursor carrying another fold no longer reaches `processor.clear()`.
+	 * It is the DEPLOYMENT's writer of that stream and not the opening fold's engine
+	 * (ADR-0087), which is why it is here at all: a fold has no receiver, and this
+	 * getter used to reach for one and THROW when the opening fold turned out to be a
+	 * follower -- a crash that stopped a restarted deployment from starting, in an
+	 * assembly three commands share.
 	 *
-	 * The opening fold is the FIRST on its stream, so it is never a follower and
-	 * always has one; the assertion says so rather than widening every caller's type
-	 * for a case `open` cannot produce.
+	 * It exists for as long as this container holds a fold, because a writer is built
+	 * with the first fold on its stream; the assertion says so rather than widening
+	 * every caller's type for a case `open` cannot produce.
 	 */
-	get ingestion(): StreamBuilder<ABI, ProcessResultType> {
-		const ingestion = this.opening.ingestion;
-		if (!ingestion) {
+	get ingestion(): StreamWriter<ABI> {
+		const writer = this.writers.get(this.opening.streamDigest);
+		if (!writer) {
 			throw new Error(
-				`the opening fold of this ReceivingIndexer has no receiver, which \`open\` cannot produce: the first fold ` +
-					`held on a stream is never a follower.`,
+				`this ReceivingIndexer holds no writer for the stream ${this.opening.streamDigest}, which \`open\` cannot ` +
+					`produce: a writer is built with the first fold on a stream.`,
 			);
 		}
-		return ingestion;
-	}
-	/** Whether the opening fold WRITES its stream (ADR-0052). See `HeldFold.writesStream`. */
-	get writesStream(): boolean {
-		return this.opening.writesStream;
+		return writer;
 	}
 
 	/** WHICH generation the opening fold is: the stream above, plus the fold over it. */
 	get generation(): GenerationId {
-		return this.ingestion.generation;
+		return {stream: this.opening.record.stream, processor: this.opening.record.processor};
 	}
 
 	/** The caps in force, reported so a host can see the bound rather than re-derive the default. */
@@ -899,141 +919,47 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * THE LIVE WIRE CONTEXTS, DERIVED FROM THE REGISTRY rather than from a rule
-	 * about promotion.
+	 * THE LIVE WIRE CONTEXTS: one STREAM WRITER per stream a registered generation
+	 * held here folds.
+	 *
+	 * A stream is ONE address on the wire, and what answers at that address is the
+	 * deployment's writer of that stream (ADR-0087) -- not a fold, because no fold
+	 * appends. So this list no longer depends on WHICH fold is present, only on
+	 * whether any registered generation still folds the stream, which is the whole
+	 * of what this change buys: a deployment holding nothing but a successor
+	 * re-folding stored history goes on fetching and appending.
 	 *
 	 * A fold is live while the generation it was registered as is still registered.
 	 * That is the whole lifetime: it BEGINS when the successor is created (`add`,
-	 * which registers before it builds a receiver) and ENDS when that generation is
-	 * DELETED -- and, if it was the last on its stream, when the stream is reaped
-	 * with it. A batch for a fold that has fallen out of this list finds no receiver
-	 * and is refused as a foreign context, which is right: its state has been
-	 * dropped, so folding into it would be writing into nothing.
+	 * which registers before it builds anything) and ENDS when that generation is
+	 * DELETED. The STREAM is no longer part of that lifetime -- it outlives every
+	 * fold over it and is deleted only when asked.
 	 *
 	 * What it deliberately does NOT consult is the canonical pointer. A superseded
-	 * generation is RETAINED under the caps rather than dropped, so "the successor
-	 * became canonical" is not by itself a reason to stop feeding the old context;
-	 * whether it should be is a POLICY that sets what the registry holds, and this
-	 * routing follows the registry either way.
+	 * generation is RETAINED under the caps, so "the successor became canonical" is
+	 * not by itself a reason to stop fetching its stream; whether it should be is a
+	 * POLICY that sets what the registry holds, and this routing follows the registry
+	 * either way.
+	 *
+	 * What is GONE from here is `reconcileWriters`, which ran before every answer to
+	 * move the wire to whichever generation the records now elected. There is nothing
+	 * to move: the wire never belonged to a generation.
 	 */
 	async liveIngestions(): Promise<readonly LogIngestion[]> {
 		const registered = await this.registry.list();
-		// BEFORE the list is answered, because the answer is what the wire routes on:
-		// deleting a stream's writer makes the next-oldest generation the writer, and a
-		// batch arriving after that must reach the fold that now holds the duty.
-		await this.reconcileWriters(registered);
-		// ...and WHICH fold answers reads, for the same reason one step further out: the
-		// batch this list is being answered for is about to be FOLDED, and only the
-		// canonical fold publishes what it applied (ADR-0083). Read here rather than
-		// cached at open, because the pointer is durable and shared.
+		// WHICH fold answers reads, read here for the reason it always was: the batch
+		// this list is being answered for is about to be FOLDED, and only the canonical
+		// fold publishes what it applied (ADR-0083). The pointer is durable and shared,
+		// so it is read where the records are.
 		this.noteCanonical(await this.registry.canonical());
-		return this.folds
-			.filter((fold) => !!fold.ingestion && registered.some((record) => sameGeneration(record, fold.record)))
-			.map((fold) => fold.ingestion as StreamBuilder<ABI, ProcessResultType>);
-	}
-
-	/**
-	 * WRITER SUCCESSION, the engine half: move the wire to the generation the records
-	 * now say writes each stream.
-	 *
-	 * ADR-0044 says the writer of a stream is the OLDEST SURVIVING generation held on
-	 * it, and that succession is atomic with a delete BECAUSE IT IS STORED NOWHERE --
-	 * the commit that removes the record is already the commit that makes the
-	 * next-oldest generation the answer. That is the DURABLE half, and it has been
-	 * true since the registry landed. This is the other half: in a running process,
-	 * the surviving generation must actually be handed the engine, or the records say
-	 * one thing while the host does another and the stream quietly stops being fed.
-	 *
-	 * Without this, deleting a writer removed the only RECEIVER its stream had: the
-	 * context stopped being live, an incoming batch resolved to nothing, and `/status`
-	 * went on looking healthy while the cursor stopped -- the exact silent stall the
-	 * amendment was written to close.
-	 *
-	 * It is a RECONCILIATION and not an event handler, for the reason everything else
-	 * here is derived: a generation can be deleted by another process, so there is no
-	 * moment this host is told about. It runs where the records are already being read
-	 * and costs nothing when nothing moved.
-	 *
-	 * ## Why a fold that is still CATCHING UP does not take the wire
-	 *
-	 * A receiver answers `expectedFromBlock` from ITS OWN fold position, and under
-	 * ADR-0052 a re-sent batch is APPENDED AGAIN. So handing the wire to a follower
-	 * that is still mid-rebuild would make it ask for everything back to its own
-	 * cursor and store a second copy of that whole range -- indistinguishable
-	 * afterwards from real emissions, which is the corruption ADR-0055's coverage
-	 * claim exists to prevent. A fold that is LEVEL asks for at most the one batch the
-	 * stream may already be ahead by, which is the duplicate ADR-0052 already accepts
-	 * and bounds.
-	 *
-	 * So succession WAITS for the survivor to catch up. That is not a stall: the
-	 * follower's rebuild is still advancing it (nothing about a deleted writer stops
-	 * the stored stream being re-foldable), so the next reconciliation hands over the
-	 * wire. The stream is unfed in the meantime, which is visible and recoverable,
-	 * where a duplicated range is neither.
-	 */
-	private async reconcileWriters(registered: readonly GenerationRecord[]): Promise<void> {
-		for (const fold of this.folds) {
-			if (!registered.some((record) => sameGeneration(record, fold.record))) continue;
-			const writer = writerOf(registered, fold.streamDigest);
-			const shouldWrite = !!writer && sameGeneration(writer, fold.record);
-			if (shouldWrite === fold.writesStream) continue;
-
-			const origin = this.origins.get(fold);
-			if (!origin) continue;
-			if (shouldWrite && !origin.level) {
-				namedLogger.info(
-					`the fold {stream: ${fold.record.stream}, processor: ${fold.record.processor}} is now the oldest surviving ` +
-						`generation on its stream and so its WRITER, but it has not finished re-folding that stream yet. The wire ` +
-						`is NOT handed over: a receiver asks from its own position, and under ADR-0052 the re-sent range would be ` +
-						`APPENDED A SECOND TIME. Its rebuild keeps advancing it; it takes the wire once it is level.`,
-				);
-				continue;
-			}
-			this.handOverTheWire(fold as MutableHeldFold<ABI, ProcessResultType>, origin, shouldWrite);
+		const live: LogIngestion[] = [];
+		for (const [digest, writer] of this.writers) {
+			const stillFolded = this.folds.some(
+				(fold) => fold.streamDigest === digest && registered.some((record) => sameGeneration(record, fold.record)),
+			);
+			if (stillFolded) live.push(writer);
 		}
-	}
-
-	/**
-	 * Give this fold the engine half the records say it should have, and take away
-	 * the one it should not.
-	 *
-	 * A fold is one of exactly two shapes (`HeldFold.ingestion` / `HeldFold.rebuild`),
-	 * and succession moves it between them: a FOLLOWER that inherits the duty stops
-	 * following and gets a receiver with the appender; a fold that already had a
-	 * receiver but not the appender is rebuilt with it. The processor and the state
-	 * are untouched, so nothing re-reads and nothing re-folds -- a `StreamBuilder`
-	 * holds no position of its own, it reads the fold's persisted cursor, so a fresh
-	 * one resumes exactly where the old one was.
-	 */
-	private handOverTheWire(
-		fold: MutableHeldFold<ABI, ProcessResultType>,
-		origin: FoldOrigin<ABI>,
-		writesStream: boolean,
-	): void {
-		const was = fold.follows ? 'a FOLLOWER' : 'a receiver that did not write';
-		fold.writesStream = writesStream;
-		fold.follows = false;
-		fold.rebuild = undefined;
-		fold.ingestion = new StreamBuilder<ABI, ProcessResultType>(fold.processor, origin.source, {
-			...(origin.provided ? {stream: origin.provided} : {}),
-			...(this.options.recordReorg ? {recordReorg: this.options.recordReorg} : {}),
-			...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
-			container: this,
-			// The same name the shape being replaced answered to: succession changes which
-			// ENGINE advances this fold and never which fold it is.
-			processorIdentity: fold.record.processor,
-		});
-		namedLogger.info(
-			`WRITER SUCCESSION on the stream ${fold.streamDigest}: {stream: ${fold.record.stream}, processor: ` +
-				`${fold.record.processor}} was ${was} and is now its writer, because it is the oldest generation still ` +
-				`registered on it (ADR-0044). It has been given the receiver and the emission appender, so the stream goes ` +
-				`on being fed and on being stored.`,
-		);
-	}
-
-	/** Every FOLLOWER held: the folds a rebuild advances rather than the wire. */
-	followers(): readonly HeldFold<ABI, ProcessResultType, unknown>[] {
-		return this.folds.filter((fold) => fold.follows);
+		return live;
 	}
 
 	/** The promotion policy this indexer runs under, resolved, so a host can see WHICH value is in force. */
@@ -1042,56 +968,57 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * Build a fold BESIDE the ones already held, and make its wire context live.
+	 * Build a fold BESIDE the ones already held, and make sure its stream is being
+	 * fetched.
 	 *
 	 * The receiving twin of `Indexer.add`, and the same order for the same reason:
 	 * STATE FIRST, then the fold over it (ADR-0043), then the REGISTRY -- which is
-	 * written before the receiver exists, because a stream subtree no registered
-	 * generation claims is what the sweep collects, so nothing may write a stream
-	 * ahead of its registration.
+	 * written before anything writes the stream, because a stream subtree no
+	 * registered generation claims is what the sweep collects.
 	 *
 	 * A cap REFUSES here and no GENERATION is left behind: the record is not
-	 * written and no receiver is built, so nothing names or reads whatever the
+	 * written and no engine is built, so nothing names or reads whatever the
 	 * state factory happened to open.
 	 *
 	 * What a refusal MAY leave is storage the factory itself created, and that is the
 	 * host's business rather than this container's: a factory that claims its store
 	 * (`openForWriting`, ADR-0077) migrates, and the cap is enforced one step later
-	 * because the record needs the processor's version hash, which needs the
+	 * because the record needs the processor's identity, which needs the
 	 * processor, which needs the state (ADR-0043). The CLI's SQL factory therefore
 	 * leaves an empty namespace behind, reused verbatim if the bound is raised. This
 	 * order cannot be swapped: a pre-check on the COUNT alone would refuse re-opening
 	 * a generation this container already holds, which is the case `create`
 	 * deliberately RESOLVES.
 	 *
-	 * WHETHER IT GETS A RECEIVER OR A REBUILD IS DETERMINED HERE, from the stream
-	 * and from nothing else (ADR-0044). A fold on a stream this container already
-	 * holds FOLLOWS it: no receiver, because a stream is ONE address on the wire,
-	 * and a `GenerationRebuild` over the stored stream instead. A fold on a stream
-	 * nobody here holds gets the receiver.
+	 * ## THERE IS NOTHING LEFT TO DETERMINE ABOUT THE FOLD (ADR-0087)
+	 *
+	 * Every fold gets a `GenerationRebuild` over the stored stream and none of them
+	 * gets a receiver or an appender. What the arriving fold's STREAM gets, if this
+	 * is the first fold on it, is a WRITER -- the deployment's, positioned from the
+	 * stream's own coverage claim. So the question that used to be decided here
+	 * ("does this fold follow, or does it hold the pen") has no answer to give,
+	 * which is what makes a restarted deployment holding only a successor fetch
+	 * exactly as a fresh one does.
 	 */
 	async add<S>(spec: ReceivedGenerationSpec<ABI, ProcessResultType, S>): Promise<HeldFold<ABI, ProcessResultType, S>> {
 		const source = spec.source ?? this.options.source;
 		const provided = spec.stream ?? this.options.stream;
-		// The RESOLVED config, exactly as `StreamBuilder` resolves it, so the digest
-		// this container files a generation under and the digest that receiver stores
-		// its emissions under cannot be two different streams.
+		// The RESOLVED config, exactly as the writer and the rebuild resolve it, so the
+		// digest this container files a generation under and the digest its stream is
+		// stored under cannot be two different streams.
 		const streamConfig = resolveStreamConfig(provided);
 		const context: GenerationContext = {stream: streamDigestOf(source, streamConfig)};
-		// DETERMINED, never configured: this is the receiving twin of `Indexer.add`'s
-		// `follows`, decided from the same fact for the same reason.
-		const follows = this.folds.some((fold) => fold.streamDigest === context.stream);
 		const replay = this.options.replay;
-		if (follows && !replay) {
-			refuseFollowerWithNoStream(context.stream);
+		if (!replay) {
+			refuseFoldWithNoStream(context.stream);
 		}
 
 		// STATE FIRST, then the fold over it (ADR-0043). The identity is the ARRIVAL's
 		// (ADR-0086), read ONCE here -- after the factories, which is what lets an arrival
-		// with no bytes derive one from the object it just built -- and handed DOWN to
-		// whichever engine shape this fold turns out to be, so the record, the receiver
-		// and the rebuild cannot name one generation three ways. Absent is REFUSED: there
-		// is nothing left that may name a fold on its behalf.
+		// with no bytes derive one from the object it just built -- and handed DOWN to the
+		// rebuild, so the record and the engine advancing it cannot name one generation
+		// two ways. Absent is REFUSED: there is nothing left that may name a fold on its
+		// behalf.
 		const state = await spec.createState(context);
 		const processor = await spec.createProcessor(state, context);
 
@@ -1101,7 +1028,7 @@ export class ReceivingIndexer<
 		};
 		// READ ONCE, BEFORE anything is registered or dropped. The SLOTS decide whether
 		// this fold is a successor at all and what it displaces; the records decide which
-		// held folds are still registered and which generation writes each stream.
+		// held folds are still registered.
 		const registeredBefore = await this.registry.list();
 		const slotsBefore = await this.registry.slots();
 		const canonicalBefore = this.noteCanonical(slotsBefore.canonical);
@@ -1110,7 +1037,11 @@ export class ReceivingIndexer<
 		// eviction: a replaced successor is dead the moment a newer one takes its place,
 		// whether the registry holds two generations or none to spare, and a rule that
 		// fired only near the bound would make a deterministic lifecycle a heuristic.
-		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream);
+		//
+		// What it does NOT take any more is the STREAM: dropping a generation leaves the
+		// stream exactly where it is (ADR-0087), so a second save in a tab can no longer
+		// delete the history the first one fetched.
+		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore);
 		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
 		// that means for this identity: the first generation of an empty registry takes
 		// `canonical` instead, and a generation some slot ALREADY names stays where it is
@@ -1124,19 +1055,6 @@ export class ReceivingIndexer<
 		// none. It is recorded because a later move BACK to it must be readable as a
 		// revert -- including the opening fold of a host that comes up already canonical.
 		const canonicalOnAdd = !canonicalBefore || sameGeneration(canonicalBefore, record);
-		// AFTER the record exists, because the rule reads the records: only the WRITER
-		// of a stream may append to it (ADR-0052/ADR-0044), and a generation registered
-		// beside an older one on the same stream is not it.
-		const writer = await this.registry.writerOf(context.stream);
-		const writesStream = !!writer && sameGeneration(writer, record);
-		if (!writesStream) {
-			namedLogger.info(
-				`the fold {stream: ${record.stream}, processor: ${record.processor}} does NOT write its stream: ` +
-					`{stream: ${writer?.stream}, processor: ${writer?.processor}} is the oldest surviving generation on it and ` +
-					`is therefore its writer. Nothing this receiver folds is appended, because the stream already holds it and ` +
-					`appending it again would be a second history for every generation that re-folds it.`,
-			);
-		}
 
 		const fold: HeldFold<ABI, ProcessResultType, S> = {
 			record,
@@ -1144,38 +1062,23 @@ export class ReceivingIndexer<
 			streamConfig,
 			state,
 			processor,
-			writesStream,
-			follows,
-			...(follows
-				? {
-						rebuild: new GenerationRebuild<ABI, ProcessResultType>(processor, source, {
-							stream: context.stream,
-							streamConfig,
-							replay: replay as ReplaySource<ABI>,
-							...(this.options.maxEmissionsPerChunk === undefined
-								? {}
-								: {maxEmissions: this.options.maxEmissionsPerChunk}),
-							// THE NAME THIS FOLD IS ALREADY REGISTERED UNDER, taken from the record rather
-							// than re-derived: `create` RESOLVES a generation already there rather than
-							// duplicating it, so the record is the authority on what this fold is called.
-							processorIdentity: record.processor,
-						}),
-					}
-				: {
-						ingestion: new StreamBuilder<ABI, ProcessResultType>(processor, source, {
-							...(provided ? {stream: provided} : {}),
-							...(this.options.recordReorg ? {recordReorg: this.options.recordReorg} : {}),
-							// THE ONE-WRITER RULE, structural rather than conventional: a fold that does
-							// not write its stream is not handed the thing that appends to it.
-							...(this.options.appendEmissions && writesStream ? {appendEmissions: this.options.appendEmissions} : {}),
-							container: this,
-							// As above: the identity the registry recorded, so the generation this receiver
-							// ADVERTISES on the wire is the one it was registered as.
-							processorIdentity: record.processor,
-						}),
-					}),
+			rebuild: new GenerationRebuild<ABI, ProcessResultType>(processor, source, {
+				stream: context.stream,
+				streamConfig,
+				replay,
+				...(this.options.maxEmissionsPerChunk === undefined ? {} : {maxEmissions: this.options.maxEmissionsPerChunk}),
+				// THE NAME THIS FOLD IS ALREADY REGISTERED UNDER, taken from the record rather
+				// than re-derived: `create` RESOLVES a generation already there rather than
+				// duplicating it, so the record is the authority on what this fold is called.
+				processorIdentity: record.processor,
+			}),
 		};
 		this.folds.push(fold as HeldFold<ABI, ProcessResultType, unknown>);
+		// ...and the STREAM's own writer, built once per stream and AFTER the record
+		// exists, for the reason the registry states: a stream subtree no registered
+		// generation claims is what the sweep collects, so nothing may write a stream
+		// ahead of its registration.
+		this.writerFor(context.stream, source, provided);
 		// WHICH fold answers reads, re-derived from what was just read and written rather
 		// than inferred later: it is the fold added here when the pointer named it or took
 		// it, and otherwise whichever held fold the pointer already named.
@@ -1185,18 +1088,102 @@ export class ReceivingIndexer<
 		// fold that happens to be canonical now would have to be re-attached at every
 		// promotion. The filter is in `publishFoldReport`, at the moment a report arrives.
 		this.relayFoldReports(fold as HeldFold<ABI, ProcessResultType, unknown>, processor);
-		// REMEMBERED for succession: a follower that later becomes its stream's writer
-		// needs a receiver built from the same source and stream config it was added
-		// with. `level` starts false for a follower, which is what stops a fold that has
-		// not caught up from being handed the wire (see `reconcileWriters`), and true for
-		// a fold that already has a receiver, because the wire is what feeds it.
-		this.origins.set(fold as HeldFold<ABI, ProcessResultType, unknown>, {
-			source,
-			provided,
-			level: !follows,
-		});
 		await this.applyPolicyTo(fold as HeldFold<ABI, ProcessResultType, unknown>);
 		return fold;
+	}
+
+	/**
+	 * THE WRITER OF ONE STREAM, built once and kept: the DEPLOYMENT's, never a
+	 * generation's (ADR-0087).
+	 *
+	 * Built with the first fold on a stream and never rebuilt, because nothing about
+	 * it depends on which folds are present -- it reads the STREAM's own coverage
+	 * claim for its position, and it appends through the deployment's appender. That
+	 * is the whole of why the elected writer is gone: there is no observation point
+	 * at which a duty has to change hands, because the duty never moved.
+	 *
+	 * A container with no way to store a stream gets NO writer, which is refused at
+	 * `open` rather than left to be discovered: a deployment that folds and never
+	 * fetches reports healthy for ever.
+	 */
+	private writerFor(
+		stream: string,
+		source: IndexingSource<ABI>,
+		provided: ProvidedStreamConfig | undefined,
+	): StreamWriter<ABI> {
+		const held = this.writers.get(stream);
+		if (held) return held;
+		const appendEmissions = this.options.appendEmissions;
+		const cursor = this.options.streamCursor;
+		if (!appendEmissions) refuseContainerThatCannotFetch('appendEmissions');
+		if (!cursor) refuseContainerThatCannotFetch('streamCursor');
+		const writer = new StreamWriter<ABI>(source, {
+			...(provided ? {stream: provided} : {}),
+			cursor,
+			appendEmissions,
+			...(this.options.recordReorg ? {recordReorg: this.options.recordReorg} : {}),
+			// WHAT WAS APPENDED, OFFERED to every fold on this stream -- after the append,
+			// so nothing about which folds are present can change what was stored.
+			deliver: (delta) => this.offerToFolds(delta),
+		});
+		this.writers.set(stream, writer);
+		return writer;
+	}
+
+	/**
+	 * OFFER the delta the writer just appended to every fold on that stream.
+	 *
+	 * The live half of the ONE advance a fold has. A fold LEVEL with the stream takes
+	 * it and folds it there and then; one that is behind declines, and its bounded
+	 * rebuild reads the same rows back off disk. Both go through
+	 * `GenerationRebuild`, so there is one implementation of "replay what the stream
+	 * says happened".
+	 *
+	 * **This is not the rejected hand-over.** The append already happened,
+	 * positioned from the stream, before any of this: what a fold does or does not
+	 * take changes nothing about what was written, which is exactly the property the
+	 * hand-over could not have at any observation point.
+	 *
+	 * A fold that THROWS is contained and said out loud rather than failing the
+	 * append that reached it: the stream is stored, which is the expensive half, and
+	 * the fold is behind by one delta and is carried by its rebuild. Failing here
+	 * would tell a sender to re-send a batch that was in fact stored.
+	 */
+	private async offerToFolds(delta: StreamDelta<ABI>): Promise<void> {
+		for (const fold of [...this.folds]) {
+			if (fold.streamDigest !== delta.stream) continue;
+			try {
+				await this.advance(fold, () => fold.rebuild.follow(delta));
+			} catch (err) {
+				namedLogger.error(
+					`the fold {stream: ${fold.record.stream}, processor: ${fold.record.processor}} could not take the ` +
+						`delta just appended to its stream. The STREAM is stored, which is what the fetch bought; this fold ` +
+						`is behind by one batch and its rebuild carries it.`,
+					err,
+				);
+			}
+		}
+	}
+
+	/**
+	 * RUN ONE ADVANCE OF ONE FOLD, after whatever was already advancing it.
+	 *
+	 * See `advancing`: a fold moves two ways -- the live delta and the scheduled
+	 * rebuild chunk -- and on a host that schedules rebuilds while it serves ingests
+	 * the two can arrive at once. Both read the durable checkpoint and apply from it,
+	 * so overlapping them would have both decide from the same position and the
+	 * storage seam would refuse the second at its duplicate-height guard.
+	 *
+	 * The chain is advanced whether the call succeeded or failed, so one failure does
+	 * not wedge the fold for ever.
+	 */
+	private advance<T>(fold: HeldFold<ABI, ProcessResultType, unknown>, work: () => Promise<T>): Promise<T> {
+		const after = (this.advancing.get(fold) ?? Promise.resolve()).then(work, work);
+		this.advancing.set(
+			fold,
+			after.catch(() => undefined),
+		);
+		return after;
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------
@@ -1204,7 +1191,7 @@ export class ReceivingIndexer<
 	// ------------------------------------------------------------------------------------------------------------------
 
 	/**
-	 * ADVANCE EVERY FOLLOWER BY ONE BOUNDED CHUNK, then settle the pointer.
+	 * ADVANCE EVERY FOLD BY ONE BOUNDED CHUNK, then settle the pointer.
 	 *
 	 * The call a HOST SCHEDULES (ADR-0022), and the shape `prune` and
 	 * `compactEmissionPairs` already have: bounded work per invocation, and a REPORT
@@ -1219,7 +1206,13 @@ export class ReceivingIndexer<
 	 * for ever at full rate while the follower never becomes level (ADR-0070). A
 	 * report that is incomplete and cannot advance needs a human, not another call.
 	 * Nothing here invents a cadence, and a call with nothing to do costs one read
-	 * per follower.
+	 * per fold.
+	 *
+	 * It advances EVERY fold and no longer only the followers, because there are no
+	 * others: under ADR-0087 no generation fetches, so every one of them catches up
+	 * by re-folding the stream the deployment stored. A fold that is already level
+	 * has taken each delta live as it was appended (`offerToFolds`), so its chunk
+	 * here finds nothing new and costs one read.
 	 *
 	 * The pointer is settled AFTER the chunks, once, so a successor that became
 	 * level during this call is promoted in the same call rather than on the next
@@ -1235,21 +1228,14 @@ export class ReceivingIndexer<
 		this.noteCanonical(await this.registry.canonical());
 		const reports: RebuildReport[] = [];
 		for (const fold of [...this.folds]) {
-			if (!fold.rebuild) continue;
 			// A generation that has been DELETED is not advanced: its state is gone, so
 			// folding into it would be writing into nothing -- the same rule
-			// `liveIngestions` applies to a receiver.
+			// `liveIngestions` applies to a stream's writer.
 			if (!registered.some((record) => sameGeneration(record, fold.record))) continue;
-			const report = await fold.rebuild.more(options);
-			// LEVEL is what lets this fold take the wire if it inherits its stream's write
-			// duty; see `reconcileWriters` for why a fold that is behind must not.
-			const origin = this.origins.get(fold);
-			if (origin) origin.level = report.complete;
-			reports.push(report);
+			// SERIALISED with whatever else is advancing this fold: a delta offered by the
+			// stream's writer applies from the same durable checkpoint this does.
+			reports.push(await this.advance(fold, () => fold.rebuild.more(options)));
 		}
-		// AFTER the chunks, so a follower that became level in this very call can inherit
-		// a vacant write duty now rather than a call later.
-		await this.reconcileWriters(registered);
 		await this.settlePromotion();
 		return reports;
 	}
@@ -1528,30 +1514,21 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * Drop a superseded generation, unless dropping it would strand a follower.
+	 * Drop a superseded generation: its registry row and its state namespace, and
+	 * NOT its stream.
 	 *
-	 * Which generation WRITES a stream is the oldest surviving one registered on it
-	 * and never the canonical one (ADR-0044), precisely so a promotion does not hand
-	 * the append duty to a different engine mid-flight. So dropping a writer another
-	 * held generation follows would leave that one folding a stream nothing appends
-	 * to: the drop is DECLINED rather than refused, and the bytes are kept.
+	 * It used to DECLINE where the generation being dropped was the elected writer
+	 * of a stream another held fold followed, because dropping it would have left
+	 * that fold folding a stream nothing appended to AND reaped the stream out from
+	 * under it. Neither is possible any more (ADR-0087): no generation writes a
+	 * stream, so there is no duty to strand, and a delete does not reap, so there
+	 * are no bytes to lose. The decline is gone rather than kept as a clause nothing
+	 * can reach.
 	 */
 	private async dropSuperseded(
 		superseded: HeldFold<ABI, ProcessResultType, unknown>,
 		successor: GenerationRecord,
 	): Promise<void> {
-		const strands = this.folds.some(
-			(fold) => fold !== superseded && fold.follows && fold.streamDigest === superseded.streamDigest,
-		);
-		if (!superseded.follows && strands) {
-			namedLogger.info(
-				`drop-on-promotion DECLINED for {stream: ${superseded.record.stream}, processor: ` +
-					`${superseded.record.processor}}: it WRITES a stream another generation follows, and dropping it would ` +
-					`leave that one folding a stream nothing appends to. It is retained; delete it explicitly once nothing ` +
-					`follows its stream.`,
-			);
-			return;
-		}
 		// Out of the held list FIRST, so nothing drives a fold whose state is being
 		// dropped underneath it.
 		this.folds.splice(this.folds.indexOf(superseded), 1);
@@ -1560,12 +1537,16 @@ export class ReceivingIndexer<
 		// can reach it through any more.
 		superseded.processor.setFoldReporter?.(undefined);
 		try {
-			const deletion = await this.registry.deleteGeneration(superseded.record);
+			// NO REAP: a promotion nobody asked to delete a stream for does not delete one
+			// (ADR-0087). The stream stays, recorded by the registry, and is what the next
+			// generation over it re-folds instead of going back to a node for history it
+			// may refuse outright.
+			await this.registry.deleteGeneration(superseded.record);
 			namedLogger.info(
 				`dropped the superseded generation {stream: ${superseded.record.stream}, processor: ` +
 					`${superseded.record.processor}} on the promotion of {stream: ${successor.stream}, processor: ` +
-					`${successor.processor}}` +
-					`${deletion.reaped ? `, reaping the stream ${deletion.reaped} with it` : ''}.`,
+					`${successor.processor}}. Its state namespace is gone and the stream ${superseded.streamDigest} is ` +
+					`KEPT: a stream outlives every fold over it and is deleted only when asked.`,
 			);
 		} catch (err) {
 			namedLogger.error(
@@ -1627,72 +1608,31 @@ export class ReceivingIndexer<
 	 * source change.
 	 *
 	 * WHICH RECORDS THAT COVERS is `displacedBySuccessor`'s, shared with the
-	 * chain-facing twin so the safety clause has ONE home; what is HERE is the part
-	 * that is genuinely this container's -- whether a drop would strand a follower,
-	 * and what stopping a fold means on this runtime.
+	 * chain-facing twin so the safety clause has ONE home; what is HERE is what
+	 * stopping a fold means on this runtime.
+	 *
+	 * ## WHAT IT NO LONGER TAKES: the stream (ADR-0087)
+	 *
+	 * This path used to reap the stream of whatever it dropped, wherever that was
+	 * the last generation on it -- so saving twice in a tab deleted the history the
+	 * first save had fetched. That is the AUTOMATIC reap ADR-0087 removes, and with
+	 * it goes the clause that used to RETAIN a replaced generation because dropping
+	 * it would have stranded a fold on the stream it wrote: no generation writes a
+	 * stream any more, so there is no duty to strand, and the bytes stay whatever
+	 * happens to the rows.
 	 */
 	private async replaceTheSuccessor(
 		arriving: GenerationId,
 		registered: readonly GenerationRecord[],
 		slots: SlottedGenerations,
-		arrivingStream: string,
 	): Promise<void> {
 		const displaced = displacedBySuccessor(arriving, registered, slots, (record) =>
 			this.folds.some((fold) => sameGeneration(fold.record, record)),
 		);
 
-		const surviving = [...registered];
 		for (const record of displaced) {
-			if (this.wouldStrandAFollower(record, surviving, arrivingStream)) {
-				namedLogger.info(
-					`the replaced successor {stream: ${record.stream}, processor: ${record.processor}} is RETAINED for now: ` +
-						`it WRITES the stream ${record.stream}, which another fold here follows, and dropping it would leave ` +
-						`that one folding a stream nothing appends to (ADR-0044). No slot names it any more, so it goes when ` +
-						`nothing follows its stream -- or when an operator reclaims what no slot names.`,
-				);
-				continue;
-			}
-			if (await this.dropReplaced(record, arriving)) {
-				surviving.splice(
-					surviving.findIndex((held) => sameGeneration(held, record)),
-					1,
-				);
-			}
+			await this.dropReplaced(record, arriving);
 		}
-	}
-
-	/**
-	 * Whether dropping this generation would leave a stream being folded by something
-	 * with nothing appending to it.
-	 *
-	 * `dropSuperseded`'s rule, applied one moment earlier and with one more follower in
-	 * view. Which generation WRITES a stream is the oldest SURVIVING one registered on
-	 * it (ADR-0044), so dropping a writer another held generation follows leaves that
-	 * one folding a stream nothing appends to. The fold about to be ADDED counts as such
-	 * a follower, because it is about to be one: it was already decided to FOLLOW this
-	 * stream (a stream is ONE address on the wire), and dropping its writer here would
-	 * also reap the stored stream out from under it and send it back to the chain for
-	 * a history it already has.
-	 *
-	 * It reads the RECORDS rather than a held fold's `writesStream`, because the
-	 * generation the slot names may be one this process holds no fold for at all --
-	 * which is exactly the restart case, and the case the durable slot exists for.
-	 *
-	 * `arrivingStream` is ABSENT where nothing is arriving, which is the operator's
-	 * `reclaim`: there the followers to protect are the ones already held, and there
-	 * is no fold about to become one.
-	 */
-	private wouldStrandAFollower(
-		record: GenerationRecord,
-		registered: readonly GenerationRecord[],
-		arrivingStream: string | undefined,
-	): boolean {
-		const writer = writerOf(registered, record.stream);
-		if (!writer || !sameGeneration(writer, record)) return false;
-		if (arrivingStream !== undefined && record.stream === arrivingStream) return true;
-		return this.folds.some(
-			(held) => !sameGeneration(held.record, record) && held.follows && held.streamDigest === record.stream,
-		);
 	}
 
 	/**
@@ -1701,10 +1641,12 @@ export class ReceivingIndexer<
 	 *
 	 * Deleting a generation is already a `DROP` of its table namespace, injected by
 	 * whoever named the tables (ADR-0053) and performed by the registry, so nothing new
-	 * is invented here: what is new is deciding WHEN, without being asked. The stream is
-	 * REAPED with it exactly when no registered generation is left folding it, which is
-	 * the registry's own rule and the reason the drop is declined above where anything
-	 * still needs it.
+	 * is invented here: what is new is deciding WHEN, without being asked.
+	 *
+	 * **The STREAM is NOT reaped with it** (ADR-0087). It used to be, wherever this was
+	 * the last generation folding it, which made a second save in a tab delete the
+	 * history the first save had fetched -- the one place this codebase deleted an
+	 * expensive thing to reclaim a cheap one. What a registration displaces is a FOLD.
 	 *
 	 * The REGISTRY GOES FIRST, which is the opposite order from `dropSuperseded` and
 	 * deliberately so: there the drop is the last act of a promotion that has already
@@ -1725,9 +1667,9 @@ export class ReceivingIndexer<
 	 * loop must see bounded churn instead of generations quietly disappearing.
 	 */
 	private async dropReplaced(record: GenerationRecord, arriving: GenerationId): Promise<boolean> {
-		let reaped: string | undefined;
 		try {
-			reaped = (await this.registry.deleteGeneration(record)).reaped;
+			// NO REAP, which is the whole of ADR-0087's second half at this call site.
+			await this.registry.deleteGeneration(record);
 		} catch (err) {
 			namedLogger.error(
 				`failed to drop the replaced successor {stream: ${record.stream}, processor: ${record.processor}}; it is ` +
@@ -1743,9 +1685,9 @@ export class ReceivingIndexer<
 				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
 				`AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was replaced -- it is ` +
 				`neither the canonical generation nor what \`predecessor\` holds, so nothing can revert to it and re-folding ` +
-				`it would be work for a result nobody will ever ask for. Its state namespace is gone` +
-				`${reaped ? `, and the stream ${reaped} was reaped with it, no registered generation being left on it` : ''}. ` +
-				`The canonical generation and the revert target are untouched.`,
+				`it would be work for a result nobody will ever ask for. Its state namespace is gone and the stream ` +
+				`${record.stream} is KEPT: a stream outlives every fold over it and is deleted only when asked ` +
+				`(ADR-0087). The canonical generation and the revert target are untouched.`,
 		);
 		return true;
 	}
@@ -1813,11 +1755,23 @@ export class ReceivingIndexer<
 	 * (`unslottedGenerations`) and never as "not canonical", which would delete the
 	 * revert target and the pending successor both.
 	 *
-	 * It also DECLINES, rather than refusing the whole call, where dropping would
-	 * leave a fold folding a stream nothing appends to: the writer of a stream another
-	 * held fold follows is kept (ADR-0044), exactly as the existing drops decline it.
-	 * NEWEST FIRST, so a replaced follower goes before the writer it strands, and one
-	 * pass frees both.
+	 * It DECLINES per generation rather than refusing the whole call, where the
+	 * substrate would not delete one: the others still go, and the next reclaim tries
+	 * again. NEWEST FIRST, which is the order the registry lists garbage in.
+	 *
+	 * ## IT IS THE ONE PATH THAT STILL REAPS A STREAM (ADR-0087)
+	 *
+	 * Deletion is a VERB. Every AUTOMATIC reap is gone -- a registration that displaces
+	 * a successor and a promotion that drops what it superseded both leave the stream
+	 * exactly where it is -- and what is left is this, which an operator ran, and
+	 * `deleteStream`, which an operator named. So a generation reclaimed here takes its
+	 * stream with it exactly when no registered generation is left folding it, which is
+	 * what an operator reclaiming disk asked for and is why the report NAMES what came
+	 * back.
+	 *
+	 * The clause that used to RETAIN the elected writer of a stream another held fold
+	 * followed is gone with the election: no generation writes a stream, so there is
+	 * no duty to strand.
 	 */
 	async reclaim(): Promise<ReclaimReport> {
 		// ONE read of the records and ONE of the slots, before anything is dropped: the
@@ -1830,22 +1784,14 @@ export class ReceivingIndexer<
 		const garbage = unslottedGenerations(registered, slots).sort((a, b) => b.createdAt - a.createdAt);
 		const reclaimed: ReclaimedGeneration[] = [];
 		const declined: DeclinedReclaim[] = [];
-		const surviving = [...registered];
 
 		for (const record of garbage) {
-			if (this.wouldStrandAFollower(record, surviving, undefined)) {
-				const message =
-					`it WRITES the stream ${record.stream}, which another fold held here FOLLOWS, and dropping it would ` +
-					`leave that one folding a stream nothing appends to (ADR-0044). It is retained with its state and its ` +
-					`stream exactly where they were; no slot names it, so it goes on the next reclaim once nothing follows ` +
-					`its stream.`;
-				namedLogger.info(`reclaim DECLINED for {stream: ${record.stream}, processor: ${record.processor}}: ${message}`);
-				declined.push({generation: record, reason: 'writes-a-followed-stream', message});
-				continue;
-			}
 			let deletion: GenerationDeletion;
 			try {
-				deletion = await this.registry.deleteGeneration(record);
+				// REAPING, and this is the only call in this container that asks for it: an
+				// operator ran the verb, so the stream of a generation that was the last one
+				// folding it goes with it (ADR-0087).
+				deletion = await this.registry.deleteGeneration(record, {reapStream: true});
 			} catch (err) {
 				const message =
 					`it could not be deleted (${err instanceof Error ? err.message : String(err)}). It is still ` +
@@ -1861,10 +1807,6 @@ export class ReceivingIndexer<
 			// does: its state has been dropped, so folding into it would be writing into
 			// nothing.
 			this.stopDriving(record);
-			surviving.splice(
-				surviving.findIndex((held) => sameGeneration(held, record)),
-				1,
-			);
 			reclaimed.push({
 				generation: record,
 				...(deletion.reaped === undefined ? {} : {reaped: deletion.reaped}),

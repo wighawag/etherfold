@@ -3,6 +3,7 @@ import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 
 import {LogEventFetcher} from '../internal/decoding/LogEventFetcher.js';
+import {UnexpectedFromBlockError} from '../errors.js';
 import {
 	batchStreamForDelivery,
 	defaultFromBlockOf,
@@ -521,7 +522,6 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 
 		const lastSync = await this.checkpoint();
 		const fromBlock = getFromBlock(lastSync, this.defaultFromBlock, this.finality);
-
 		const chunk = await this.replay.readChunk({
 			stream: this.stream,
 			fromBlock,
@@ -583,6 +583,38 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 			};
 		}
 
+		// THE STREAM HAS NOT MOVED, so there is nothing above this fold to fold. Answered
+		// before the slice is replayed rather than after, and it is a CORRECTNESS guard
+		// rather than an optimisation.
+		//
+		// A resume point reaches BACK over the reorg window (`getFromBlock`), so a level
+		// fold re-reads rows it has already consumed, and the replay walk de-duplicates
+		// them by WINDOW MEMBERSHIP. That test is complete for a block still held -- and
+		// wrong for one this fold applied and then RETRACTED, which is not in the window
+		// and therefore reads as new: the dead branch is re-applied and re-retracted on
+		// every call, for ever. The state ends correct, which is why it hid; what it costs
+		// is a `revertTo` and a pair of state-moved notifications per call, on the fold
+		// that answers reads.
+		//
+		// The comparison is exact rather than approximate: a chunk carries the stream's
+		// own three numbers, and a fold that consumed one adopted them, so "the same
+		// `lastToBlock` and the same `latestBlock`" means no append has happened since --
+		// every append moves the coverage claim, including the one that carries a
+		// retraction and the one that carries no logs at all (ADR-0055).
+		if (chunk.lastToBlock === lastSync.lastToBlock && chunk.latestBlock === lastSync.latestBlock) {
+			return {
+				generation,
+				fromBlock,
+				toBlock: chunk.lastToBlock,
+				scanned: chunk.eventStream.length,
+				replayed: 0,
+				retracted: 0,
+				highWater: chunk.highWater,
+				complete: !chunk.truncated,
+				stopped: chunk.truncated ? {reason: 'budget'} : {reason: 'stream-consumed'},
+			};
+		}
+
 		// REPLAY and not feed: these rows carry their own verdicts (ADR-0042), and a
 		// rebuild has no fetch window to derive them from. The window is rebuilt by
 		// WALKING the slice, which is also what de-duplicates the part of it this fold
@@ -622,6 +654,96 @@ export class GenerationRebuild<ABI extends Abi, ProcessResultType = unknown> {
 			complete: !chunk.truncated,
 			stopped: chunk.truncated ? {reason: 'budget'} : {reason: 'stream-consumed'},
 		};
+	}
+
+	/**
+	 * TAKE THE DELTA THE STREAM'S WRITER JUST APPENDED, if this fold is level with
+	 * it.
+	 *
+	 * The live half of the same one advance. Under ADR-0087 the DEPLOYMENT fetches a
+	 * stream and appends to it, and every generation over that stream READS what was
+	 * appended -- so a fold sitting exactly where the append begins folds it there and
+	 * then, instead of paying a round trip to read back rows it was just handed.
+	 *
+	 * It is the SAME code path as `more()` below the read: the same checkpoint, the
+	 * same `reparse`, the same `generateStreamFromReplay`, the same delivery cut. Only
+	 * the source of the chunk differs -- the port, or the writer -- which is what keeps
+	 * "a generation is a stream plus a fold over it" one implementation rather than
+	 * two that agree on the day they were written.
+	 *
+	 * ## Declining is the ordinary answer and never an error
+	 *
+	 * A fold that is BEHIND the stream cannot apply a delta beginning above where it
+	 * resumes: doing so would leave the blocks between as a HOLE in its own state.
+	 * `generateStreamFromReplay` already refuses exactly that (`UnexpectedFromBlockError`),
+	 * and the refusal is caught HERE and reported as `declined` rather than thrown,
+	 * because it is not a fault: a successor mid-catch-up is behind BY DESIGN, and its
+	 * bounded rebuild is what carries it. A fold that is AHEAD -- a delta it has
+	 * already applied, re-offered -- resumes above it and declines for the same reason.
+	 *
+	 * Nothing here is a hand-over of the write duty. The append already happened,
+	 * positioned from the stream, before this fold was consulted; what a fold does or
+	 * does not take changes nothing about what is stored.
+	 */
+	async follow(delta: {
+		eventStream: LogEvent<ABI>[];
+		lastSync: LastSync<ABI>;
+	}): Promise<{applied: boolean; replayed: number}> {
+		const lastSync = await this.checkpoint();
+		const fromBlock = getFromBlock(lastSync, this.defaultFromBlock, this.finality);
+		if (fromBlock !== delta.lastSync.lastFromBlock) {
+			// BEHIND (or ahead of) the range just appended. Said cheaply and without
+			// building a stream: the rebuild reads the rows back and carries this fold.
+			return {applied: false, replayed: 0};
+		}
+
+		// RE-DECODED on the way through, exactly as a chunk read back off disk is: the
+		// stream carries the raw log and `args` / `eventName` are what SOME ABI made of
+		// those bytes (ADR-0034), so a fold decodes against the source IT runs. That
+		// matters here rather than being ceremony: two generations share a stream
+		// precisely when the FETCH filter matches, and a decode-only change moves the
+		// decoded half while leaving the stream intact.
+		//
+		// A delta with NO RAW HALF is folded AS DELIVERED, which is the one tolerance
+		// and it is narrow: `reparse` refuses an event carrying no `topics`, `data` or
+		// `address`, a stream of that shape predates the seam narrowing to what the node
+		// said, and the delta a deployment JUST derived is already decoded under the
+		// source it is running now. Refusing instead would mean a deployment over such a
+		// stream folded nothing at all, silently. Note the asymmetry it leaves, which is
+		// honest rather than hidden: the same rows read back off DISK carry no decoded
+		// half to fall back on, so `more()` reports `undecodable` for them and says so
+		// loudly.
+		const replayable = this.decoder.reparse(delta.eventStream) ?? delta.eventStream;
+
+		let eventStream: LogEvent<ABI>[];
+		let newLastSync: LastSync<ABI>;
+		try {
+			({eventStream, newLastSync} = generateStreamFromReplay(lastSync, this.defaultFromBlock, replayable, {
+				newLatestBlock: delta.lastSync.latestBlock,
+				newLastFromBlock: delta.lastSync.lastFromBlock,
+				newLastToBlock: delta.lastSync.lastToBlock,
+				finality: this.finality,
+			}));
+		} catch (err) {
+			// STRUCTURALLY rather than with `instanceof`, for the reason `isRetryable` is
+			// structural: two copies of this package in one dependency tree would otherwise
+			// turn an ordinary decline into a crash inside somebody's fetch cycle.
+			if ((err as {name?: string})?.name === 'UnexpectedFromBlockError') {
+				return {applied: false, replayed: 0};
+			}
+			throw err;
+		}
+
+		const batches = batchStreamForDelivery(eventStream, newLastSync, this.feedBatchSize);
+		for (const batch of batches) {
+			await this.processor.process(batch.events, batch.lastSync);
+		}
+		if (batches.length === 0) {
+			// The CURSOR still has to move, or this fold would decline every later delta:
+			// a quiet range moves the stream's reach without carrying a row.
+			await this.processor.process([], newLastSync);
+		}
+		return {applied: true, replayed: eventStream.length};
 	}
 
 	/**

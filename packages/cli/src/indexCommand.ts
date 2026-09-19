@@ -5,7 +5,7 @@ import {
 	type EventProcessor,
 	type IndexingSource,
 	type ReceivingIndexer,
-	type StreamBuilder,
+	type StreamWriter,
 } from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
@@ -221,7 +221,7 @@ export type RunningReceiver<ABI extends Abi = Abi, ProcessResultType = unknown> 
 	 * has never been this field: it is `container.liveIngestions()`, resolved per
 	 * batch from the registry.
 	 */
-	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
+	streamWriter: StreamWriter<ABI>;
 	/**
 	 * THE GENERATIONS THIS PROCESS HOLDS, which is what the name it registered
 	 * resolves to: the durable registry, the canonical pointer and the folds over
@@ -324,7 +324,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// do. The ingest route below is a CALLER of `receive` and writes neither itself,
 		// so a process that both concludes and receives cannot double-count a revert
 		// (ADR-0050) or store a batch twice (ADR-0052).
-		const {container, processor, store, streamBuilder} = await openFolding<ABI, ProcessResultType>(
+		const {container, processor, store, streamWriter} = await openFolding<ABI, ProcessResultType>(
 			declared,
 			config.destination,
 			db,
@@ -493,25 +493,25 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			})();
 		};
 
-		/** Which followers have already been reported as stalled, so it is said once and not per tick. */
+		/** Which folds have already been reported as stalled, so it is said once and not per tick. */
 		const reportedStalled = new Set<string>();
 		/**
-		 * ONE bounded rebuild chunk for every follower held AND the pointer settled once.
+		 * ONE bounded rebuild chunk for every fold held AND the pointer settled once.
 		 *
 		 * The SAME call `run` makes in the gap between its cycles, unconditionally and for
-		 * the reason stated there: `rebuildMore` is TWO things, and a successor registered
-		 * at `open` is NOT a follower -- `add` decides that from "do I already hold a fold
-		 * on this stream", and at `open` the fold list is empty -- so on this command it is
-		 * fed by the WIRE and holds no rebuild at all. What it needs from here is the
-		 * SETTLE, and a call gated on "is anything being rebuilt" would answer the wrong
-		 * question and never make it.
+		 * the reason stated there: `rebuildMore` is TWO things, and gating it on "is
+		 * anything being rebuilt" answers the wrong question. It used to be the wrong
+		 * question in a sharper way -- a successor registered at `open` was NOT a follower,
+		 * so it was fed by the WIRE and held no rebuild at all, and what it needed from
+		 * here was the SETTLE alone. Under ADR-0087 no generation fetches, so this call is
+		 * what ADVANCES every fold as well as what settles the pointer, and a tick that
+		 * never runs is a successor that never moves.
 		 *
 		 * The stall report is `run`'s own (`followers.ts`) rather than a second copy: a
 		 * rebuild that cannot advance recurs identically on every call, so polling never
-		 * resolves it (ADR-0070). No fold this command opens with is a follower, so nothing
-		 * reaches it today; it is shared rather than dropped because the contract being
-		 * handled is `rebuildMore`'s, not `run`'s, and a receiver that inherits a vacant
-		 * write duty is one registry change away from holding one.
+		 * resolves it (ADR-0070), and since ADR-0087 EVERY fold this command holds
+		 * advances that way -- no generation fetches, so a fold catches up by re-folding
+		 * the stream the sender's batches stored.
 		 *
 		 * It FAILS SOFT, exactly as the prune below does: the canonical generation goes on
 		 * answering, the successor is behind by one chunk, and the next tick retries.
@@ -521,7 +521,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 				for (const stalled of newlyStalledFollowers(await container.rebuildMore(), reportedStalled)) {
 					logger.error(
 						`index: the rebuild of generation ${stalled.id} cannot advance (${stalled.reason}) and retrying will not ` +
-							`change that. It stays behind and never becomes level, so it will not take over writing its stream. ` +
+							`change that. It stays behind, never becomes level and is therefore never promoted. ` +
 							`This needs a look; the canonical generation is unaffected and goes on answering.`,
 					);
 				}
@@ -589,7 +589,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			store,
 			processor,
 			source,
-			...(streamBuilder ? {streamBuilder} : {}),
+			streamWriter,
 			container,
 			stopped,
 			stop: async () => {
@@ -671,8 +671,8 @@ async function sayWhatFeedsASuccessor<ABI extends Abi, ProcessResultType>(
 			`${generationDigestOf(canonical)}, which goes on answering reads until the successor is level. This command ` +
 			`makes no chain call, so nothing here fetches for it: it advances ONLY from what a sender pushes at ` +
 			`${ingestUrl} for its own {source, config}` +
-			`${opening.writesStream ? '' : `, and it does not write that stream, because an older generation on it still does`}` +
-			`. A sender configured for a different source or stream config is refused there as a foreign context ` +
+			`. Every generation here READS the stored stream this deployment stores, and none of them writes one ` +
+			`(ADR-0087). A sender configured for a different source or stream config is refused there as a foreign context ` +
 			`(400 context-mismatch), and a successor nothing pushes to never becomes level, so the pointer never moves.`,
 	);
 	logger.info(`index: holding ${held} as a successor beside the canonical ${generationDigestOf(canonical)}`);

@@ -19,6 +19,7 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
 	indexerEntryOn,
 	readReorgCounters,
 	storedEmissionReplaySource,
@@ -172,6 +173,7 @@ async function openTenant(name: string, source: IndexingSource<TestABI>): Promis
 		stream: STREAM_CONFIG,
 		recordReorg: hostRecorderFor(db),
 		appendEmissions: emissionAppenderFor(db, name),
+		streamCursor: streamCursorSourceOn(db, name),
 		replay: storedEmissionReplaySource(db, name),
 		generation: openingFoldIn(db),
 	})) as ReceivingIndexer<TestABI, unknown, VersionedStateEventProcessor<TestABI>>;

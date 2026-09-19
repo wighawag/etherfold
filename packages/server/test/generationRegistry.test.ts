@@ -47,6 +47,7 @@ const INDEXER = 'main';
 const OTHER_INDEXER = 'other';
 const STREAM_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const STREAM_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const STREAM_C = 'cccccccccccccccccccccccccccccccc';
 const PROC_A = 'processor-a';
 const PROC_B = 'processor-b';
 const CAPS = {maxGenerations: 4, maxStreams: 2};
@@ -266,7 +267,7 @@ describe('the rules the other substrates pass, over SQL', () => {
 		expect((await generationRows(db)).map((row) => row.processor)).toEqual([PROC_A]);
 	});
 
-	it('REAPS the stream subtree when the last generation on it goes', async () => {
+	it('REAPS the stream subtree when the last generation on it goes AND the caller ASKED', async () => {
 		const db = await freshDB();
 		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
 		await registry.create(idOf(STREAM_A, PROC_A));
@@ -275,13 +276,73 @@ describe('the rules the other substrates pass, over SQL', () => {
 		await writeStream(db, INDEXER, STREAM_B);
 		await writeStream(db, OTHER_INDEXER, STREAM_B);
 
-		const deletion = await registry.deleteGeneration(onOwnStream);
+		// ASKED FOR, which is the operator's `reclaim` and nothing else: the automatic
+		// reap a registration or a promotion used to fire is gone (ADR-0087).
+		const deletion = await registry.deleteGeneration(onOwnStream, {reapStream: true});
 
 		expect(deletion.reaped).toBe(STREAM_B);
 		expect(await emissionCount(db, INDEXER, STREAM_B)).toBe(0);
 		// the live stream, and another named indexer's rows under the same digest
 		expect(await emissionCount(db, INDEXER, STREAM_A)).toBe(1);
 		expect(await emissionCount(db, OTHER_INDEXER, STREAM_B)).toBe(1);
+	});
+
+	it('KEEPS the stream subtree where nobody asked for it to go', async () => {
+		// A stream OUTLIVES every fold over it (ADR-0087): it is what CHAIN FETCHES
+		// bought, the state is derived from it, and "no registered generation folds it"
+		// is exactly the state it is in between an old fold being dropped and a new one
+		// being built.
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, PROC_A));
+		const onOwnStream = await registry.create(idOf(STREAM_B, PROC_B));
+		await writeStream(db, INDEXER, STREAM_B);
+
+		const deletion = await registry.deleteGeneration(onOwnStream);
+
+		expect(deletion.reaped).toBeUndefined();
+		expect(await emissionCount(db, INDEXER, STREAM_B)).toBe(1);
+		// ...and the registry still RECORDS it, which is what stops the sweep on the
+		// next open undoing the keep
+		expect(await registry.keptStreams()).toEqual([STREAM_A, STREAM_B].sort());
+	});
+
+	it('SURVIVES A RESTART, because the keep is a ROW and not a decision in memory', async () => {
+		// The trap ADR-0087 does not name and the one that silently undoes it: the
+		// sweep on registry OPEN drops every stream subtree "claimed by no registered
+		// generation", and a kept stream is exactly that. Re-opening over the same
+		// database is the only way to assert it; a second read inside one process
+		// would not go near the sweep.
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, PROC_A));
+		const onOwnStream = await registry.create(idOf(STREAM_B, PROC_B));
+		await writeStream(db, INDEXER, STREAM_B);
+		await registry.deleteGeneration(onOwnStream);
+
+		const reopened = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+
+		expect(reopened.swept).toEqual([]);
+		expect(await emissionCount(db, INDEXER, STREAM_B)).toBe(1);
+		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_B})).toBeDefined();
+	});
+
+	it('still COLLECTS a pre-generation orphan, so the sweep keeps its own reason for existing', async () => {
+		// The sweep exists for a subtree written BEFORE generations existed -- under a
+		// placeholder digest, or under a digest rule a later change replaced -- which no
+		// departure could ever fire a reap for. Such a subtree was never RECORDED, which
+		// is exactly what tells it apart from a deliberately kept stream.
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, PROC_A));
+		await writeStream(db, INDEXER, STREAM_A);
+		await writeStream(db, INDEXER, STREAM_C);
+
+		const reopened = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+
+		expect(reopened.swept).toEqual([STREAM_C]);
+		expect(await emissionCount(db, INDEXER, STREAM_C)).toBe(0);
+		expect(await emissionCount(db, INDEXER, STREAM_A)).toBe(1);
 	});
 });
 
@@ -308,7 +369,7 @@ describe('reaping a stream takes its COVERAGE CLAIM with its rows', () => {
 		// the claim is there before the reap, or this asserts nothing
 		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_B})).toBeDefined();
 
-		await registry.deleteGeneration(onOwnStream);
+		await registry.deleteGeneration(onOwnStream, {reapStream: true});
 
 		expect(await readStreamCoverage(db, {indexer: INDEXER, stream: STREAM_B})).toBeUndefined();
 		// the OTHER named indexer's claim under the SAME digest is untouched, exactly as
@@ -371,12 +432,12 @@ describe('the writer of a stream is the OLDEST SURVIVING generation on it', () =
 		await registry.moveCanonicalTo(successor);
 
 		// the WRITER is the oldest, and is deliberately not the canonical one
-		expect(await registry.writerOf(STREAM_A)).toEqual(original);
+		expect(await registry.fetcherOf(STREAM_A)).toEqual(original);
 
 		writes.length = 0;
 		await registry.deleteGeneration(original);
 
-		expect(await registry.writerOf(STREAM_A)).toEqual(successor);
+		expect(await registry.fetcherOf(STREAM_A)).toEqual(successor);
 		expect((await generationRows(db)).map((row) => row.processor)).toEqual([PROC_A]);
 		// ONE writing batch: succession is atomic with the drop because it is
 		// stored NOWHERE -- no writer column, no second write to crash between
@@ -385,7 +446,11 @@ describe('the writer of a stream is the OLDEST SURVIVING generation on it', () =
 		expect(writes.flat().join('\n')).not.toMatch(/writer/i);
 	});
 
-	it('has no writer left when the last generation goes, so the stream is reaped', async () => {
+	it('answers NOTHING when the last generation goes, and the stream STAYS', async () => {
+		// RE-SCOPED with its sentence. "No writer left, so the stream is reaped" rested
+		// on the answer being a DUTY; under ADR-0087 the DEPLOYMENT appends, so no answer
+		// here is nobody's permission to do anything and there is no reason to delete the
+		// bytes a fetch bought.
 		const db = await freshDB();
 		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
 		const canonical = await registry.create(idOf(STREAM_A, PROC_A));
@@ -394,9 +459,9 @@ describe('the writer of a stream is the OLDEST SURVIVING generation on it', () =
 
 		await registry.deleteGeneration(onOwnStream);
 
-		expect(await registry.writerOf(STREAM_B)).toBeUndefined();
-		expect(await emissionCount(db, INDEXER, STREAM_B)).toBe(0);
-		expect(await registry.writerOf(STREAM_A)).toEqual(canonical);
+		expect(await registry.fetcherOf(STREAM_B)).toBeUndefined();
+		expect(await emissionCount(db, INDEXER, STREAM_B)).toBe(1);
+		expect(await registry.fetcherOf(STREAM_A)).toEqual(canonical);
 	});
 });
 

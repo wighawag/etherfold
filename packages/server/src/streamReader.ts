@@ -10,6 +10,8 @@ import {
 	type ReplayChunkQuery,
 	type ReplaySource,
 	type StoredLogEvent,
+	type StreamCursorRead,
+	type StreamCursorSource,
 	type UsedStreamConfig,
 } from '@etherfold/core';
 import {logs} from 'named-logs';
@@ -299,6 +301,62 @@ export function storedEmissionReplaySource<ABI extends Abi>(db: RemoteSQL, index
 				// what a scheduler acts on: is there more of the stream above this chunk
 				truncated: lastToBlock < coverage.lastToBlock,
 				highWater,
+			};
+		},
+	};
+}
+
+/**
+ * WHERE THE STREAM'S OWN POSITION IS READ, for the thing that FETCHES it
+ * (ADR-0087).
+ *
+ * The third way these rows are read, and the one that belongs to the WRITER
+ * rather than to a fold: the coverage claim says how far the stream reaches, and
+ * the TAIL above the reorg window is what the writer walks its unconfirmed window
+ * out of. Together they are the two numbers ADR-0038 says the arbiter of a safe
+ * append needs, read from the stream itself instead of borrowed from whichever
+ * generation happened to hold the pen.
+ *
+ * It closes over the same two values `emissionAppenderFor` does, and for the same
+ * reason: the NAME is the HOST's (ADR-0036) and WHICH stream is asked per call.
+ * They are supplied together, because a deployment that can append to a stream is
+ * exactly one that can read back how far it reaches.
+ *
+ * ## Why it reads a TAIL and not the whole stream
+ *
+ * A window reaches back `finality` blocks from the stream's own `lastToBlock` and
+ * no further, so nothing below that bound can be in it. Reading only the tail is
+ * what makes this cost one bounded scan per fetch cycle rather than one
+ * proportional to the history -- and it is the same cut the reorg window itself
+ * is defined by, so there is no second number to keep honest.
+ *
+ * Retractions are INCLUDED and `alive` is never consulted, exactly as the replay
+ * source does it: these rows carry the fold's own verdicts, and the walk that
+ * turns them into a window HONOURS them (an applied block enters, a retracted
+ * block leaves). Filtering the retractions out would leave both branches of a
+ * reorg at one height.
+ *
+ * NOTHING is the whole PRESENCE test, as everywhere else on these rows: the
+ * coverage claim, never "there are rows". A stream scanned and found empty is
+ * PRESENT, and its absence is the documented absence of a stream -- which is what
+ * keeps the writer's hole guard PERMISSIVE on the first save of a fresh
+ * deployment.
+ */
+export function streamCursorSourceOn(db: RemoteSQL, indexer: string): StreamCursorSource {
+	return {
+		async readStreamCursor(query: {stream: string; finality: number}): Promise<StreamCursorRead | undefined> {
+			const coverage = await readStreamCoverage(db, {indexer, stream: query.stream});
+			if (!coverage) {
+				return undefined;
+			}
+			// The window's own bound, and never a second number: a block is in the window
+			// exactly while `lastToBlock - number <= finality`.
+			const from = Math.max(0, coverage.lastToBlock - query.finality);
+			return {
+				latestBlock: coverage.latestBlock,
+				lastFromBlock: coverage.lastFromBlock,
+				lastToBlock: coverage.lastToBlock,
+				tail: await readStoredStream(db, {indexer, stream: query.stream, fromBlock: from}),
 			};
 		},
 	};

@@ -160,7 +160,7 @@ async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, wha
 /** A batch in the shape the wire takes, asserting the identity this receiver indexes. */
 function batchFor(receiver: RunningReceiver, fromBlock: number, toBlock: number): string {
 	return serializeWireBatch({
-		context: receiver.streamBuilder!.context,
+		context: receiver.streamWriter.context,
 		fromBlock,
 		toBlock,
 		latestBlock: TIP,
@@ -210,7 +210,7 @@ describe('the receiver runs, folds what is pushed to it, and keeps running', () 
 		// been folded, so the answer is the earliest block this source can have
 		// anything to say about -- and it came from a stream-builder this server HOSTS,
 		// which is the difference between `index` and every other command
-		expect(answer.contexts).toEqual([{expectedFromBlock: START_BLOCK, context: running.streamBuilder!.context}]);
+		expect(answer.contexts).toEqual([{expectedFromBlock: START_BLOCK, context: running.streamWriter.context}]);
 	});
 
 	it('registers exactly the NAME it was given, and refuses every other rather than defaulting', async () => {
@@ -260,12 +260,12 @@ describe('the receiver runs, folds what is pushed to it, and keeps running', () 
 			expect(body.generations).toHaveLength(1);
 			expect(body.generations[0]).toMatchObject({canonical: true});
 			expect(body.canonical).toMatchObject({
-				stream: running.streamBuilder!.generation.stream,
-				processor: running.streamBuilder!.generation.processor,
+				stream: running.container.generation.stream,
+				processor: running.container.generation.processor,
 			});
 			// ...and it is the generation the container holds, not a second opinion about it
 			expect((await running.container.generations()).map((record) => record.processor)).toEqual([
-				running.streamBuilder!.generation.processor,
+				running.container.generation.processor,
 			]);
 
 			// the guard is the ADMIN one and fails closed: it is deliberately not the ingest

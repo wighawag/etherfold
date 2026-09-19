@@ -253,7 +253,7 @@ async function aDeploymentWithASuccessor(
 ): Promise<{indexer: RunningIndexer; incumbent: string; successor: string}> {
 	const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
 	const indexer = await aRunServing(path, promotion);
-	const incumbent = generationDigestOf(indexer.streamBuilder!.generation);
+	const incumbent = generationDigestOf(indexer.container.generation);
 
 	// THE REBUILD a watcher notices: one edited handler at the same path, so the
 	// bytes moved and the identity with them, with no author action

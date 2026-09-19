@@ -1648,9 +1648,41 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	/**
 	 * Whether the stream is at or AHEAD of the state, which is the only position
 	 * from which an append cannot leave a hole. See `streamLastToBlock`.
+	 *
+	 * ## The permissive default was ONE condition and is TWO facts (ADR-0087, amended)
+	 *
+	 * ADR-0087 first asked for this whole default to REFUSE, on the ground that an
+	 * unknown stream position must not permit. Measured, the two halves do not get
+	 * the same answer and only one of them may refuse:
+	 *
+	 * - **`!this.lastSync` REFUSES**, and doing so is inert: `promiseToIndex` loads
+	 *   before it fetches and `load` sets `lastSync` on every branch it returns
+	 *   through, so nothing reaches it today. It refuses anyway, because "we do not
+	 *   know where the STATE is" is genuinely an unknown position, and the one thing
+	 *   this comparison may never do is guess in the permissive direction.
+	 * - **`this.streamLastToBlock === undefined` STAYS PERMISSIVE.** It is not an
+	 *   unknown position, it is the documented ABSENCE of a stream
+	 *   (`forgetStoredStream`: "there is no stream on disk any more, so nothing
+	 *   constrains the next write"). Refusing there declines the first save of every
+	 *   fresh deployment, and it destroys the case `streamSeedInstall.test.ts`
+	 *   protects by name (`locallyIndexedAbove`): a stream lost while its STATE
+	 *   survived is re-opened by the next save at the state's resume point, and the
+	 *   new subtree RECORDS that resume point as its own `startBlock`, so a read from
+	 *   below it is answered `does-not-reach-back` rather than served. That is an
+	 *   honest partial stream, not a hole.
+	 *
+	 * The DUPLICATE that ADR-0087 attributed to this method was never on its path:
+	 * this sits over an `ExistingStream` the load path always reads first, while the
+	 * hand-over it measured wrote through an append-only `EmissionAppender` with no
+	 * hole guard of any kind. That guard now exists, on the thing that FETCHES a
+	 * stream and therefore writes it (`StreamHoleError`), where the hazard actually
+	 * is.
 	 */
 	protected streamCanReceive(): boolean {
-		if (this.streamLastToBlock === undefined || !this.lastSync) {
+		if (!this.lastSync) {
+			return false;
+		}
+		if (this.streamLastToBlock === undefined) {
 			return true;
 		}
 		return this.streamLastToBlock >= this.lastSync.lastToBlock;

@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
+import {generationDigestOf} from '@etherfold/core';
 import {build, canonicalGenerationIn, heldGenerationsIn, prepareIndexing} from '../src/index.js';
 import type {IndexingDependencies} from '../src/index.js';
 import type {Options} from '../src/types.js';
@@ -240,10 +241,18 @@ describe('a `build` STOPPED from outside', () => {
 		await stopped.index();
 
 		const successor = stopped.container.held()[0].record;
-		// it really did catch up, so this is a decision and not a shortfall
-		expect(await stopped.container.registry.readStateCursor(successor)).toBe(TIP);
-		// ...and the pointer stayed where the previous build left it: a caller asking a
-		// process to stop is not asking it to publish a generation first
+		// RE-SCOPED. This used to assert the successor was LEVEL, on the premise that a
+		// re-run `build` folds its successor through the WIRE: the kill landed on the
+		// caught-up report, so the fold was finished and only the settle was left. Under
+		// ADR-0087 no generation fetches -- the deployment appends to the stream and each
+		// generation re-folds it -- so what the EXIT work drives is the catch-up itself,
+		// and a build stopped from outside skips ALL of it. The successor is registered
+		// and has got wherever it got, which is the honest state of an interrupted run.
+		expect(await stopped.container.generations()).toContainEqual(successor);
+		// ...and the pointer stayed where the previous build left it, which is the claim
+		// this case exists for: a caller asking a process to stop is not asking it to
+		// publish a generation first.
 		expect(await canonicalDigestOf(db)).toBe(incumbent);
+		expect(generationDigestOf(successor)).not.toBe(incumbent);
 	});
 });

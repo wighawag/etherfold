@@ -54,6 +54,14 @@ export function createMemoryGenerationRegistryPort(options?: {
 	readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
 }): GenerationRegistryPort {
 	const generations = new Map<string, GenerationRecord>();
+	/**
+	 * THE STREAM RECORDS: every stream this indexer holds, folded or not (ADR-0087).
+	 *
+	 * It doubles as this substrate's SUBTREE list, which is honest rather than a
+	 * shortcut: the memory port stores no stream bytes at all, so the only thing it
+	 * can enumerate is what it was told about. A runtime that wants its orphan
+	 * subtrees swept needs a port that can SEE them (the IndexedDB and SQL ones).
+	 */
 	const streams = new Set<string>();
 	// THE THREE DURABLE SLOTS -- durable everywhere but here, which is this
 	// substrate's whole trade-off (see the JSDoc above): the rule is one and the
@@ -66,6 +74,7 @@ export function createMemoryGenerationRegistryPort(options?: {
 	const snapshot = (): GenerationRegistryState => ({
 		generations: [...generations.values()],
 		slots: Object.fromEntries([...slots].map(([name, id]) => [name, {stream: id.stream, processor: id.processor}])),
+		keptStreams: [...streams],
 	});
 
 	return {
@@ -83,6 +92,15 @@ export function createMemoryGenerationRegistryPort(options?: {
 			}
 			if (write.put) {
 				generations.set(keyOf(write.put), write.put);
+			}
+			// RECORDED before anything is forgotten, and forgotten last, so one commit that
+			// did both ends with the stream gone: an ASKED-FOR deletion wins over the
+			// registration that happens to be in the same write.
+			if (write.keepStream !== undefined) {
+				streams.add(write.keepStream);
+			}
+			for (const digest of write.forgetStreams ?? []) {
+				streams.delete(digest);
 			}
 			for (const name of SLOT_NAMES) {
 				const assigned = write.slots?.[name];

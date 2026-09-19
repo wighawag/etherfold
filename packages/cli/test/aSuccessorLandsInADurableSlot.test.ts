@@ -18,6 +18,7 @@ import {
 	applySchema,
 	EMISSION_STREAM_TABLE,
 	emissionAppenderFor,
+	streamCursorSourceOn,
 	GENERATION_SLOT_TABLE,
 	GENERATION_TABLE,
 	generationRegistryPortOnSQL,
@@ -30,7 +31,19 @@ import type {IndexingSource} from '@etherfold/core';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it, vi} from 'vitest';
-import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, timestampOf, ZERO} from './utils/chain.js';
+import {
+	ALICE,
+	BOB,
+	CONTRACT,
+	START_BLOCK,
+	TRANSFER_TOPIC,
+	ZERO,
+	abi,
+	addressTopic,
+	nftEntities,
+	nftProcessor,
+	timestampOf,
+} from './utils/chain.js';
 import {identityOf} from './utils/processorIdentity.js';
 import {generationStateSeamsOn} from './utils/generationState.js';
 
@@ -150,6 +163,7 @@ async function openIndexer(
 		source: SOURCE_A,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
+		streamCursor: streamCursorSourceOn(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
 		generation: specFor(db, identity),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
@@ -168,22 +182,33 @@ function transferEvent(blockNumber: number, address: string, to: string, id: big
 		removed: false,
 		address,
 		data: '0x',
-		topics: [],
+		// REAL TOPICS, so a REPLAY can `reparse` this row. It used to be `topics: []`
+		// with a pre-decoded `args`, which was enough while a fold was fed by the WIRE:
+		// the decoded half arrived with the batch. Since ADR-0087 every generation
+		// advances by re-folding the stream the deployment STORED, and a stored row
+		// carries the raw log alone (`args` is what SOME ABI made of those bytes,
+		// ADR-0034) -- so a fixture with no `topic0` is one no fold can decode.
+		topics: [TRANSFER_TOPIC, addressTopic(ZERO), addressTopic(to), `0x${id.toString(16).padStart(64, '0')}`],
 		transactionHash: `0x${logCounter.toString(16).padStart(64, '0')}`,
 		logIndex: 0,
 		extra: undefined,
-		eventName: 'Transfer',
-		args: {from: ZERO, to, id},
 	} as unknown as LogEvent<typeof abi>;
 }
 
-/** Feed ONE fold through its own receiver, at its own address on the wire. */
+/**
+ * Feed ONE fold's STREAM, at that stream's address on the wire.
+ *
+ * It used to reach for the fold's own receiver. A fold has none since ADR-0087:
+ * what answers at a stream's address is the DEPLOYMENT's writer of that stream,
+ * and every generation over it reads what that writer stored.
+ */
 async function feed(
+	indexer: ReceivingIndexer<typeof abi, unknown, unknown>,
 	fold: HeldFold<typeof abi, unknown, unknown>,
 	over: {address: string; toBlock: number; to: string; id: bigint},
 ): Promise<void> {
-	const receiver = fold.ingestion;
-	if (!receiver) throw new Error('this fold FOLLOWS its stream, so it has no receiver to feed');
+	const receiver = (await indexer.liveIngestions()).find((one) => one.streamDigest === fold.streamDigest);
+	if (!receiver) throw new Error(`nothing is fetching the stream ${fold.streamDigest}`);
 	const batch: WireBatch<typeof abi> = {
 		context: receiver.context,
 		fromBlock: START_BLOCK,
@@ -260,7 +285,7 @@ const idOf = (fold: {record: {stream: string; processor: string}}): GenerationId
 async function aDeploymentThatHasFolded(db: RemoteSQL) {
 	await applySchema(db);
 	const indexer = await openIndexer(db);
-	await feed(indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
+	await feed(indexer, indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
 	return indexer;
 }
 
@@ -315,7 +340,6 @@ describe('the `successor` slot holds ONE, so a second registration replaces the 
 		// the incumbent WRITES the stream both successors re-fold, so nothing dropped
 		// may touch it: replacing a successor never disturbs the generation that writes
 		// its stream (ADR-0044)
-		expect(indexer.writesStream).toBe(true);
 		expect(await emissionRows(db, indexer.streamDigest)).toBe(stored);
 		expect((await namespaceTables(db, indexer.generation)).length).toBeGreaterThan(0);
 	});
@@ -528,9 +552,8 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 		// `successor` slot, so a newer successor replaces the pending one WHEREVER it
 		// sits -- which is what frees the stream slot as well.
 		const onB = await indexer.add(specFor(db, V2, sourceOn(OTHER_CONTRACT)));
-		await feed(onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
+		await feed(indexer, onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
 		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
-		expect(onB.writesStream).toBe(true);
 
 		const onC = await indexer.add(specFor(db, V3, sourceOn(THIRD_CONTRACT)));
 		const onD = await indexer.add(specFor(db, V4, sourceOn(FOURTH_CONTRACT)));
@@ -539,49 +562,52 @@ describe('the caps are never REACHED by churn, and they are UNCHANGED', () => {
 		expect(await indexer.registry.streams()).toEqual(
 			[indexer.streamDigest, onD.streamDigest].sort((a, b) => a.localeCompare(b)),
 		);
-		// the replaced successor's own stream was reaped with it, no registered
-		// generation being left folding it
-		expect(await emissionRows(db, onB.streamDigest)).toBe(0);
+		// RE-SCOPED: the replaced successor's own STREAM is KEPT (ADR-0087). Its
+		// registry row and its state namespace go, because a registration displaced it;
+		// the bytes a chain fetch bought do not, because nobody asked for them to. That
+		// is what makes the next generation over that filter a local re-fold rather than
+		// a re-index against a node that may refuse the history outright.
+		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
+		expect(await indexer.registry.keptStreams()).toContain(onB.streamDigest);
 		expect(await namespaceTables(db, idOf(onB))).toEqual([]);
 		expect(await namespaceTables(db, idOf(onC))).toEqual([]);
 		// and the canonical generation's own stream is untouched
 		expect(await emissionRows(db, indexer.streamDigest)).toBe(1);
 	});
 
-	it('DECLINES the drop while another held fold follows the replaced one\u2019s stream, then takes it', async () => {
+	it('DROPS the replaced successor even where another held fold folds its stream, and KEEPS the stream', async () => {
+		// RE-SCOPED. This used to assert a DECLINE: the older generation WROTE the
+		// stream the newer one followed, so dropping it would have left that fold folding
+		// a stream nothing appended to -- and would have reaped the stream out from under
+		// it. Neither is possible under ADR-0087: the DEPLOYMENT writes the stream it
+		// fetches, so there is no duty to strand, and a delete does not reap, so there
+		// are no bytes to lose. The decline is gone rather than kept as a clause nothing
+		// can reach.
 		const db = oneDatabase();
 		const indexer = await aDeploymentThatHasFolded(db);
 
 		// the source change lands first, and the processor follows a moment later on
 		// that same new stream
 		const onB = await indexer.add(specFor(db, V2, sourceOn(OTHER_CONTRACT)));
-		await feed(onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
+		await feed(indexer, onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
 		const alsoOnB = await indexer.add(specFor(db, V3, sourceOn(OTHER_CONTRACT)));
 
-		// the older one lost the slot, but it WRITES the stream the newer one follows,
-		// and dropping it would leave that one folding a stream nothing appends to
-		// (ADR-0044). So it is RETAINED, named by no slot, and the one-writer rule is
-		// untouched.
-		expect(alsoOnB.follows).toBe(true);
-		expect(onB.writesStream).toBe(true);
-		expect(await registeredProcessors(db)).toEqual([
-			indexer.generation.processor,
-			onB.record.processor,
-			alsoOnB.record.processor,
-		]);
+		// the older one lost the slot and GOES: nothing is left named by no slot and
+		// retained "for now", so the churn a development loop produces stays bounded
+		// without a clause that only fires on one stream shape.
+		expect(await registeredProcessors(db)).toEqual([indexer.generation.processor, alsoOnB.record.processor]);
 		expect(await slotProcessors(db)).toEqual({
 			canonical: indexer.generation.processor,
 			successor: alsoOnB.record.processor,
 			predecessor: null,
 		});
-		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
-
-		// ...and when the next change moves off that stream entirely, BOTH go in one
-		// pass: the follower first, which is what leaves the writer free to go too
-		const onC = await indexer.add(specFor(db, V4, sourceOn(THIRD_CONTRACT)));
-		expect(await registeredProcessors(db)).toEqual([indexer.generation.processor, onC.record.processor]);
-		expect(await emissionRows(db, onB.streamDigest)).toBe(0);
 		expect(await namespaceTables(db, idOf(onB))).toEqual([]);
-		expect(await namespaceTables(db, idOf(alsoOnB))).toEqual([]);
+
+		// ...and the STREAM it opened is exactly where it was, which is what the fold
+		// still on it re-folds. That is the whole point: a replaced generation is dead
+		// work, and the history it fetched is not.
+		expect(alsoOnB.streamDigest).toBe(onB.streamDigest);
+		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
+		expect(await indexer.registry.keptStreams()).toContain(onB.streamDigest);
 	});
 });
