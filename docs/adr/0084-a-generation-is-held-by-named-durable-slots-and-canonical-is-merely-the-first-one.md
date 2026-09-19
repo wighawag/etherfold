@@ -1,5 +1,5 @@
 ---
-status: accepted, not yet implemented
+status: accepted
 ---
 
 # A generation is held by NAMED DURABLE SLOTS, and `canonical` is merely the first one
@@ -60,7 +60,13 @@ The working name through the design discussion was `staging`, and it is rejected
 
 **The `opened` gate can key on the slot instead of on arrival.** Arm what `successor` names; never arm what `predecessor` names. The restart path then gets the documented promotion behaviour while the hazard the gate exists to prevent stays prevented, so the gate's reasoning is honoured rather than reversed. This removes the correctness cliff where a restarted deployment waits for ever for a promotion that cannot happen.
 
-> **STILL OPEN as of 2026-09-17, and it is the LAST one: this is why the front-matter status line stays.** `promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade` owns it and is in `work/tasks/ready/`, re-scoped after a measured build STOPPED on it (`work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`) having found the gate is one of THREE parts and none of them sufficient alone. Every OTHER consequence of this ADR has landed -- the durable slots and the replacement rule on the receiving container, the reclaim verb and its route, and the chain-facing twin -- so read `not yet implemented` as naming this consequence and no other. `the-chain-facing-container-holds-its-generations-in-slots` was told to remove the line on the premise that the arming had landed first; it checked, found it had not, and left the line alone. It comes off with the arming.
+> **LANDED 2026-09-19 (`promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade`), and the front-matter status line comes off with it.** It was the last open consequence, and it turned out to be THREE parts rather than one, none of them sufficient alone -- which is what a measured build found when it implemented the gate narrowing exactly as written and watched the pointer stay where it was (`work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`).
+>
+> 1. **The gate.** `applyPolicyTo` arms what `successor` names and nothing else; `opened` and the in-memory `candidates` set are DELETED, and `settlePromotion` reads the slot.
+> 2. **The TRIGGER had to be evaluable with no held fold for the canonical generation**, which is the restart shape itself: a redeployed process holds one fold, the new one, and the old processor's code is not in the build. A generation's position is now read the way the read tier already resolves its state -- by NAMESPACE, through an injected seam beside `dropState` (`GenerationRegistryPort.readStateCursor`) -- so measuring a generation needs no engine, exactly as ANSWERING from one does. Nothing retains, re-imports or reconstructs past processor code; the comparison needs a number, and the number is a row.
+> 3. **Something had to CALL the settle** in that shape: `run` gated its `rebuildMore` on holding a follower, and a successor registered at `open` is not one (it is fed by the wire), so the trigger was never reached at all.
+>
+> Asserted end to end on a deployment stood up, stopped and re-run over the same substrate with a changed processor, plus the revert case driven through a restart (`packages/cli/test/aRestartFinishesTheUpgrade.test.ts`). ADR-0046 carries the amendment for the arming rule it wrote; the chain-facing `Indexer` still arms in memory and is deliberately untouched here.
 
 **The in-memory `candidates` set collapses into the slot**, since the candidate for promotion IS what `successor` names, subject to the policy. Together with the abandoned-successor predicate, three in-memory structures reduce to one durable fact.
 

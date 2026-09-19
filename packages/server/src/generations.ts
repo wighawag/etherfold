@@ -131,7 +131,7 @@ export class GenerationCommitContentionError extends Error {
 	}
 }
 
-/** The `dropState` seam, and nothing else this substrate cannot derive. */
+/** The two STATE seams, and nothing else this substrate cannot derive. */
 export type SQLGenerationRegistryOptions = {
 	/**
 	 * Drop the state store this generation folded into. Nothing, by default.
@@ -142,6 +142,18 @@ export type SQLGenerationRegistryOptions = {
 	 * convention here would fork one the rest of the system does not share.
 	 */
 	dropState?: (id: GenerationId) => Promise<void>;
+	/**
+	 * How far the fold in this generation's state got (`lastToBlock`), for a
+	 * generation the asker holds no fold for. NOTHING READABLE, by default.
+	 *
+	 * `dropState`'s READ sibling, injected for exactly the same reason and by the
+	 * same host: the namespace is named above this substrate, so only whoever named
+	 * it can address it (see `GenerationRegistryPort.readStateCursor`). A host that
+	 * FOLDS supplies it -- it is what lets the promotion trigger measure the
+	 * canonical generation on a redeployed process that holds no fold for it -- and a
+	 * read tier that folds nothing supplies neither.
+	 */
+	readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
 };
 
 /** A generation record, as its row spells it. */
@@ -322,6 +334,10 @@ export function generationRegistryPortOnSQL(
 
 		async dropState(id) {
 			await options?.dropState?.(id);
+		},
+
+		async readStateCursor(id) {
+			return options?.readStateCursor?.(id);
 		},
 	};
 }

@@ -478,23 +478,39 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 	const wait = deps.sleep ?? sleep;
 	/**
 	 * WHAT THE HOST DOES IN THE GAP IT WAITS: one bounded rebuild chunk for every
-	 * follower held, one bounded prune pass over the states held, then the sleep the
-	 * loop asked for.
+	 * follower held AND the pointer settled once, one bounded prune pass over the
+	 * states held, then the sleep the loop asked for.
 	 *
 	 * Both are the same bargain and both FAIL SOFT. A rebuild that fails is LOGGED
 	 * and the loop carries on: the successor is behind by one chunk and the canonical
 	 * generation goes on answering, which is the whole shape of a rebuild running
 	 * beside a live fold. A prune that fails leaves a store larger than it asked to
-	 * be, which is not a wrong answer. The rebuild costs one in-memory check on a
-	 * process holding no follower, which is every process until something adds one;
-	 * the prune costs one tip read on a store with no floor, which is every
-	 * deployment that configured no retention.
+	 * be, which is not a wrong answer.
+	 *
+	 * ## Why it is UNCONDITIONAL, exactly like the prune beneath it
+	 *
+	 * It used to be gated on `container.followers().length > 0`, and that gate made
+	 * the whole restart-shape upgrade unreachable. `rebuildMore` is TWO things -- it
+	 * advances every follower and then SETTLES the pointer once -- and a successor
+	 * that arrived at `open` is not a follower: `add` decides that from "do I already
+	 * hold a fold on this stream", and at `open` the fold list is empty, so a
+	 * redeployed process's successor is fed by the WIRE and holds no rebuild. It
+	 * caught up and the settle it needed was never called, so the pointer stayed on
+	 * the incumbent for ever. The gate answered the wrong question: whether anything
+	 * is being REBUILT, rather than whether anything might be PROMOTED.
+	 *
+	 * What it costs when there is nothing to do is a few registry reads per cycle, in
+	 * the gap the loop already waits, which is the same bargain the prune below
+	 * states for itself. It decides nothing about where a rebuild gets its turn on
+	 * `index`, which has no drive loop at all
+	 * (`an-index-process-advances-the-successor-it-registered` owns that); this is the
+	 * loop `run` already had, no longer refusing to call a settle.
 	 */
 	/** Which followers have already been reported as stalled, so it is said once and not per cycle. */
 	const reportedStalled = new Set<string>();
 
 	const betweenCycles: Sleep = async (ms, signal) => {
-		if (!stopAtTip && container.followers().length > 0) {
+		if (!stopAtTip) {
 			try {
 				for (const stalled of newlyStalledFollowers(await container.rebuildMore(), reportedStalled)) {
 					// `console.error` and NOT the named-logs logger, for the reason

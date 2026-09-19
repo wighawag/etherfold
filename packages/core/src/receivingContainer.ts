@@ -16,6 +16,7 @@ import {
 	displacedBySuccessor,
 	openGenerationRegistry,
 	sameGeneration,
+	slotHolding,
 	SLOT_NAMES,
 	unslottedGenerations,
 	writerOf,
@@ -593,36 +594,25 @@ export class ReceivingIndexer<
 	/** The promotion policy this indexer runs under, with nothing left to decide. */
 	private readonly promotionConfig: UsedPromotionConfig;
 
-	/**
-	 * Whether the fold this container OPENED with has been added.
-	 *
-	 * The same gate the chain-facing container keeps, for the same reason: the
-	 * generations an indexer is opened with are the set it holds, and which of them
-	 * is canonical is the registry's durable answer. Applying the policy at open
-	 * would let `immediate` promote whatever the host happened to be built with, and
-	 * `on-catch-up` undo a revert recorded in a previous session. A fold added
-	 * AFTERWARDS is a successor, and that is the only thing the policy has an
-	 * opinion about.
-	 */
-	private opened = false;
-
-	/**
-	 * WHICH folds are armed for automatic promotion (ADR-0046).
-	 *
-	 * IN MEMORY, exactly as the chain-facing container keeps it and for the same
-	 * reason: the registry records what a generation IS, and being a candidate is
-	 * what a container is DOING with one. It is deliberately not "every
-	 * non-canonical generation is a candidate", which would re-promote a successor
-	 * on the cycle after a REVERT.
-	 */
-	private readonly candidates = new Set<HeldFold<ABI, ProcessResultType, unknown>>();
-
 	/* ------------------------------------------------------------------------------
 	 * WHAT USED TO BE HERE, and what reads it now (ADR-0084)
 	 *
-	 * Two in-memory sets stood here and both are DELETED rather than left beside the
-	 * slot agreeing with it most of the time:
+	 * FOUR in-memory facts stood here and all of them are DELETED rather than left
+	 * beside the slot agreeing with it most of the time:
 	 *
+	 * - `opened`, "has the fold this host was built with been added yet", which
+	 *   gated the promotion policy so that it spoke for nothing arriving at `open`.
+	 *   Its REASONING was right and is preserved exactly: applying the policy at open
+	 *   would have let `immediate` promote whatever the host happened to be built
+	 *   with, and `on-catch-up` undo a revert recorded in a previous session. Both
+	 *   hazards are now ruled out by the SLOT rather than by the moment of arrival
+	 *   (see `applyPolicyTo`), which is what lets a successor that arrived at `open`
+	 *   -- a RESTART with a changed processor -- finish its upgrade instead of
+	 *   waiting for ever for a promotion that could never happen.
+	 * - `candidates`, "which held folds are armed for automatic promotion", which
+	 *   was in memory because nothing durable said what a generation was FOR. The
+	 *   `successor` slot says it, for every process, across every restart -- so
+	 *   promotion READS the slot and the set is gone rather than kept beside it.
 	 * - `everCanonical`, "which generations the pointer has ever named, as far as
 	 *   THIS container has seen", which is how a REVERT was told from a PROMOTION.
 	 *   The slots answer it durably and better: a promotion is a move onto what
@@ -659,9 +649,10 @@ export class ReceivingIndexer<
 	 * because a fold reports a block from inside `process()` and only the canonical
 	 * fold publishes.
 	 *
-	 * IN MEMORY, for the reason `candidates` above is: the registry records what a
-	 * generation IS, and this is which HELD FOLD OBJECT answers for it right now,
-	 * which is a fact about this process. It is DERIVED and never set by a caller --
+	 * IN MEMORY, and it is the ONE fact here that legitimately is: the registry
+	 * records what a generation IS, and this is which HELD FOLD OBJECT answers for it
+	 * right now, which is a fact about this process and about no other. It is DERIVED
+	 * and never set by a caller --
 	 * `noteCanonical` re-reads it
 	 * from the records wherever this container already reads the pointer, which is
 	 * every path that precedes a fold (`liveIngestions` before a batch is routed,
@@ -692,17 +683,22 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * Add the fold this host was built with, and only then let the policy speak.
+	 * Add the fold this host was built with, and let the policy speak about it on
+	 * exactly the same terms as any other (ADR-0084).
 	 *
 	 * Called by `openReceivingIndexer`; separate from the constructor because
 	 * registering a generation is a write and a CAP refuses here, at start-up, where
 	 * an operator reads it.
+	 *
+	 * There is no longer a gate saying "the policy is silent during `open`", and that
+	 * is the correctness cliff ADR-0084 exists to remove: a generation registered at
+	 * `open` could never be promoted -- not late, ever -- so restarting with a changed
+	 * processor left a successor that caught up and then sat there for ever, with
+	 * nothing reported and no policy value that changed it. What the gate was
+	 * PROTECTING is protected by the slot instead; see `applyPolicyTo`.
 	 */
 	async open(): Promise<void> {
 		await this.add(this.options.generation);
-		// LAST: from here on, a fold handed to `add` is a SUCCESSOR beside a live one,
-		// which is the only thing the promotion policy has an opinion about.
-		this.opened = true;
 	}
 
 	/**
@@ -1284,33 +1280,63 @@ export class ReceivingIndexer<
 	 * success, and that is the one question worth asking here.
 	 */
 	async promote(id: GenerationId): Promise<GenerationRecord> {
-		return this.movePointer(
-			id,
-			this.folds.find((held) => sameGeneration(held.record, id)),
-		);
+		return this.movePointer(id);
 	}
 
 	/**
-	 * What the policy does about a fold that has just been ADDED beside the live
-	 * one.
+	 * What the policy does about a fold that has just been ADDED, whether it arrived
+	 * at `open` or beside a live one.
 	 *
-	 * Nothing at all during `open` (see `opened`), and nothing for a fold that is
-	 * already the canonical generation, which is not a successor to anything. The
-	 * MAPPING from policy to action is `generation/promotion.ts`'s and is shared
-	 * with the chain-facing container.
+	 * ## ONE condition, stated positively: arm what `successor` names
+	 *
+	 * Read off the durable slot rather than off how the fold ARRIVED (ADR-0084). The
+	 * question stops being "did this turn up at `open` or through a reconfigure",
+	 * which nothing durable records and which a restart answers wrongly, and becomes
+	 * "what is this generation FOR", which is a row. `add` always leaves the arriving
+	 * fold in exactly ONE slot -- the registry assigns `successor`, or leaves it in the
+	 * slot that already named it, or gives it `canonical` on an empty registry -- so
+	 * there are exactly two things this excludes, and they are NOT the same weight:
+	 *
+	 * - **What `predecessor` names, and this clause is load-bearing.** After a revert
+	 *   the pointer sits on an older generation while a newer one is still registered,
+	 *   so arming every non-canonical fold at open would re-promote exactly what an
+	 *   operator deliberately reverted away from -- undoing a revert by restarting
+	 *   (ADR-0046). It is MEASURED rather than argued: drop this clause and a restart
+	 *   after a revert under `immediate` moves the pointer straight back
+	 *   (`packages/cli/test/aRestartFinishesTheUpgrade.test.ts`). The registry keeps
+	 *   such a generation where it is (`create`, rule 2), so it never enters
+	 *   `successor` and is armed under no policy value.
+	 * - **What `canonical` names, which is INTENT plus defence in depth.** This is the
+	 *   hazard `immediate` posed at `open` -- promoting whatever the host happened to
+	 *   be built with -- and it is worth saying that the pointer would not actually
+	 *   move: `moveCanonicalTo` writes nothing when the target is the generation the
+	 *   pointer already names, so the hazard is already neutral one layer down.
+	 *   Removing this clause therefore breaks no test, and it stays anyway, because
+	 *   the rule is a statement about what a generation IS: the fold the pointer
+	 *   already names is not a successor to anything, and a policy asking to promote
+	 *   it would be saying something false about it in every log line it produced.
+	 *
+	 * What is NOT here any more is a clause about the MOMENT of arrival. The MAPPING
+	 * from policy to action stays `generation/promotion.ts`'s, shared with the
+	 * chain-facing container.
 	 */
 	private async applyPolicyTo(fold: HeldFold<ABI, ProcessResultType, unknown>): Promise<void> {
-		if (!this.opened) return;
-		const canonical = await this.registry.canonical();
-		if (canonical && sameGeneration(canonical, fold.record)) return;
+		// ONE read of the slots, and the pointer noted from it: `canonical` is one of the
+		// three answers this is asking for, so asking for it separately would pair two
+		// reads across another process's write.
+		const slots = await this.registry.slots();
+		this.noteCanonical(slots.canonical);
+		if (slotHolding(slots, fold.record) !== 'successor') return;
 		switch (promotionOnAdd(this.promotionConfig.policy)) {
 			case 'promote':
-				await this.movePointer(fold.record, fold);
+				await this.movePointer(fold.record);
 				return;
 			case 'arm':
-				this.candidates.add(fold);
-				// Evaluated at once as well as per chunk: a fold added when it is already
-				// level (one named a second time across a restart, mid-rebuild) is ready NOW.
+				// ARMING IS NOT A THING THIS CONTAINER REMEMBERS any more: the slot already
+				// says it, so there is nothing to record and the settle simply reads it. It is
+				// evaluated at once as well as per chunk, because a fold added when it is
+				// already level -- one that caught up in a previous process and is being held
+				// again after a restart -- is ready NOW.
 				await this.settlePromotion();
 				return;
 			case 'wait':
@@ -1319,61 +1345,102 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * THE TRIGGER: promote the armed fold that has reached the CANONICAL
+	 * THE TRIGGER: promote what `successor` names once it has reached the CANONICAL
 	 * generation's cursor.
 	 *
 	 * The rule is `readyForPromotion`'s, shared with the chain-facing container so
 	 * that there is one answer to "when does the pointer move on its own". What this
-	 * runtime supplies is the VIEW: a cursor here is not a field an engine publishes,
-	 * it is the `lastToBlock` each fold has PERSISTED -- read live on every settle,
-	 * never snapshotted, because a snapshot would let a successor be promoted while
-	 * the incumbent had moved on.
+	 * runtime supplies is the VIEW, and it is now the same view the read tier has: a
+	 * cursor here is not a field an engine publishes, it is the `lastToBlock` a
+	 * generation has PERSISTED in its own table namespace -- read live on every
+	 * settle, never snapshotted, because a snapshot would let a successor be promoted
+	 * while the incumbent had moved on.
 	 *
-	 * A canonical generation this container holds no fold for is not an error here
-	 * (see the module JSDoc): reads answer from a table namespace with no engine at
-	 * all. It simply means there is nothing to compare a successor against, so the
-	 * pointer does not move on its own.
+	 * ## Neither side has to be a fold THIS CONTAINER HOLDS, and that is the fix
+	 *
+	 * The entries are the two the SLOTS name, and they are read by IDENTITY. This
+	 * used to search the held folds for one matching the canonical generation and
+	 * return when there was none -- which is the ORDINARY restart: a redeployed host
+	 * holds exactly one fold, the new one, and a fold for the incumbent is unbuildable
+	 * by construction, because the old processor's code is not in the build. So the
+	 * trigger could not be EVALUATED on the very shape the upgrade story is about, and
+	 * the pointer never moved (`work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`).
+	 * It is now the same rule the rest of this runtime follows (module JSDoc, rule 1;
+	 * `promote`'s docstring): a generation ANSWERS with no engine, so it can be
+	 * MEASURED with no engine.
+	 *
+	 * The POLICY still decides WHEN. This is the `arm` half of it and runs under
+	 * nothing else: `immediate` moved the pointer at `add`, and `manual` means the
+	 * pointer moves only when somebody asks -- a successor sitting armed in a slot must
+	 * not creep forward because the slot exists.
 	 */
 	private async settlePromotion(): Promise<void> {
-		if (this.candidates.size === 0) return;
-		const canonical = this.noteCanonical(await this.registry.canonical());
-		if (!canonical) return;
-		const current = this.folds.find((fold) => sameGeneration(fold.record, canonical));
-		if (!current) return;
+		if (promotionOnAdd(this.promotionConfig.policy) !== 'arm') return;
+		const slots = await this.registry.slots();
+		this.noteCanonical(slots.canonical);
+		const current = slots.canonical;
+		const successor = slots.successor;
+		if (!current || !successor) return;
 
-		const cursors = new Map<HeldFold<ABI, ProcessResultType, unknown>, number | undefined>();
-		for (const fold of this.folds) {
-			cursors.set(fold, await this.cursorOf(fold));
-		}
-		const ready = readyForPromotion(this.folds, current, {
-			isCandidate: (fold) => this.candidates.has(fold),
-			cursorOf: (fold) => cursors.get(fold),
+		const cursors = new Map<GenerationRecord, number | undefined>([
+			[current, await this.cursorOf(current)],
+			[successor, await this.cursorOf(successor)],
+		]);
+		const ready = readyForPromotion([current, successor], current, {
+			// BEING A CANDIDATE IS A ROW: the slot says what a generation is FOR, so there
+			// is nothing in memory to consult and nothing that a restart empties.
+			isCandidate: (record) => record === successor,
+			cursorOf: (record) => cursors.get(record),
 		});
 		if (ready) {
-			await this.movePointer(ready.record, ready);
+			await this.movePointer(ready);
 		}
 	}
 
 	/**
-	 * HOW FAR THIS FOLD HAS GOT, read from where it is durable.
+	 * HOW FAR ONE GENERATION HAS GOT, read from where it is durable and with NO
+	 * ENGINE.
 	 *
 	 * The persisted cursor and never an in-memory copy, for the reason
 	 * `StreamBuilder` reads its own on every call: several isolates may serve one
-	 * database, and a cursor held in a process is that process's private opinion of
-	 * a value the database owns. A cursor written by ANOTHER fold answers
-	 * `undefined` rather than a number, so a generation that has folded nothing can
-	 * never be read as level with one that has.
+	 * database, and a cursor held in a process is that process's private opinion of a
+	 * value the database owns.
+	 *
+	 * It goes through the INJECTED seam (`GenerationRegistryPort.readStateCursor`)
+	 * rather than through a held fold's `processor.load(...)`, and the difference is
+	 * the whole of part two of ADR-0084's third symptom. Three things follow, and
+	 * each one was a defect:
+	 *
+	 *  - a generation this container holds NO FOLD for can be measured, which is the
+	 *    restart shape and the case the upgrade story depends on;
+	 *  - nothing here retains, re-imports or reconstructs the processor that wrote the
+	 *    cursor -- the number is a ROW addressed by an identity the registry holds
+	 *    (ADR-0053), and retaining CODE is a separate question this does not answer;
+	 *  - a fold with its OWN source has its cursor read with the pair it ACTUALLY
+	 *    folded under, because the address IS that pair. The read it replaced passed
+	 *    the CONTAINER's source with the FOLD's stream config, which is a pair no fold
+	 *    necessarily ran under (it was latent rather than observable, because neither
+	 *    implementation of `load` chooses a cursor by `source`).
+	 *
+	 * A read that FAILS is reported as `undefined` and said out loud, exactly as the
+	 * status reporter treats an unreadable store: `undefined` means NOT READABLE and
+	 * must never become a zero, or a generation that has folded nothing would read as
+	 * level at block 0 with one that has. The safe direction falls out of that --
+	 * `hasReachedCursor` is false wherever either side is unknown, so an unreadable
+	 * cursor holds the pointer where it is.
 	 */
-	private async cursorOf(fold: HeldFold<ABI, ProcessResultType, unknown>): Promise<number | undefined> {
-		// WHAT THIS FOLD IS CALLED, read off the RECORD: the identity the arrival
-		// supplied is what this generation was registered under, and the record is where
-		// that was written down (ADR-0086).
-		const processorHash = fold.record.processor;
-		const loaded = await fold.processor.load(this.options.source, fold.streamConfig);
-		if (!loaded || loaded.lastSync.context.processor !== processorHash) {
+	private async cursorOf(record: GenerationRecord): Promise<number | undefined> {
+		try {
+			return await this.registry.readStateCursor({stream: record.stream, processor: record.processor});
+		} catch (err) {
+			namedLogger.error(
+				`the cursor of the generation {stream: ${record.stream}, processor: ${record.processor}} could not be read, ` +
+					`so it counts as NOT READABLE rather than as a position: the pointer does not move on its own until it can ` +
+					`be read`,
+				err,
+			);
 			return undefined;
 		}
-		return loaded.lastSync.lastToBlock;
 	}
 
 	/**
@@ -1386,15 +1453,14 @@ export class ReceivingIndexer<
 	 * appends to. On the ordinary processor upgrade the superseded generation IS
 	 * that writer, so the drop is declined and said out loud.
 	 *
-	 * The FOLD is optional, and its absence is a case rather than a refusal. A held
-	 * fold is what the in-memory bookkeeping hangs off -- disarming it as a candidate
-	 * -- and there is none for a generation this process was not built with, which is
-	 * the ordinary post-redeploy revert (see `promote`).
+	 * It takes an IDENTITY and nothing else. It used to take the held fold beside it,
+	 * purely so that the move could DISARM it in memory; the `successor` slot is what
+	 * arming is now, and the registry empties that slot in the same commit as the
+	 * move, so there is nothing left for a caller to hand over -- which is right,
+	 * since there is no fold at all for a generation this process was not built with
+	 * (the ordinary post-redeploy revert, see `promote`).
 	 */
-	private async movePointer(
-		id: GenerationId,
-		fold: HeldFold<ABI, ProcessResultType, unknown> | undefined,
-	): Promise<GenerationRecord> {
+	private async movePointer(id: GenerationId): Promise<GenerationRecord> {
 		const slotsBefore = await this.registry.slots();
 		const supersededRecord = slotsBefore.canonical;
 		/**
@@ -1436,12 +1502,10 @@ export class ReceivingIndexer<
 		// `undefined` where this container holds no fold for the target, which is the
 		// ordinary post-redeploy revert: nothing here publishes then, and nothing should.
 		this.noteCanonical(record);
-		if (fold) {
-			// It is canonical: it is no longer waiting to become so, and a REVERT past it
-			// later must not re-promote it on the next chunk. The registry took it out of the
-			// `successor` slot in the same commit as the move, for the same reason.
-			this.candidates.delete(fold);
-		}
+		// NOTHING IS DISARMED HERE. The target is canonical now, so it is no longer
+		// waiting to become so -- and the registry took it out of the `successor` slot in
+		// the same commit as the move, which is the only place that fact was ever kept.
+		// A REVERT past it later therefore cannot re-promote it on the next chunk.
 		if (!supersededRecord || sameGeneration(supersededRecord, record)) {
 			return record;
 		}
@@ -1491,7 +1555,6 @@ export class ReceivingIndexer<
 		// Out of the held list FIRST, so nothing drives a fold whose state is being
 		// dropped underneath it.
 		this.folds.splice(this.folds.indexOf(superseded), 1);
-		this.candidates.delete(superseded);
 		// ...and nothing relays what it did: this container no longer drives it, and a
 		// dropped fold that went on reporting would be a channel into a publisher nothing
 		// can reach it through any more.
@@ -1689,10 +1752,10 @@ export class ReceivingIndexer<
 
 	/**
 	 * STOP DRIVING a generation whose record has gone: out of the held folds, out of
-	 * the armed candidates, out of the memo, and off the reporter.
+	 * the memo, and off the reporter.
 	 *
-	 * One function rather than the same four lines wherever a generation is deleted,
-	 * because the fourth is the one that is easy to forget and the worst to omit: a
+	 * One function rather than the same three lines wherever a generation is deleted,
+	 * because the last is the one that is easy to forget and the worst to omit: a
 	 * dropped fold that went on REPORTING would be a channel into a publisher nothing
 	 * can reach it through any more. The memo matters for the opposite reason -- a
 	 * later fold on the same identity must be REGISTERED again rather than resolved
@@ -1705,7 +1768,6 @@ export class ReceivingIndexer<
 		const fold = this.folds.find((held) => sameGeneration(held.record, record));
 		if (fold) {
 			this.folds.splice(this.folds.indexOf(fold), 1);
-			this.candidates.delete(fold);
 			fold.processor.setFoldReporter?.(undefined);
 		}
 		this.records.delete(keyOf(record));

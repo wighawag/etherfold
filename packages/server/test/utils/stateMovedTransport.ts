@@ -33,6 +33,7 @@ import {
 	ZERO,
 	type TestABI,
 } from './feedHarness.js';
+import {generationDatabases, type GenerationDatabases} from './generationDatabases.js';
 import {identityOf} from './processorIdentity.js';
 import {openSignalStream, type SignalStream} from './signalStream.js';
 
@@ -114,10 +115,10 @@ const entityProcessor: EntityProcessor<TestABI> = {
  * that change is different BYTES rather than a bumped `version`, and the identity
  * is HANDED to the fold instead of asked of it.
  */
-function foldAt(marker: string) {
+function foldAt(states: GenerationDatabases, marker: string) {
 	const identity = identityOf(marker);
 	return {
-		createState: () => freshDatabase(),
+		createState: (context: {stream: string}) => states.open({stream: context.stream, processor: identity}),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: identity,
 	};
@@ -134,13 +135,17 @@ function foldAt(marker: string) {
 export async function openServerTransport(): Promise<StateMovedTransport> {
 	const db = freshDatabase();
 	await applySchema(db);
+	// WHERE each generation's state lives is this host's own fact, so this host
+	// supplies both seams over it: the DROP, and the READ the promotion trigger
+	// compares (`GenerationRegistryPort.readStateCursor`).
+	const states = generationDatabases();
 	const indexer = await openReceivingIndexer({
-		port: generationRegistryPortOnSQL(db, NAME),
+		port: generationRegistryPortOnSQL(db, NAME, {readStateCursor: states.readStateCursor}),
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource<TestABI>(db, NAME),
-		generation: foldAt('the-incumbent-fold'),
+		generation: foldAt(states, 'the-incumbent-fold'),
 	});
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
@@ -255,7 +260,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 			// catches up by re-folding what the emission table already holds. The pointer
 			// moves under the ordinary default once it is level.
 			const before = await indexer.canonical();
-			await indexer.add(foldAt('the-successor-fold'));
+			await indexer.add(foldAt(states, 'the-successor-fold'));
 			for (let round = 0; round < 60; round++) {
 				if ((await indexer.canonical())?.processor !== before?.processor) return;
 				// The pointer moves at the END of a rebuild rather than inside one, so a

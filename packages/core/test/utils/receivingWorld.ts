@@ -279,7 +279,15 @@ function clone(lastSync: LastSync<TestABI>): LastSync<TestABI> {
 
 /** One named indexer's DURABLE world: the registry records, the stream, and a store per namespace. */
 export function world() {
-	const port: GenerationRegistryPort = createMemoryGenerationRegistryPort();
+	// The HOST supplies both STATE seams, because the host is what named the
+	// namespaces (ADR-0053) and this substrate holds only the records: how a
+	// generation's store is dropped, and how far the fold in it got. The second is
+	// what a promotion compares, and it is answered for a generation NOBODY HOLDS A
+	// FOLD FOR -- which is the restart shape, and the one the container itself could
+	// never have answered.
+	const port: GenerationRegistryPort = createMemoryGenerationRegistryPort({
+		readStateCursor: async (id) => stores.get(generationDigestOf(id))?.lastSync?.lastToBlock,
+	});
 	const stream = storedStream();
 	const stores = new Map<string, MemoryStore>();
 

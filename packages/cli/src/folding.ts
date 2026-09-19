@@ -15,6 +15,7 @@ import {
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
 import {
+	localPosition,
 	openForWriting,
 	type EntityProcessor,
 	type StateStore,
@@ -539,6 +540,21 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 			dropState: async (id) => {
 				await stateFor(id).drop();
 			},
+			// ...and READING how far that namespace's fold got is the same injection, for
+			// the same reason and from the same `stateFor`: it is what lets the promotion
+			// trigger measure the CANONICAL generation on a process redeployed with a
+			// changed processor, which holds no fold for it and never could -- the old
+			// processor's code is not in this build. No engine is involved and none is
+			// retained: the store is built UNCLAIMED (`stateFor`, not `openForWriting`, so
+			// reading a position never takes the claim away from the fold that is writing
+			// it) and one row is read.
+			//
+			// It is the identity's OWN namespace, so there is no second check that the
+			// cursor found there was written by this generation: the address IS the pair
+			// `{stream, processor}` (ADR-0053). `undefined` for "nothing written yet, or a
+			// cursor that cannot be parsed" is `localPosition`'s own rule, and it is the
+			// answer the trigger needs -- never a zero.
+			readStateCursor: (id) => localPosition(stateFor(id)),
 		}),
 		// A CLI is a server: the database IS the durable artifact here and the retained
 		// generation is what the pointer moves BACK to, so it states the same generous

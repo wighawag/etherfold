@@ -518,7 +518,7 @@ describe('nothing about the CAPS is persisted by this substrate', () => {
 		expect(schema).not.toMatch(/maxGenerations|maxStreams|\bcaps?\b/i);
 	});
 
-	it('supplies exactly the five port operations', async () => {
+	it('supplies exactly the six port operations', async () => {
 		const db = await freshDB();
 
 		expect(Object.keys(generationRegistryPortOnSQL(db, INDEXER)).sort()).toEqual([
@@ -527,6 +527,9 @@ describe('nothing about the CAPS is persisted by this substrate', () => {
 			'dropStreamSubtree',
 			'listStreamDigests',
 			'read',
+			// the READ half of the state seam, beside the DROP: both are the host's fact
+			// about where a generation's state lives, and neither is this substrate's
+			'readStateCursor',
 		]);
 	});
 

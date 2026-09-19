@@ -41,6 +41,17 @@ import {
 export function createMemoryGenerationRegistryPort(options?: {
 	/** Drop the state store a deleted generation folded into. Nothing, by default. */
 	dropState?: (id: GenerationId) => Promise<void>;
+	/**
+	 * How far the fold in one generation's state got (`lastToBlock`), for a
+	 * generation the asker holds no fold for. NOTHING READABLE, by default.
+	 *
+	 * The same injection `dropState` is, for the same reason: this substrate holds
+	 * the RECORDS and knows nothing about where a caller kept the state. A caller
+	 * that supplies none is saying its generations' positions cannot be read from
+	 * outside a fold, and the promotion trigger then moves no pointer on its own --
+	 * which is the safe direction, and never a zero (see the port's JSDoc).
+	 */
+	readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
 }): GenerationRegistryPort {
 	const generations = new Map<string, GenerationRecord>();
 	const streams = new Set<string>();
@@ -98,13 +109,20 @@ export function createMemoryGenerationRegistryPort(options?: {
 		async dropState(id) {
 			await options?.dropState?.(id);
 		},
+
+		async readStateCursor(id) {
+			return options?.readStateCursor?.(id);
+		},
 	};
 }
 
 /** The registry over that substrate. The caps are the caller's: nothing here has a default. */
 export function openMemoryGenerationRegistry(
 	caps: GenerationCaps,
-	options?: {dropState?: (id: GenerationId) => Promise<void>},
+	options?: {
+		dropState?: (id: GenerationId) => Promise<void>;
+		readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
+	},
 ): Promise<GenerationRegistry> {
 	return openGenerationRegistry(createMemoryGenerationRegistryPort(options), caps);
 }

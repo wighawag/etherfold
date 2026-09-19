@@ -56,6 +56,8 @@ function memoryPort() {
 	const slots = new Map<SlotName, GenerationId>();
 	const streams = new Set<string>();
 	const states = new Set<string>();
+	/** WHERE each generation's fold got to, as the host that named the tables can read it. */
+	const positions = new Map<string, number>();
 	const calls: Call[] = [];
 	const keyOf = (id: GenerationId) => `${id.stream}\u0000${id.processor}`;
 
@@ -102,6 +104,10 @@ function memoryPort() {
 			calls.push({op: 'dropState', detail: id});
 			states.delete(keyOf(id));
 		},
+		async readStateCursor(id) {
+			calls.push({op: 'readStateCursor', detail: id});
+			return positions.get(keyOf(id));
+		},
 	};
 
 	return {
@@ -120,6 +126,10 @@ function memoryPort() {
 		},
 		hasState(id: GenerationId) {
 			return states.has(keyOf(id));
+		},
+		/** How far this generation's fold got, as a row the host can read with no engine. */
+		foldedTo(id: GenerationId, lastToBlock: number) {
+			positions.set(keyOf(id), lastToBlock);
 		},
 	};
 }
@@ -686,5 +696,31 @@ describe('the unregistered-subtree sweep', () => {
 		// mid-write, and it is the only moment this can run from
 		expect(Object.keys(registry)).not.toContain('sweep');
 		expect((registry as Record<string, unknown>).sweep).toBeUndefined();
+	});
+});
+
+describe('how far a generation got is READ through the port, for a generation nobody holds a fold for', () => {
+	it('forwards the identity to the host that named the tables, and answers its number', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		await registry.create(idOf(STREAM_A, PROC_A));
+		world.foldedTo(idOf(STREAM_A, PROC_A), 1_000_050);
+
+		// NO fold, no processor and no engine is involved: the position is a row
+		// addressed by the identity the registry already holds (ADR-0053), which is
+		// what lets a redeployed process measure the incumbent it cannot rebuild.
+		expect(await registry.readStateCursor(idOf(STREAM_A, PROC_A))).toBe(1_000_050);
+		expect(world.calls.map((call) => call.op)).toContain('readStateCursor');
+	});
+
+	it('answers `undefined` for a generation that has folded nothing, and never a zero', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		await registry.create(idOf(STREAM_A, PROC_A));
+
+		// "has not loaded" must stay distinguishable from "level at block 0", or a
+		// successor that had done nothing would read as level with an incumbent that
+		// had
+		expect(await registry.readStateCursor(idOf(STREAM_A, PROC_A))).toBeUndefined();
 	});
 });

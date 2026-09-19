@@ -36,8 +36,15 @@ import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './ut
 // The successor is introduced exactly as a deployment introduces one: an EDIT to
 // the processor bundle on disk and `POST /{indexer}/admin/reconfigure`. That is
 // what makes the assertion honest rather than a test of `container.add` wearing a
-// command line -- and it is the only way a successor reaches a running CLI
-// deployment at all, which is why `run` is the one command that owns this input.
+// command line -- and it is the only way a successor reaches a RUNNING CLI
+// deployment, which is why `run` is the one command that owns this input.
+//
+// The OTHER way one arrives is by RESTARTING the deployment with different bytes,
+// which is what a redeploy does, and the three values mean the same three things
+// there: `packages/cli/test/aRestartFinishesTheUpgrade.test.ts` asserts them on
+// that path (ADR-0084). The cases below are deliberately NOT rewritten onto the
+// shorter path now that one exists -- what they assert is the reconfigure
+// ENDPOINT's behaviour, which nothing else covers.
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'nfts';
