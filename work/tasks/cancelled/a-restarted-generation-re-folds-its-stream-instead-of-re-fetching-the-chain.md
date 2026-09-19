@@ -2,6 +2,7 @@
 title: 'A restarted generation RE-FOLDS the stream it already has instead of re-fetching the chain, and an unknown stream position REFUSES'
 slug: a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain
 blockedBy: [run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver]
+reason: 'Superseded and folded in. BUILT and MEASURED before being stopped: the change does what this task asks -- the restarted deployment re-folds the stored stream and asks for not one historical `eth_getLogs` -- and it also makes the deployment ask the node for `["eth_chainId"]` and NOTHING ELSE, for ever, because a follower has no receiver so `liveIngestions()` is empty and the fetch side has nowhere to push. Expensive-but-live became cheap-and-dead. The reverse split fails too (moving the write duty while a restarted generation is still a fetching receiver puts the fetch position back on its empty state, so it duplicates or holes), so the two halves are ONE change and are now the whole of `whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold`, which carries every criterion here. ADR-0087 is amended with the two claims this disproved. The patch and the numbers are kept at `docs/spikes/a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain/`.'
 covers: []
 needsAnswers: true
 ---

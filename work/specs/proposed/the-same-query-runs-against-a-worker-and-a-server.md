@@ -2,12 +2,10 @@
 title: 'The same query runs against a worker and a server'
 slug: the-same-query-runs-against-a-worker-and-a-server
 taskedAfter:
-  [
-    a-second-writer-writes-nothing,
-    a-declaration-a-schema-can-be-built-from,
-    the-indexer-runs-in-a-worker-and-the-tab-talks-to-it,
-    a-reader-learns-when-the-state-moved,
-  ]
+  - a-second-writer-writes-nothing
+  - a-declaration-a-schema-can-be-built-from
+  - the-indexer-runs-in-a-worker-and-the-tab-talks-to-it
+  - a-reader-learns-when-the-state-moved
 ---
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.

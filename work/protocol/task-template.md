@@ -6,6 +6,13 @@ spec: <source-spec-slug> # slug of the work/specs/ready/<slug>.md this task deri
 # needsAnswers: true  # gate axis 2 (DISCOVERED): open questions block autonomous work. OMIT otherwise. List them in the body.
 # promptGuidance.testFirst: true  # optional per-item NUDGE override: pin the test-first nudge ON (true) or OFF (false) for THIS task, regardless of the repo's resolved policy. OMIT to inherit (spec, else repo). NEVER an acceptance criterion — `verify` still decides pass/fail.
 blockedBy: [] # slugs that must reach work/tasks/done/ first; [] = startable now
+# THREE OR MORE blockers: use the BLOCK form below, never the inline one. An inline list past
+# Prettier's printWidth is reformatted into a multi-line FLOW list, which the runner parses as
+# EMPTY -- so the item becomes claimable before its blockers land, with no warning. `check:graph`
+# refuses it, and a fan-in is exactly where it bites (see ADR-FORMAT.md on the last task in a chain):
+#   blockedBy:
+#     - first-blocking-slug
+#     - second-blocking-slug
 covers: [] # optional: user-story numbers within `spec` this task covers
 ---
 

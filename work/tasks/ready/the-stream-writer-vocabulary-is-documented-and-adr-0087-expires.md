@@ -3,7 +3,6 @@ title: 'The glossary says a stream is written by whoever fetches it, and ADR-008
 slug: the-stream-writer-vocabulary-is-documented-and-adr-0087-expires
 blockedBy:
   - run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver
-  - a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain
   - whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold
   - a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge
 covers: []
@@ -17,7 +16,7 @@ The last task of this family: the coherence pass over the vocabulary, and the AD
 
 Each earlier task in the family was asked to update the glossary for what IT changed, so the tree was never left saying something false. This task owns what none of them could: the pass that reads those entries TOGETHER and makes the vocabulary one coherent account rather than four correct patches. Look especially at the entries for the follower, the read-only stream view, the promotion trigger and drop-on-promotion, the generation slot, and the writable-store entry that contrasts a stream's writer with a state store's writer -- that contrast is the sharpest statement of the old rule in the document and it is load-bearing for a reader learning the difference, so it needs rewriting rather than deleting.
 
-**Then remove ADR-0087's `status: accepted, not yet implemented` line. THIS IS THAT TASK.** It is blocked by every other task in the family precisely so that it is unambiguously last, which `work/protocol/ADR-FORMAT.md` warns is otherwise a hand-off with no holder: "every task in a chain can see that it is not the last one while the actual last one has no way to know that it is". ADR-0006 and ADR-0073 both kept the line for exactly that reason. Check rather than assume: confirm each of the other four tasks is in `work/tasks/done/`, and say which you checked and what you found.
+**Then remove ADR-0087's `status: accepted, not yet implemented` line. THIS IS THAT TASK.** It is blocked by every other task in the family precisely so that it is unambiguously last, which `work/protocol/ADR-FORMAT.md` warns is otherwise a hand-off with no holder: "every task in a chain can see that it is not the last one while the actual last one has no way to know that it is". ADR-0006 and ADR-0073 both kept the line for exactly that reason. Check rather than assume: confirm each of the other three tasks is in `work/tasks/done/`, and say which you checked and what you found.
 
 **Do not remove the line if the family did not actually land what the ADR decided.** The status is a claim about the CODE, not about the tasks. If a blocker landed in a reduced form -- the automatic reap removed but a stream still lost across a restart, or a write duty still derivable from registration order -- then the honest outcome is to leave the line, say what is missing, and route this to needs-attention. A green board is not the same as a decision implemented.
 
@@ -37,7 +36,7 @@ Also check what ELSE documents the old rule. The user-facing guide and the packa
 
 ## Blocked by
 
-All four of `run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver`, `a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain`, `whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold`, and `a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge`.
+All three of `run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver`, `whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold`, and `a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge`.
 
 The chain is linear, so the last of them would be enough to order this. They are ALL listed anyway, deliberately: the fan-in is what makes this task able to know it is last, which is the whole mechanism `ADR-FORMAT.md` asks for and which ADR-0086's closing task used.
 
@@ -49,12 +48,12 @@ Read ADR-0087 in full, then read every `CONTEXT.md` entry that mentions a stream
 
 The decision most likely to be got wrong is treating this as a find-and-replace. The glossary does not merely MENTION the old rule, it ARGUES from it in several places -- the writable-store entry uses "a stream's writer is the oldest surviving generation, a state store's writer is the last claimant" as a deliberate contrast to stop two things being conflated, and the promotion entry explains a decline in terms of it. Rewrite the arguments so they still teach what they were teaching, under the new rule. A sentence that merely stops being false while no longer explaining anything is a worse outcome than the old one.
 
-The second: verify the family before you expire the status line. Read the four done records, and read the code for the two claims that are easiest to land partially -- that nothing derives a write duty from registration order, and that a stream survives having no folds over it ACROSS A RESTART. If either is not true, leave the line and stop.
+The second: verify the family before you expire the status line. Read the three done records, and read the code for the two claims that are easiest to land partially -- that nothing derives a write duty from registration order, and that a stream survives having no folds over it ACROSS A RESTART. If either is not true, leave the line and stop.
 
 The third: this repo's reference check will fail on any citation of a task that moved to `done/` during this family. You are the task that can see all of them. Run the check and fix what it names.
 
 Done means: one rule in the glossary, the contrast still taught, the doc surfaces checked, the family confirmed done, and the status line gone because the decision is implemented.
 
-FIRST, check this task against current reality. Four tasks landed before it and the vocabulary they left is what you are reconciling, so this body's description of what `CONTEXT.md` says may already be partly out of date -- read the file, not this summary.
+FIRST, check this task against current reality. Three tasks landed before it and the vocabulary they left is what you are reconciling, so this body's description of what `CONTEXT.md` says may already be partly out of date -- read the file, not this summary.
 
 RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT: how you restated the writer contrast, what you found when you verified the family, and anything you chose to leave alone. Do not write the done record, the commit message or the PR body yourself.

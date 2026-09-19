@@ -37,7 +37,15 @@ if (this.streamLastToBlock === undefined || !this.lastSync) return true;
 return this.streamLastToBlock >= this.lastSync.lastToBlock;
 ```
 
-An UNKNOWN stream position defaults to PERMISSIVE. That is safe today only because the pen is held by a fold that has already loaded the stream, so the `undefined` case is unreachable in practice. It is precisely why the naive hand-over duplicated: the newly-written-to fold never learned the stream's position, took the permissive branch, and `streamRemainderOf` had nothing to strip against. Any change to who writes makes that default dangerous. It should refuse rather than permit when the position is unknown.
+An UNKNOWN stream position defaults to PERMISSIVE. That is safe today only because the pen is held by a fold that has already loaded the stream, so the `undefined` case is unreachable in practice. Any change to who writes makes that default dangerous. It should refuse rather than permit when the position is unknown.
+
+> **Amended 2026-09-19, measured.** The condition above is TWO different facts and only one of them may refuse.
+>
+> **`!this.lastSync` may refuse**, and doing so is inert: `promiseToIndex` loads before it fetches and `load` sets `lastSync` on every branch it returns through, so nothing reaches it today.
+>
+> **`this.streamLastToBlock === undefined` must STAY PERMISSIVE.** It is not an unknown position, it is the documented ABSENCE of a stream (`forgetStoredStream`: "there is no stream on disk any more, so nothing constrains the next write"). Refusing there declines the first save of every fresh deployment, and it destroys the case `streamSeedInstall.test.ts` protects by name (`locallyIndexedAbove`): a stream lost while its STATE survived is re-opened by the next save at the state's resume point, and the new subtree RECORDS that resume point as its own `startBlock`, so a read from below it is answered `does-not-reach-back` rather than served. That is an honest partial stream, not a hole; refusing left it never written and that suite red in two cases.
+>
+> This paragraph also mis-attributed the duplicate. The naive hand-over measured in "The defect that forced it" wrote through `StreamBuilder.storeStream` over an append-only `EmissionAppender`, which reads nothing back and has NO hole guard of any kind. `streamCanReceive` is `IndexerGeneration`'s, over an `ExistingStream` that `load` always reads first, and the duplicate was never on its path. **The hazard is real and it is in the other method**, so guarding it belongs with whoever moves the write duty.
 
 ## The second half: a stream outlives every fold over it
 
@@ -55,7 +63,15 @@ This does not make streams immortal. It makes deletion a VERB, consistent with e
 
 **An elected-writer POINTER on the stream** (a mutable record naming the current writer). Rejected. It turns a derivable fact into a coordinated one: two processes holding different folds can disagree, the pointer can oscillate, and `writerOf` stops being a pure function every reader can evaluate independently. Delete-succession also stops being atomic with the delete. "Whoever fetches it writes it" needs no election at all, which is why it is better than both this and the stand-down mark.
 
-**Make the restarted successor a FOLLOWER, and nothing else** (the narrow fix: `add` derives `follows` from the registry rather than from this process's in-memory fold array, so a restarted generation re-folds the stored stream, lands on the coverage, and is handed the wire by machinery that already exists). This is ADR-0044's own rule, currently disobeyed, and it IS the correct behaviour. It is not rejected -- it is a REQUIRED part of this proposal and can land first. It is not sufficient alone, because it leaves the writer a generation and therefore leaves the class open.
+**Make the restarted successor a FOLLOWER, and nothing else** (the narrow fix: `add` derives `follows` from the registry rather than from this process's in-memory fold array, so a restarted generation re-folds the stored stream and lands on the coverage). This is ADR-0044's own rule, currently disobeyed, and it IS the correct behaviour. It is not rejected -- it is a REQUIRED part of this proposal. It is not sufficient alone, because it leaves the writer a generation and therefore leaves the class open.
+
+> **Amended 2026-09-19, measured.** This entry originally said the restarted follower is "handed the wire by machinery that already exists" and that the narrow fix "can land first". **Both are false**, and the first is contradicted three paragraphs earlier in this same document.
+>
+> `reconcileWriters` hands the wire only to the fold `writerOf` NAMES. A restart registers the successor BESIDE the incumbent, so `writerOf` still names the incumbent, which is registered and not held; `shouldWrite` is already `false`, equals `fold.writesStream`, and the loop `continue`s. That is precisely the no-op "The defect that forced it" identifies above. This ADR credited as machinery the very no-op it condemns.
+>
+> Built and measured on the defect's own scenario: the restarted deployment re-folds the stored stream correctly and then asks the node for `["eth_chainId"]` and nothing else -- zero `eth_getLogs`, zero `eth_blockNumber` -- for ever. A follower has no receiver, so `liveIngestions()` is empty and the fetch side has nowhere to push. It is promoted, serves reads and reports healthy. Today's behaviour is expensive but LIVE; the narrow fix alone is cheap and DEAD, which is the silent-failure class this ADR exists to close. On `build` it is worse than a stall: `NoLiveReceiverError` is re-thrown before the exit rebuild, so a re-run `build` with changed bytes fails outright without folding anything.
+>
+> So the narrow fix cannot land first, and it cannot land alone. It REQUIRES the fetch to have moved off the generation's indexing loop -- which is this proposal's own "the append is driven by the FETCH, not by a fold's indexing loop" under Consequences. The two are ONE change and are tasked as one. The patch and the numbers are kept at `docs/spikes/a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain/`.
 
 **Suppress appends below the stream's coverage** (let the newcomer write and drop what is already stored). Rejected as the design, though `streamRemainderOf` already does something like it per batch. As a POLICY it carries a hazard that belongs in an ADR rather than in a defect fix: a reorg that happened below the coverage while the deployment was down is folded into the successor's STATE but suppressed from the STREAM, so a third generation re-folding that stream derives a different state. Under this proposal it cannot arise, because the fold that folds is never the fold that writes.
 
