@@ -2,12 +2,10 @@
 title: 'The glossary says a stream is written by whoever fetches it, and ADR-0087 stops saying it is unimplemented'
 slug: the-stream-writer-vocabulary-is-documented-and-adr-0087-expires
 blockedBy:
-  [
-    run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver,
-    a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain,
-    whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold,
-    a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge,
-  ]
+  - run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver
+  - a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain
+  - whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold
+  - a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge
 covers: []
 ---
 
