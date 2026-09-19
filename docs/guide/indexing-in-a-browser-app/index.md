@@ -362,6 +362,60 @@ Under `immediate` the new generation is canonical having folded nothing, so read
 
 The old generation is kept, so `promote(indexer.generations[0].record)` moves the pointer **back** with no re-index and no fetch.
 
+### Wiring that to your bundler's hot update
+
+`reconfigureFromHotUpdate` is the same thing with the outcome your reload indicator needs. Call it from **your own** `import.meta.hot.accept(...)` handler, with the module that handler receives:
+
+```ts
+import {reconfigureFromHotUpdate} from '@etherfold/browser';
+
+let saves = 0;
+
+if (import.meta.hot) {
+	import.meta.hot.accept('./processor.js', async (module) => {
+		if (!module) return;
+		const next = module.tokenProcessor;
+		const report = await reconfigureFromHotUpdate(indexer, {
+			// ITS OWN store. The successor folds beside the incumbent, which goes on
+			// writing its own rows, and two generations sharing one `databaseName`
+			// are one store by IndexedDB's own definition.
+			createState: async (context) =>
+				openForWriting(
+					await createBrowserStateStore(next.entities, {
+						databaseName: `app-${context.stream}-${++saves}`,
+					}),
+				),
+			createProcessor: (state) => fromEntityProcessor(next)(state),
+		});
+
+		switch (report.outcome) {
+			case 'registered':
+				return show(`your edit is folding beside the running generation (${report.generation.processor})`);
+			case 'unchanged':
+				return show(`nothing changed: the handlers are the fold already running, so your warm state was kept`);
+			case 'failed':
+				return show(`that save did not build, and nothing changed: ${report.message}`);
+		}
+	});
+}
+```
+
+**This library subscribes to nothing.** There is no reference to `import.meta.hot` anywhere in `@etherfold/browser`, and that is deliberate: *noticing* a change is your job, which is the same rule the server side follows — whatever watches a file stays outside the process. Your bundler is already the watcher. So a build with no HMR at all is unaffected by construction rather than by a guard, and because this is a plain function rather than a method on the indexer, the production build that eliminates your `if (import.meta.hot)` block drops it too.
+
+**Three outcomes, because "I saved and nothing happened" otherwise has three causes.** `ReconfigureReport` is the same shape the server's `POST /{indexer}/admin/reconfigure` answers, so the arrivals share one contract ([ADR-0085](https://github.com/wighawag/etherfold/blob/main/docs/adr/0085-a-processor-may-be-pushed-as-a-content-addressed-artifact-and-its-hash-is-its-version.md)):
+
+| outcome | what happened |
+| --- | --- |
+| `registered` | your edit moved the identity, and it is folding beside the generation still answering your reads |
+| `unchanged` | the handler sources are the ones already running — a success, and rare, not a failure |
+| `failed` | the processor could not be built (you saved mid-edit). **Nothing** was registered and the tab is exactly as it was: same generations, same pointer, still folding, still answering |
+
+A `failed` is the ordinary case in an editing loop, so it is data rather than an exception: the next save repairs it.
+
+**A burst stays bounded with nothing to do on your side.** The `successor` slot holds at most one, so the fourth save *replaces* the third rather than landing beside it, and the count never climbs towards the browser's cap of two generations ([ADR-0084](https://github.com/wighawag/etherfold/blob/main/docs/adr/0084-a-generation-is-held-by-named-durable-slots-and-canonical-is-merely-the-first-one.md)).
+
+There is no `{force}` here, and there cannot be: forcing means registering a generation beside one of the same name, and the name *is* the generation. For a change the handler text does not carry, `updateProcessor(next, {force: true})` is the in-place verb — and it costs the rebuild this call exists to avoid.
+
 ### Axis two — the contract was redeployed
 
 On a local chain these apps deploy behind a **proxy**, so a redeploy does not move the address. What moves is the implementation and therefore the generated ABI — and the ABI is hashed into the indexing source, so handing the new source over is enough:

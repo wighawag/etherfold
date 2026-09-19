@@ -1,0 +1,11 @@
+---
+title: 'Two browser doc sites lag the generation model: one names the deleted declared identity, one shows two generations sharing a store'
+slug: two-doc-sites-still-describe-the-deleted-declared-identity-or-a-shared-generation-store
+observed: 2026-09-19
+---
+
+2026-09-19 — Noticed while writing the hot-update arrival's docs (`an-hmr-update-reconfigures-the-tab-it-is-running-in`), in files adjacent to the ones I edited, and deliberately not fixed.
+
+`packages/browser/README.md`, in the paragraph about `processorIdentity` on a generation spec, still ends "Leave it off and the generation keeps the author-declared identity the processor computes from its `version`, exactly as before." There is no declared identity any more (ADR-0086, `the-declared-version-and-the-drift-report-are-deleted`): leaving it off now means the MODULE arrival derives one from the handler sources, or is refused if it cannot.
+
+`docs/guide/indexing-in-a-browser-app/index.md`, in the `addGeneration` snippet under "The same edit, without the blank app", passes `createBrowserStateStore(next.entities)` with no `databaseName`, which defaults to `etherfold-state` — the same database the canonical generation is already folding into. Two generations sharing one `databaseName` are one store, so that snippet as written collides on the rows and on the sync cursor and one of the two would be demoted by the writer claim.
