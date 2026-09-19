@@ -200,6 +200,36 @@ Both axes are in-place calls that report whether the state survived, so a caller
 
 Both return a `ReconfigureOutcome`: `{stateDiscarded}` for the caller that only has to re-seed its own copy, plus `sourceInvalidation` — the verdict that bit was collapsed from, which names WHICH half stopped being valid (the raw log stream, the state folded out of it, or both) and FROM WHICH block. It is `undefined` on `updateProcessor` and `reset`, which ask no source question. `examples/browser-reference` is the worked version of this, with both axes wired to a live-reload.
 
+### A hot update reconfigures the tab it is running in
+
+`updateProcessor` reconfigures the generation that is answering reads, so the rebuild it costs is time the app has nothing to render. `reconfigureFromHotUpdate(indexer, {createState, createProcessor})` is the other shape for a dev loop: it registers a **successor** beside the live generation, which goes on answering every read while the new fold catches up, and it answers WHAT it did. Call it from the application's own hot-update handler, with the module that handler receives:
+
+```ts
+import {reconfigureFromHotUpdate} from '@etherfold/browser';
+
+if (import.meta.hot) {
+	import.meta.hot.accept('./processor.js', async (module) => {
+		if (!module) return;
+		const next = module.tokenProcessor;
+		const report = await reconfigureFromHotUpdate(indexer, {
+			// ITS OWN store: the incumbent goes on writing its own rows, and two
+			// generations sharing one `databaseName` are one store.
+			createState: async (context) =>
+				openForWriting(
+					await createBrowserStateStore(next.entities, {databaseName: `app-${context.stream}-${++saves}`}),
+				),
+			createProcessor: (state) => fromEntityProcessor(next)(state),
+		});
+		// 'registered' | 'unchanged' | 'failed'
+		show(report.outcome === 'failed' ? report.message : report.outcome);
+	});
+}
+```
+
+**This package subscribes to nothing**, and contains no reference to `import.meta.hot` or any other bundler HMR global. Noticing a change is the application's job — the same rule the server side follows, where whatever watches a file stays outside the process — and the bundler is already the watcher. So a build with no HMR is unaffected by construction rather than by a guard, and because this is a free function rather than a method, the production build that eliminates the app's own `if (import.meta.hot)` block drops it too.
+
+It answers `ReconfigureReport`, which is the shape the server's `POST /{indexer}/admin/reconfigure` answers, so the arrivals share one contract rather than three ([ADR-0085](https://github.com/wighawag/etherfold/blob/main/docs/adr/0085-a-processor-may-be-pushed-as-a-content-addressed-artifact-and-its-hash-is-its-version.md)). `registered` names the generation now folding beside the live one; `unchanged` is a SUCCESS and says plainly that the handler sources are the ones already running; `failed` carries the reason and leaves the tab exactly as it was — same generations, same pointer, still folding, still answering — which is the ordinary case in an editing loop, since a developer saves mid-edit. A burst stays bounded with nothing to do on the caller's side: the `successor` slot holds at most one, so a newer save replaces the pending one ([ADR-0084](https://github.com/wighawag/etherfold/blob/main/docs/adr/0084-a-generation-is-held-by-named-durable-slots-and-canonical-is-merely-the-first-one.md)). There is deliberately no `{force}`, because forcing means registering a generation beside one of the same name and the name is what a generation IS; `updateProcessor(next, {force: true})` is the in-place verb for that case.
+
 **What that derivation can and cannot see, because both halves are real.** It is taken over the handler SOURCE TEXT, so it survives reformatting and re-ordering, and it does NOT survive minification or a change of transpiler — which is why it names a module a DEV SERVER handed the tab, and never a deployed build. A production app arrives as a self-contained bundle and is named by the SHA-256 of those octets, so the same code has a different identity as a module than as a bundle: a dev iteration and a deployed build are different generations either way. In the other direction it does not MOVE for a change the source text does not carry — an edited helper the handler imports, an entity declaration that changed, behaviour decided by a captured value — and `updateProcessor(next, {force: true})` is what an integrator who knows better passes. Nothing an application supplies is ever taken as an identity here; a value nobody can check against the code it claims to name is the author-declared identity ADR-0086 deletes.
 
 ## Two more things a browser app tends to need

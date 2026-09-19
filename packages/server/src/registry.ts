@@ -3,6 +3,7 @@ import type {
 	GenerationRecord,
 	LogIngestion,
 	ReclaimReport,
+	ReconfigureReport,
 	SlottedGenerations,
 	StateMovedDetach,
 	StateMovedHandler,
@@ -12,73 +13,21 @@ import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
 
 /**
- * WHAT ONE RE-READ DID, in the three answers a caller has to be able to tell
- * apart (`POST /{indexer}/admin/reconfigure`).
+ * WHAT ONE RE-READ DID (`POST /{indexer}/admin/reconfigure`), in the three
+ * answers a caller has to be able to tell apart.
  *
- * A watcher calls that route after every build, so "I saved the file and nothing
- * happened" must not be one shape with three causes: a generation was
- * REGISTERED, the configuration named the generation this deployment already
- * holds (`unchanged`), or the re-read could not be completed at all (`failed`)
- * and the deployment is exactly as it was.
+ * RE-EXPORTED rather than declared, because the re-read is one ARRIVAL of three
+ * and they answer ONE contract rather than three that agree on the day they were
+ * written (ADR-0085): a browser tab's hot update hands its container a module
+ * object and reports the same `registered` / `unchanged` / `failed`, from
+ * `@etherfold/browser`. The type therefore lives in the only package both of
+ * them already depend on, and its whole rationale is stated there
+ * (`@etherfold/core`, `arrival.ts`) rather than half here.
  *
- * `unchanged` is a SUCCESS and is deliberately not folded into `registered` with
- * a flag: it is the ordinary answer to a re-read that landed on the generation
- * this deployment already holds, so a developer reading it learns something true
- * rather than watching a no-op report success.
- *
- * ## `unchanged` MEANS WHAT IT SAYS, because an identity is DERIVED
- *
- * WHERE the identity came from is the arrival's business and not this type's
- * (ADR-0086), but every arrival derives one from what the processor IS: the
- * SHA-256 of a bundle's bytes, or a digest of the handler sources where there are
- * no bytes. So an edited handler always moves it, and `unchanged` is the honest
- * answer that these are the same bytes -- there is nothing an author could have
- * forgotten to declare, and nothing for a second opinion to disagree with.
- *
- * It used to read TWO ways, and the `drift` field on this arm was the answer:
- * under an author-DECLARED identity an edited handler and a save that changed
- * nothing produced the same `unchanged`, so the report said which. Both the
- * declared identity and the report are gone
- * (`the-declared-version-and-the-drift-report-are-deleted`), and the condition
- * `drift` named cannot occur.
- *
- * It is DATA rather than an exception on the failure arm, because the failure is
- * EXPECTED: a processor that does not compile is the normal state between the
- * two halves of one change, the next build repairs it, and a route that had to
- * distinguish "the module is broken" from "this host threw" by inspecting an
- * error would be guessing.
- *
- * ## Why it is not called `ReconfigureOutcome`
- *
- * Because that name is TAKEN, by a different question's answer:
- * `@etherfold/core`'s `ReconfigureOutcome` rides out of `updateIndexer`, the
- * IN-PLACE verb, and says whether the fold it reconfigured was DISCARDED and
- * what the source comparison decided. Nothing is discarded here -- that is the
- * whole of what "a reconfigure is not an outage" means -- so there is no reset
- * verdict to carry. `@etherfold/browser` met the same collision first and
- * answered it the same way (`HostReconfigure`, "what a reconfigure did, as the
- * TAB is told"); this is its sibling one transport out, "what a re-read did, as
- * the CALLER of the admin route is told", with one arm the in-process one does
- * not need.
+ * It keeps its name at this boundary because this is where a caller meets it: an
+ * admin route's JSON body is what a deploy hook or a file watcher branches on.
  */
-export type ReconfigureReport =
-	| {
-			readonly outcome: 'registered';
-			/** The generation that was registered BESIDE the incumbent, which is what the caller asked to learn. */
-			readonly generation: GenerationId;
-	  }
-	| {
-			readonly outcome: 'unchanged';
-			/** The generation the re-read named, which this deployment was already holding a fold for. */
-			readonly generation: GenerationId;
-			/** WHY nothing was registered, in terms an author can act on. */
-			readonly message: string;
-	  }
-	| {
-			readonly outcome: 'failed';
-			/** What went wrong, as the caller's watcher will print it. */
-			readonly message: string;
-	  };
+export type {ReconfigureReport} from '@etherfold/core';
 
 /**
  * ONE named indexer this host was built with, as the routes see it.

@@ -1,6 +1,23 @@
 export * from './IndexerState.js';
 
 /**
+ * THE HOT-UPDATE ARRIVAL: hand this tab the processor its own dev server just
+ * gave it, so a handler edit keeps the warm fold (ADR-0085).
+ *
+ * A FREE FUNCTION and deliberately not a method on the hook, for two reasons.
+ * An app's `if (import.meta.hot)` block is eliminated from a production build,
+ * and a free function goes with it, so a deployment carries no dev-only
+ * machinery; and it reaches for nothing private, so it is an adapter in front of
+ * `addGeneration` rather than privileged access to it.
+ *
+ * NOTHING HERE SUBSCRIBES. There is no reference to `import.meta.hot` in this
+ * package: noticing a change is the application's job, exactly as it is on the
+ * server side where the watcher stays outside the process. The bundler is the
+ * watcher and it already exists.
+ */
+export {reconfigureFromHotUpdate, type HotUpdatableIndexer, type HotUpdateGeneration} from './hotUpdate.js';
+
+/**
  * LOSING IS A DEMOTION: the one function a writer calls when it stops being one,
  * whether the store refused it or a lease was lost. `isStoreWriterChanged` is
  * deliberately NOT published: the demotion is what this package offers, and a
@@ -69,6 +86,12 @@ export type {
 	LastSync,
 	LoadingState,
 	LogEvent,
+	// WHAT AN ARRIVAL DID: `registered`, `unchanged` or `failed`. Named here
+	// because `reconfigureFromHotUpdate` answers one, and a caller that cannot name
+	// the type cannot annotate the value it branches on. It lives in
+	// `@etherfold/core` because the admin re-read route answers the SAME shape from
+	// another package, and one contract across the arrivals is the claim (ADR-0085).
+	ReconfigureReport,
 	LogParseConfig,
 	// What an ARGUMENT FILTER is written in: a caller that cannot name a rule
 	// cannot annotate one (ADR-0062).
