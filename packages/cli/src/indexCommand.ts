@@ -1,4 +1,5 @@
 import {
+	generationDigestOf,
 	resolveStreamConfig,
 	type Abi,
 	type EventProcessor,
@@ -14,6 +15,7 @@ import {openProcessorArrival} from '@etherfold/utils';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
+import {newlyStalledFollowers} from './followers.js';
 import {
 	foldingStatusReport,
 	openFolding,
@@ -26,6 +28,42 @@ import {DEFAULT_PRUNE_BUDGET, DEFAULT_PRUNE_INTERVAL_SECONDS, pruneHeldMore} fro
 import type {IndexConfig, Options} from './types.js';
 
 const logger = logs('etherfold');
+
+/**
+ * How often a receiver takes its turn at the bounded rebuild, in seconds.
+ *
+ * ## Why a CLOCK, and what that costs under load
+ *
+ * `run` needs no such number: it has a CYCLE, so the bounded rebuild rides in the
+ * gap the loop already waits between fetches (`driveCycles`, `src/index.ts`).
+ * `index` has no cycle. Its loop is driven by ARRIVALS -- a sender pushes and it
+ * folds -- and that is exactly why the turn must NOT be taken there. ADR-0022
+ * says the rebuild is a call the HOST SCHEDULES and never a side effect of a
+ * write, ingest is the only other thing that happens in this process, so "one
+ * chunk after each batch" would be that side effect wearing a different hat: it
+ * would put an arbitrarily long catch-up between a sender and its
+ * acknowledgement, on the path this command exists to serve, for work that batch
+ * did not cause. So it is a clock, which is the same answer the scheduled prune
+ * beside it reached for the same reason, and the two are serialised so that one
+ * database handle never carries two maintenance passes at once.
+ *
+ * FOUR SECONDS, because that is `run`'s own cadence rather than a new number: the
+ * gap a caught-up `run` waits is its poll interval, which defaults to 4s
+ * (`pollIntervalMs`, `@etherfold/fetcher-host`), so a follower advances at the
+ * same rate on both shapes and an operator watching an upgrade sees one story.
+ *
+ * WHAT IT COSTS UNDER LOAD. A tick with nothing to advance is a few registry
+ * reads -- the same bargain `run`'s unconditional call already states -- and a
+ * tick WITH something to advance is bounded by construction at
+ * `DEFAULT_MAX_EMISSIONS_PER_CHUNK` (2000) stored emissions, so a large catch-up
+ * is spread over ticks rather than paid for in one. The bound is on the CHUNK and
+ * not on the clock: under a heavy ingest load the two contend for the one handle
+ * for the length of one chunk, and the ingest path wins the next tick outright,
+ * because an overlapping tick is SKIPPED rather than queued. Tuning this down
+ * buys a slightly earlier promotion; tuning it up delays one. Neither changes how
+ * much work a pass does.
+ */
+export const DEFAULT_REBUILD_INTERVAL_SECONDS = 4;
 
 // ---------------------------------------------------------------------------------------------------
 // `etherfold index`: THE FOLDING HALF, RECEIVING A PUSHED STREAM AND OWNING THE DATABASE
@@ -42,7 +80,7 @@ const logger = logs('etherfold');
 // as the only difference, which is what makes the split a DEPLOYMENT CHOICE
 // rather than a second implementation.
 //
-// Four things define it, and each is a constraint rather than a feature:
+// Seven things define it, and most of them are constraints rather than features:
 //
 //  1. **It makes NO chain call**, anywhere in this path. There is no provider
 //     here, no `LogFetcher` and no fetcher host, which is why its source must be
@@ -77,12 +115,29 @@ const logger = logs('etherfold');
 //     (`ServerOptions.getIndexer`).
 //  6. **What that name resolves to is a GENERATION CONTAINER**, the same one
 //     `run` folds through (`openFolding`, `folding.ts`), so the two commands
-//     differ in where their batches come from and in nothing else. A batch
-//     naming a fold this process has not seen therefore CREATES a generation
-//     beside the live one instead of reaching `processor.clear()`, and because
-//     the container answers the registry entry's two questions itself, this name
-//     also carries the two OPTIONAL ones -- the listing and the pointer move
-//     (ADR-0057) -- which a host holding a bare receiver cannot.
+//     differ in where their batches come from and in nothing else. A CHANGED
+//     `{source, config}` or a changed processor therefore registers a generation
+//     beside the live one instead of reaching `processor.clear()` -- at RESTART,
+//     which is the only moment this command adds a fold, because `open()` is the
+//     one caller of `container.add` it wires up (the other is a re-read, and
+//     `reconfigure.ts` is a `run`-only surface). What a BATCH naming a fold this
+//     process does not hold gets is a refusal, not a generation: the ingest route
+//     selects a receiver by matching `{source, config}` against the live wire
+//     contexts and answers `400 context-mismatch` listing the ones it holds
+//     (`@etherfold/server`). This paragraph used to claim the batch created the
+//     generation, and no code path ever did that -- creating a fold from an
+//     unseen batch would be a FEATURE (a receiver that registers generations on
+//     a sender's say-so), not a thing that was here and stopped working.
+//     Because the container answers the registry entry's two questions itself,
+//     this name also carries the two OPTIONAL ones -- the listing and the pointer
+//     move (ADR-0057) -- which a host holding a bare receiver cannot.
+//  7. **It SCHEDULES the bounded rebuild for the generations it holds**, on a
+//     clock, exactly as it schedules the prune below and for the same ADR-0022
+//     reason. That call is what ADVANCES a fold added at `open` to level and then
+//     SETTLES the pointer, so a redeployed receiver finishes its processor
+//     upgrade instead of holding an armed successor for ever. See
+//     `DEFAULT_REBUILD_INTERVAL_SECONDS` for where the turn comes from and what it
+//     costs under load.
 // ---------------------------------------------------------------------------------------------------
 
 /** Starts the HTTP surface. Defaults to the Node platform adapter's `startServer`, imported lazily. */
@@ -125,6 +180,18 @@ export type IndexDependencies = {
 	 * the schedule is not how a deployment says it wants nothing dropped.
 	 */
 	pruneIntervalSeconds?: number;
+	/**
+	 * Seconds between scheduled rebuild passes. Defaults to
+	 * `DEFAULT_REBUILD_INTERVAL_SECONDS`; `0` disables the schedule entirely.
+	 *
+	 * The same instrument `pruneIntervalSeconds` is, for the same reason and with the
+	 * same warning: a test sets it low to watch an upgrade finish without waiting for
+	 * a deployment's clock, or to `0` to assert that the SCHEDULE is what finishes it.
+	 * A DEPLOYMENT leaves it alone, and there is deliberately NO FLAG for it -- the
+	 * number a deployment wants is the one the constant argues for, and turning it off
+	 * is turning off processor upgrades on this half.
+	 */
+	rebuildIntervalSeconds?: number;
 	/** Where the startup lines go. Defaults to the console. */
 
 	log?: (...args: unknown[]) => void;
@@ -388,41 +455,109 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// dependency, which exists so a test can observe a pass without waiting a minute.
 		const pruneEverySeconds =
 			config.pruneIntervalSeconds ?? deps.pruneIntervalSeconds ?? DEFAULT_PRUNE_INTERVAL_SECONDS;
-		// Guards the ONE case a clock has that a cycle does not: a pass slower than the
-		// interval. Ticks would otherwise stack, and several concurrent passes over one
-		// store spend the budget several times for the deletes a single pass would have
-		// made.
-		let pruning = false;
-		const pruneTimer =
-			pruneEverySeconds > 0
-				? setInterval(() => {
-						if (pruning) return;
-						pruning = true;
-						void (async () => {
-							try {
-								const pruned = await pruneHeldMore(container, {maxVersions: DEFAULT_PRUNE_BUDGET});
-								if (!pruned.complete) {
-									logger.info(
-										`index: pruned ${pruned.versionsDeleted} versions and the budget of ${DEFAULT_PRUNE_BUDGET} ` +
-											`stopped the pass before the store reached its floor. The next tick continues.`,
-									);
-								}
-							} catch (err) {
-								// Receiving is what this process is FOR. A delete that could not run
-								// leaves a store larger than it asked to be, which is worth saying and
-								// not worth refusing a batch over.
-								logger.error(`index: a scheduled prune failed; the fold is unaffected and the next tick retries`, err);
-							} finally {
-								pruning = false;
-							}
-						})();
-					}, pruneEverySeconds * 1000)
+		// ADVANCE WHAT THIS PROCESS HOLDS, on the same kind of clock and for the same
+		// ADR-0022 reason (`DEFAULT_REBUILD_INTERVAL_SECONDS`, which argues the cadence
+		// and the cost). No flag resolves into this: a deployment has no say in it, and
+		// the dependency exists so a test can watch an upgrade finish without waiting for
+		// a deployment's clock.
+		const rebuildEverySeconds = deps.rebuildIntervalSeconds ?? DEFAULT_REBUILD_INTERVAL_SECONDS;
+
+		// ONE MAINTENANCE PASS AT A TIME over the ONE handle, which is the whole of how
+		// two clocks stay out of each other's way -- and out of the ingest path's.
+		//
+		// It guards the case a clock has that a cycle does not: a pass slower than its
+		// interval. Ticks would otherwise STACK, and several concurrent prune passes over
+		// one store spend the budget several times for the deletes a single pass would
+		// have made. Shared between the two timers rather than one flag each, because the
+		// scarce thing is the DATABASE HANDLE and not the verb: a rebuild chunk and a
+		// prune pass running at once would contend with the fold that the sender is
+		// waiting on, which is precisely what riding the host's own gap is supposed to
+		// avoid. A SKIPPED tick is never a lost one -- both passes are resumable by
+		// construction and the next tick continues -- so dropping is right where queueing
+		// would let a backlog grow behind a slow pass.
+		let maintaining = false;
+		const maintain = (pass: () => Promise<void>) => {
+			if (maintaining) return;
+			maintaining = true;
+			void (async () => {
+				try {
+					await pass();
+				} finally {
+					maintaining = false;
+				}
+			})();
+		};
+
+		/** Which followers have already been reported as stalled, so it is said once and not per tick. */
+		const reportedStalled = new Set<string>();
+		/**
+		 * ONE bounded rebuild chunk for every follower held AND the pointer settled once.
+		 *
+		 * The SAME call `run` makes in the gap between its cycles, unconditionally and for
+		 * the reason stated there: `rebuildMore` is TWO things, and a successor registered
+		 * at `open` is NOT a follower -- `add` decides that from "do I already hold a fold
+		 * on this stream", and at `open` the fold list is empty -- so on this command it is
+		 * fed by the WIRE and holds no rebuild at all. What it needs from here is the
+		 * SETTLE, and a call gated on "is anything being rebuilt" would answer the wrong
+		 * question and never make it.
+		 *
+		 * The stall report is `run`'s own (`followers.ts`) rather than a second copy: a
+		 * rebuild that cannot advance recurs identically on every call, so polling never
+		 * resolves it (ADR-0070). No fold this command opens with is a follower, so nothing
+		 * reaches it today; it is shared rather than dropped because the contract being
+		 * handled is `rebuildMore`'s, not `run`'s, and a receiver that inherits a vacant
+		 * write duty is one registry change away from holding one.
+		 *
+		 * It FAILS SOFT, exactly as the prune below does: the canonical generation goes on
+		 * answering, the successor is behind by one chunk, and the next tick retries.
+		 */
+		const advanceHeldGenerations = async (): Promise<void> => {
+			try {
+				for (const stalled of newlyStalledFollowers(await container.rebuildMore(), reportedStalled)) {
+					logger.error(
+						`index: the rebuild of generation ${stalled.id} cannot advance (${stalled.reason}) and retrying will not ` +
+							`change that. It stays behind and never becomes level, so it will not take over writing its stream. ` +
+							`This needs a look; the canonical generation is unaffected and goes on answering.`,
+					);
+				}
+			} catch (err) {
+				logger.error(
+					`index: a rebuild chunk failed; the canonical generation is unaffected and the next tick retries`,
+					err,
+				);
+			}
+		};
+
+		const prunePass = async (): Promise<void> => {
+			try {
+				const pruned = await pruneHeldMore(container, {maxVersions: DEFAULT_PRUNE_BUDGET});
+				if (!pruned.complete) {
+					logger.info(
+						`index: pruned ${pruned.versionsDeleted} versions and the budget of ${DEFAULT_PRUNE_BUDGET} ` +
+							`stopped the pass before the store reached its floor. The next tick continues.`,
+					);
+				}
+			} catch (err) {
+				// Receiving is what this process is FOR. A delete that could not run
+				// leaves a store larger than it asked to be, which is worth saying and
+				// not worth refusing a batch over.
+				logger.error(`index: a scheduled prune failed; the fold is unaffected and the next tick retries`, err);
+			}
+		};
+
+		const rebuildTimer =
+			rebuildEverySeconds > 0
+				? setInterval(() => maintain(advanceHeldGenerations), rebuildEverySeconds * 1000)
 				: undefined;
-		// A prune is never a reason for the process to stay alive: what holds it up is
+		const pruneTimer =
+			pruneEverySeconds > 0 ? setInterval(() => maintain(prunePass), pruneEverySeconds * 1000) : undefined;
+		// Neither pass is ever a reason for the process to stay alive: what holds it up is
 		// the server listening.
+		rebuildTimer?.unref?.();
 		pruneTimer?.unref?.();
 
 		const close = async () => {
+			if (rebuildTimer) clearInterval(rebuildTimer);
 			if (pruneTimer) clearInterval(pruneTimer);
 			releaseSignals();
 			deps.signal?.removeEventListener('abort', stop);
@@ -440,6 +575,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		);
 		log(`  status: ${server.url}/status`);
 		logger.info(`index: listening on ${server.url}, folding into ${config.destination.db}`);
+		await sayWhatFeedsASuccessor(container, `${server.url}/${config.wire.indexer}/ingest`, log);
 
 		return {
 			url: server.url,
@@ -464,6 +600,77 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		deps.signal?.removeEventListener('abort', stop);
 		throw err;
 	}
+}
+
+/**
+ * SAY WHAT WILL FEED THE SUCCESSOR THIS PROCESS CAME UP HOLDING, because on this
+ * half the answer is not "this process".
+ *
+ * The restart-shaped upgrade is now finishable here: a successor registered at
+ * `open` is armed from its slot (ADR-0084) and the tick above settles the pointer
+ * once it is level. What the tick CANNOT do is advance it, and that is structural
+ * rather than missing. `index` has no chain-facing half by design -- no provider,
+ * no `LogFetcher`, no fetcher host -- and a fold added at `open` is not a FOLLOWER
+ * either (`add` decides that from "do I already hold a fold on this stream", and
+ * at `open` the fold list is empty), so it holds no rebuild over the stored stream
+ * to be carried by. It is fed by the WIRE and by nothing else: a sender has to
+ * push for ITS OWN `{source, config}`, which it discovers by asking
+ * `POST /{indexer}/ingest/expected-from-block`.
+ *
+ * So the one way this upgrade silently never finishes is a sender that is pushing
+ * something else -- a different source, or a different stream config -- whose
+ * batches are refused as a foreign context by the ingest route while `/status`
+ * goes on looking healthy. That refusal is visible on the SENDER and nowhere on
+ * this half, which is exactly the shape of stall worth one line at start-up. The
+ * alternative considered and rejected was giving `index` a fetcher so it could
+ * feed its own successor, which would delete the property that defines the
+ * command.
+ *
+ * Said ONCE, at start-up, through the operator's own startup lines rather than the
+ * log facade, because it is a fact about the deployment that was just configured
+ * and not an event. A process holding no successor says nothing, so the line
+ * means something wherever it appears.
+ *
+ * It cannot REFUSE a start-up: a diagnostic read that failed against a registry
+ * this process has already opened and bound a port over would otherwise throw past
+ * a `catch` that closes neither the server nor the timers, so a receiver would die
+ * of the line explaining itself. The read is said to have failed and the process
+ * goes on receiving.
+ */
+async function sayWhatFeedsASuccessor<ABI extends Abi, ProcessResultType>(
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
+	ingestUrl: string,
+	log: (...args: unknown[]) => void,
+): Promise<void> {
+	const opening = container.held()[0];
+	if (!opening) return;
+	let slots: Awaited<ReturnType<typeof container.slots>>;
+	try {
+		slots = await container.slots();
+	} catch (err) {
+		logger.error(`index: the slots could not be read, so this process cannot say what it came up holding`, err);
+		return;
+	}
+	// WHAT THE SLOT SAYS this generation is FOR, which is the same question the arming
+	// asks and is deliberately not "how did this fold arrive" (ADR-0084). A registry
+	// that names a successor always names a canonical too -- the first generation of an
+	// empty registry takes the pointer -- so there is nothing to report without one.
+	const successor = slots.successor;
+	const canonical = slots.canonical;
+	if (!successor || !canonical) return;
+	const held = generationDigestOf(opening.record);
+	if (generationDigestOf(successor) !== held) return;
+
+	log(
+		`  upgrade in progress: this process holds generation ${held} in the SUCCESSOR slot, beside the canonical ` +
+			`${generationDigestOf(canonical)}, which goes on answering reads until the successor is level. This command ` +
+			`makes no chain call, so nothing here fetches for it: it advances ONLY from what a sender pushes at ` +
+			`${ingestUrl} for its own {source, config}` +
+			`${opening.writesStream ? '' : `, and it does not write that stream, because an older generation on it still does`}` +
+			`. A sender configured for a different source or stream config is refused there as a foreign context ` +
+			`(400 context-mismatch), and a successor nothing pushes to never becomes level, so the pointer never moves.`,
+	);
+	logger.info(`index: holding ${held} as a successor beside the canonical ${generationDigestOf(canonical)}`);
 }
 
 /**
