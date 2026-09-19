@@ -85,7 +85,7 @@ Whether a browser tab CAN instantiate retained bytes at all is not yet known, an
 ## Out of Scope
 
 - **The promotion trigger's inability to read an unheld generation's cursor** (`work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`). It looks like the same missing-engine fact and it is not: the trigger needs a NUMBER, which is a row addressed by an identity the registry already holds. It is fixed by a cursor seam beside `dropState` and must NOT wait for this spec.
-- **The stored-stream gap on restart** (`work/notes/observations/a-restarted-deployment-appends-nothing-to-its-stored-stream.md`), where the one-writer rule names an incumbent the process holds no fold for and nothing appends. Retained code would dissolve it as a side effect, but it is a defect with its own fix and should not be parked behind a feature.
+- **The stored-stream gap on restart** (`work/tasks/ready/a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge.md`), where the one-writer rule names an incumbent the process holds no fold for and nothing appends. Retained code would dissolve it as a side effect, but it is a defect with its own fix and should not be parked behind a feature -- so it is tasked separately and carries the measurement itself.
 - **Pushing a processor over the wire**, which is ADR-0085 and `a-processor-reaches-a-deployment-however-it-arrives`. This spec consumes that artifact format; it does not extend the delivery story.
 - **Migrating existing deployments.** Nothing is published (`CONTEXT.md`), so there is no persisted state to carry forward.
 

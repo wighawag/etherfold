@@ -43,9 +43,29 @@ export type LoadProcessorModuleOptions = {
 
 // Import the processor module by path. Behaviour (superset of the previous CLI/server copies):
 //  - absolute path: imported directly.
-//  - relative path: joined against `cwd` and imported; if that import fails, fall back to resolving
-//    the specifier through `createRequire(cwd/node_modules).resolve(...)` (this is the server's
-//    fallback, kept as the shared superset so a bare package specifier still resolves).
+//  - relative path: joined against `cwd` and imported; if that import fails BECAUSE NOTHING WAS
+//    THERE, fall back to resolving the specifier through `createRequire(cwd/node_modules).resolve(...)`
+//    (this is the server's fallback, kept as the shared superset so a bare package specifier still
+//    resolves).
+//
+// WHOSE ERROR AN OPERATOR IS SHOWN, which is the whole point of the two guards below.
+//
+// The fallback exists for ONE condition: the relative specifier named no file, so it might name a
+// PACKAGE instead. Every other failure belongs to the author's own module -- a syntax error, a
+// top-level throw, an import IT makes that does not resolve -- and for those the fallback is not a
+// second chance, it is a way to lose the real error. Falling back unconditionally and reporting
+// whatever the RESOLVER then said is how `Cannot find module './dist/processor.js'` comes to be
+// printed for a module that exists and threw, sending an operator to look at their path when the
+// fault is inside their code.
+//
+// So: only a resolution failure earns the fallback, and even then the ORIGINAL error is what
+// propagates if the fallback also fails, because the original is the one that describes what the
+// operator actually asked for. `ERR_MODULE_NOT_FOUND` is the discriminator rather than the message,
+// and it is deliberately NOT narrowed further by matching the specifier in the text: a module whose
+// own missing sibling raises the same code names that sibling AND names the module it was imported
+// from, so a text match cannot tell the two apart. The second guard is what makes that safe -- such
+// a module takes the fallback, the fallback fails, and the error the operator is shown is still the
+// one naming the sibling.
 export async function loadProcessorModule<ABI extends Abi, ProcessResultType>(
 	processorPath: string,
 	options?: LoadProcessorModuleOptions,
@@ -62,8 +82,18 @@ export async function loadProcessorModule<ABI extends Abi, ProcessResultType>(
 	try {
 		return await importModule(path.join(cwd, processorPath));
 	} catch (err) {
-		// Fallback: resolve the specifier as a package/module name relative to cwd's node_modules.
-		return await importModule(requireResolve(processorPath));
+		// Not a "nothing was there" failure, so it is the module's own and the fallback cannot help.
+		if ((err as NodeJS.ErrnoException | undefined)?.code !== 'ERR_MODULE_NOT_FOUND') {
+			throw err;
+		}
+		try {
+			// Fallback: resolve the specifier as a package/module name relative to cwd's node_modules.
+			return await importModule(requireResolve(processorPath));
+		} catch {
+			// The resolver's complaint is about a specifier the operator never wrote as a package name.
+			// Theirs is the one above.
+			throw err;
+		}
 	}
 }
 

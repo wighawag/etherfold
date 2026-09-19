@@ -52,6 +52,13 @@ function asImported<ABI extends Abi, ProcessResultType>(mod: object): ProcessorM
 // loadProcessorModule — module resolution (createRequire fallback is the superset behaviour)
 // ---------------------------------------------------------------------------------------------------
 
+/** An error shaped like the one Node raises when a specifier resolves to nothing. */
+function moduleNotFound(message = "Cannot find module '/some/cwd/some-pkg'"): NodeJS.ErrnoException {
+	const err: NodeJS.ErrnoException = new Error(message);
+	err.code = 'ERR_MODULE_NOT_FOUND';
+	return err;
+}
+
 describe('loadProcessorModule', () => {
 	it('imports an absolute path directly (no cwd join, no fallback)', async () => {
 		const mod = {createProcessor: () => fakeProcessor()};
@@ -79,9 +86,11 @@ describe('loadProcessorModule', () => {
 		expect(importModule).toHaveBeenCalledWith('/some/cwd/rel/processor.js');
 	});
 
-	it('falls back to createRequire(...).resolve when the cwd-relative import fails', async () => {
+	it('falls back to createRequire(...).resolve when the cwd-relative specifier named no file', async () => {
 		const mod = {createProcessor: () => fakeProcessor()};
-		const importModule = vi.fn().mockRejectedValueOnce(new Error('Cannot find module')).mockResolvedValueOnce(mod);
+		// `code` is what a REAL resolution failure carries, and it is now the discriminator, so a
+		// bare `Error` here would no longer stand in for the condition this test is about.
+		const importModule = vi.fn().mockRejectedValueOnce(moduleNotFound()).mockResolvedValueOnce(mod);
 		const requireResolve = vi.fn(() => '/resolved/node_modules/some-pkg/index.js');
 		const result = await loadProcessorModule('some-pkg', {
 			importModule,
@@ -92,6 +101,59 @@ describe('loadProcessorModule', () => {
 		expect(requireResolve).toHaveBeenCalledWith('some-pkg');
 		expect(importModule).toHaveBeenNthCalledWith(1, '/some/cwd/some-pkg');
 		expect(importModule).toHaveBeenNthCalledWith(2, '/resolved/node_modules/some-pkg/index.js');
+	});
+
+	// -------------------------------------------------------------------------------------------------
+	// WHOSE ERROR AN OPERATOR IS SHOWN
+	// -------------------------------------------------------------------------------------------------
+	// The fallback is for one condition -- the specifier named no file, so it may name a package. Every
+	// other failure is the author's own module, and reporting the RESOLVER's complaint for those points
+	// an operator at their path when the fault is inside their code.
+
+	it('re-raises the module\u2019s OWN error rather than falling back, when the module exists and threw', async () => {
+		const ownError = new SyntaxError('Unexpected token }');
+		const importModule = vi.fn().mockRejectedValueOnce(ownError);
+		const requireResolve = vi.fn(() => '/resolved/node_modules/x/index.js');
+
+		await expect(
+			loadProcessorModule('./dist/processor.js', {importModule, requireResolve, cwd: '/some/cwd'}),
+		).rejects.toBe(ownError);
+
+		// the fallback is not merely unreported, it is not ATTEMPTED: resolving a path the operator
+		// never wrote as a package name can only produce a misleading second error.
+		expect(requireResolve).not.toHaveBeenCalled();
+		expect(importModule).toHaveBeenCalledTimes(1);
+	});
+
+	it('re-raises the ORIGINAL error when the fallback is tried and also fails', async () => {
+		// A module whose own missing sibling raises ERR_MODULE_NOT_FOUND too, naming the sibling AND the
+		// module it was imported from -- indistinguishable from a missing entry by the message, which is
+		// why this guard and not a text match is what keeps the operator\u2019s error.
+		const original = moduleNotFound(
+			"Cannot find module '/some/cwd/dist/abi.js' imported from /some/cwd/dist/processor.js",
+		);
+		const importModule = vi
+			.fn()
+			.mockRejectedValueOnce(original)
+			.mockRejectedValueOnce(new Error("Cannot find module './dist/processor.js'"));
+		const requireResolve = vi.fn(() => '/resolved/node_modules/x/index.js');
+
+		await expect(
+			loadProcessorModule('./dist/processor.js', {importModule, requireResolve, cwd: '/some/cwd'}),
+		).rejects.toBe(original);
+		expect(importModule).toHaveBeenCalledTimes(2);
+	});
+
+	it('re-raises the resolver\u2019s own throw as the original error, so a bad specifier still reports the import', async () => {
+		const original = moduleNotFound();
+		const importModule = vi.fn().mockRejectedValueOnce(original);
+		const requireResolve = vi.fn(() => {
+			throw new Error('MODULE_NOT_FOUND');
+		});
+
+		await expect(
+			loadProcessorModule('./dist/processor.js', {importModule, requireResolve, cwd: '/some/cwd'}),
+		).rejects.toBe(original);
 	});
 });
 

@@ -15,6 +15,15 @@ So `index` must schedule the bounded rebuild for the generations it holds, the w
 
 While in there, settle the related claim the module header makes: it says a batch naming a fold this process has not seen CREATES a generation beside the live one, and no code path does that. Either make the header true or correct it, and say which you did and why.
 
+**The measured account, folded in from the observation this was raised from** (which is discharged, so this task carries it rather than pointing at it). Restarting `etherfold index` with a changed processor opens the container with the successor beside the incumbent, and nothing ever carries it to level, for two independent reasons:
+
+- **Never ARMED.** `ReceivingIndexer.applyPolicyTo` returns immediately while `opened` is false, so a fold added by `open()` is never even a candidate. That half is `promotion-arms-from-the-slot-so-a-restart-can-finish-an-upgrade`, which this task is blocked on.
+- **Never ADVANCED.** `packages/cli/src/indexCommand.ts` schedules no `rebuildMore` at all; only `driveCycles` in `packages/cli/src/index.ts` does, and that runs on `run`. This half is THIS task.
+
+So the incumbent stays canonical for ever, the successor stays at nothing, and a split deployment's only route to an upgraded fold is to delete a generation by hand. `run` has both halves and is unaffected.
+
+The stale module-header claim above is probably the same gap seen from the other side: `container.add` is called only by `open()` and by `packages/cli/src/reconfigure.ts`, which `index` does not wire up.
+
 ## Acceptance criteria
 
 - [ ] An `index` process holding a successor ADVANCES it, so its cursor moves without a second process or an operator doing anything.
@@ -34,7 +43,7 @@ While in there, settle the related claim the module header makes: it says a batc
 
 The goal is that a deployment split into a fetching half and an indexing half can upgrade its processor by restarting, like the combined process can.
 
-Read `work/notes/observations/an-index-process-can-never-finish-a-processor-upgrade.md`, which is where this was found and which names both halves and the exact code paths. Then read the CLI's `index` command beside the combined `run`, specifically where `run` schedules its drive cycles and what `index` does instead. ADR-0044 is why a follower holds a read-only view of a stream it does not own and folds it rather than fetching; the generation rebuild in `@etherfold/core` is the bounded driver itself.
+Read the CLI's `index` command beside the combined `run`, specifically where `run` schedules its drive cycles and what `index` does instead. ADR-0044 is why a follower holds a read-only view of a stream it does not own and folds it rather than fetching; the generation rebuild in `@etherfold/core` is the bounded driver itself.
 
 The decision most likely to be got wrong is scheduling. `index` exists to receive pushed batches and fold them, so its loop is driven by arrivals rather than by a clock, and a rebuild bolted on without regard to that can compete with the ingest path for the one database handle. Decide explicitly where the rebuild gets its turn, prefer the shape `run` already uses if it transfers, and say what you chose and what it costs under load.
 
