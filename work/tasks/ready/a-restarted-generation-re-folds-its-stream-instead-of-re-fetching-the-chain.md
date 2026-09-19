@@ -3,6 +3,7 @@ title: 'A restarted generation RE-FOLDS the stream it already has instead of re-
 slug: a-restarted-generation-re-folds-its-stream-instead-of-re-fetching-the-chain
 blockedBy: [run-and-build-drive-the-folds-they-hold-rather-than-one-captured-receiver]
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
