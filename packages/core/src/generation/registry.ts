@@ -190,7 +190,7 @@ export type GenerationRegistryWrite = {
 /**
  * What a SUBSTRATE supplies, scoped to ONE named indexer.
  *
- * Five operations, and the split between them is the design. `read` and
+ * Six operations, and the split between them is the design. `read` and
  * `commit` are the registry's own records, and `commit` takes a DECISION
  * FUNCTION rather than a write, for the same reason `commitSegmentWithCursor`
  * does: the decision (is this already registered, does it breach a cap) has to
@@ -201,12 +201,13 @@ export type GenerationRegistryWrite = {
  * legitimately await, and it may THROW: a refusal is a decision made on the
  * state the transaction read.
  *
- * The other three reach OUTSIDE the registry's own records, and each of them is
+ * The other four reach OUTSIDE the registry's own records, and each of them is
  * a fact only the runtime knows: which stream subtrees exist, how a subtree is
- * dropped, and how a generation's state store is dropped. That last one is
- * injected rather than derived because WHERE a generation's state lives is
- * decided by the container above `StateStore`, which is a later task; the
- * registry must not fork a naming convention it does not own.
+ * dropped, and how a generation's state store is DROPPED and READ. Those last
+ * two are injected rather than derived because WHERE a generation's state lives
+ * is decided by the container above `StateStore` (ADR-0053 makes it a table
+ * NAMESPACE named from the identity); the registry must not fork a naming
+ * convention it does not own.
  */
 export type GenerationRegistryPort = {
 	/** Every registered generation and every slot assignment, as one read. */
@@ -231,6 +232,41 @@ export type GenerationRegistryPort = {
 	dropStreamSubtree(digest: string): Promise<number>;
 	/** Drop the state store this generation folded into. */
 	dropState(id: GenerationId): Promise<void>;
+	/**
+	 * HOW FAR THE FOLD IN THIS GENERATION'S STATE GOT: `lastToBlock`, read where it
+	 * is durable, for a generation the ASKER may hold no fold for.
+	 *
+	 * `dropState`'s symmetric sibling, injected for exactly the reason that one is:
+	 * a generation's state is a TABLE NAMESPACE named from its identity (ADR-0053),
+	 * the registry does not own that convention, and whoever named the tables is the
+	 * one who can address them. It is the READ half of the same fact.
+	 *
+	 * ## It takes an IDENTITY and never a fold, which is the whole point
+	 *
+	 * The promotion trigger compares a successor's position against the CANONICAL
+	 * generation's, and on the ordinary upgrade the process holding the successor
+	 * holds no fold for the incumbent at all -- the old processor's code is not in
+	 * the build, so one is unbuildable by construction. That is the same fact the
+	 * receiving container's module JSDoc (rule 1) and `promote`'s docstring already
+	 * state: a generation ANSWERS with no engine, because its state is a namespace
+	 * the pointer names. This read follows that rule instead of being the one place
+	 * that still needs an engine.
+	 *
+	 * ## A NUMBER, and `undefined` is never a zero
+	 *
+	 * A NUMBER because that is what the comparison needs, and because the cursor
+	 * itself is an opaque string behind the storage seam whose window holds whole
+	 * decoded blocks (ADR-0027, ADR-0047): the codec lives above that seam, in the
+	 * host, which is where this is implemented. `undefined` means NOT READABLE -- no
+	 * cursor written yet, an unparseable one, or a cursor another fold wrote -- and
+	 * it must never be reported as `0`, or "has folded nothing" would read as "level
+	 * at block 0" and a successor that had done nothing would be promoted over an
+	 * incumbent that had.
+	 *
+	 * Nothing here retains, re-imports or reconstructs a past processor: the number
+	 * is a ROW, addressed by an identity the registry holds.
+	 */
+	readStateCursor(id: GenerationId): Promise<number | undefined>;
 };
 
 /** What `deleteGeneration` did. */
@@ -374,6 +410,17 @@ export type GenerationRegistry = {
 	writerOf(stream: string): Promise<GenerationRecord | undefined>;
 	/** Move the canonical pointer. Forwards it is promotion; backwards it is revert. */
 	moveCanonicalTo(id: GenerationId): Promise<GenerationRecord>;
+	/**
+	 * HOW FAR THE FOLD IN THIS GENERATION'S STATE GOT, for a generation the caller
+	 * may hold no fold for. See `GenerationRegistryPort.readStateCursor`.
+	 *
+	 * Forwarded rather than answered here, because the records say nothing about it:
+	 * it is the host's fact, reached through the port beside the DROP of the same
+	 * state. It is on the registry because the registry is what a container holds,
+	 * and the question it answers -- "is the successor level with the generation the
+	 * pointer names" -- is asked about IDENTITIES the registry resolves.
+	 */
+	readStateCursor(id: GenerationId): Promise<number | undefined>;
 	/** Drop a generation's state store, and reap its stream if it was the last one. */
 	deleteGeneration(id: GenerationId): Promise<GenerationDeletion>;
 	/** Drop every generation on a stream, and the stream's keyspace with them. */
@@ -668,6 +715,11 @@ export async function openGenerationRegistry(
 	return {
 		caps: bounds,
 		swept,
+
+		/** The host's own read, forwarded unchanged. See the port's JSDoc. */
+		readStateCursor(id: GenerationId): Promise<number | undefined> {
+			return port.readStateCursor(assertIdentity(id));
+		},
 
 		/**
 		 * Register a generation, TAKING ITS STARTING STREAM AS AN INPUT.

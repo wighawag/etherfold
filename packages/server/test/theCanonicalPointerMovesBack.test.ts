@@ -22,6 +22,7 @@ import {
 	type IndexerRegistryEntry,
 } from '../src/index.js';
 import {ALICE, CONTRACT, SOURCE, STREAM_CONFIG, TOKEN, ZERO, transfer, type TestABI} from './utils/feedHarness.js';
+import {generationDatabases, type GenerationDatabases} from './utils/generationDatabases.js';
 import {identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -89,10 +90,10 @@ function freshDatabase(): RemoteSQL {
  * what is under test here is the POINTER, and a fold that could reach another's
  * rows would make an assertion about the pointer mean nothing.
  */
-function foldAt(marker: string) {
+function foldAt(states: GenerationDatabases, marker: string) {
 	const identity = identityOf(marker);
 	return {
-		createState: () => freshDatabase(),
+		createState: (context: {stream: string}) => states.open({stream: context.stream, processor: identity}),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorFor(marker)),
 		processorIdentity: identity,
 	};
@@ -120,13 +121,17 @@ type Deployment = {
 async function anUpgradeThatLanded(): Promise<Deployment> {
 	const db = freshDatabase();
 	await applySchema(db);
+	// The host knows which database each generation folds into, so it supplies both
+	// seams over that fact: the DROP, and the READ the promotion trigger measures
+	// through -- which is what lets the pointer move on its own below.
+	const states = generationDatabases();
 	const indexer = (await openReceivingIndexer({
-		port: generationRegistryPortOnSQL(db, NAME),
+		port: generationRegistryPortOnSQL(db, NAME, {readStateCursor: states.readStateCursor}),
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
-		generation: foldAt('incumbent'),
+		generation: foldAt(states, 'incumbent'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 
 	let resolutions = 0;
@@ -166,7 +171,7 @@ async function anUpgradeThatLanded(): Promise<Deployment> {
 	await push({toBlock: 105, latestBlock: 105, logs: [transfer(101, '0xa101', ALICE, 1n, 0, CONTRACT)]});
 
 	const incumbentGeneration = indexer.generation;
-	const successor = await indexer.add(foldAt('successor'));
+	const successor = await indexer.add(foldAt(states, 'successor'));
 	for (let guard = 0; guard < 50; guard++) {
 		const [report] = await indexer.rebuildMore();
 		if (report?.complete) break;

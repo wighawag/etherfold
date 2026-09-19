@@ -75,7 +75,11 @@ export function generationAddress(name: string) {
  */
 export function generationRegistryPortOnIndexedDB(
 	name: string,
-	options: {store?: UseStore; dropState: (id: GenerationId) => Promise<void>},
+	options: {
+		store?: UseStore;
+		dropState: (id: GenerationId) => Promise<void>;
+		readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
+	},
 ): GenerationRegistryPort {
 	const store = options.store ?? keyvalStore();
 	const address = generationAddress(name);
@@ -197,6 +201,10 @@ export function generationRegistryPortOnIndexedDB(
 		dropState(id) {
 			return options.dropState(id);
 		},
+
+		async readStateCursor(id) {
+			return options.readStateCursor?.(id);
+		},
 	};
 }
 
@@ -233,6 +241,22 @@ export type BrowserGenerationRegistryOptions = {
 	 * that is `indexedDB.deleteDatabase(...)` of whatever the host named it.
 	 */
 	dropState: (id: GenerationId) => Promise<void>;
+	/**
+	 * How far the fold in one generation's state got (`lastToBlock`), for a
+	 * generation the asker holds no fold for -- `dropState`'s READ sibling, and
+	 * injected for the same reason (see `GenerationRegistryPort.readStateCursor`).
+	 *
+	 * OPTIONAL here and REQUIRED of nobody on this runtime, which is a statement
+	 * about which container reads it rather than an exception to "every host that
+	 * names the tables supplies it". A tab runs the CHAIN-FACING container, whose
+	 * promotion trigger reads the cursor each held ENGINE publishes, so nothing here
+	 * asks -- and a required option nothing consults would be accepted and ignored.
+	 * A RECEIVING container over this port (`ReceivingIndexer`, what a server and the
+	 * CLI fold through) is the one that asks, and it cannot promote on its own
+	 * without it: absent, every position reads as NOT READABLE and the pointer stays
+	 * where it is.
+	 */
+	readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
 	/** Overrides for `BROWSER_GENERATION_CAPS`. */
 	caps?: Partial<GenerationCaps>;
 	/**

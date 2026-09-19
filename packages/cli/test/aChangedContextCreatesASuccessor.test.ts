@@ -30,6 +30,7 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
 import {abi, CONTRACT, nftProcessor, SOURCE, START_BLOCK, timestampOf, ZERO, ALICE, BOB} from './utils/chain.js';
 import {identityOf} from './utils/processorIdentity.js';
+import {generationStateSeamsOn} from './utils/generationState.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE OUTAGE, REMOVED ON A REAL DATABASE: A CHANGED CONTEXT CREATES A SUCCESSOR
@@ -90,11 +91,13 @@ async function openIndexer(
 	options: {caps?: {maxGenerations: number; maxStreams: number}} = {},
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	const {declared, identity} = fold;
-	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
-		await new VersionedStateStore(db, declared.entities, {tableNamespace: generationDigestOf(id)}).drop();
-	};
+	// BOTH state seams, under the namespace convention `openFolding` uses: the DROP
+	// of a generation's namespace, and the READ of how far the fold in it got -- which
+	// is what the promotion trigger compares, with no engine and for a generation this
+	// process may hold no fold for.
+	const state = generationStateSeamsOn(db, declared.entities);
 	return openReceivingIndexer({
-		port: generationRegistryPortOnSQL(db, INDEXER, {dropState}),
+		port: generationRegistryPortOnSQL(db, INDEXER, state),
 		...(options.caps ? {caps: options.caps} : {}),
 		source: SOURCE,
 		stream: {finality: FINALITY},

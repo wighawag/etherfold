@@ -32,6 +32,7 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it, vi} from 'vitest';
 import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, timestampOf, ZERO} from './utils/chain.js';
 import {identityOf} from './utils/processorIdentity.js';
+import {generationStateSeamsOn} from './utils/generationState.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A SUCCESSOR LANDS IN A DURABLE SLOT THAT HOLDS EXACTLY ONE (ADR-0084)
@@ -139,11 +140,13 @@ async function openIndexer(
 	db: RemoteSQL,
 	identity: string = V1,
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
-	const dropState: SQLGenerationRegistryOptions['dropState'] = async (id) => {
-		await new VersionedStateStore(db, nftEntities, {tableNamespace: generationDigestOf(id)}).drop();
-	};
+	// BOTH state seams, under the namespace convention `openFolding` uses: the DROP
+	// of a generation's namespace, and the READ of how far the fold in it got -- which
+	// is what the promotion trigger compares, with no engine and for a generation this
+	// process may hold no fold for.
+	const state = generationStateSeamsOn(db, nftEntities);
 	return openReceivingIndexer({
-		port: generationRegistryPortOnSQL(db, INDEXER, {dropState}),
+		port: generationRegistryPortOnSQL(db, INDEXER, state),
 		source: SOURCE_A,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),

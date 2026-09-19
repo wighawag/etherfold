@@ -39,6 +39,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
+import {generationDatabases, type GenerationDatabases} from './utils/generationDatabases.js';
 import {identityOf} from './utils/processorIdentity.js';
 import {openSignalStream} from './utils/signalStream.js';
 
@@ -87,10 +88,10 @@ function freshDatabase(): RemoteSQL {
 }
 
 /** A FOLD ARRIVING AS THE BYTES `marker` NAMES, identified by them rather than by a declaration. */
-function foldAt(marker: string) {
+function foldAt(states: GenerationDatabases, marker: string) {
 	const identity = identityOf(marker);
 	return {
-		createState: () => freshDatabase(),
+		createState: (context: {stream: string}) => states.open({stream: context.stream, processor: identity}),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: identity,
 	};
@@ -100,6 +101,8 @@ type Deployment = {
 	app: ReturnType<typeof createServer<{INGEST_TOKEN?: string}>>;
 	db: RemoteSQL;
 	indexer: ReceivingIndexer<TestABI, unknown, RemoteSQL>;
+	/** Where this host keeps each generation's state, and how it reads a position out of one. */
+	states: GenerationDatabases;
 	/** How many subscribers are attached to the producer RIGHT NOW, through the entry. */
 	attached: () => number;
 	push: (over: {toBlock: number; latestBlock: number; logs: LogEvent<TestABI>[]}) => Promise<Response>;
@@ -120,13 +123,17 @@ async function deploy(
 ): Promise<Deployment> {
 	const db = freshDatabase();
 	await applySchema(db);
+	// This host decides where a generation's state lives, so it supplies the READ of
+	// a generation's position beside the DROP of it -- the seam the promotion trigger
+	// measures through, with no engine of its own.
+	const states = generationDatabases();
 	const indexer = (await openReceivingIndexer({
-		port: generationRegistryPortOnSQL(db, NAME),
+		port: generationRegistryPortOnSQL(db, NAME, {readStateCursor: states.readStateCursor}),
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
-		generation: foldAt('the-incumbent-fold'),
+		generation: foldAt(states, 'the-incumbent-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 
 	let attached = 0;
@@ -173,6 +180,7 @@ async function deploy(
 		app,
 		db,
 		indexer,
+		states,
 		attached: () => attached,
 		push: async (over) => {
 			const response = await push(over);
@@ -309,7 +317,7 @@ describe('a remote client is told the state moved', () => {
 
 		// a successor over the SAME stream (a processor change), caught up by
 		// re-folding the stored stream, which under the default policy MOVES the pointer
-		await deployment.indexer.add(foldAt('the-successor-fold'));
+		await deployment.indexer.add(foldAt(deployment.states, 'the-successor-fold'));
 		for (let guard = 0; guard < 50; guard++) {
 			const [report] = await deployment.indexer.rebuildMore();
 			if (report?.complete) break;

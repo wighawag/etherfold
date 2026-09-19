@@ -38,6 +38,7 @@ import {
 	type RawLog,
 } from './utils/chain.js';
 import {identityOf} from './utils/processorIdentity.js';
+import {generationStateSeamsOn} from './utils/generationState.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN OPERATOR WATCHES A REBUILD ADVANCE, ON `/status`, WITH NO NEW ENDPOINT
@@ -131,7 +132,9 @@ function specFor(db: RemoteSQL, fold: {declared: EntityProcessor<typeof abi>; id
 
 async function openIndexer(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	return openReceivingIndexer({
-		port: generationRegistryPortOnSQL(db, INDEXER),
+		// BOTH state seams, as `openFolding` supplies them: this host named the
+		// namespaces, so it is the one that can drop one and read a position out of one.
+		port: generationRegistryPortOnSQL(db, INDEXER, generationStateSeamsOn(db, nftEntities)),
 		source: SOURCE,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
