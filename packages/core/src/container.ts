@@ -1520,19 +1520,21 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	/**
-	 * Drop a superseded generation: its state store, its record, and its stream if
-	 * it was the last one folding it.
+	 * Drop a superseded generation: its registry row and its state store, and NOT its
+	 * stream, which outlives every fold over it and is deleted only where a caller ASKS
+	 * (ADR-0087). The stream is what the chain fetches bought and the state is derived
+	 * from it, so what the drop takes is the recomputable half.
 	 *
 	 * **It never drops the WRITER of a stream another held generation follows.**
 	 * Which generation writes a stream is the first one held on it and not the
 	 * canonical one (ADR-0044), precisely so a promotion does not hand the append
 	 * duty to a different engine mid-flight -- so dropping the writer would leave
 	 * its followers folding a stream nothing appends to, and the app would simply
-	 * stop advancing. That is worse than keeping the bytes, so the drop is DECLINED
-	 * and said out loud. The case it costs is the common reconfigure (a processor
-	 * change, on the stream that is already there); the case it serves is the
-	 * expensive one (a filter change), where the retired generation owns a whole
-	 * stream of its own that goes with it.
+	 * stop advancing. That is worse than keeping a row and a state store nobody
+	 * reads, so the drop is DECLINED and said out loud. The case it costs is the
+	 * common reconfigure (a processor change, on the stream that is already there);
+	 * the case it serves is the filter change, where the retired generation is alone
+	 * on its stream and dropping it strands nothing.
 	 */
 	protected async dropSuperseded(
 		superseded: HeldEntry<ABI, ProcessResultType>,
@@ -1557,12 +1559,15 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// being dropped underneath it.
 		this.held.splice(this.held.indexOf(superseded), 1);
 		try {
-			const deletion = await this.registry.deleteGeneration(superseded.record);
+			// NO REAP: a promotion nobody asked to delete a stream for does not delete one
+			// (ADR-0087). The stream stays, and is what the next generation over it re-folds
+			// instead of going back to a node for history it may refuse outright.
+			await this.registry.deleteGeneration(superseded.record);
 			namedLogger.info(
 				`dropped the superseded generation {stream: ${superseded.record.stream}, processor: ` +
 					`${superseded.record.processor}} on the promotion of {stream: ${successor.record.stream}, processor: ` +
-					`${successor.record.processor}}` +
-					`${deletion.reaped ? `, reaping the stream ${deletion.reaped} with it` : ''}.`,
+					`${successor.record.processor}}. Its state store is gone and the stream ` +
+					`${superseded.record.stream} is KEPT: a stream outlives every fold over it and is deleted only when asked.`,
 			);
 		} catch (err) {
 			// The state may or may not have gone; what must not happen is this container
@@ -1652,9 +1657,10 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * it (ADR-0044), so dropping a writer another held generation follows leaves that
 	 * one folding a stream nothing appends to. The generation about to be ADDED counts
 	 * as such a follower, because it is about to be one: a generation on a stream this
-	 * container already holds FOLLOWS it, and dropping its writer here would also reap
-	 * the stored stream out from under it and send it back to the chain for a history
-	 * it already has -- which on a browser's public node may not be served at all.
+	 * container already holds FOLLOWS it, and dropping its writer here would leave it,
+	 * too, on a stream nothing appends to. What the drop does NOT do is take the stored
+	 * stream with it -- no drop reaps one any more (ADR-0087) -- so the hazard here is
+	 * the missing appender and only that.
 	 *
 	 * It reads the RECORDS rather than a held entry's `follows`, because the generation
 	 * the slot names may be one this process holds no engine for at all -- which is
@@ -1678,9 +1684,13 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * of it in this container.
 	 *
 	 * Deleting a generation is already a drop of its state (`dropState`, injected by
-	 * whoever named the storage) and a reap of its stream where no registered
-	 * generation is left folding it, so nothing new is invented here: what is new is
+	 * whoever named the storage), so nothing new is invented here: what is new is
 	 * deciding WHEN, without being asked.
+	 *
+	 * **The STREAM is NOT reaped with it** (ADR-0087). It used to be, wherever this was
+	 * the last generation folding it, which made a second save in a tab delete the
+	 * history the first save had fetched -- the one place this codebase deleted an
+	 * expensive thing to reclaim a cheap one. What a registration displaces is a FOLD.
 	 *
 	 * The REGISTRY GOES FIRST, which is the opposite order from `dropSuperseded` and
 	 * deliberately so: there the drop is the last act of a promotion that has already
@@ -1696,9 +1706,9 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * a user is looking at.
 	 */
 	protected async dropReplaced(record: GenerationRecord, arriving: GenerationId): Promise<boolean> {
-		let reaped: string | undefined;
 		try {
-			reaped = (await this.registry.deleteGeneration(record)).reaped;
+			// NO REAP, which is the whole of ADR-0087's second half at this call site.
+			await this.registry.deleteGeneration(record);
 		} catch (err) {
 			namedLogger.error(
 				`failed to drop the replaced successor {stream: ${record.stream}, processor: ${record.processor}}; it is ` +
@@ -1714,8 +1724,8 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
 				`AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was replaced -- it is ` +
 				`neither the canonical generation nor what \`predecessor\` holds, so nothing can revert to it and re-folding ` +
-				`it would be work for a result nobody will ever ask for. Its state store is gone` +
-				`${reaped ? `, and the stream ${reaped} was reaped with it, no registered generation being left on it` : ''}. ` +
+				`it would be work for a result nobody will ever ask for. Its state store is gone and the stream ` +
+				`${record.stream} is KEPT: a stream outlives every fold over it and is deleted only when asked. ` +
 				`The canonical generation and the revert target are untouched.`,
 		);
 		return true;
