@@ -10,7 +10,7 @@ needsAnswers: false
 >
 > It would otherwise be deleted as a spent signal. It stays because `docs/adr/0071-one-rule-has-one-home-the-writer-and-the-unreadable-snapshot.md` cites it BY PATH as the failure that forced its decision, so this note is that ADR's evidence and deleting it would orphan the citation.
 >
-> The sibling it did NOT fix -- what happens when the generation `writerOf` names is not HELD, so nothing appends at all -- is `work/tasks/ready/a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge.md`.
+> The sibling it did NOT fix -- what happens when the generation `writerOf` names is not HELD, so nothing appends at all -- was the task `a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge` (named by slug, since it has since landed and its file moved to `work/tasks/done/`). That sibling is CLOSED: ADR-0087 took the write duty off the generation entirely, and ADR-0088 then narrowed which generation FETCHES on this chain-facing runtime to the oldest one the container actually HOLDS, which is this note's own case decided in the small.
 
 2026-09-16, noticed while porting slots to the chain-facing container (`the-chain-facing-container-holds-its-generations-in-slots`). Recorded rather than fixed: it is `follows`, not slots, and ADR-0071 decided the rule deliberately.
 

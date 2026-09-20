@@ -6,7 +6,7 @@ This is a decision about the browser engine and nothing else. It does not extend
 
 ## The defect, measured
 
-Evidence and the re-runnable harness: `docs/spikes/the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has/`. Read off source it was `work/notes/observations/a-reloaded-tab-with-a-changed-handler-folds-its-stream-and-never-fetches.md`; what follows was RUN.
+Evidence and the re-runnable harness: `docs/spikes/the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has/`. It began as an observation read off the source and explicitly not run (`a-reloaded-tab-with-a-changed-handler-folds-its-stream-and-never-fetches`, since discharged into this ADR and that spike); what follows was RUN.
 
 **The trigger is a reload after a PROMOTION, not a reload with a changed handler.** Session 1 indexes on fold A, a save registers fold B beside it, and the default `on-catch-up` policy promotes B. `dropOnPromotion` defaults to `false` and a generation `predecessor` names is untouchable, so A survives. Session 2 is a full page load of B's bundle -- which is all a tab can supply, since A's code is not in it. B is already `canonical`, so `resolveCanonical` succeeds and the container opens. But `fetcherOf` names A, which is older and not held, so B `follows`:
 

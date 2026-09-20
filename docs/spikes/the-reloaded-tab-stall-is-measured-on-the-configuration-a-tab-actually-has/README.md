@@ -2,7 +2,7 @@
 
 The task `the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has` was a MEASUREMENT and a DECISION, with no behaviour change. This folder is the evidence, so the follow-on FIX task does not pay for the measurement twice. The decision it produced is **ADR-0088**.
 
-Everything below was RUN, against `main` at `8ca52576`. The signal it was raised from (`work/notes/observations/a-reloaded-tab-with-a-changed-handler-folds-its-stream-and-never-fetches.md`) was read off the source and explicitly not run, in both its original claim and its `## Update`.
+Everything below was RUN, against `main` at `8ca52576`. The signal it was raised from (the observation `a-reloaded-tab-with-a-changed-handler-folds-its-stream-and-never-fetches`, discharged once this measurement and ADR-0088 carried it) was read off the source and explicitly not run, in both its original claim and its `## Update`.
 
 ## What is here
 
