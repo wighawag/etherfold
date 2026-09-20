@@ -1,10 +1,8 @@
----
-status: accepted, not yet implemented
----
-
 # A stream is written by whoever FETCHES it, never by a GENERATION, and it OUTLIVES every fold over it
 
 **The invariant is that a stored stream has one writer and that writer is the thing FETCHING it, not one of the folds reading it.** A generation is a stream plus a fold over it (ADR-0044); today it is also, for exactly one generation per stream, the thing that APPENDS. That third role is an accident of where the code puts the call, and it is the root of a measured data-loss defect. We propose to separate it: the deployment fetches a stream and appends to it, every generation reads it, and no generation is ever the writer. And because the stream is then nobody's property, we propose the second half plainly: **a stream is never deleted because the last fold over it went away.**
+
+> **Amended 2026-09-20, when the `accepted, not yet implemented` line came off.** This is IMPLEMENTED on the RECEIVING runtime (server and CLI), which is the one the defect below was measured on and the one Consequences names: the election is gone, `writesStream` and `reconcileWriters` with it, one `StreamWriter` per stream is positioned from the stream's own **coverage claim**, and no fold is handed the pen. The CHAIN-FACING `Indexer` (a browser tab) is deliberately NOT restructured, so the headline reads *whoever FETCHES a stream writes it*: there the thing that fetches IS a generation (`IndexerGeneration` opens `load()` with `eth_chainId`), so "which generation fetched this" and "which generation writes it" are ONE fact, and ADR-0044's follower rule is untouched, including the clause that declines dropping a generation whose stream another held fold follows. What registration order answers there is which generation FETCHES, never which NON-FETCHING fold holds the pen, and it is the second of those this ADR retired. The residue is that on that runtime the registered fetcher can still be a generation the tab holds no fold for, which is the shape the receiving side was in; WHETHER a tab reaches it is being MEASURED rather than assumed, and is tasked separately (`the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has`, named by slug rather than by path because its folder changes when it lands). Extending this decision to the browser engine, by splitting `IndexerGeneration`'s fetch from its fold, is a restructure nothing has asked for and would be its own decision.
 
 ## The defect that forced it
 
