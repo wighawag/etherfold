@@ -1,12 +1,14 @@
 import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
 import {
+	CanonicalGenerationNotHeldError,
 	GenerationCapReachedError,
 	openIndexer,
 	type AnyGenerationSpec,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
+	type Indexer,
 } from '@etherfold/core';
 import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import type {EntityProcessor, EntityEventProcessor, EntityStateView} from '@etherfold/processor-entities';
@@ -18,6 +20,11 @@ import {
 	openGenerationRegistryOnIndexedDB,
 } from '../src/index.js';
 import {
+	BRANCH_A_EXTENDED,
+	BRANCH_A_EXTENDED_TIP,
+	BOB,
+	CAROL,
+	DAN,
 	entityProcessorOver,
 	EXPECTED_A,
 	fakeChain,
@@ -27,6 +34,8 @@ import {
 	processorVariant,
 	readState,
 	SOURCE,
+	START_BLOCK,
+	streamOf,
 	type TestABI,
 } from '../browser/workload.js';
 import {identityOf, markerOf} from './utils/processorIdentity.js';
@@ -117,6 +126,52 @@ function generationOver(
  * look inside one (ADR-0086) and after this batch there is nothing in there to
  * read, so the suite asks which bytes it hashed instead (`markerOf`).
  */
+/**
+ * Drive the container the way a TAB's driver does: `load()` once, then
+ * `indexMore()` to the tip.
+ *
+ * The `load()` is not decoration. `setupIndexing` calls `indexer.load()` before
+ * it ever advances, so a case measuring what a reloaded tab asks the chain for
+ * has to open the same way the thing it is measuring does.
+ */
+async function driveToTip(container: Indexer<TestABI, EntityStateView>, rounds = 20): Promise<void> {
+	await container.load();
+	for (let round = 0; round < rounds; round++) {
+		const lastSync = await container.indexMore();
+		if (lastSync.lastToBlock >= lastSync.latestBlock) return;
+	}
+}
+
+/**
+ * WHAT THE TAB LEFT IN THE STREAM, which is the half neither a flag nor a count
+ * of chain reads can say.
+ *
+ * A fix for a stall is judged on the DUPLICATE-OR-HOLE question ADR-0087
+ * measured on the receiving side -- `_emissions` holding four rows where two are
+ * correct -- so the stored stream is read back and both are looked for by name: a
+ * log delivered twice, and what the stream's own cursor claims to cover.
+ */
+async function storedStream(keepStream: {
+	fetchFrom: (source: typeof SOURCE, fromBlock: number) => Promise<unknown>;
+}): Promise<{events: number; blocksPresent: number[]; deliveredTwice: string[]; coversTo: number}> {
+	const read = (await keepStream.fetchFrom(SOURCE, START_BLOCK)) as {status: string};
+	if (read.status !== 'stream') {
+		throw new Error(`expected a stored stream, got '${read.status}'`);
+	}
+	const {eventStream, lastSync} = streamOf(read as never);
+	const seen = new Map<string, number>();
+	for (const event of eventStream) {
+		const key = `${event.blockHash}:${event.logIndex}:${event.removed ? 'removed' : 'applied'}`;
+		seen.set(key, (seen.get(key) ?? 0) + 1);
+	}
+	return {
+		events: eventStream.length,
+		blocksPresent: [...new Set(eventStream.map((event) => Number(event.blockNumber)))],
+		deliveredTwice: [...seen.entries()].filter(([, count]) => count > 1).map(([key, count]) => `${key} x${count}`),
+		coversTo: lastSync.lastToBlock,
+	};
+}
+
 async function slotsBy(registry: GenerationRegistry): Promise<Record<string, string | undefined>> {
 	const held = await registry.slots();
 	const marker = (record: GenerationRecord | undefined) => markerOf(record?.processor);
@@ -255,11 +310,12 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 		// test that the reload REPLACES has to be the test that the reload still WORKS,
 		// or this change trades a refusal for a silent stall.
 		//
-		// The canonical generation WRITES this stream (it is the oldest registered on
-		// it, ADR-0044) and must therefore go to the NODE. Asserted as behaviour --
-		// ranges asked of the chain, and the state that only a fetch can produce -- with
-		// `follows` beside it to name the mechanism when it breaks.
-		expect(afterReload.canonical.follows).toBe(false);
+		// It is asserted HERE on the configuration this case needs -- BOTH folds, which
+		// is the only way a container opens while the incumbent is still canonical -- and
+		// that configuration is one no entry point produces, since a tab can only supply
+		// the fold in the bundle that just loaded. The shape a real tab HAS is one fold
+		// after a PROMOTION, it is where the stall actually lived, and it is the next
+		// describe (ADR-0088).
 		for (let round = 0; round < 20; round++) {
 			const lastSync = await afterReload.indexMore();
 			if (lastSync.lastToBlock >= lastSync.latestBlock) break;
@@ -301,6 +357,215 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
 		expect(await slotsBy(registry)).toEqual({canonical: 'the-app', successor: undefined, predecessor: undefined});
 		expect(reloaded.dropped).toEqual([]);
 		expect(first.canonical.record).toEqual(before[0]);
+	});
+});
+
+/**
+ * A TAB THAT RELOADS AFTER A PROMOTION GOES ON INDEXING (ADR-0088).
+ *
+ * This is the shape a real tab HAS, and it is the one the stall lived in. A save
+ * registers the edited fold beside the live one, the default `on-catch-up`
+ * policy promotes it, and `dropOnPromotion` defaults to false -- so the previous
+ * generation SURVIVES as `predecessor`, which is the revert window slots exist
+ * for. The reload then supplies exactly ONE fold, because that is all a tab can
+ * supply: the previous handler's code is not in the bundle that just loaded.
+ *
+ * The generation that fetches a stream used to be the oldest one REGISTERED on
+ * it, so it was the one this tab does not hold -- and the tab's only fold became
+ * a follower of a stream nothing writes. It opened healthy, answered reads and
+ * reported `at-tip` while the chain moved on without it, because a follower never
+ * calls `eth_blockNumber` and the host's pacing rule compared its frozen
+ * `latestBlock` with itself. Measured, with the harness and the raw numbers kept
+ * at `docs/spikes/the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has/`.
+ *
+ * **Asserted on the CHAIN READS, and never on the `follows` flag.** Every flag
+ * and every status looked correct while the tab asked the node for nothing, so a
+ * flag is precisely what this defect already had: the methods, the `eth_getLogs`
+ * ranges, the cursor against the node's tip, and what the stored stream holds
+ * afterwards are the evidence.
+ */
+describe('a tab that reloads AFTER A PROMOTION goes on FETCHING', () => {
+	/** Session 1: index on the app's fold, save an edited one beside it, let the policy promote it. */
+	async function aTabThatSavedAndPromoted(name: string, chain: ReturnType<typeof fakeChain>) {
+		const {registry} = await durableRegistry(name);
+		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
+		const session = await openIndexer<TestABI, EntityStateView>({
+			registry,
+			provider: chain.provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
+		});
+		await driveToTip(session);
+		// THE SAVE: the developer edits the handler, the tab registers the new fold
+		// beside the live one, and the default policy promotes it once it is level.
+		const savedState = await memoryStore(editedTo(3));
+		await session.add(generationOver(savedState, editedTo(3), identityFor(3)));
+		await driveToTip(session);
+		return {registry, keepStream, savedState};
+	}
+
+	/** The state the extended branch folds to under the saved handler: six transfers counted by three. */
+	const EXPECTED_AFTER_THE_RELOAD = {owners: {'1': BOB, '2': CAROL, '3': DAN, '4': undefined}, transfers: 18};
+
+	it.each([
+		{carriesItsState: false, what: 'a FRESH state, so it re-folds the stored stream from the start'},
+		{carriesItsState: true, what: "the tab's OWN state, which survived the reload in IndexedDB"},
+	])('fetches the blocks that arrived while it was closed, with $what', async ({carriesItsState}) => {
+		const name = freshName();
+		const chain = fakeChain();
+		const {registry, keepStream, savedState} = await aTabThatSavedAndPromoted(name, chain);
+		// the promotion happened, the previous generation survives as the revert target,
+		// and it is the one this tab is about to NOT hold
+		expect(await slotsBy(registry)).toEqual({
+			canonical: 'edited-by-3',
+			successor: undefined,
+			predecessor: 'the-app',
+		});
+
+		// THE CHAIN MOVES ON while the tab is closed. Without it, "asked for nothing"
+		// means "already at the tip" and the measurement says nothing.
+		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		const callMark = chain.calls.length;
+		const rangeMark = chain.ranges.length;
+
+		// THE RELOAD: a fresh process over the same IndexedDB, holding exactly ONE fold.
+		const reloaded = await durableRegistry(name);
+		const afterReload = await openIndexer<TestABI, EntityStateView>({
+			registry: reloaded.registry,
+			provider: chain.provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: [
+				generationOver(carriesItsState ? savedState : await memoryStore(editedTo(3)), editedTo(3), identityFor(3)),
+			],
+		});
+		await driveToTip(afterReload);
+
+		// THE METHODS: the identity handshake is what a stalled tab made too, so what
+		// separates the two is `eth_blockNumber` and `eth_getLogs` being there at all.
+		expect(chain.callsByMethod(callMark)).toEqual({eth_chainId: 2, eth_blockNumber: 1, eth_getLogs: 1});
+		// THE RANGES: one request, resuming above the stored cursor, up to the node's tip
+		expect(chain.ranges.slice(rangeMark)).toEqual([{from: 102, to: BRANCH_A_EXTENDED_TIP}]);
+		// ...so the tab is AT the tip rather than reporting that it is: a follower's
+		// `latestBlock` is frozen where the last fetch left it, which is what made the
+		// host's pacing rule answer `at-tip` two blocks behind
+		expect(afterReload.canonical.lastSync?.lastToBlock).toBe(BRANCH_A_EXTENDED_TIP);
+		expect(afterReload.canonical.lastSync?.latestBlock).toBe(BRANCH_A_EXTENDED_TIP);
+		// ...the block that arrived while it was closed is FOLDED...
+		expect(await readState(afterReload.state)).toEqual(EXPECTED_AFTER_THE_RELOAD);
+		// ...and the stream it wrote has the new block ONCE and no hole under it
+		expect(await storedStream(keepStream)).toEqual({
+			events: 6,
+			blocksPresent: [100, 102, 104, 106],
+			deliveredTwice: [],
+			coversTo: BRANCH_A_EXTENDED_TIP,
+		});
+		// the tab still holds exactly what a tab can hold, and the revert target is still
+		// there: fetching is not bought by dropping the generation that named it
+		expect(afterReload.generations.length).toBe(1);
+		expect(await slotsBy(reloaded.registry)).toEqual({
+			canonical: 'edited-by-3',
+			successor: undefined,
+			predecessor: 'the-app',
+		});
+	});
+
+	/**
+	 * THE ORDER PROBE, and the reason this task was not a one-line predicate.
+	 *
+	 * `open` populates the held set INCREMENTALLY -- one `add` per spec -- and `add`
+	 * freezes the read-only stream view into the engine's config at construction. So
+	 * a derivation that reads a HALF-BUILT held set answers differently depending on
+	 * the order the caller listed its specs in, and the measured cost of that is two
+	 * generations deciding they fetch, the same range requested twice and block 106's
+	 * log stored twice: seven rows where six are correct.
+	 *
+	 * The property is therefore ONE FETCHER whichever way the same set is listed, and
+	 * it is asserted on what reached the node and what reached the stream. The
+	 * rejected candidate patch passes the case above and fails this one.
+	 */
+	it.each([
+		{first: 'the app', edited: false},
+		{first: 'the EDITED fold', edited: true},
+	])('asks the node once and stores each log once, with $first listed first', async ({edited}) => {
+		const name = freshName();
+		const chain = fakeChain();
+		const {registry} = await durableRegistry(name);
+		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
+		const session = await openIndexer<TestABI, EntityStateView>({
+			registry,
+			provider: chain.provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
+		});
+		await driveToTip(session);
+		await session.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
+		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		const rangeMark = chain.ranges.length;
+
+		const theApp = generationOver(await memoryStore(), processor, APP_IDENTITY);
+		const theEdit = generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3));
+		const reloaded = await durableRegistry(name);
+		const afterReload = await openIndexer<TestABI, EntityStateView>({
+			registry: reloaded.registry,
+			provider: chain.provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: edited ? [theEdit, theApp] : [theApp, theEdit],
+		});
+		await driveToTip(afterReload);
+
+		// ONE generation fetches this stream, and it is the same one either way round:
+		// the oldest PRESENT fold, which both orders agree about because the records
+		// they are ranked by outlived the reload
+		expect(afterReload.generations.filter((generation) => !generation.follows).length).toBe(1);
+		// ONE request of the node, not one per fold that thinks it fetches
+		expect(chain.ranges.slice(rangeMark)).toEqual([{from: 102, to: BRANCH_A_EXTENDED_TIP}]);
+		// ...and the stream holds each log ONCE, which is the half a range count misses
+		expect(await storedStream(keepStream)).toEqual({
+			events: 6,
+			blocksPresent: [100, 102, 104, 106],
+			deliveredTwice: [],
+			coversTo: BRANCH_A_EXTENDED_TIP,
+		});
+	});
+
+	/**
+	 * THE OTHER RELOAD IS STILL A LOUD REFUSAL, and it is a different bug class.
+	 *
+	 * With no promotion the incumbent is still canonical, so a tab arriving with the
+	 * edited fold alone holds no fold for the generation that answers reads. That is
+	 * refused at `open` and always was; narrowing the fetcher's candidate set to the
+	 * folds the container HOLDS must not turn that refusal into an open container
+	 * answering from a generation the registry says is not canonical.
+	 */
+	it('still REFUSES the changed-handler reload, which no promotion made legal', async () => {
+		const name = freshName();
+		const chain = fakeChain();
+		const {registry} = await durableRegistry(name);
+		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
+		const session = await openIndexer<TestABI, EntityStateView>({
+			registry,
+			provider: chain.provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
+		});
+		await driveToTip(session);
+		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+
+		const reloaded = await durableRegistry(name);
+		await expect(
+			openIndexer<TestABI, EntityStateView>({
+				registry: reloaded.registry,
+				provider: chain.provider,
+				source: SOURCE,
+				config: {keepStream, stream: {finality: FINALITY}},
+				generations: [generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3))],
+			}),
+		).rejects.toThrow(CanonicalGenerationNotHeldError);
 	});
 });
 
