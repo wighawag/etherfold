@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=true -->
+<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=false -->
 
 ## Q1
 
@@ -55,3 +55,13 @@ So the re-scope is FOUR tasks and not two, and this task is the LAST of them rat
 One correction to the report, measured rather than argued. It ordered the `follows` fix BEFORE the CLI restructure, and ADR-0087 repeats that order. It does not work: patching `ReceivingIndexer.add` to derive `follows` from the registry and running the suite puts **25 CLI tests red**, 17 of them on `the opening fold of this ReceivingIndexer has no receiver`. The restructure is the EXPAND step and the derivation fix is the MIGRATE step, so they are tasked in that order. (Measured in a throwaway clone and reverted.)
 
 The observation the report ended on -- that a restart re-fetches the whole chain -- was filed and is `work/notes/observations/a-restarted-run-refetches-the-whole-chain-instead-of-refolding-the-stored-stream.md`. It is discharged by task 2 above.
+
+## Q2
+
+**'task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge' was bounced — how should we proceed?**
+
+> agent failed: Warning: No models match pattern "ollama/glm-4.7:cloud"
+
+<!-- q2 fields: id=q2 kind=stuck -->
+
+**Your answer** (write below this line):
