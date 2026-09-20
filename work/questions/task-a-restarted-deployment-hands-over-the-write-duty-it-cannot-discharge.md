@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=false -->
+<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=true -->
 
 ## Q1
 
@@ -65,3 +65,21 @@ The observation the report ended on -- that a restart re-fetches the whole chain
 <!-- q2 fields: id=q2 kind=stuck -->
 
 **Your answer** (write below this line):
+
+ANSWERED 2026-09-20 by the conductor. **Re-dispatch unchanged. Nothing about the task, the premise or the code is in question, and the quoted reason is not the failure.**
+
+The reason recorded above is a pi STARTUP WARNING about an unrelated model pattern in the harness config; it is printed on every run and was not why this one stopped. The actual cause, from the job's own systemd journal:
+
+```
+dorfl-t4.service: The kernel OOM killer killed some processes in this unit.
+dorfl-t4.service: Failed with result 'oom-kill'.
+dorfl-t4.service: Consumed 10min 18s CPU over 18min 49s wall, 55.9G memory peak, 6.7G swap peak.
+```
+
+The build agent was killed by the kernel at 55.9G on a 60G machine, mid-`pnpm --filter @etherfold/core build` plus a `vitest` run, roughly 19 minutes in. That is a machine-capacity event, not a red gate, not a drift STOP and not a judgement call.
+
+The partial work is real and is preserved on `work/task-a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge` (commit `777b5734`, "save aborted work (wip)"): a 532-line end-to-end acceptance test `packages/cli/test/aRestartedDeploymentGoesOnAppending.test.ts` that stands a `run` deployment up over a real handle, stops it, restarts it with a rewritten bundle, and reads BOTH the stored rows and the recorded `eth_getLogs` ranges; a sabotage twin of it used as a negative control; and ONE temporary line in `packages/core/src/stream/writer.ts` (`if ((globalThis as any).SABOTAGE_NO_APPEND) return;`) that exists only to drive that negative control.
+
+**That temporary line must NOT survive into the PR.** It is a deliberate sabotage hook in shipped source. Either the negative control is expressed without touching `packages/core/src`, or the hook and its test go. A sabotage switch reachable from `globalThis` in a published package is a defect in its own right.
+
+The re-claim continues from that branch tip, so the next run should build on the test rather than restart it, and should re-check its shape against the task's own warning that this is a fan-in which may be largely covered already.
