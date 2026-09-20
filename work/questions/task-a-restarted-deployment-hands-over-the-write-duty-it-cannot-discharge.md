@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=true -->
+<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=false -->
 
 ## Q1
 
@@ -83,3 +83,13 @@ The partial work is real and is preserved on `work/task-a-restarted-deployment-h
 **That temporary line must NOT survive into the PR.** It is a deliberate sabotage hook in shipped source. Either the negative control is expressed without touching `packages/core/src`, or the hook and its test go. A sabotage switch reachable from `globalThis` in a published package is a defect in its own right.
 
 The re-claim continues from that branch tip, so the next run should build on the test rather than restart it, and should re-check its shape against the task's own warning that this is a fan-in which may be largely covered already.
+
+## Q3
+
+**'task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge' was bounced — how should we proceed?**
+
+> agent failed: Warning: No models match pattern "ollama/glm-4.7:cloud"
+
+<!-- q3 fields: id=q3 kind=stuck -->
+
+**Your answer** (write below this line):

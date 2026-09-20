@@ -3,6 +3,7 @@ title: 'A restarted deployment goes on APPENDING to the stream it fetches, so a 
 slug: a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge
 blockedBy: [whoever-fetches-a-stream-writes-it-and-the-stream-outlives-every-fold]
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
