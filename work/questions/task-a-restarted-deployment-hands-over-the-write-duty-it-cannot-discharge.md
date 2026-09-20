@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=false -->
+<!-- dorfl-sidecar: item=task:a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge type=task slug=a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge allAnswered=true -->
 
 ## Q1
 
@@ -93,3 +93,34 @@ The re-claim continues from that branch tip, so the next run should build on the
 <!-- q3 fields: id=q3 kind=stuck -->
 
 **Your answer** (write below this line):
+
+ANSWERED 2026-09-20 by the conductor. **Re-dispatch. Same cause as Q2 -- an OOM kill, not a model failure -- but this time the cause was ISOLATED and MEASURED, and it is your own negative control. Read this before you run anything.**
+
+The recorded reason is, again, a harmless pi startup warning; ignore it. The journal for this run says:
+
+```
+dorfl-t5.service: The kernel OOM killer killed some processes in this unit.
+dorfl-t5.service: Consumed 6min 27s CPU over 9min 3s wall, 57.4G memory peak.
+```
+
+**WHAT BLOWS UP, measured in isolation under an 8 GB cap, on your own branch at `ff4d180a`:**
+
+```
+appender intact                          8 tests pass in 1.17s, comfortably under the cap.
+NEGCTRL=no-append (your negative control)  hits 8 GB and is OOM-killed in UNDER 50 SECONDS,
+                                         paging 3.9 GB of swap on the way. No test completes.
+```
+
+Uncapped, that same run reached 56-57 GB on a 60 GB machine and the kernel killed the whole job, twice, with you inside it. It is not slow growth and it is not a long-run leak: suppressing the append makes the deployment grow without bound, immediately.
+
+**So your acceptance test is fine.** `packages/cli/test/aRestartedDeploymentGoesOnAppending.test.ts` passes, 8 tests, 1.17 seconds. Nothing is wrong with it and you do not need to rewrite it. What killed both runs was running it with the append suppressed.
+
+**Three things follow.**
+
+1. **Never run an append-suppressed configuration bare.** If you want that negative control, bound it: a memory cap and a short timeout, and treat "it was killed" as the expected result rather than a surprise. Better, prove the same property without suppressing the append at all -- assert the stored rows and the recorded `eth_getLogs` ranges, which is the measurement this task actually asks for and which your test already does.
+
+2. **Both sabotage hooks must come OUT of `packages/core/src/stream/writer.ts` before you finish.** Your branch currently carries two: `NEGCTRL === 'no-append'` at line 345 and `NEGCTRL === 'twice'` at line 358. A sabotage switch reachable from `globalThis` in shipped, published source is a defect in its own right, and the gate will not catch it. The negative controls belong outside `packages/*/src` or they do not exist.
+
+3. The unbounded growth itself is filed as an observation, `a-stream-writer-whose-append-silently-does-nothing-grows-without-bound`, with the numbers. It is a robustness finding and NOT reachable on today's code -- the hook had to be hand-added to provoke it, and it is a different injection point from this family's actual defect, where the writer never gets the pen at all and the deployment stays small and live. **It is not yours to chase.** Do not widen this task to fix it.
+
+Everything else in the Q2 answer still stands: continue from your branch, and re-check the fan-in warning in the task body that this may already be largely covered by the three tasks before it.
