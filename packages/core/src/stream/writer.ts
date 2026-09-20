@@ -342,8 +342,8 @@ export class StreamWriter<ABI extends Abi> implements LogIngestion {
 		if (stored && newLastSync.lastFromBlock > stored.lastToBlock + 1) {
 			throw new StreamHoleError(this.streamDigest, stored.lastToBlock, newLastSync.lastFromBlock);
 		}
-		if ((globalThis as any).SABOTAGE_NO_APPEND) return;
-		await this.appendEmissions({
+		if ((globalThis as any).process?.env?.NEGCTRL === 'no-append') return;
+		const payload = {
 			stream: this.streamDigest,
 			coverage: {
 				source: this.context.source,
@@ -353,7 +353,9 @@ export class StreamWriter<ABI extends Abi> implements LogIngestion {
 				lastToBlock: newLastSync.lastToBlock,
 			},
 			emissions,
-		});
+		};
+		await this.appendEmissions(payload);
+		if ((globalThis as any).process?.env?.NEGCTRL === 'twice' && emissions.length > 0) await this.appendEmissions(payload);
 	}
 
 	/**
