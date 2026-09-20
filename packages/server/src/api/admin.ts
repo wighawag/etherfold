@@ -270,10 +270,16 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * `200` for all three, because the verb RAN: `reclaimed` (something went, each one
 			 * named with the stream reaped and the records that came back with it), `declined`
 			 * (something was reclaimable and could not go yet, per generation and with the
-			 * reason -- the writer of a stream another fold still follows is kept, ADR-0044),
-			 * and `nothing-to-reclaim` (every generation this indexer holds is named by a
-			 * slot). Collapsing the last two would tell an operator whose disk is full that
-			 * there was nothing to free, which is the false answer this verb exists to end.
+			 * reason -- today that is the substrate refusing the deletion, and the next call
+			 * tries again), and `nothing-to-reclaim` (every generation this indexer holds is
+			 * named by a slot). Collapsing the last two would tell an operator whose disk is
+			 * full that there was nothing to free, which is the false answer this verb exists
+			 * to end.
+			 *
+			 * A generation is no longer kept back because it WRITES a stream another fold
+			 * follows (ADR-0044): no generation writes a stream since ADR-0087, so that
+			 * decline has no subject and is gone rather than documented where nothing can meet
+			 * it.
 			 *
 			 * The refusals are the ones this surface already has: `401` with no ADMIN_TOKEN or
 			 * the wrong one (it is deliberately never the ingest credential -- a log shipper

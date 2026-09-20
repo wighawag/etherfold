@@ -466,18 +466,23 @@ export type ReclaimedGeneration = {
  * ONE GENERATION NOT RECLAIMED, and WHY -- because a verb that quietly did less
  * than it was asked to is worse than one that refused.
  *
- * Two reasons, and they are different situations for the operator. A generation
- * that WRITES a stream another held fold follows is kept on purpose (ADR-0044):
- * dropping it would leave that fold folding a stream nothing appends to, so it
- * goes once nothing follows its stream, and the answer is "ask again later". A
- * deletion that FAILED is the substrate saying no, and the generation is still
- * named by no slot, so the next call tries again.
+ * ONE reason, where there used to be two. The other was a generation that WROTE a
+ * stream another held fold followed, kept on purpose (ADR-0044) because dropping
+ * it would have left that fold folding a stream nothing appends to, and answered
+ * as "ask again later". Under ADR-0087 no generation writes a stream at all -- the
+ * DEPLOYMENT that fetches it appends, and every generation over it merely reads --
+ * so there is no duty to strand and nothing can produce that answer. It is DELETED
+ * rather than left in the union unreachable: a reason an operator can read in the
+ * type and never receive is a promise about behaviour that no longer exists.
+ *
+ * What is left is the substrate saying no. The generation is still registered and
+ * still named by no slot, so nothing reads it and the next call tries again.
  */
 export type DeclinedReclaim = {
 	/** The generation that was left alone. Its state and its stream are exactly where they were. */
 	readonly generation: GenerationRecord;
-	/** WHICH of the two situations this is. */
-	readonly reason: 'writes-a-followed-stream' | 'deletion-failed';
+	/** WHICH situation this is. One member, and it is a union so that a second reason can be told apart. */
+	readonly reason: 'deletion-failed';
 	/** What to do about it, in words an operator can act on. */
 	readonly message: string;
 };
@@ -1433,11 +1438,14 @@ export class ReceivingIndexer<
 	 * THE MOVE: one small write, and the generation left behind is RETAINED.
 	 *
 	 * Retaining is what makes moving the pointer BACK a revert rather than a
-	 * re-index, which is why drop-on-promotion is OFF by default -- and why, when it
-	 * is on, it still never drops the WRITER of a stream another held generation
-	 * follows (ADR-0046): that would leave the follower folding a stream nothing
-	 * appends to. On the ordinary processor upgrade the superseded generation IS
-	 * that writer, so the drop is declined and said out loud.
+	 * re-index, which is why drop-on-promotion is OFF by default. Where it IS on, it
+	 * now really does drop the superseded generation on the ordinary processor
+	 * upgrade: the clause that used to DECLINE that drop -- never drop the WRITER of a
+	 * stream another held generation follows (ADR-0046), which would leave the
+	 * follower folding a stream nothing appends to -- has no subject left on this
+	 * runtime, because no generation writes a stream (ADR-0087). What the deployment
+	 * keeps instead is the STREAM, which is the expensive half: a drop takes the
+	 * registry row and the state namespace and never the bytes the fetches bought.
 	 *
 	 * It takes an IDENTITY and nothing else. It used to take the held fold beside it,
 	 * purely so that the move could DISARM it in memory; the `successor` slot is what

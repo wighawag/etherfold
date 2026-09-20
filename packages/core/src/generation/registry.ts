@@ -518,10 +518,12 @@ export function slotHolding(slots: GenerationSlots, id: GenerationId): SlotName 
  * no slot names it" would be one rule written twice, and the second copy is what
  * drifts.
  *
- * It says nothing about whether such a generation may be deleted RIGHT NOW: one
- * that WRITES a stream another held fold follows is kept, because dropping it
- * would leave that fold folding a stream nothing appends to (ADR-0044). That is a
- * fact about held FOLDS and so belongs to the container, not here.
+ * It says nothing about what DELETING one then costs, which belongs to the
+ * container and not here. It used to answer one thing more, and no longer does:
+ * a generation that WROTE a stream another held fold followed was kept, because
+ * dropping it would have left that fold folding a stream nothing appends to
+ * (ADR-0044). Its only callers are on the RECEIVING side, where no generation
+ * writes a stream at all since ADR-0087, so that clause has no subject here.
  */
 export function unslottedGenerations(
 	generations: readonly GenerationRecord[],

@@ -83,8 +83,13 @@ export type ReportedFold = {
 	store: StateStore;
 	/**
 	 * Whether it is a FOLLOWER: advanced by a REBUILD over the stored stream rather
-	 * than by the wire (ADR-0044). Absent means no, which is every fold a host holds
-	 * until a successor is created beside one.
+	 * than by the wire (ADR-0044).
+	 *
+	 * Absent means no. It stays OPTIONAL although this package's only producer sets
+	 * it on every fold -- under ADR-0087 no generation fetches, so on a receiving
+	 * deployment there is one shape of fold and it is this one -- because the
+	 * reporter is the seam a host fills in and a host that holds both shapes is what
+	 * the field is for.
 	 */
 	follows?: boolean;
 };
