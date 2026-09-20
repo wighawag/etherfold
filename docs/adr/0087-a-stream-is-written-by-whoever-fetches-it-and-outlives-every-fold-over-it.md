@@ -1,5 +1,5 @@
 ---
-status: accepted, implemented
+status: accepted, not yet implemented
 ---
 
 # A stream is written by whoever FETCHES it, never by a GENERATION, and it OUTLIVES every fold over it
