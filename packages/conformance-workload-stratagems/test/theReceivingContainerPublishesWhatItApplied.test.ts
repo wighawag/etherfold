@@ -29,9 +29,16 @@ import {
 	generationDigestOf,
 	openReceivingIndexer,
 	type AppliedBlock,
+	type EmittedLog,
+	type EmissionWrite,
 	type LogEvent,
+	type ReplayRead,
+	type ReplaySource,
 	type StateApplied,
 	type StateMoved,
+	type StreamCoverage,
+	type StreamCursorRead,
+	type StreamCursorSource,
 } from '@etherfold/core';
 import {
 	EntityEventProcessor,
@@ -69,6 +76,76 @@ const PROCESSOR_IDENTITY = identityOf('stratagems-receiving-container');
  * a later height, which is what a transaction that went back to the mempool and
  * was re-mined looks like.
  */
+/**
+ * THE STORED STREAM this deployment writes and its folds read, in memory.
+ *
+ * The three ends a host supplies over a database (`@etherfold/server`), kept here
+ * as plainly as they can be: `seq`-ordered rows with retractions INCLUDED at
+ * their original block, plus the COVERAGE CLAIM, which is the only thing that can
+ * say how far a quiet range carried the stream.
+ */
+function aStoredStream() {
+	const rows: {seq: number; log: EmittedLog & {removed: boolean}}[] = [];
+	let coverage: (StreamCoverage & {startBlock: number}) | undefined;
+	let seq = 0;
+	const blockOf = (row: {log: EmittedLog}) => (row.log as unknown as {blockNumber: number}).blockNumber;
+	const eventsOf = (some: readonly {seq: number; log: EmittedLog}[]) =>
+		[...some].sort((a, b) => a.seq - b.seq).map((row) => ({...row.log}) as unknown as LogEvent<StratagemsABI>);
+
+	return {
+		append(write: EmissionWrite): void {
+			coverage = coverage
+				? {...write.coverage, startBlock: coverage.startBlock}
+				: {...write.coverage, startBlock: write.coverage.lastFromBlock};
+			for (const emission of write.emissions) {
+				seq++;
+				rows.push({seq, log: {...emission, removed: !!(emission as {removed?: boolean}).removed} as never});
+			}
+		},
+		cursor(): StreamCursorSource {
+			return {
+				async readStreamCursor({finality}): Promise<StreamCursorRead | undefined> {
+					if (!coverage) return undefined;
+					const from = Math.max(0, coverage.lastToBlock - finality);
+					return {
+						latestBlock: coverage.latestBlock,
+						lastFromBlock: coverage.lastFromBlock,
+						lastToBlock: coverage.lastToBlock,
+						tail: eventsOf(rows.filter((row) => blockOf(row) >= from)) as never,
+					};
+				},
+			};
+		},
+		source(): ReplaySource<StratagemsABI> {
+			return {
+				async readChunk({fromBlock, foldedThrough, maxEmissions}): Promise<ReplayRead<StratagemsABI>> {
+					if (!coverage) return {status: 'absent'};
+					if (coverage.startBlock > fromBlock) {
+						return {status: 'does-not-reach-back', startBlock: coverage.startBlock};
+					}
+					const highWater = rows.length === 0 ? 0 : (rows[rows.length - 1] as {seq: number}).seq;
+					const above = rows
+						.filter((row) => blockOf(row) >= fromBlock)
+						.sort((a, b) => blockOf(a) - blockOf(b) || a.seq - b.seq);
+					const floor = Math.max(foldedThrough + 1, fromBlock);
+					const budgetCut =
+						above.length > maxEmissions ? blockOf(above[maxEmissions] as never) - 1 : coverage.lastToBlock;
+					const lastToBlock = Math.min(coverage.lastToBlock, Math.max(budgetCut, floor));
+					return {
+						status: 'chunk',
+						eventStream: eventsOf(above.filter((row) => blockOf(row) <= lastToBlock)),
+						lastFromBlock: fromBlock,
+						lastToBlock,
+						latestBlock: coverage.latestBlock,
+						truncated: lastToBlock < coverage.lastToBlock,
+						highWater,
+					};
+				},
+			};
+		},
+	};
+}
+
 const WITHDRAWN_BLOCK = 11_704_357;
 const FORK_POINT = WITHDRAWN_BLOCK - 1;
 const REMINED_BLOCK = WITHDRAWN_BLOCK + 13;
@@ -84,11 +161,21 @@ const REMINED_FROM = 11_683_311;
  */
 async function aReceivingContainer() {
 	const fixture = loadStream(BASE_ABANDONED);
+	const stored = aStoredStream();
 	const container = await openReceivingIndexer<StratagemsABI, EntityStateView, WritableStateStore>({
 		port: createMemoryGenerationRegistryPort(),
 		caps: {maxGenerations: 2, maxStreams: 1},
 		source: fixture.source,
 		stream: {finality: FINALITY},
+		// THE STREAM'S THREE ENDS (ADR-0087). The deployment fetches a stream and
+		// appends to it, positioned from the stream's own coverage claim, and every
+		// generation over it READS what was stored -- so a container with nowhere to
+		// store one could never fetch a block, and one with no way to read it back
+		// could hold no fold. In memory here, because what this suite is about is what
+		// the container PUBLISHES rather than what a substrate persists.
+		appendEmissions: (write) => stored.append(write),
+		streamCursor: stored.cursor(),
+		replay: stored.source(),
 		generation: {
 			createState: () => openForWriting(new MemoryStateStore(stratagemsProcessor.entities)),
 			createProcessor: (store) => new EntityEventProcessor<StratagemsABI>(store, stratagemsProcessor),

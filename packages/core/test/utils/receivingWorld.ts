@@ -2,9 +2,10 @@ import type {Abi} from 'abitype';
 import type {EmissionWrite, StreamCoverage} from '../../src/emissionStream.js';
 import {generationDigestOf} from '../../src/generation/identity.js';
 import {createMemoryGenerationRegistryPort} from '../../src/generation/memory.js';
-import type {ReplayRead, ReplaySource} from '../../src/generation/rebuild.js';
+import type {RebuildReport, ReplayRead, ReplaySource} from '../../src/generation/rebuild.js';
 import type {GenerationRegistryPort} from '../../src/generation/registry.js';
 import {openReceivingIndexer, type ReceivingIndexer} from '../../src/receivingContainer.js';
+import type {StreamCursorRead, StreamCursorSource} from '../../src/stream/writer.js';
 import type {
 	EmittedLog,
 	EventProcessor,
@@ -12,6 +13,7 @@ import type {
 	IndexingSource,
 	LastSync,
 	LogEvent,
+	StoredLogEvent,
 	WireBatch,
 } from '../../src/types.js';
 import {taggedBnReplacer, taggedBnReviver} from '../../src/utils/bigint.js';
@@ -153,6 +155,29 @@ export function storedStream() {
 					} as unknown as EmittedLog,
 				});
 			}
+		},
+		/**
+		 * WHERE THE STREAM'S OWN POSITION IS READ, in the shape `@etherfold/server`
+		 * implements over SQL (ADR-0087).
+		 *
+		 * The WRITER's half of these same rows: the coverage claim, and the TAIL above
+		 * the reorg window that the unconfirmed window is walked out of. NOTHING where no
+		 * batch has ever been stored, which is the documented ABSENCE of a stream and is
+		 * what keeps the first save of a fresh deployment permissive.
+		 */
+		cursor(): StreamCursorSource {
+			return {
+				async readStreamCursor({finality}): Promise<StreamCursorRead | undefined> {
+					if (!coverage) return undefined;
+					const from = Math.max(0, coverage.lastToBlock - finality);
+					return {
+						latestBlock: coverage.latestBlock,
+						lastFromBlock: coverage.lastFromBlock,
+						lastToBlock: coverage.lastToBlock,
+						tail: eventsOf(rows.filter((row) => blockOf(row) >= from)) as unknown as StoredLogEvent[],
+					};
+				},
+			};
 		},
 		/**
 		 * The BOUNDED read, in the shape `@etherfold/server` implements over SQL: a
@@ -337,7 +362,11 @@ export function world() {
 			port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
+			// THE STREAM'S THREE ENDS, which is what a host supplies now: where it is
+			// STORED, where it REACHES (which is what positions the fetch), and how it is READ
+			// BACK so every generation over it can re-fold it.
 			appendEmissions: (write) => stream.append(write),
+			streamCursor: stream.cursor(),
 			replay: stream.source(),
 			recordReorg: async (reorg) => {
 				reorgs.push({blockNumber: reorg.blockNumber});
@@ -361,6 +390,20 @@ export function world() {
 }
 
 export type World = ReturnType<typeof world>;
+
+/**
+ * THE REPORT FOR ONE GENERATION, picked out of what `rebuildMore` answered.
+ *
+ * `rebuildMore` reports one entry per FOLD HELD, and since ADR-0087 that is every
+ * generation this container holds rather than the followers alone: no generation
+ * fetches, so every one of them advances by re-folding the stream the deployment
+ * stored. `reports[0]` therefore names whichever fold was added first, which is
+ * almost never the one a catch-up assertion is about -- so a test names the
+ * generation it means.
+ */
+export function reportFor(reports: readonly RebuildReport[], marker: string): RebuildReport | undefined {
+	return reports.find((report) => report.generation.processor === identityOf(marker));
+}
 
 export function batch(
 	indexer: ReceivingIndexer<TestABI, string[], MemoryStore>,

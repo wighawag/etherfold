@@ -18,6 +18,15 @@ import {streamsUnder, streamSubtree} from '../stream/OnIndexedDB.js';
 const GENERATION = 'generation';
 /** The generation records' own level, beside the slots. */
 const ENTRY = 'entry';
+/**
+ * THE STREAM RECORDS' own level: every stream this indexer holds, folded or not.
+ *
+ * A stream OUTLIVES every fold over it (ADR-0087), so what the sweep compares
+ * against is not "which streams do the generations name" any more. These records
+ * are what makes a deliberately-KEPT stream distinguishable from a PRE-GENERATION
+ * ORPHAN across a reload: the kept one has a record here, the orphan never did.
+ */
+const KEPT = 'kept';
 
 /**
  * The registry's address under one indexer name: HIERARCHICAL array keys, in the
@@ -28,6 +37,7 @@ const ENTRY = 'entry';
  * ['generation', <indexer-name>, 'successor']                          a SLOT
  * ['generation', <indexer-name>, 'predecessor']                        a SLOT
  * ['generation', <indexer-name>, 'entry', <streamDigest>, <processor>]  a generation
+ * ['generation', <indexer-name>, 'kept', <streamDigest>]               a STREAM this indexer holds
  * ```
  *
  * The two halves of a generation's identity are two KEY ELEMENTS and never one
@@ -58,6 +68,10 @@ export function generationAddress(name: string) {
 		entry: (id: GenerationId) => [...prefix, ENTRY, id.stream, id.processor] as IDBValidKey,
 		/** Every generation record under this name, and nothing else. */
 		entries: IDBKeyRange.bound([...prefix, ENTRY], [...prefix, ENTRY, []], true, false),
+		/** WHERE the record that this indexer holds one stream lives. */
+		kept: (digest: string) => [...prefix, KEPT, digest] as IDBValidKey,
+		/** Every stream record under this name, and nothing else. Same bound trick as `entries`. */
+		keptStreams: IDBKeyRange.bound([...prefix, KEPT], [...prefix, KEPT, []], true, false),
 	};
 }
 
@@ -92,15 +106,19 @@ export function generationRegistryPortOnIndexedDB(
 				slots[name] = held;
 			}
 		});
-		return {generations: records as GenerationRecord[], slots: slots as GenerationSlots};
+		return {generations: records as GenerationRecord[], slots: slots as GenerationSlots, keptStreams: []};
 	};
 
-	/** The entries and every slot record, as the ONE read both `read` and `commit` make. */
+	/** The entries, the stream records and every slot record, as the ONE read both `read` and `commit` make. */
 	const readState = (objectStore: IDBObjectStore): Promise<GenerationRegistryState> =>
 		Promise.all([
 			promisifyRequest<unknown[]>(objectStore.getAll(address.entries)),
+			promisifyRequest<unknown[]>(objectStore.getAll(address.keptStreams)),
 			...SLOT_NAMES.map((name) => promisifyRequest<unknown>(objectStore.get(address.slot(name)))),
-		]).then(([records, ...assigned]) => stateOf(records as unknown[], assigned));
+		]).then(([records, kept, ...assigned]) => ({
+			...stateOf(records as unknown[], assigned),
+			keptStreams: (kept as {stream?: string}[]).map((record) => record?.stream).filter((one): one is string => !!one),
+		}));
 
 	return {
 		async read() {
@@ -137,6 +155,15 @@ export function generationRegistryPortOnIndexedDB(
 									// the identity alone: a copy of the record here would be a second
 									// opinion about a generation the entry level already holds.
 									objectStore.put({stream: assigned.stream, processor: assigned.processor}, address.slot(name));
+								}
+								// THE STREAM RECORDS, recorded before they are forgotten, so a commit that
+								// does both ends with the stream gone: an ASKED-FOR deletion wins over a
+								// registration in the same write.
+								if (write.keepStream !== undefined) {
+									objectStore.put({stream: write.keepStream}, address.kept(write.keepStream));
+								}
+								for (const digest of write.forgetStreams ?? []) {
+									objectStore.delete(address.kept(digest));
 								}
 								resolve(promisifyRequest(objectStore.transaction));
 							} catch (error) {

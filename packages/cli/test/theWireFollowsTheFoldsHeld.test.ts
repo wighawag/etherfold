@@ -118,6 +118,6 @@ describe('the combined wire', () => {
 		// the opening fold of a first build is not a follower, so it has one -- and the
 		// assembly reads it off the HELD FOLD, where it is already optional, instead of
 		// through the assertion that used to stand over it
-		expect(prepared.streamBuilder).toBe(prepared.container.held()[0].ingestion);
+		expect(prepared.streamWriter).toBe((await prepared.container.liveIngestions())[0]);
 	});
 });

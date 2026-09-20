@@ -236,6 +236,15 @@ export type {
 export * from './stream/readOnly.js';
 export * from './stream/capture.js';
 export * from './stream/segments.js';
+/**
+ * WHOEVER FETCHES A STREAM IS THE THING THAT APPENDS TO IT (ADR-0087).
+ *
+ * `StreamWriter` is the one writer of one stream, and it is NOT a generation: the
+ * deployment fetches and appends, every generation reads. `StreamCursorSource` is
+ * the port it reads the stream's own position through, supplied by whoever owns
+ * the storage.
+ */
+export * from './stream/writer.js';
 // `degradingStream` was exported here and is DELETED (ADR-0068). It turned an
 // unreadable substrate into ABSENT at the seam, which is the right answer for the
 // load path (it re-indexes) and the wrong one for `installStreamSeed` (it writes),

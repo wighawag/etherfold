@@ -1,4 +1,5 @@
 import {
+	type RebuildReport,
 	generationDigestOf,
 	openReceivingIndexer,
 	type LogEvent,
@@ -15,6 +16,7 @@ import {
 	applySchema,
 	createServer,
 	emissionAppenderFor,
+	streamCursorSourceOn,
 	generationRegistryPortOnSQL,
 	storedEmissionReplaySource,
 } from '@etherfold/server';
@@ -138,6 +140,7 @@ async function openIndexer(db: RemoteSQL): Promise<ReceivingIndexer<typeof abi, 
 		source: SOURCE,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
+		streamCursor: streamCursorSourceOn(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
 		generation: specFor(db, V1),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
@@ -223,7 +226,8 @@ async function hostOver(db: RemoteSQL, indexer: ReceivingIndexer<typeof abi, unk
 				folds: indexer.held().map((fold) => ({
 					generation: fold.record,
 					store: fold.state as WritableStateStore,
-					follows: fold.follows,
+					// every generation on this runtime folds the stored stream (ADR-0087)
+					follows: true,
 				})),
 				...(canonical ? {canonical} : {}),
 			});
@@ -254,6 +258,19 @@ function entryFor(
 	return found;
 }
 
+/**
+ * THE REPORT FOR ONE GENERATION, named rather than taken off the front.
+ *
+ * `rebuildMore` reports one entry per fold held, and since ADR-0087 that is every
+ * generation this container holds rather than the followers alone -- so the first
+ * entry is the incumbent, which is level and reports `complete` at once.
+ */
+function reportFor(reports: readonly RebuildReport[], generation: {stream: string; processor: string}) {
+	return reports.find(
+		(report) => report.generation.stream === generation.stream && report.generation.processor === generation.processor,
+	);
+}
+
 // ---------------------------------------------------------------------------------------------------
 
 describe('a rebuild in progress is visible on /status, and it ADVANCES', () => {
@@ -266,10 +283,11 @@ describe('a rebuild in progress is visible on /status, and it ADVANCES', () => {
 		// deployment holds
 		const alone = await statusOf(app);
 		expect(alone.cursor.generations).toHaveLength(1);
-		expect(entryFor(alone, incumbent.generation)).toMatchObject({canonical: true, follows: false});
+		// `follows` is TRUE for every fold on this runtime since ADR-0087: no generation
+		// fetches, so each of them advances by re-folding the stream the deployment stored.
+		expect(entryFor(alone, incumbent.generation)).toMatchObject({canonical: true, follows: true});
 
 		const successor = await incumbent.add(specFor(db, V2));
-		expect(successor.follows).toBe(true);
 
 		// BEFORE ANY CHUNK: the successor is VISIBLE and has got nowhere. This is the
 		// distinction the whole task is about -- an operator can tell "being built"
@@ -285,10 +303,10 @@ describe('a rebuild in progress is visible on /status, and it ADVANCES', () => {
 		expect(entryFor(created, incumbent.generation).canonical).toBe(true);
 
 		// TWO READS, EITHER SIDE OF A CHUNK
-		const [first] = await incumbent.rebuildMore({maxEmissions: 1});
+		const first = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), successor.record);
 		expect(first?.complete).toBe(false);
 		const afterFirst = await statusOf(app);
-		const [second] = await incumbent.rebuildMore({maxEmissions: 1});
+		const second = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), successor.record);
 		expect(second?.complete).toBe(false);
 		const afterSecond = await statusOf(app);
 
@@ -301,7 +319,7 @@ describe('a rebuild in progress is visible on /status, and it ADVANCES', () => {
 
 		// ...and what a READER gets did not move while it advanced (ADR-0008)
 		const incumbentAfter = entryFor(afterSecond, incumbent.generation);
-		expect(incumbentAfter).toMatchObject({canonical: true, follows: false});
+		expect(incumbentAfter).toMatchObject({canonical: true, follows: true});
 		expect(incumbentAfter.value).toEqual(entryFor(alone, incumbent.generation).value);
 		// the top-level `value` is the CANONICAL generation's, which is what a reader
 		// that predates the generations field reads (ADR-0047)
@@ -317,7 +335,7 @@ describe('a rebuild in progress is visible on /status, and it ADVANCES', () => {
 		const canonicalDuring: string[] = [];
 		let done = false;
 		for (let guard = 0; guard < 20 && !done; guard++) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), successor.record);
 			done = !!report?.complete;
 			const body = await statusOf(app);
 			canonicalDuring.push((body.cursor.generations ?? []).find((entry) => entry.canonical)?.generation as string);

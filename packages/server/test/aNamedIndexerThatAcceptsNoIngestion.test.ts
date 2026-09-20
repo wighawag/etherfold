@@ -15,6 +15,7 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
 	indexerEntryOn,
 	storedEmissionReplaySource,
 	type IndexerRegistryEntry,
@@ -111,6 +112,7 @@ async function deployReadOnly(): Promise<Deployment> {
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
 		generation: {
 			createState: () => new VersionedStateEventProcessor<TestABI>(db, entityProcessor),
@@ -232,16 +234,16 @@ describe('a named indexer registered as READ-ONLY', () => {
 		};
 		expect(body.indexer).toBe(NAME);
 		expect(body.generations).toHaveLength(1);
-		expect(body.canonical).toMatchObject(deployment.indexer.ingestion.generation);
+		expect(body.canonical).toMatchObject(deployment.indexer.generation);
 
 		// the MOVE answers too, which is the half that used to be `501` here
 		const moved = await deployment.app.request(`/${NAME}/admin/canonical-generation`, {
 			method: 'POST',
 			headers: {...authorized, 'Content-Type': 'application/json'},
-			body: JSON.stringify(deployment.indexer.ingestion.generation),
+			body: JSON.stringify(deployment.indexer.generation),
 		});
 		expect(moved.status).toBe(200);
-		expect((await moved.json()).canonical).toMatchObject(deployment.indexer.ingestion.generation);
+		expect((await moved.json()).canonical).toMatchObject(deployment.indexer.generation);
 	});
 });
 

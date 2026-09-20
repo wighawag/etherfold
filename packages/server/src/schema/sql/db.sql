@@ -297,5 +297,35 @@ CREATE TABLE IF NOT EXISTS _generation_slots (
     revision TEXT NOT NULL
 );
 
+-- THE STREAM RECORDS: every stream one named indexer HOLDS, folded or not
+-- (ADR-0087).
+--
+-- A stream is what CHAIN FETCHES bought, and it OUTLIVES every fold over it: the
+-- last generation on a stream going away is not a reason to delete the stream,
+-- it is exactly the state a stream is in between an old fold being dropped and a
+-- new one being built. So "this indexer holds this stream" is a DURABLE ROW of
+-- its own rather than something inferred from `_generations`, which is what lets
+-- it survive a restart.
+--
+-- It is what the registry's SWEEP compares a stored subtree against, and the
+-- whole of how a deliberately-KEPT stream is told from a PRE-GENERATION ORPHAN:
+-- a kept stream has a row here, and a subtree written before generations existed
+-- (under the `chain-<chainId>` placeholder, or under a digest rule a later change
+-- replaced) never did, so the sweep's own reason for existing is untouched.
+--
+-- A row is written when a generation is REGISTERED on the stream, and removed
+-- only when something ASKS for the stream to go (`deleteStream`, or the
+-- operator's `reclaim` reaping the last generation's stream).
+--
+-- Deliberately NOT the same fact as `_stream_coverage`, which says HOW FAR a
+-- stream reaches and under WHICH FILTER. This says the indexer holds it at all.
+CREATE TABLE IF NOT EXISTS _generation_streams (
+    -- the NAMED INDEXER this stream belongs to: the tenancy discriminator
+    indexer TEXT NOT NULL,
+    -- WHICH stream, as `streamDigestOf` renders it
+    stream TEXT NOT NULL,
+    PRIMARY KEY (indexer, stream)
+);
+
 INSERT INTO _meta (key, value) VALUES ('schemaVersion', '1')
     ON CONFLICT (key) DO UPDATE SET value = excluded.value;

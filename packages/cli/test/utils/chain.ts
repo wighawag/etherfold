@@ -40,7 +40,7 @@ export const ZERO = '0x0000000000000000000000000000000000000000';
  */
 export const START_BLOCK = 1_000_000;
 
-const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
 export type RawLog = {
 	blockNumber: string;
@@ -56,7 +56,7 @@ export type RawLog = {
 };
 
 const hex = (value: number | bigint) => `0x${value.toString(16)}`;
-const addressTopic = (address: string) => `0x${address.slice(2).toLowerCase().padStart(64, '0')}`;
+export const addressTopic = (address: string) => `0x${address.slice(2).toLowerCase().padStart(64, '0')}`;
 
 /** A plausible timestamp for a block: 12s slots from a fixed epoch, so a store can record blocks. */
 export const timestampOf = (blockNumber: number) => 1_600_000_000 + blockNumber * 12;

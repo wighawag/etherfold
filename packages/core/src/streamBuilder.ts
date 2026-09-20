@@ -107,7 +107,8 @@ export type LogIngestion = {
 	 */
 	readonly streamDigest: string;
 	/**
-	 * WHICH GENERATION this receiver is: the stream above, plus the fold over it.
+	 * WHICH GENERATION this receiver is: the stream above, plus the fold over it --
+	 * or NOTHING, where this address has no single fold behind it.
 	 *
 	 * Here because the processor is the one thing a host CANNOT see -- it hands one
 	 * over at construction and then holds an interface that never mentions it again
@@ -123,8 +124,15 @@ export type LogIngestion = {
 	 * captured once would then advertise a fold that is no longer running, which is
 	 * worse than not advertising at all. Its `stream` half is `streamDigest` itself,
 	 * so the two can never disagree.
+	 *
+	 * **OPTIONAL since ADR-0087**, because the thing this address resolves to on a
+	 * generation container is no longer a fold at all: it is the STREAM WRITER, and a
+	 * stream is read by every generation over it. Filling this in with whichever fold
+	 * happened to be first would be the retired election wearing a reporting field's
+	 * name. A host holding a bare receiver (`singleContextEntry`) still has one, and
+	 * nothing about such a deployment changes.
 	 */
-	readonly generation: GenerationId;
+	readonly generation?: GenerationId;
 	expectedFromBlock(): Promise<number>;
 	receive(batch: UntypedWireBatch): Promise<IngestionOutcome>;
 };

@@ -5,7 +5,7 @@ import {
 	type EventProcessor,
 	type IndexingSource,
 	type ReceivingIndexer,
-	type StreamBuilder,
+	type StreamWriter,
 } from '@etherfold/core';
 import {
 	createFetcherHost,
@@ -70,7 +70,7 @@ export {
 } from './indexCommand.js';
 export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
-import {newlyStalledFollowers} from './followers.js';
+import {newlyStalledFollowers, rebuildUntilLevel} from './followers.js';
 import {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete} from './pruning.js';
 
 const logger = logs('etherfold');
@@ -153,7 +153,7 @@ export type PreparedIndexing<
 	 * whatever the container holds LIVE at the moment of the ask, never into a value
 	 * captured here.
 	 */
-	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
+	streamWriter: StreamWriter<ABI>;
 	/**
 	 * THE GENERATIONS THIS PROCESS HOLDS, and which one answers reads.
 	 *
@@ -329,7 +329,7 @@ export async function prepareIndexing<
 	// stream is appended there too, before the fold (ADR-0052). So a combined
 	// process stores what it folded exactly as a receiver behind an HTTP route does,
 	// and the database `build` emits carries its stream.
-	const {container, store, processor, streamBuilder} = await openFolding<ABI, ProcessResultType>(
+	const {container, store, processor, streamWriter} = await openFolding<ABI, ProcessResultType>(
 		declared,
 		resolved.destination,
 		db,
@@ -371,14 +371,13 @@ export async function prepareIndexing<
 			//
 			// It used to be `createDirectIngestion(container.ingestion)`, one receiver read
 			// off the container at `open`. Two things were wrong with that and only one of
-			// them was visible. The visible one: that getter THROWS for a fold with no
+			// them was visible. The visible one: that getter THROWS for a FOLD with no
 			// receiver, so the whole assembly rested on the opening fold never being a
-			// FOLLOWER -- which ADR-0087 retires, since a restarted deployment over a stream
-			// the registry already carries comes up holding exactly that. The other: a
-			// captured receiver is PINNED, so a deployment whose live fold moved while it ran
-			// (a successor registered beside the incumbent, a generation deleted by another
-			// process, writer succession handing the wire on) went on feeding the one it read
-			// at start-up.
+			// follower -- which ADR-0087 retires, since no generation fetches and what a
+			// stream's address resolves to is the DEPLOYMENT's own writer of it. The other:
+			// a captured receiver is PINNED, so a deployment whose live set moved while it
+			// ran (a successor registered beside the incumbent, a generation deleted by
+			// another process) went on feeding the one it read at start-up.
 			//
 			// `container.liveIngestions()` is the question the ingest route already asks per
 			// batch (`@etherfold/server`), answered from the REGISTRY rather than from
@@ -394,7 +393,7 @@ export async function prepareIndexing<
 		config: resolved as ConfigFor<C, ABI>,
 		source,
 		processor,
-		...(streamBuilder ? {streamBuilder} : {}),
+		streamWriter,
 		container,
 		host,
 		store,
@@ -444,14 +443,12 @@ export async function prepareIndexing<
  *
  * **There is exactly ONE retryable refusal the one-shot does not retry, and it is
  * not a bound.** `NoLiveReceiverError` with nothing live at all says this process
- * holds no receiver for the wire to push into, because every fold it holds is a
- * FOLLOWER fed by its own bounded rebuild (ADR-0044). On a `run` that is worth
- * another try and the rule above is exactly right: the rebuild in the gap between
- * cycles is what advances the follower, and writer succession hands it the wire
- * once it is level, so the process stays up and a line is written every cycle.
- * On a `build` there IS no such gap -- the rebuild is a single step taken after
- * the loop -- so nothing about waiting can change the answer, and a one-shot that
- * retried it would hang for ever rather than exit. It is re-thrown here for the
+ * has nowhere to push. Since ADR-0087 that is a much narrower state than it was:
+ * a stream's address resolves to the DEPLOYMENT's own writer of that stream, held
+ * for as long as any registered generation folds it, so "every fold here is a
+ * follower" no longer reaches it at all -- which was the whole defect, since a
+ * restarted deployment answered it for ever while reporting itself healthy. What
+ * is left is a process holding no fold. It is re-thrown on the one-shot for the
  * same reason a `fatal` is: a one-shot that folded nothing must not report
  * success, and a CI job depends on the code rather than on parsing output.
  *
@@ -459,15 +456,17 @@ export async function prepareIndexing<
  * means another sender moved the cursor, and stopping there would report success
  * having landed nothing.
  *
- * Stopping a FOLLOWER is therefore a signal and never a report, which is what
- * `deps.signal` carries in from the caller (`run` installs the process's signal
+ * Stopping a follower of the TIP is therefore a signal and never a report, which
+ * is what `deps.signal` carries in from the caller (`run` installs the process's signal
  * handlers on it; a test aborts it by hand).
  *
  * ## The second difference, and it is the SAME one: who advances a SUCCESSOR
  *
- * A `run` is a long-running host, so it has TIME to advance a successor: a fold
- * added beside the live one is a FOLLOWER, and a follower is advanced by a bounded
- * REBUILD its host SCHEDULES (ADR-0022) rather than by the wire. The gap the loop
+ * A `run` is a long-running host, so it has TIME to advance a successor: under
+ * ADR-0087 no generation fetches, so EVERY fold is advanced by a bounded REBUILD
+ * its host SCHEDULES (ADR-0022) over the stream the deployment stored -- taking
+ * each delta live where it is level, and reading the rows back where it is
+ * behind -- rather than by the wire. The gap the loop
  * already waits between cycles is that host's own clock, so one chunk is taken
  * there -- bounded by construction, on the same thread as the fold, so it can
  * neither stall a cycle beyond a chunk nor write into the incumbent's tables
@@ -484,15 +483,15 @@ export async function prepareIndexing<
  * the artifact it published therefore served the old fold, with a fully caught-up
  * newer one sitting in the database beside it.
  *
- * WHAT THAT STEP PROMISES, and it is deliberately less than `run`'s: it advances
- * every follower this build holds by ONE bounded chunk and settles the pointer
- * ONCE. It does NOT promise a successor reaches level, and it must not -- a
- * settle that WAITED for one would make the one-shot unbounded, which is the one
- * thing a command whose exit is the point may never be. The successor a re-run
- * `build` registers is fed by the WIRE and is level by the time the loop ends, so
- * the settle finds it and moves the pointer; a follower that is genuinely behind
- * is advanced by a chunk, the pointer stays where it was, and re-running the
- * command is what carries it further.
+ * WHAT THAT STEP PROMISES, and it is BOUNDED without being a single chunk: it
+ * carries every fold this build holds to the end of the stream AS IT STANDS, and
+ * settles the pointer. It loops only while a chunk stopped on its BUDGET -- "more
+ * is waiting right now" -- so it terminates on the stream's own finite length,
+ * and every stop reason that recurs for ever ends it (ADR-0070). It used to be
+ * ONE chunk, on the premise that a re-run `build`'s successor was fed by the WIRE
+ * and was already level by the time the loop ended, leaving only the settle.
+ * ADR-0087 removes that premise: a fold that came up behind advances by
+ * re-folding, and one chunk is not a catch-up.
  *
  * WHERE THE SUCCESSOR COMES FROM, in the two ways it can arrive. A generation is
  * registered when the container OPENS, from config, so a RESTART is one of them
@@ -567,15 +566,17 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 	 *
 	 * ## Why it is UNCONDITIONAL, exactly like the prune beneath it
 	 *
-	 * It used to be gated on `container.followers().length > 0`, and that gate made
-	 * the whole restart-shape upgrade unreachable. `rebuildMore` is TWO things -- it
-	 * advances every follower and then SETTLES the pointer once -- and a successor
-	 * that arrived at `open` is not a follower: `add` decides that from "do I already
-	 * hold a fold on this stream", and at `open` the fold list is empty, so a
-	 * redeployed process's successor is fed by the WIRE and holds no rebuild. It
-	 * caught up and the settle it needed was never called, so the pointer stayed on
-	 * the incumbent for ever. The gate answered the wrong question: whether anything
+	 * It used to be gated on how many FOLLOWERS the container held, and that gate made
+	 * the whole restart-shape upgrade unreachable: a successor that arrived at `open`
+	 * was not a follower, because `follows` was decided from "do I already hold a fold
+	 * on this stream" and at `open` the fold list is empty -- so a redeployed process's
+	 * successor was fed by the WIRE, held no rebuild, caught up, and the settle it
+	 * needed was never called. The gate answered the wrong question: whether anything
 	 * is being REBUILT, rather than whether anything might be PROMOTED.
+	 *
+	 * Under ADR-0087 there is nothing left to gate on at all: no generation fetches,
+	 * so EVERY fold advances by re-folding the stream this deployment stored, and
+	 * `rebuildMore` is what does it -- plus the settle, once.
 	 *
 	 * What it costs when there is nothing to do is a few registry reads per cycle, in
 	 * the gap the loop already waits, which is the same bargain the prune below
@@ -678,12 +679,24 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
 		// first, and the tip it stopped at is not the tip either was written for.
 		if (stopAtTip && !deps.signal?.aborted) {
 			try {
-				// ONE call, which is TWO things and both of them bounded: every follower held is
-				// advanced by one chunk, and then the pointer is settled ONCE. It is the same
-				// call `run` makes in the gap between cycles, made here because this command has
-				// no such gap -- and it is called once rather than looped, because looping it is
-				// exactly how a one-shot stops being one.
-				await container.rebuildMore();
+				// EVERY FOLD CARRIED TO THE END OF THE STREAM AS IT STANDS, and the pointer
+				// settled. It is the same `rebuildMore` `run` makes in the gap between cycles,
+				// LOOPED here because this command has no such gap and its database is a
+				// publishable ARTIFACT: under ADR-0087 no generation fetches, so a fold that came
+				// up BEHIND -- a re-run `build` with changed bytes over a database that already
+				// holds the history -- advances by re-folding rather than by the wire, and one
+				// bounded chunk is not a catch-up.
+				//
+				// It stays BOUNDED, which is the property a one-shot may never give up: the loop
+				// runs only while a chunk stopped on its BUDGET, so it terminates on the stream's
+				// own finite length, and every reason that recurs for ever ends it (ADR-0070).
+				for (const stalled of await rebuildUntilLevel(container, reportedStalled)) {
+					console.error(
+						`the rebuild of generation ${stalled.id} cannot advance (${stalled.reason}) and retrying will not ` +
+							`change that, so this build exits with that generation still behind. The canonical generation is ` +
+							`unaffected; this needs a look.`,
+					);
+				}
 			} catch (err) {
 				// `console.error` and NOT the named-logs logger, for the reason the rebuild
 				// diagnostic above already documents: on the commands that reach this loop a

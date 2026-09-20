@@ -117,6 +117,61 @@ export function groupStreamPerBlock<ABI extends Abi>(
 	return ordered;
 }
 
+/**
+ * THE UNCONFIRMED WINDOW OF A STORED STREAM, rebuilt by WALKING it.
+ *
+ * A stream keeper stores no window -- its copy is read by nobody, and the three
+ * block numbers plus the rows are everything it holds (ADR-0035 as amended). So
+ * whoever needs the STREAM's own window derives it the way a replay already does
+ * (`generateStreamFromReplay`): an applied block ENTERS the set, a retracted
+ * block LEAVES it, keyed by block HASH, and the finality prune happens ONCE at
+ * the end. Filtering the `removed` entries out instead would leave both branches
+ * of a reorg at one height.
+ *
+ * It is the same walk as the replay's, extracted rather than written twice,
+ * because the two must not drift into two ideas of what a held block is: the
+ * thing that FETCHES a stream derives its retractions against this window
+ * (ADR-0087), and the thing that RE-FOLDS that stream derives the same verdicts
+ * from the same rows.
+ *
+ * `storedStream` is `seq`-ordered with retractions at their ORIGINAL block --
+ * the order the fold concluded them in, and the only order this may honour.
+ * `coveredThrough` is the stream's own `lastToBlock`, which is the bound a block
+ * is carried forward on.
+ */
+export function windowOfStoredStream<ABI extends Abi>(
+	storedStream: LogEvent<ABI>[],
+	coveredThrough: number,
+	finality: number,
+): EventBlock<ABI>[] {
+	const live = new Map<string, EventBlock<ABI>>();
+	const order: string[] = [];
+	for (const group of groupStreamPerBlock(storedStream)) {
+		if (group.removed) {
+			live.delete(group.hash);
+			continue;
+		}
+		if (live.has(group.hash)) continue;
+		live.set(group.hash, {hash: group.hash, number: group.number, events: group.events.map((event) => ({...event}))});
+		order.push(group.hash);
+	}
+	const window: EventBlock<ABI>[] = [];
+	const kept = new Set<string>();
+	for (const hash of order) {
+		const block = live.get(hash);
+		if (!block || kept.has(hash)) continue;
+		kept.add(hash);
+		if (coveredThrough - block.number <= finality) {
+			window.push(block);
+		}
+	}
+	// ASCENDING, which is what every reader of a window assumes: the reorg walk stops
+	// at the first block the incoming range contradicts, so a window out of block
+	// order would conclude the wrong fork point.
+	window.sort((a, b) => a.number - b.number);
+	return window;
+}
+
 /** One `process()` call's worth of a generated stream: the events, and the cursor TRUE OF THEM ALONE. */
 export type DeliveryBatch<ABI extends Abi> = {
 	events: LogEvent<ABI>[];
@@ -243,6 +298,25 @@ export function batchStreamForDelivery<ABI extends Abi>(
  * does (`generateStreamToAppend`), and the two are decided the same way for the
  * same reason: a held block is named by its hash, never by a height, because a
  * height names whichever branch won.
+ *
+ * ## ...and why membership ALONE is not enough on the catch-up shape
+ *
+ * Membership answers "does this fold still hold that block". It cannot answer
+ * "did this fold already hold it and TAKE IT BACK", because a retracted block has
+ * left the window -- so a re-offered dead branch reads as NEW. A catch-up
+ * re-reading a range containing a reorg therefore re-applied the dead block at a
+ * height its replacement already occupies, which the storage seam refuses at its
+ * duplicate-height guard (measured: `UNIQUE constraint failed: _blocks.number`).
+ * Where the store tolerated it, it applied and then took back a branch nobody
+ * asked about, publishing a retraction and rotating a coherence token for it.
+ *
+ * The fix is local and costs nothing: a block that is APPLIED and then RETRACTED
+ * within ONE walk, having not been live when the walk began, contributes NOTHING
+ * to the state, so neither half is delivered. It is sound because a retraction
+ * carries its ORIGINAL block and a chunk is cut on BLOCK boundaries, so the two
+ * halves are never split across two chunks; and it is exact because a hash
+ * applied, retracted and applied AGAIN inside one walk still delivers the last
+ * application, which is the branch that survives.
  */
 export function generateStreamFromReplay<ABI extends Abi>(
 	lastSync: LastSync<ABI>,
@@ -275,12 +349,14 @@ export function generateStreamFromReplay<ABI extends Abi>(
 	}
 
 	const eventStream: LogEvent<ABI>[] = [];
-	for (const group of groupStreamPerBlock(storedStream)) {
+	const groups = groupStreamPerBlock(storedStream);
+	for (let at = 0; at < groups.length; at++) {
+		const group = groups[at];
 		if (group.removed) {
 			if (!live.has(group.hash)) {
 				// nothing to take back: this block was never applied under this cursor, so
 				// telling the processor to revert it would be an instruction about state it
-				// does not hold
+				// does not hold -- or it is the second half of a pair this walk skipped whole
 				continue;
 			}
 			live.delete(group.hash);
@@ -288,6 +364,19 @@ export function generateStreamFromReplay<ABI extends Abi>(
 		} else {
 			if (live.has(group.hash)) {
 				// already applied: a catch-up replay re-offers the window it reached back over
+				continue;
+			}
+			if (group.number <= lastSync.lastToBlock && retractedLater(groups, at)) {
+				// A RE-READ of a branch this fold has already settled: at or below where it
+				// has folded through, not in its window, and retracted again before this walk
+				// ends. Delivering it would apply a block at a height its replacement already
+				// occupies -- which the storage seam refuses -- for a net effect of nothing.
+				//
+				// The `lastToBlock` half is what keeps a REBUILD faithful: a fresh cursor has
+				// folded through nothing, so nothing is a re-read and the whole stream is
+				// delivered exactly as the live run concluded it, reverts included (ADR-0042).
+				// It is only the CATCH-UP shape -- reaching back over its own reorg window --
+				// that can be re-offered a branch it has already taken back.
 				continue;
 			}
 			live.set(group.hash, {
@@ -336,6 +425,28 @@ export function generateStreamFromReplay<ABI extends Abi>(
 			unconfirmedBlocks: newUnconfirmedBlocks,
 		},
 	};
+}
+
+/**
+ * Whether this walk RETRACTS this block again before it applies it again.
+ *
+ * The lookahead behind the skip in `generateStreamFromReplay`: the next group
+ * naming the same hash decides it, because a stream records the verdicts in the
+ * order the fold reached them. A retraction means the pair is internal to this
+ * walk and delivers nothing; another APPLICATION cannot come first (the hash is
+ * live between the two); and no further mention at all means this application
+ * survives and must be delivered.
+ */
+function retractedLater<ABI extends Abi>(
+	groups: readonly (BlockOfEvents<ABI> & {removed: boolean})[],
+	from: number,
+): boolean {
+	const hash = groups[from].hash;
+	for (let at = from + 1; at < groups.length; at++) {
+		if (groups[at].hash !== hash) continue;
+		return groups[at].removed;
+	}
+	return false;
 }
 
 /**

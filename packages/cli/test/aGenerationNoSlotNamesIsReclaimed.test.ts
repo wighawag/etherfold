@@ -20,6 +20,7 @@ import {
 	applySchema,
 	EMISSION_STREAM_TABLE,
 	emissionAppenderFor,
+	streamCursorSourceOn,
 	generationRegistryPortOnSQL,
 	storedEmissionReplaySource,
 	type SQLGenerationRegistryOptions,
@@ -29,7 +30,19 @@ import {createClient} from '@libsql/client';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
-import {abi, ALICE, BOB, CONTRACT, nftEntities, nftProcessor, START_BLOCK, timestampOf, ZERO} from './utils/chain.js';
+import {
+	ALICE,
+	BOB,
+	CONTRACT,
+	START_BLOCK,
+	TRANSFER_TOPIC,
+	ZERO,
+	abi,
+	addressTopic,
+	nftEntities,
+	nftProcessor,
+	timestampOf,
+} from './utils/chain.js';
 import {identityOf} from './utils/processorIdentity.js';
 import {generationStateSeamsOn} from './utils/generationState.js';
 
@@ -150,6 +163,7 @@ async function openIndexer(
 		source,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
+		streamCursor: streamCursorSourceOn(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
 		generation: specFor(db, identity, source),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
@@ -168,22 +182,33 @@ function transferEvent(blockNumber: number, address: string, to: string, id: big
 		removed: false,
 		address,
 		data: '0x',
-		topics: [],
+		// REAL TOPICS, so a REPLAY can `reparse` this row. It used to be `topics: []`
+		// with a pre-decoded `args`, which was enough while a fold was fed by the WIRE:
+		// the decoded half arrived with the batch. Since ADR-0087 every generation
+		// advances by re-folding the stream the deployment STORED, and a stored row
+		// carries the raw log alone (`args` is what SOME ABI made of those bytes,
+		// ADR-0034) -- so a fixture with no `topic0` is one no fold can decode.
+		topics: [TRANSFER_TOPIC, addressTopic(ZERO), addressTopic(to), `0x${id.toString(16).padStart(64, '0')}`],
 		transactionHash: `0x${logCounter.toString(16).padStart(64, '0')}`,
 		logIndex: 0,
 		extra: undefined,
-		eventName: 'Transfer',
-		args: {from: ZERO, to, id},
 	} as unknown as LogEvent<typeof abi>;
 }
 
-/** Feed ONE fold through its own receiver, at its own address on the wire. */
+/**
+ * Feed ONE fold's STREAM, at that stream's address on the wire.
+ *
+ * It used to reach for the fold's own receiver. A fold has none since ADR-0087:
+ * what answers at a stream's address is the DEPLOYMENT's writer of that stream,
+ * and every generation over it reads what that writer stored.
+ */
 async function feed(
+	indexer: ReceivingIndexer<typeof abi, unknown, unknown>,
 	fold: HeldFold<typeof abi, unknown, unknown>,
 	over: {address: string; toBlock: number; to: string; id: bigint},
 ): Promise<void> {
-	const receiver = fold.ingestion;
-	if (!receiver) throw new Error('this fold FOLLOWS its stream, so it has no receiver to feed');
+	const receiver = (await indexer.liveIngestions()).find((one) => one.streamDigest === fold.streamDigest);
+	if (!receiver) throw new Error(`nothing is fetching the stream ${fold.streamDigest}`);
 	const batch: WireBatch<typeof abi> = {
 		context: receiver.context,
 		fromBlock: START_BLOCK,
@@ -266,14 +291,14 @@ async function aDeploymentUpgradedTwice(): Promise<Deployment> {
 
 	// the incumbent, on its own stream, which has folded and stored what it folded
 	const indexer = await openIndexer(db, V1, SOURCE_A);
-	await feed(indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
+	await feed(indexer, indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
 	const first = indexer.generation;
 
 	// a SOURCE change: a new stream, its own receiver, and a promotion that makes the
 	// first generation the PREDECESSOR -- retained, because the pointer must be able to
 	// move back to it
 	const second = await indexer.add(specFor(db, V2, SOURCE_B));
-	await feed(second, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
+	await feed(indexer, second, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
 	await indexer.promote(idOf(second));
 
 	// ...and a PROCESSOR change over that same stream, promoted in turn. The first
@@ -399,42 +424,34 @@ describe('a generation ANY slot names is never reclaimed', () => {
 	});
 });
 
-describe('reclaiming is DECLINED where dropping would strand a fold that follows the stream', () => {
-	it('retains the writer another held fold follows, and says why', async () => {
+describe('nothing is DECLINED for stranding a fold any more, because no generation writes a stream', () => {
+	it('finds nothing to reclaim, and the STREAM a fold still folds survives it', async () => {
+		// RE-SCOPED. This used to assert a DECLINE: the generation being reclaimed WROTE
+		// the stream another held fold followed, so taking it would have left that fold
+		// folding a stream nothing appended to -- and would have reaped the stream with
+		// it. Under ADR-0087 the DEPLOYMENT writes the stream it fetches, so there is no
+		// duty to strand; what is left to protect is the STREAM, and a reclaim only reaps
+		// one where no generation is left folding it.
 		const db = oneDatabase();
 		await applySchema(db);
 		const indexer = await openIndexer(db, V1, SOURCE_A);
-		await feed(indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
+		await feed(indexer, indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
 
-		// the source change lands first and stores its stream, then a processor change on
-		// that same stream FOLLOWS it -- which takes the `successor` slot and leaves the
-		// writer named by no slot, retained because dropping it then would strand the
-		// follower (ADR-0044)
+		// a source change stores a second stream, then a processor change on that same
+		// stream takes the `successor` slot -- which DROPS what it replaced rather than
+		// retaining it, so there is nothing left named by no slot for an operator to find
 		const onB = await indexer.add(specFor(db, V2, SOURCE_B));
-		await feed(onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
+		await feed(indexer, onB, {address: OTHER_CONTRACT, toBlock: START_BLOCK + 20, to: BOB, id: 2n});
 		const alsoOnB = await indexer.add(specFor(db, V3, SOURCE_B));
-		expect(alsoOnB.follows).toBe(true);
-		expect(onB.writesStream).toBe(true);
-		expect(unslottedGenerations(await indexer.generations(), await indexer.slots())).toMatchObject([
-			{processor: onB.record.processor},
-		]);
+		expect(unslottedGenerations(await indexer.generations(), await indexer.slots())).toEqual([]);
 
 		const report = await indexer.reclaim();
 
-		// the same decline the existing drop makes, said out loud rather than performed
-		// quietly: the bytes are kept, and the operator is told what to do about it
-		expect(report.outcome).toBe('declined');
-		expect(report.reclaimed).toEqual([]);
-		expect(report.declined.map((one) => one.generation.processor)).toEqual([onB.record.processor]);
-		expect(report.declined[0]?.reason).toBe('writes-a-followed-stream');
-		expect(report.declined[0]?.message).toContain(onB.streamDigest);
-		expect(report.message).toContain(onB.record.processor);
-
-		// ...and NOTHING went: its state and the stream the follower is re-folding are
-		// exactly where they were
-		expect((await namespaceTables(db, idOf(onB))).length).toBeGreaterThan(0);
-		expect(await emissionRows(db, onB.streamDigest)).toBe(1);
-		expect((await indexer.generations()).length).toBe(3);
+		expect(report.outcome).toBe('nothing-to-reclaim');
+		expect(report.declined).toEqual([]);
+		// ...and the stream the surviving fold re-folds is untouched by any of it
+		expect(await emissionRows(db, alsoOnB.streamDigest)).toBe(1);
+		expect(await indexer.registry.keptStreams()).toContain(alsoOnB.streamDigest);
 	});
 });
 
@@ -443,7 +460,7 @@ describe('reclaiming NOTHING is a success that says it reclaimed nothing', () =>
 		const db = oneDatabase();
 		await applySchema(db);
 		const indexer = await openIndexer(db, V1, SOURCE_A);
-		await feed(indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
+		await feed(indexer, indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
 		const pending = await indexer.add(specFor(db, V2));
 
 		const report = await indexer.reclaim();

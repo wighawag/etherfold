@@ -16,6 +16,7 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
 	indexerEntryOn,
 	storedEmissionReplaySource,
 	STATE_MOVED_EVENT,
@@ -144,6 +145,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
 		replay: storedEmissionReplaySource<TestABI>(db, NAME),
 		generation: foldAt(states, 'the-incumbent-fold'),
 	});

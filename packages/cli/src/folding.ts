@@ -10,7 +10,7 @@ import {
 	type ProvidedStreamConfig,
 	type ReceivedGenerationSpec,
 	type ReceivingIndexer,
-	type StreamBuilder,
+	type StreamWriter,
 } from '@etherfold/core';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
@@ -444,28 +444,26 @@ export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
 	/** The OPENING fold's processor. */
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/**
-	 * The OPENING fold's receiver, or NOTHING where that fold has none.
+	 * THE WRITER of the stream the opening fold folds: this deployment's own, and
+	 * the live wire context a single-stream process has.
 	 *
-	 * ## Why it is optional, and why nothing FEEDS through it any more
+	 * ## Why it is a WRITER and no longer a fold's receiver
 	 *
-	 * It used to be `container.ingestion`, whose getter asserts that the opening
-	 * fold has a receiver "which `open` cannot produce: the first fold held on a
-	 * stream is never a follower". That assertion is a property of how `follows` is
-	 * currently DERIVED -- from the folds this process happens to hold in memory,
-	 * which at `open` is an empty list -- rather than of the shape, and ADR-0087
-	 * retires it: a restarted deployment whose stream the registry already carries
-	 * comes up holding a FOLLOWER, and a follower has no receiver because a stream is
-	 * ONE address on the wire (ADR-0044). Reading the getter here made THAT the
-	 * crash that stops a process starting, in an assembly three commands share.
+	 * It used to be `container.ingestion` reaching for the opening FOLD's engine,
+	 * whose getter asserted "the first fold held on a stream is never a follower".
+	 * That assertion was a property of how `follows` was DERIVED -- from the folds a
+	 * process happened to hold in memory, which at `open` is an empty list -- rather
+	 * than of the shape, and ADR-0087 retires the question entirely: no generation
+	 * fetches and none appends, so a fold has no receiver at all and the thing at a
+	 * stream's address is the deployment's writer of it.
 	 *
-	 * So it is reported, never fed through. What a combined command pushes into is
+	 * It is reported, never fed through. What a combined command pushes into is
 	 * resolved PER ASK from `container.liveIngestions()` (`prepareIndexing`), which is
 	 * the same question the ingest route asks on the HTTP side, and what a serving
 	 * command registers is that function itself. This field is what a CALLER reads to
-	 * say which engine the process came up folding, and `undefined` is a true answer
-	 * rather than a missing one.
+	 * say which stream this process came up fetching.
 	 */
-	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
+	streamWriter: StreamWriter<ABI>;
 };
 
 /**
@@ -489,11 +487,11 @@ export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
  *
  * The APPENDER is handed to the container rather than to a receiver, which is
  * what makes the one-writer rule structural: the container gives it to the
- * WRITER of a stream -- the oldest surviving generation registered on it -- and
- * to nothing else, so a successor re-folding a stored stream cannot append a
- * second history (ADR-0044/ADR-0052). Its READ counterpart is handed over beside
- * it, because a fold on a stream this container already holds is a FOLLOWER and
- * catches up by re-folding those same rows.
+ * STREAM's own WRITER -- the DEPLOYMENT's, one per stream -- and to no fold at
+ * all, so no generation can append a second history (ADR-0052/ADR-0087). Beside
+ * it go the other two ends of the same rows: where the stream REACHES, which is
+ * what positions the fetch, and how it is READ BACK in bounded slices, because
+ * every generation here catches up by re-folding it.
  *
  * The imports are dynamic for the reason `openFoldingDatabase`'s are.
  */
@@ -593,23 +591,25 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		source: context.source,
 		stream: context.stream,
 		recordReorg: reorgRecorderFor(db),
+		// THE STREAM'S THREE ENDS, all over the one database this command folds into:
+		// where it is STORED, where it REACHES (which is what positions the fetch, and is
+		// the half that makes the write duty movable at all -- ADR-0087), and how it is
+		// READ BACK in bounded slices so every generation over it can re-fold it.
 		appendEmissions: server.emissionAppenderFor(db, context.indexer),
+		streamCursor: server.streamCursorSourceOn(db, context.indexer),
 		replay: server.storedEmissionReplaySource<ABI>(db, context.indexer),
 		generation: parts.generation,
 	});
 
-	const opening = container.held()[0];
 	return {
 		container,
 		db,
 		store: container.state,
 		processor: container.processor,
-		// OFF THE HELD FOLD rather than off `container.ingestion`: that getter THROWS for
-		// a fold with no receiver, and under ADR-0087 an opening fold that is a FOLLOWER
-		// is an ordinary state. A `HeldFold` already reports its receiver as optional,
-		// which is the honest shape, so this reads the fact instead of the assertion over
-		// it.
-		...(opening?.ingestion ? {streamBuilder: opening.ingestion} : {}),
+		// THE WRITER of the stream the opening fold folds, which is the DEPLOYMENT's and
+		// not that fold's engine (ADR-0087). A fold has no receiver at all now, so what a
+		// caller reads here to say "which thing is fetching this stream" is this.
+		streamWriter: container.ingestion,
 	};
 }
 
@@ -637,7 +637,12 @@ export async function foldingStatusReport<ABI extends Abi, ProcessResultType>(
 		folds: container.held().map((fold) => ({
 			generation: fold.record,
 			store: fold.state as StateStore,
-			follows: fold.follows,
+			// TRUE FOR EVERY FOLD ON THIS RUNTIME, and that is the fact rather than a
+			// constant nobody updated: under ADR-0087 no generation fetches, so every one of
+			// them advances by re-folding the stream the deployment stored. The field stays
+			// on the report because an operator comparing two deployments reads it; what it
+			// no longer distinguishes is two shapes of fold, because there is one.
+			follows: true,
 		})),
 		...(canonical ? {canonical} : {}),
 	});

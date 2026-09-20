@@ -81,6 +81,20 @@ export const GENERATION_TABLE = '_generations';
  */
 export const GENERATION_SLOT_TABLE = '_generation_slots';
 
+/**
+ * THE STREAM RECORDS: one row per stream this named indexer HOLDS, folded or not.
+ *
+ * The durable half of "a stream outlives every fold over it" (ADR-0087). It is
+ * what the registry's sweep compares a stored subtree against, so a stream KEPT
+ * after its last generation was dropped survives a restart while a PRE-GENERATION
+ * ORPHAN -- which never had a row here -- is still collected.
+ *
+ * Deliberately not a column on `_generations` (the fact outlives the generation)
+ * and deliberately not `_stream_coverage` (that says how far a stream reaches,
+ * this says the indexer holds it at all).
+ */
+export const GENERATION_STREAM_TABLE = '_generation_streams';
+
 /** The two columns one slot occupies. NULL in both means the slot is empty. */
 function slotColumns(slot: SlotName): {stream: string; processor: string} {
 	return {stream: `${slot}Stream`, processor: `${slot}Processor`};
@@ -427,7 +441,11 @@ export function openGenerationRegistryOnSQL(
 function writesAnything(write: GenerationRegistryWrite | undefined): write is GenerationRegistryWrite {
 	return (
 		!!write &&
-		((write.remove?.length ?? 0) > 0 || !!write.put || SLOT_NAMES.some((slot) => write.slots?.[slot] !== undefined))
+		((write.remove?.length ?? 0) > 0 ||
+			!!write.put ||
+			write.keepStream !== undefined ||
+			(write.forgetStreams?.length ?? 0) > 0 ||
+			SLOT_NAMES.some((slot) => write.slots?.[slot] !== undefined))
 	);
 }
 
@@ -443,18 +461,20 @@ async function readGuarded(
 	db: RemoteSQL,
 	indexer: string,
 ): Promise<{state: GenerationRegistryState; revision: string}> {
-	const [records, slotRow] = await db.batch([
+	const [records, slotRow, streamRows] = await db.batch([
 		db.prepare(`SELECT stream, processor, createdAt FROM ${GENERATION_TABLE} WHERE indexer = ?1`).bind(indexer),
 		db
 			.prepare(`SELECT ${SLOT_COLUMNS.join(', ')}, revision FROM ${GENERATION_SLOT_TABLE} WHERE indexer = ?1`)
 			.bind(indexer),
+		db.prepare(`SELECT stream FROM ${GENERATION_STREAM_TABLE} WHERE indexer = ?1`).bind(indexer),
 	]);
 
 	const generations = ((records?.results ?? []) as GenerationRow[]).map(
 		(row): GenerationRecord => ({stream: row.stream, processor: row.processor, createdAt: Number(row.createdAt)}),
 	);
 	const row = (slotRow?.results ?? [])[0] as SlotRow | undefined;
-	return {state: {generations, slots: slotsFrom(row)}, revision: row?.revision ?? UNWRITTEN};
+	const keptStreams = ((streamRows?.results ?? []) as {stream: string}[]).map((one) => one.stream);
+	return {state: {generations, slots: slotsFrom(row), keptStreams}, revision: row?.revision ?? UNWRITTEN};
 }
 
 /**
@@ -497,6 +517,28 @@ function statementsFor(
 					 ON CONFLICT (indexer, stream, processor) DO UPDATE SET createdAt = excluded.createdAt`,
 				)
 				.bind(indexer, write.put.stream, write.put.processor, write.put.createdAt, revision),
+		);
+	}
+
+	// THE STREAM RECORDS, guarded like everything else. Recorded first and forgotten
+	// after, so one commit that does both ends with the stream gone: an ASKED-FOR
+	// deletion wins over a registration in the same write.
+	if (write.keepStream !== undefined) {
+		statements.push(
+			db
+				.prepare(
+					`INSERT INTO ${GENERATION_STREAM_TABLE} (indexer, stream)
+					 SELECT ?1, ?2 WHERE ${guard} = ?3
+					 ON CONFLICT (indexer, stream) DO NOTHING`,
+				)
+				.bind(indexer, write.keepStream, revision),
+		);
+	}
+	for (const digest of write.forgetStreams ?? []) {
+		statements.push(
+			db
+				.prepare(`DELETE FROM ${GENERATION_STREAM_TABLE} WHERE indexer = ?1 AND stream = ?2 AND ${guard} = ?3`)
+				.bind(indexer, digest, revision),
 		);
 	}
 

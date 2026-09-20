@@ -15,6 +15,7 @@ import {
 	batch,
 	canonicalAnswers,
 	idOf,
+	reportFor,
 	transfer,
 	world,
 } from './utils/receivingWorld.js';
@@ -48,10 +49,10 @@ import {
 
 describe('a successor on a SHARED stream is a FOLLOWER, determined and never configured', () => {
 	it('stays ONE writer when both generations register in the same millisecond', async () => {
-		// `writerOf` names the oldest surviving generation on a stream, and `createdAt`
+		// `fetcherOf` names the oldest surviving generation on a stream, and `createdAt`
 		// used to be a bare `Date.now()` -- milliseconds, with `byAge` breaking a tie on
 		// the processor HASH. Two generations registered in one millisecond therefore
-		// ordered by hash rather than by registration, and `writerOf` could name the
+		// ordered by hash rather than by registration, and `fetcherOf` could name the
 		// SUCCESSOR as the writer of a stream the incumbent already wrote. Measured:
 		// TWO writers on one stream, which is the invariant ADR-0044 exists to hold.
 		//
@@ -64,9 +65,13 @@ describe('a successor on a SHARED stream is a FOLLOWER, determined and never con
 		const successor = await incumbent.add(w.specFor('aaa-successor', 10));
 		clock.mockRestore();
 
-		expect(successor.follows).toBe(true);
-		expect(successor.writesStream).toBe(false);
-		expect(incumbent.writesStream).toBe(true);
+		// The question `fetcherOf` answers is no longer a DUTY (ADR-0087) -- the
+		// deployment writes the stream it fetches -- but the ORDERING it reads is the same
+		// one every listing an operator reads is sorted by, and a tie still breaks on the
+		// processor HASH. Named the other way round this passes against the broken
+		// ordering too.
+		expect((await incumbent.registry.fetcherOf(incumbent.streamDigest))?.processor).toBe(identityOf('zzz-incumbent'));
+		expect(successor.record.processor).toBe(identityOf('aaa-successor'));
 
 		// and the registry ORDERED them by registration rather than by hash, which is
 		// what makes the above true rather than lucky
@@ -98,19 +103,23 @@ describe('a successor on a SHARED stream is a FOLLOWER, determined and never con
 		expect(new Set(created).size).toBe(3);
 	});
 
-	it('gets a rebuild over the stored stream and NO receiver, because a stream is one address', async () => {
+	it('gets a rebuild over the stored stream and NO receiver -- and so does the fold beside it', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();
 
 		const successor = await incumbent.add(w.specFor('v2', 10));
 
-		expect(successor.follows).toBe(true);
-		expect(successor.ingestion).toBeUndefined();
+		// ONE fold shape (ADR-0087): every generation reads the stored stream, none of
+		// them fetches and none of them appends, so there is nothing left to determine.
 		expect(successor.rebuild).toBeDefined();
-		// and it is not the writer: ADR-0052's one-writer rule, so it stores nothing
-		expect(successor.writesStream).toBe(false);
-		expect(incumbent.writesStream).toBe(true);
-		// one live wire context, still: the follower has no address of its own
-		expect((await incumbent.liveIngestions()).map((live) => live.streamDigest)).toEqual([incumbent.streamDigest]);
+		expect(incumbent.held()[0]?.rebuild).toBeDefined();
+		expect(successor).not.toHaveProperty('ingestion');
+		expect(successor).not.toHaveProperty('writesStream');
+		// one live wire context: a stream is ONE address, and what answers at it is the
+		// DEPLOYMENT's writer of that stream rather than either fold
+		const live = await incumbent.liveIngestions();
+		expect(live.map((one) => one.streamDigest)).toEqual([incumbent.streamDigest]);
+		expect(live[0]).toBe(incumbent.ingestion);
+		expect(live[0]?.generation).toBeUndefined();
 	});
 
 	it('replays `_emissions` alone: no chain, and not one write to the stream', async () => {
@@ -173,7 +182,7 @@ describe('a re-folding successor does not re-count the reverts the stream carrie
 		const successor = await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 
@@ -198,8 +207,8 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		const reports = [];
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
-			if (!report) throw new Error('no follower to advance');
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
+			if (!report) throw new Error('no successor to advance');
 			reports.push(report);
 			done = report.complete;
 		}
@@ -222,8 +231,8 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		const scans: number[] = [];
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
-			if (!report) throw new Error('no follower to advance');
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
+			if (!report) throw new Error('no successor to advance');
 			scans.push(report.scanned);
 			done = report.complete;
 		}
@@ -321,7 +330,7 @@ describe('the rebuild proceeds in bounded chunks and REPORTS whether it finished
 		const incumbent = await w.open('v1', 1);
 		await incumbent.add(w.specFor('v2', 10));
 
-		const [report] = await incumbent.rebuildMore();
+		const report = reportFor(await incumbent.rebuildMore(), 'v2');
 		expect(report).toMatchObject({stopped: {reason: 'nothing-stored'}, complete: false, scanned: 0});
 		// TRANSIENT: the writer simply has not appended yet, so calling again is right.
 		// This is the half that must stay distinguishable from `does-not-reach-back`,
@@ -347,8 +356,8 @@ describe('resumability, asserted through a FRESH container between every chunk',
 		while (!done) {
 			const fresh = await w.open('v1', 1);
 			await fresh.add(w.specFor('v2', 10));
-			const [report] = await fresh.rebuildMore({maxEmissions: 1});
-			if (!report) throw new Error('no follower to advance');
+			const report = reportFor(await fresh.rebuildMore({maxEmissions: 1}), 'v2');
+			if (!report) throw new Error('no successor to advance');
 			chunks++;
 			done = report.complete;
 			expect(chunks).toBeLessThan(20);
@@ -376,7 +385,7 @@ describe('resumability, asserted through a FRESH container between every chunk',
 		while (!done) {
 			const revived = await w.open('v1', 1);
 			await revived.add(w.specFor('v2', 10));
-			const [report] = await revived.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await revived.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 
@@ -396,12 +405,12 @@ describe('resumability, asserted through a FRESH container between every chunk',
 		await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 		const level = [...w.rowsIn('v2', incumbent.streamDigest)];
 
-		const [again] = await incumbent.rebuildMore();
+		const again = reportFor(await incumbent.rebuildMore(), 'v2');
 
 		expect(again).toMatchObject({complete: true, replayed: 0});
 		expect(w.rowsIn('v2', incumbent.streamDigest)).toEqual(level);
@@ -418,8 +427,8 @@ describe('the canonical generation is served throughout, and the pointer moves O
 		const pointers: string[] = [];
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
-			if (!report) throw new Error('no follower to advance');
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
+			if (!report) throw new Error('no successor to advance');
 			done = report.complete;
 			if (!done) {
 				answersDuring.push(await canonicalAnswers(w, incumbent));
@@ -450,7 +459,7 @@ describe('the canonical generation is served throughout, and the pointer moves O
 		await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 
@@ -472,7 +481,7 @@ describe('the canonical generation is served throughout, and the pointer moves O
 		await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
@@ -485,32 +494,30 @@ describe('the canonical generation is served throughout, and the pointer moves O
 		expect((await incumbent.canonical())?.processor).toBe(identityOf('v1'));
 	});
 
-	it('keeps the WRITER and the retired generation FOLDING after the move (open question 2)', async () => {
+	it('keeps the DEPLOYMENT fetching and BOTH generations folding after the move (open question 2)', async () => {
 		const {world: w, incumbent} = await anIncumbentThatHasFolded();
 		await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 
-		// the append duty did NOT move with the pointer: the writer is the oldest
-		// surviving generation on the stream, registration order and never the pointer
-		expect((await incumbent.registry.writerOf(incumbent.streamDigest))?.processor).toBe(identityOf('v1'));
-		expect(incumbent.writesStream).toBe(true);
-		// so the retired generation is still the one being fed...
-		expect((await incumbent.liveIngestions()).map((live) => live.streamDigest)).toEqual([incumbent.streamDigest]);
+		// the append duty did NOT move with the pointer, because there is none to move:
+		// the DEPLOYMENT writes the stream it fetches (ADR-0087), so a promotion changes
+		// which generation ANSWERS and nothing about which thing appends
+		expect((await incumbent.liveIngestions())[0]).toBe(incumbent.ingestion);
 
 		const LATER = transfer(112, '0xa112', 5n);
 		const fromBlock = await incumbent.ingestion.expectedFromBlock();
 		await incumbent.ingestion.receive(batch(incumbent, {toBlock: 115, latestBlock: 115, logs: [LATER]}, fromBlock));
 
-		// ...and it KEEPS FOLDING: a frozen retired generation would answer stale data
-		// the instant the pointer was moved back to it
+		// BOTH folds take it. The retired one KEEPS FOLDING -- a frozen retired
+		// generation would answer stale data the instant the pointer was moved back to it
+		// -- and so does the promoted successor, which is level and therefore takes the
+		// delta the writer just appended rather than waiting for a rebuild chunk.
 		expect(w.rowsIn('v1', incumbent.streamDigest)).toContain(`${idOf(LATER)}x1`);
-		// and the promoted successor keeps FOLLOWING the same stream
-		await incumbent.rebuildMore();
 		expect(w.rowsIn('v2', incumbent.streamDigest)).toContain(`${idOf(LATER)}x10`);
 	});
 });
@@ -528,6 +535,7 @@ describe('the promotion policy is applied here and re-decided nowhere', () => {
 			source: SOURCE,
 			stream: {finality: FINALITY},
 			appendEmissions: (write) => w.stream.append(write),
+			streamCursor: w.stream.cursor(),
 			replay: w.stream.source(),
 			promotion: {policy: 'manual'},
 			generation: w.specFor('v1', 1),
@@ -538,7 +546,7 @@ describe('the promotion policy is applied here and re-decided nowhere', () => {
 		await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 
@@ -555,6 +563,8 @@ describe('the promotion policy is applied here and re-decided nowhere', () => {
 				port: w.port,
 				source: SOURCE,
 				stream: {finality: FINALITY},
+				appendEmissions: (write) => w.stream.append(write),
+				streamCursor: w.stream.cursor(),
 				replay: w.stream.source(),
 				promotion: {policy: 'immediate', dropOnPromotion: true},
 				generation: w.specFor('v1', 1),
@@ -562,33 +572,40 @@ describe('the promotion policy is applied here and re-decided nowhere', () => {
 		).rejects.toThrow(/'immediate' with dropOnPromotion is not available/);
 	});
 
-	it('DECLINES a drop that would leave a follower folding a stream nothing appends to', async () => {
+	it('DROPS the superseded generation on promotion and KEEPS its stream', async () => {
+		// RE-SCOPED. This used to assert that the drop was DECLINED, because the
+		// superseded generation WROTE the stream the promoted one followed and dropping
+		// it would have left that fold folding a stream nothing appended to -- and would
+		// have reaped the stream out from under it. Neither can happen under ADR-0087:
+		// no generation writes a stream, so there is no duty to strand, and a delete
+		// does not reap, so there are no bytes to lose. What is asserted instead is the
+		// property that replaces it: the drop HAPPENS and the stream SURVIVES it.
 		const w = world();
 		const incumbent = await openReceivingIndexer<TestABI, string[], MemoryStore>({
 			port: w.port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
 			appendEmissions: (write) => w.stream.append(write),
+			streamCursor: w.stream.cursor(),
 			replay: w.stream.source(),
 			promotion: {dropOnPromotion: true},
 			generation: w.specFor('v1', 1),
 		});
 		const fromBlock = await incumbent.ingestion.expectedFromBlock();
 		await incumbent.ingestion.receive(batch(incumbent, {toBlock: 105, latestBlock: 105, logs: [AT_101]}, fromBlock));
+		const storedBefore = w.stream.snapshot();
 
 		await incumbent.add(w.specFor('v2', 10));
 		let done = false;
 		while (!done) {
-			const [report] = await incumbent.rebuildMore({maxEmissions: 1});
+			const report = reportFor(await incumbent.rebuildMore({maxEmissions: 1}), 'v2');
 			done = !!report?.complete;
 		}
 
-		// the superseded generation WRITES the stream the promoted one follows, so
-		// dropping it would leave the app simply not advancing (ADR-0046)
 		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
-			identityOf('v1'),
-			identityOf('v2'),
-		]);
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([identityOf('v2')]);
+		// ...and the STREAM the dropped generation opened is byte for byte where it was
+		expect(w.stream.snapshot()).toBe(storedBefore);
+		expect(await incumbent.registry.keptStreams()).toEqual([incumbent.streamDigest]);
 	});
 });

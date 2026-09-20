@@ -22,6 +22,7 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
 	indexerEntryOn,
 	singleContextEntry,
 	storedEmissionReplaySource,
@@ -132,6 +133,7 @@ async function deploy(
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
 		replay: storedEmissionReplaySource(db, NAME),
 		generation: foldAt(states, 'the-incumbent-fold'),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
@@ -381,7 +383,10 @@ describe('the state-moved stream REFUSES where it cannot be served', () => {
 			getDB: () => db,
 			getEnv: () => ({INGEST_TOKEN: TOKEN}),
 			holdsStreamsAcrossRequests: true,
-			getIndexer: (_c, name) => (name === NAME ? singleContextEntry(db, {} as unknown as LogIngestion) : undefined),
+			getIndexer: (_c, name) =>
+				name === NAME
+					? singleContextEntry(db, {generation: {stream: 'a-stream', processor: 'a-fold'}} as unknown as LogIngestion)
+					: undefined,
 		});
 
 		const response = await app.request(`/${NAME}/state-moved`);

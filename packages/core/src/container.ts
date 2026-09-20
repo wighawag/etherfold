@@ -6,7 +6,7 @@ import {IndexerGeneration, type LoadingState, type PauseState, type ReconfigureO
 import {
 	displacedBySuccessor,
 	sameGeneration,
-	writerOf,
+	fetcherOf,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
@@ -790,19 +790,30 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		//
 		// Asked of the durable REGISTRY rather than of this process's `held` array,
 		// which is whatever order the caller passed its specs in and does not survive a
-		// restart. And asked as `writerOf` -- the SAME expression the receiving twin
-		// uses and ADR-0044's rule itself -- so "which generation writes this stream"
-		// has ONE home and `follows` is simply "and it is not me". The duty is never
-		// REASSIGNED, so the first generation registered on a stream keeps it.
+		// restart. And asked as `fetcherOf` -- ADR-0044's own rule -- so "which
+		// generation fetches this stream" has ONE home and `follows` is simply "and it is
+		// not me". The duty is never REASSIGNED, so the first generation registered on a
+		// stream keeps it.
+		//
+		// **ADR-0087 does not reach this line, and the reason is what the word means
+		// here.** On the RECEIVING side the thing that fetches a stream is the
+		// DEPLOYMENT, so electing a generation to hold the pen was a third role that did
+		// not belong to a generation at all, and it is gone. HERE the thing that fetches
+		// IS a generation -- `IndexerGeneration` opens `load()` with `eth_chainId` and a
+		// batch is a side effect of it advancing -- so "which generation fetched this
+		// stream" and "which generation writes it" are ONE fact, which is exactly
+		// ADR-0044's follower rule and is untouched. What ADR-0087 changes on this
+		// runtime is nothing; splitting the browser engine's fetch from its fold is a
+		// separate change nothing has asked for.
 		//
 		// ADR-0071 REJECTED this form and that rejection has EXPIRED, twice over.
 		//
 		// It rejected it because `createdAt` was a millisecond clock with a hash
 		// tie-break, so two generations added in the same millisecond could each see
-		// `writerOf` name THEMSELVES and one stream got two writers (measured, 20/20).
+		// `fetcherOf` name THEMSELVES and one stream got two writers (measured, 20/20).
 		// ADR-0072 removed the tie: `createdAt` is strictly increasing within a
 		// registry, so records sort in REGISTRATION order and every reader of
-		// `writerOf` gets the same answer. That is exactly the precondition ADR-0071
+		// `fetcherOf` gets the same answer. That is exactly the precondition ADR-0071
 		// named as the open work, and it has landed.
 		//
 		// What it fell back to -- "is any OTHER generation already registered on this
@@ -815,16 +826,18 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// a leftover successor B found B "already on this stream" and built its own
 		// CANONICAL generation as a FOLLOWER of a stream nothing writes: it stopped
 		// fetching while its state and its reported status both went on looking healthy.
-		// The set question is equivalent only for a record that is NEW. `writerOf` is
+		// The set question is equivalent only for a record that is NEW. `fetcherOf` is
 		// right for both, so it is what is asked.
 		//
 		// This is still the INITIAL derivation and nothing recomputes it: `follows`
-		// freezes `readOnlyStream` into the engine's config at construction, where the
-		// receiving side can recompute through `reconcileWriters`. That asymmetry is
-		// untouched here and only matters if the writer CHANGES while a fold is held;
-		// what a reload needs is this one derivation being right at the start.
-		const writer = writerOf(await this.registry.list(), record.stream);
-		const follows = !!writer && !sameGeneration(writer, record);
+		// freezes `readOnlyStream` into the engine's config at construction. That only
+		// matters if the fetcher CHANGES while a fold is held; what a reload needs is
+		// this one derivation being right at the start. (The receiving side used to
+		// recompute it per cycle through `reconcileWriters`; that whole hand-over is
+		// deleted, because there the deployment fetches and no generation ever holds the
+		// pen -- ADR-0087.)
+		const fetcher = fetcherOf(await this.registry.list(), record.stream);
+		const follows = !!fetcher && !sameGeneration(fetcher, record);
 		const config: ProvidedIndexerConfig<ABI> =
 			follows && this.config.keepStream
 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}
@@ -1545,8 +1558,8 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		registered: readonly GenerationRecord[],
 		arrivingStream: string,
 	): boolean {
-		const writer = writerOf(registered, record.stream);
-		if (!writer || !sameGeneration(writer, record)) return false;
+		const fetcher = fetcherOf(registered, record.stream);
+		if (!fetcher || !sameGeneration(fetcher, record)) return false;
 		if (record.stream === arrivingStream) return true;
 		return this.held.some(
 			(entry) => !sameGeneration(entry.record, record) && entry.follows && entry.record.stream === record.stream,

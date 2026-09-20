@@ -13,6 +13,7 @@ import {
 	batch,
 	canonicalAnswers,
 	idOf,
+	reportFor,
 	transfer,
 	world,
 } from './utils/receivingWorld.js';
@@ -49,11 +50,18 @@ import {
 // asserted in `packages/server/test/theCanonicalPointerMovesBack.test.ts`.
 // ---------------------------------------------------------------------------------------------------
 
-/** Drive the follower to level, which under the default policy is what moves the pointer. */
+/**
+ * Drive the SUCCESSOR to level, which under the default policy is what moves the
+ * pointer.
+ *
+ * NAMED rather than taken off the front of the list: since ADR-0087 `rebuildMore`
+ * reports one entry per fold held, because every generation re-folds the stream
+ * the deployment stored, and the first entry is the incumbent.
+ */
 async function catchUp(indexer: ReceivingIndexer<TestABI, string[], MemoryStore>): Promise<void> {
 	for (let guard = 0; guard < 50; guard++) {
-		const [report] = await indexer.rebuildMore({maxEmissions: 1});
-		if (!report) throw new Error('no follower to advance');
+		const report = reportFor(await indexer.rebuildMore({maxEmissions: 1}), 'v2');
+		if (!report) throw new Error('no successor to advance');
 		if (report.complete) return;
 	}
 	throw new Error('the rebuild never reported itself complete');
@@ -156,13 +164,20 @@ describe('the generation reverted FROM stays available, so a second move forward
 		expect(await canonicalAnswers(w, incumbent)).toEqual(successorAnswers);
 	});
 
-	it('is NOT dropped by a backwards move, even under drop-on-promotion', async () => {
+	it('is DROPPED by a forward move under drop-on-promotion now -- and its STREAM is kept', async () => {
+		// RE-SCOPED. This used to assert that the forward move kept BOTH, because the
+		// superseded generation WROTE the stream the promoted one followed and dropping
+		// it would have stranded that fold -- and would have reaped the stream out from
+		// under it. Neither is possible under ADR-0087: no generation writes a stream and
+		// a delete does not reap. So the flag now does what it says, and what the
+		// DEPLOYMENT keeps is the expensive thing: the stream.
 		const w = world();
 		const incumbent = await openReceivingIndexer<TestABI, string[], MemoryStore>({
 			port: w.port,
 			source: SOURCE,
 			stream: {finality: FINALITY},
 			appendEmissions: (write) => w.stream.append(write),
+			streamCursor: w.stream.cursor(),
 			replay: w.stream.source(),
 			// the deployment that would rather bound its storage than keep a way back
 			promotion: {dropOnPromotion: true},
@@ -170,28 +185,50 @@ describe('the generation reverted FROM stays available, so a second move forward
 		});
 		const fromBlock = await incumbent.ingestion.expectedFromBlock();
 		await incumbent.ingestion.receive(batch(incumbent, {toBlock: 105, latestBlock: 105, logs: [AT_101]}, fromBlock));
+		const storedBefore = w.stream.snapshot();
+
 		await incumbent.add(w.specFor('v2', 10));
 		await catchUp(incumbent);
-		// the forward move kept BOTH: dropping the superseded one would have stranded
-		// the promoted follower, which writes nothing (ADR-0046)
+
+		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([identityOf('v2')]);
+		// the STATE of the superseded generation is gone, which is what the flag asked
+		// for; the STREAM the deployment fetched is byte for byte where it was, which is
+		// what nobody asked to delete
+		expect(w.stream.snapshot()).toBe(storedBefore);
+		expect(await incumbent.registry.keptStreams()).toEqual([incumbent.streamDigest]);
+	});
+
+	it('drops NOTHING on a move that is not a PROMOTION, even under drop-on-promotion', async () => {
+		// The half of the old case that is untouched, asserted on its own: drop-on-
+		// promotion discards a generation a PROMOTION superseded, and any other move
+		// supersedes nothing. `wasPromotion` is read off the `successor` slot before the
+		// move applies, so a move onto a generation no slot names drops nothing.
+		const w = world();
+		const incumbent = await openReceivingIndexer<TestABI, string[], MemoryStore>({
+			port: w.port,
+			source: SOURCE,
+			stream: {finality: FINALITY},
+			appendEmissions: (write) => w.stream.append(write),
+			streamCursor: w.stream.cursor(),
+			replay: w.stream.source(),
+			promotion: {policy: 'manual', dropOnPromotion: true},
+			generation: w.specFor('v1', 1),
+		});
+		const fromBlock = await incumbent.ingestion.expectedFromBlock();
+		await incumbent.ingestion.receive(batch(incumbent, {toBlock: 105, latestBlock: 105, logs: [AT_101]}, fromBlock));
+		// registered through the RESOLVE path, which puts it in NO slot
+		const other = await incumbent.resolveGeneration({
+			stream: incumbent.streamDigest,
+			processor: identityOf('v2'),
+		});
+
+		await incumbent.promote(other);
+
+		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
 		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
 			identityOf('v1'),
 			identityOf('v2'),
 		]);
-		const successorAnswers = await canonicalAnswers(w, incumbent);
-
-		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v1')});
-
-		// A BACKWARDS MOVE DROPS NOTHING. Dropping what the pointer moved away from
-		// would delete the very generation a second move forward wants, and would make
-		// a revert an unrecoverable operation under a flag about storage.
-		expect((await incumbent.generations()).map((record) => record.processor)).toEqual([
-			identityOf('v1'),
-			identityOf('v2'),
-		]);
-		expect(w.rowsIn('v2', incumbent.streamDigest)).toEqual(successorAnswers);
-		await incumbent.promote({stream: incumbent.streamDigest, processor: identityOf('v2')});
-		expect(await canonicalAnswers(w, incumbent)).toEqual(successorAnswers);
 	});
 });
 

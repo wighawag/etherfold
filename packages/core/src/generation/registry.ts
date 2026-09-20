@@ -171,6 +171,30 @@ export type GenerationRegistryState = {
 	readonly generations: readonly GenerationRecord[];
 	/** WHICH generation each of the three slots names, or nothing where a slot is empty. */
 	readonly slots: GenerationSlots;
+	/**
+	 * EVERY STREAM THIS INDEXER HOLDS, whether or not a generation still folds it
+	 * (ADR-0087).
+	 *
+	 * A stream is what CHAIN FETCHES bought, and it OUTLIVES every fold over it: the
+	 * last generation on a stream going away is not a reason to delete the stream,
+	 * it is precisely the state a stream is in between an old fold being dropped and
+	 * a new one being built. So the fact "this indexer fetched this stream" is a
+	 * DURABLE RECORD of its own rather than something inferred from the generations,
+	 * which is what lets it survive a restart.
+	 *
+	 * It is what the SWEEP compares against, and it is the whole of how a KEPT stream
+	 * is told from a PRE-GENERATION ORPHAN across a restart: a kept stream is one this
+	 * registry RECORDED, and an orphan -- a subtree written under a placeholder digest
+	 * before generations existed, or under a digest rule a later change replaced -- was
+	 * never recorded and is still collected.
+	 *
+	 * A stream ENTERS this set when a generation is registered on it, and LEAVES it
+	 * only when something ASKS for the stream to go: `deleteStream`, or
+	 * `deleteGeneration` told to reap. Deliberately NOT part of `maxStreams`, which
+	 * goes on counting the distinct streams among REGISTERED GENERATIONS, so keeping
+	 * a stream nothing folds does not bring a deployment closer to a refusal.
+	 */
+	readonly keptStreams: readonly string[];
 };
 
 /**
@@ -185,6 +209,10 @@ export type GenerationRegistryWrite = {
 	readonly remove?: readonly GenerationId[];
 	readonly put?: GenerationRecord;
 	readonly slots?: SlotAssignment;
+	/** RECORD that this indexer holds this stream. Idempotent. See `GenerationRegistryState.keptStreams`. */
+	readonly keepStream?: string;
+	/** FORGET these streams, which is what an ASKED-FOR deletion of one writes. */
+	readonly forgetStreams?: readonly string[];
 };
 
 /**
@@ -210,7 +238,7 @@ export type GenerationRegistryWrite = {
  * convention it does not own.
  */
 export type GenerationRegistryPort = {
-	/** Every registered generation and every slot assignment, as one read. */
+	/** Every registered generation, every slot assignment and every stream held, as one read. */
 	read(): Promise<GenerationRegistryState>;
 	/**
 	 * Read, decide and write in ONE transaction.
@@ -272,7 +300,18 @@ export type GenerationRegistryPort = {
 /** What `deleteGeneration` did. */
 export type GenerationDeletion = {
 	readonly generation: GenerationRecord;
-	/** The stream that was reaped with it, if this was its last generation. */
+	/**
+	 * The stream that was reaped with it, present only where the caller ASKED for a
+	 * reap AND this was the last generation folding it.
+	 *
+	 * It used to be present whenever the last generation on a stream went, whoever
+	 * had asked and for whatever reason. That was the AUTOMATIC reap ADR-0087
+	 * removes: registering into an occupied `successor` slot drops the replaced
+	 * generation, so saving twice in a tab deleted a stream nobody asked to delete --
+	 * and "no registered generation folds it" is exactly the state a stream is in
+	 * between an old fold being dropped and a new one being built, which is when its
+	 * value is highest.
+	 */
 	readonly reaped: string | undefined;
 	/**
 	 * How many substrate records the reaped subtree held, and `undefined` where no
@@ -358,8 +397,11 @@ export class UnknownStreamError extends Error {
 
 	constructor(readonly digest: string) {
 		super(
-			`this indexer holds no generation on the stream ${digest}, so there is nothing here to delete. A subtree ` +
-				`nothing claims is not deleted through this call: it is collected by the sweep on the next registry open.`,
+			`this indexer holds no stream ${digest} -- no generation folds it and the registry has no record of it -- so ` +
+				`there is nothing here to delete. A subtree nothing claims is not deleted through this call: it is ` +
+				`collected by the sweep on the next registry open. A stream this indexer DOES hold is deletable through ` +
+				`this call even when no generation is left folding it, which is the ordinary state of a kept stream ` +
+				`(ADR-0087).`,
 		);
 	}
 }
@@ -406,8 +448,15 @@ export type GenerationRegistry = {
 	slots(): Promise<SlottedGenerations>;
 	/** The generation that answers reads, or nothing if none has been created. */
 	canonical(): Promise<GenerationRecord | undefined>;
-	/** The generation that WRITES this stream: the oldest surviving one on it. */
-	writerOf(stream: string): Promise<GenerationRecord | undefined>;
+	/** The generation this stream was FETCHED FOR: the oldest surviving one on it. See `fetcherOf`. */
+	fetcherOf(stream: string): Promise<GenerationRecord | undefined>;
+	/**
+	 * EVERY STREAM THIS INDEXER HOLDS, whether or not a generation still folds it.
+	 *
+	 * The durable half of "a stream outlives every fold over it" (ADR-0087), and what
+	 * the sweep on open compares against. See `GenerationRegistryState.keptStreams`.
+	 */
+	keptStreams(): Promise<string[]>;
 	/** Move the canonical pointer. Forwards it is promotion; backwards it is revert. */
 	moveCanonicalTo(id: GenerationId): Promise<GenerationRecord>;
 	/**
@@ -421,8 +470,16 @@ export type GenerationRegistry = {
 	 * pointer names" -- is asked about IDENTITIES the registry resolves.
 	 */
 	readStateCursor(id: GenerationId): Promise<number | undefined>;
-	/** Drop a generation's state store, and reap its stream if it was the last one. */
-	deleteGeneration(id: GenerationId): Promise<GenerationDeletion>;
+	/**
+	 * Drop a generation's row and its state store -- and its stream too, but ONLY
+	 * where the caller ASKED and no other generation is left folding it.
+	 *
+	 * `reapStream` defaults to FALSE, which is the substance of ADR-0087's second
+	 * half: deletion is a VERB, so the stream goes when an operator says so
+	 * (`ReceivingIndexer.reclaim`, `deleteStream`) and never because a registration
+	 * displaced the last fold over it.
+	 */
+	deleteGeneration(id: GenerationId, options?: {reapStream?: boolean}): Promise<GenerationDeletion>;
 	/** Drop every generation on a stream, and the stream's keyspace with them. */
 	deleteStream(digest: string): Promise<StreamDeletion>;
 };
@@ -538,35 +595,35 @@ export function displacedBySuccessor(
 }
 
 /**
- * WHICH generation writes a stream: the OLDEST SURVIVING one registered on it.
+ * WHICH generation a stream was FETCHED FOR: the OLDEST SURVIVING one registered
+ * on it.
  *
- * Only one generation may append to a stream (the **one-writer rule**), and
- * ADR-0044 says which one: the FIRST held on it -- registration order, never the
- * canonical pointer -- so that a promotion cannot hand the append duty to a
- * different engine mid-flight. What it does not say is what happens when THAT
- * generation is deleted, and unhandled the answer is a silent stall: generations
- * on one stream share a wire context whose receiver is the writer, so with it
- * gone nothing appends AND an incoming batch resolves to no receiver, while
- * `/status` goes on looking healthy.
+ * ## It is an ANSWER and no longer a DUTY on the receiving side (ADR-0087)
  *
- * So the rule is RESTATED rather than replaced (see ADR-0044's amendment): the
- * oldest SURVIVING generation on the stream. At the start the oldest survivor IS
- * the first one held, so ADR-0044's rule is subsumed rather than contradicted,
- * and succession is defined without letting the POINTER in -- "the canonical
- * takes over" would reintroduce the very coupling ADR-0044 refused, and leave
- * two rules where one does.
+ * It was `writerOf`, and it ELECTED the one generation per stream that held the
+ * pen: the appender was handed to whichever fold this named and to nothing else.
+ * That third role does not belong to a generation at all, and electing it by
+ * registration ORDER is what produced the measured data-loss defect -- the elected
+ * writer can be a generation the process holds no fold for, so the duty belonged
+ * to something absent while a present fold folded happily.
  *
- * **Succession is ATOMIC WITH THE DELETE because it is stored NOWHERE.** There is
- * no writer column to move in a second write, so no crash can land between the
- * two: the commit that removes the record is already the commit that makes the
- * next-oldest generation the answer here. Deriving it also keeps it true across a
- * restart, where a container's own in-memory registration order is whatever this
- * boot happened to add in.
+ * So the ELECTION is gone: on the receiving side the DEPLOYMENT fetches a stream
+ * and appends to it, positioned from the STREAM's own coverage claim, and every
+ * generation merely READS it. What survives here is the question ADR-0087 says may
+ * survive -- *which generation was this stream fetched for* -- which is still the
+ * oldest surviving record on it, still derived, still stored nowhere, and still
+ * atomic with a delete. Nothing may read it as permission to append.
  *
- * `undefined` means no registered generation folds this stream, which is
- * precisely when there is nothing left to append for and the stream is reaped.
+ * The CHAIN-FACING container still derives `follows` from it, and that is the same
+ * question rather than the retired one: there the engine that fetches a stream IS
+ * a generation (`IndexerGeneration` opens `load()` with `eth_chainId`), so "which
+ * generation fetched this" and "which generation writes this" are one fact, and
+ * ADR-0044's follower rule is untouched.
+ *
+ * `undefined` means no registered generation folds this stream. That is no longer
+ * a reason to delete anything: the stream is KEPT (`GenerationRegistryState.keptStreams`).
  */
-export function writerOf(generations: readonly GenerationRecord[], stream: string): GenerationRecord | undefined {
+export function fetcherOf(generations: readonly GenerationRecord[], stream: string): GenerationRecord | undefined {
 	return generations.filter((record) => record.stream === stream).sort(byAge)[0];
 }
 
@@ -687,6 +744,18 @@ function deletable(current: GenerationRegistryState): {
  * including a later redefinition of the digest rule and a crash between a
  * generation's record going and its stream being dropped.
  *
+ * ## WHAT THE REGISTRY KNOWS IS NOW TWO THINGS, and that is ADR-0087's half here
+ *
+ * A stream is KEPT when the last generation folding it goes away, so "claimed by
+ * no registered generation" stopped being the same question as "nothing ever
+ * fetched this". Read the narrow way, this sweep would undo the keep at the next
+ * restart -- silently, in the precise window the keep exists for, with a green
+ * gate. So the comparison is against the generations AND the registry's own
+ * STREAM RECORDS (`GenerationRegistryState.keptStreams`): a deliberately-kept
+ * stream is one this registry RECORDED, which survives a restart because it is a
+ * row, and a pre-generation orphan was never recorded and is still collected.
+ * The sweep's own stated purpose is untouched.
+ *
  * It runs on OPEN rather than on a timer, because that is the one moment the
  * known set is authoritative and nothing is mid-write. There is deliberately no
  * other way to run it.
@@ -697,7 +766,11 @@ export async function openGenerationRegistry(
 ): Promise<GenerationRegistry> {
 	const bounds = assertCaps(caps);
 
-	const known = new Set((await port.read()).generations.map((record) => record.stream));
+	const opening = await port.read();
+	// BOTH halves of what the registry knows: the streams its generations fold, and
+	// the streams it RECORDED and has not been asked to delete. A digest in either is
+	// not an orphan.
+	const known = new Set([...opening.generations.map((record) => record.stream), ...(opening.keptStreams ?? [])]);
 	const swept: string[] = [];
 	for (const digest of await port.listStreamDigests()) {
 		if (known.has(digest)) {
@@ -719,6 +792,11 @@ export async function openGenerationRegistry(
 		/** The host's own read, forwarded unchanged. See the port's JSDoc. */
 		readStateCursor(id: GenerationId): Promise<number | undefined> {
 			return port.readStateCursor(assertIdentity(id));
+		},
+
+		/** Every stream this indexer holds, folded or not. See `GenerationRegistryState.keptStreams`. */
+		async keptStreams(): Promise<string[]> {
+			return [...((await port.read()).keptStreams ?? [])].sort();
 		},
 
 		/**
@@ -770,20 +848,26 @@ export async function openGenerationRegistry(
 			let resolved: GenerationRecord | undefined;
 			await port.commit((current) => {
 				const found = current.generations.find((record) => sameGeneration(record, wanted));
+				// THE STREAM IS RECORDED whether this registration is new or resolves, and it
+				// is idempotent: the record is what makes the stream outlive every fold over it
+				// (ADR-0087), and a registry written by an earlier build holds generations whose
+				// streams were never recorded -- so re-registering one is where those learn
+				// their own stream rather than having it swept out from under them.
+				const keepStream = wanted.stream;
 				if (found) {
 					resolved = found;
 					// A registry holding generations and pointing at none answers nothing,
 					// so a pointer that was never set takes this one even here.
 					if (!current.slots.canonical) {
-						return {slots: {canonical: identityOf(found)}};
+						return {keepStream, slots: {canonical: identityOf(found)}};
 					}
 					// ...and a generation some slot already names stays where it is: a restart
 					// that re-registers the canonical generation, or the one a revert returned
 					// to, is not asking for it to become a pending successor.
 					if (!into || slotHolding(current.slots, found)) {
-						return undefined;
+						return {keepStream};
 					}
-					return {slots: {[into]: identityOf(found)}};
+					return {keepStream, slots: {[into]: identityOf(found)}};
 				}
 
 				if (current.generations.length + 1 > bounds.maxGenerations) {
@@ -837,7 +921,7 @@ export async function openGenerationRegistry(
 				} else if (into) {
 					slots[into] = identityOf(resolved);
 				}
-				return {put: resolved, ...(Object.keys(slots).length > 0 ? {slots} : {})};
+				return {put: resolved, keepStream, ...(Object.keys(slots).length > 0 ? {slots} : {})};
 			});
 			return resolved as GenerationRecord;
 		},
@@ -870,14 +954,14 @@ export async function openGenerationRegistry(
 		},
 
 		/**
-		 * Which generation WRITES this stream, read from the records themselves.
+		 * Which generation this stream was FETCHED FOR, read from the records themselves.
 		 *
-		 * See `writerOf`: the oldest SURVIVING generation on the stream, so deleting
-		 * a writer hands the append duty on in the same commit as the delete, with
-		 * nothing stored and nothing to migrate.
+		 * See `fetcherOf`: the oldest SURVIVING generation on the stream. It is an ANSWER
+		 * and never permission to append -- on the receiving side the DEPLOYMENT writes
+		 * the stream it fetches (ADR-0087).
 		 */
-		async writerOf(stream: string): Promise<GenerationRecord | undefined> {
-			return writerOf((await port.read()).generations, stream);
+		async fetcherOf(stream: string): Promise<GenerationRecord | undefined> {
+			return fetcherOf((await port.read()).generations, stream);
 		},
 
 		/**
@@ -937,8 +1021,23 @@ export async function openGenerationRegistry(
 		},
 
 		/**
-		 * Delete a generation: drop its state store, and REAP its stream if it was
-		 * the last generation folding it.
+		 * Delete a generation: drop its row and its state store -- and its stream too,
+		 * but only where the CALLER ASKED and nothing else is left folding it.
+		 *
+		 * ## The reap is ASKED FOR now, and that is ADR-0087's second half
+		 *
+		 * It used to fire whenever the last generation on a stream went, whoever had
+		 * asked. Two callers reach here without an operator anywhere near them --
+		 * registering into an occupied `successor` slot drops what it replaced, and
+		 * drop-on-promotion drops what a promotion superseded -- so saving twice in a tab
+		 * deleted the stream. That is backwards: the stream is what CHAIN FETCHES bought
+		 * and the state is derived from it, and "no registered generation folds it" is
+		 * exactly the state a stream is in between an old fold being dropped and a new one
+		 * being built.
+		 *
+		 * So deletion is a VERB. `reapStream` is false unless a caller says otherwise, and
+		 * the one caller that says otherwise is the operator's `reclaim`. What is kept is
+		 * RECORDED (`keptStreams`), so the sweep on the next open does not undo it.
 		 *
 		 * The order is the record FIRST and the bytes after, and it is deliberate.
 		 * A crash between them leaks storage; the other order leaves the registry
@@ -947,8 +1046,9 @@ export async function openGenerationRegistry(
 		 * by the sweep on the next open, which is exactly the recovery this ordering
 		 * relies on.
 		 */
-		async deleteGeneration(id: GenerationId): Promise<GenerationDeletion> {
+		async deleteGeneration(id: GenerationId, options?: {reapStream?: boolean}): Promise<GenerationDeletion> {
 			const wanted = assertIdentity(id);
+			const reapStream = options?.reapStream === true;
 			let removed: GenerationRecord | undefined;
 			let reaped: string | undefined;
 			await port.commit((current) => {
@@ -961,13 +1061,20 @@ export async function openGenerationRegistry(
 				}
 				removed = found;
 				reaped =
-					current.generations.filter((record) => record.stream === found.stream).length === 1
+					reapStream && current.generations.filter((record) => record.stream === found.stream).length === 1
 						? found.stream
 						: undefined;
 				// ...and the slot that named it is cleared WITH it, so no slot survives the
 				// generation it pointed at
 				const cleared = clearSlotsNaming(current.slots, [found]);
-				return {remove: [identityOf(found)], ...(cleared ? {slots: cleared} : {})};
+				return {
+					remove: [identityOf(found)],
+					// the STREAM RECORD goes in the SAME commit as the row, and only where the
+					// reap was asked for: a record kept for a stream whose bytes are gone would
+					// make the sweep spare an orphan for ever
+					...(reaped === undefined ? {} : {forgetStreams: [reaped]}),
+					...(cleared ? {slots: cleared} : {}),
+				};
 			});
 
 			await port.dropState(identityOf(removed as GenerationRecord));
@@ -984,12 +1091,25 @@ export async function openGenerationRegistry(
 		 * Cheap and complete only because streams are self-contained -- separate
 		 * keyspaces that never share entries -- so this is a scoped delete rather
 		 * than a walk of anything.
+		 *
+		 * ## It accepts a stream NO GENERATION FOLDS, because that is now an ordinary
+		 * state
+		 *
+		 * A stream OUTLIVES every fold over it (ADR-0087), so "no registered generation
+		 * is on this digest" stopped meaning "this indexer has no such stream". Refusing
+		 * there would make exactly the streams the keep exists for the ones an operator
+		 * could not delete -- immortal bytes, which is not the trade the ADR makes. So a
+		 * stream this registry RECORDS is deletable with no generation on it at all, and
+		 * `UnknownStreamError` is left for a digest the registry has never heard of.
+		 *
+		 * The GUARD is untouched: a stream the canonical generation folds is refused,
+		 * because deleting it would leave the indexer answering nothing.
 		 */
 		async deleteStream(digest: string): Promise<StreamDeletion> {
 			let removed: GenerationRecord[] = [];
 			await port.commit((current) => {
 				const on = current.generations.filter((record) => record.stream === digest).sort(byAge);
-				if (on.length === 0) {
+				if (on.length === 0 && !(current.keptStreams ?? []).includes(digest)) {
 					throw new UnknownStreamError(digest);
 				}
 				if (current.slots.canonical && current.slots.canonical.stream === digest) {
@@ -997,7 +1117,9 @@ export async function openGenerationRegistry(
 				}
 				removed = on;
 				const cleared = clearSlotsNaming(current.slots, on);
-				return {remove: on.map(identityOf), ...(cleared ? {slots: cleared} : {})};
+				// ASKED FOR, so the stream RECORD goes with the rows: this is the operator's
+				// verb, and what it deletes must not be spared by the sweep's keep rule.
+				return {remove: on.map(identityOf), forgetStreams: [digest], ...(cleared ? {slots: cleared} : {})};
 			});
 
 			for (const record of removed) {

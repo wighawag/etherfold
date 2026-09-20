@@ -172,14 +172,15 @@ export class WireContextMismatchError extends Error {
  *   block number and no waiting makes a foreign `{source, config}` right. NOT
  *   retryable, so a host stops rather than pushing for ever at something that
  *   will never accept it.
- * - **nothing is live at all** is a fact about the MOMENT. It is what a
- *   container whose every held fold is a follower answers, and the container's
- *   own machinery is what closes it: a bounded rebuild advances the follower and
- *   writer succession hands it the wire once it is level (ADR-0044's second
- *   amendment, `reconcileWriters`). Retryable, so the process stays up and goes
- *   on rebuilding, and a line says so every cycle -- which is that amendment's
- *   own trade, since an unfed stream is visible and recoverable where a silently
- *   idle one is neither.
+ * - **nothing is live at all** is a fact about the MOMENT, and since ADR-0087 it
+ *   is a much narrower one. A stream's address resolves to the DEPLOYMENT's own
+ *   writer of that stream, held for as long as any registered generation folds
+ *   it, so "every fold here is a follower" stopped being a way to reach this at
+ *   all -- which was the whole defect: a restarted deployment answered it for
+ *   ever, fetched nothing, and reported itself healthy. What is left is a
+ *   container holding no fold at all, or one built with no way to store a stream
+ *   (and that is now refused at `open`). Retryable, so a process that is between
+ *   folds stays up rather than exiting.
  *
  * What it is deliberately NOT is an answer. Inventing an `expectedFromBlock` for
  * a sender with nowhere to push would be a fetcher fetching ranges into nothing:
@@ -199,9 +200,9 @@ export class NoLiveReceiverError extends Error {
 		super(
 			expected.length === 0
 				? `this process holds no live receiver at all, so there is nowhere to push ${JSON.stringify(received)}. ` +
-						`Every fold it holds is a FOLLOWER re-folding a stored stream, which is fed by its own bounded rebuild ` +
-						`and is deliberately not addressable on the wire (ADR-0044). The rebuild is what closes this: a follower ` +
-						`that becomes level inherits the wire when it inherits the write duty.`
+						`A receiver here is the WRITER of a stream this deployment fetches (ADR-0087), and there is one per ` +
+						`stream the container holds a fold on -- so holding none means this container holds no fold at all, or ` +
+						`was built with no way to store a stream (no \`appendEmissions\`, no stream cursor source).`
 				: `this process folds no such {source, config}: it holds ${expected.length} live wire context(s), ` +
 						`${JSON.stringify(expected)}, and was asked about ${JSON.stringify(received)}. No block number makes ` +
 						`this right -- the sender's source or stream config differs from every receiver held here.`,
@@ -229,6 +230,61 @@ export class NoLiveReceiverError extends Error {
  *   worse than refusing, since `groupLogsPerBlock` skips them and the sender
  *   would never learn its markers went nowhere.
  */
+/**
+ * AN APPEND THAT WOULD PUNCH A HOLE IN THE STORED STREAM, refused.
+ *
+ * A **hole** is a range of blocks the stream never RECEIVED, hidden behind a
+ * cursor claiming to cover them (`CONTEXT.md`, "hole versus gap"). It is
+ * INVISIBLE to every later reader: the rows are perfectly well-formed, the
+ * coverage claim is self-consistent, and on the next state discard the stream
+ * replays as though it were whole with the missing blocks simply absent from the
+ * rebuilt state. Silent, permanent, self-consistent.
+ *
+ * ## Why the guard is HERE, on the append-only writer
+ *
+ * ADR-0087 first credited this guard to `IndexerGeneration.streamCanReceive`,
+ * and its own amendment corrects that: that method sits over an `ExistingStream`
+ * the load path always reads first, so the duplicate measured there was never on
+ * its path. The hazard is on the APPEND-ONLY path -- an `EmissionAppender` reads
+ * nothing back and had no hole guard of any kind -- which is precisely the path
+ * the thing that FETCHES a stream writes through.
+ *
+ * It is a durable BACKSTOP and deliberately not the arbiter. The arbiter is the
+ * cursor protocol (`UnexpectedFromBlockError`), which refuses a batch that does
+ * not start where the stream resumes; this catches the case where the position a
+ * write was derived from is not the stream's own -- the exact failure that moving
+ * the write duty could reintroduce.
+ *
+ * **An ABSENT stream is PERMISSIVE and that is not an oversight.** No stored
+ * stream is the documented ABSENCE of one rather than an unknown position (the
+ * same correction ADR-0087's amendment makes about `streamLastToBlock ===
+ * undefined`): nothing constrains the next write, and refusing there would
+ * decline the first save of every fresh deployment.
+ */
+export class StreamHoleError extends Error {
+	readonly name = 'StreamHoleError';
+	/** NOT retryable: re-sending the same range meets the same gap. */
+	readonly retryable = false;
+
+	constructor(
+		/** The stream that would have been damaged, as `streamDigestOf` renders it. */
+		readonly stream: string,
+		/** How far the stored stream currently claims to reach. */
+		readonly coveredThrough: number,
+		/** The first block of the range that was about to be appended. */
+		readonly appendingFrom: number,
+	) {
+		super(
+			`refusing to append to the stream ${stream} from block ${appendingFrom} while it only claims to cover ` +
+				`through ${coveredThrough}: blocks ${coveredThrough + 1}..${appendingFrom - 1} would never have been ` +
+				`received, and the coverage claim this append carries would say they had. That is a HOLE -- invisible to ` +
+				`every later reader, because the rows are well-formed and the claim is self-consistent, so the stream ` +
+				`replays as though it were whole and those blocks are simply absent from every state rebuilt from it. ` +
+				`Whatever positioned this write is not reading the STREAM's own position (ADR-0087).`,
+		);
+	}
+}
+
 export class InvalidBatchError extends Error {
 	readonly name = 'InvalidBatchError';
 	readonly retryable = false;

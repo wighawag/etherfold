@@ -2,7 +2,7 @@ import type {Abi} from 'abitype';
 import {describe, expect, it, vi} from 'vitest';
 import {openIndexer, type AnyGenerationSpec, type Indexer} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
-import {sameGeneration, writerOf, type GenerationRecord} from '../src/generation/registry.js';
+import {sameGeneration, fetcherOf, type GenerationRecord} from '../src/generation/registry.js';
 import {UnexpectedChainError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
@@ -424,7 +424,7 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 	it('keeps ONE writer whichever way the two processor hashes sort (a PRECONDITION, see the note)', async () => {
 		// READ THIS BEFORE ADDING A CASE HERE. This asserts a PRECONDITION, and it
 		// cannot distinguish the container's rule from the one ADR-0071 rejected --
-		// swapping `container.ts` back to `writerOf`-per-generation leaves this file, and
+		// swapping `container.ts` back to `fetcherOf`-per-generation leaves this file, and
 		// the whole core suite, green.
 		//
 		// That is not an oversight, it is the consequence of the fix. The two rules used
@@ -443,11 +443,11 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		expect(shared.indexer.generations[0].record.stream).toBe(shared.indexer.generations[1].record.stream);
 		expect(shared.indexer.generations.filter((held) => !held.follows)).toHaveLength(1);
 
-		// the registry ordered them by REGISTRATION, so `writerOf` and the container
+		// the registry ordered them by REGISTRATION, so `fetcherOf` and the container
 		// agree here rather than merely happening not to disagree
 		const records = await shared.registry.list();
 		expect(records[0].createdAt).toBeLessThan(records[1].createdAt);
-		const named = writerOf(records, records[0].stream) as GenerationRecord;
+		const named = fetcherOf(records, records[0].stream) as GenerationRecord;
 		expect(sameGeneration(named, shared.indexer.generations[0].record)).toBe(true);
 	});
 

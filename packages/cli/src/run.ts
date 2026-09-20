@@ -1,4 +1,4 @@
-import type {Abi, EventProcessor, ReceivingIndexer, StreamBuilder} from '@etherfold/core';
+import type {Abi, EventProcessor, ReceivingIndexer, StreamWriter} from '@etherfold/core';
 import type {FetcherHost, RunSummary} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
@@ -104,7 +104,7 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 * ADR-0087 is an ordinary state rather than a crash (`FoldingAssembly`). What this
 	 * process FEEDS is resolved per ask from the container, never from here.
 	 */
-	streamBuilder?: StreamBuilder<ABI, ProcessResultType>;
+	streamWriter: StreamWriter<ABI>;
 	/**
 	 * THE GENERATIONS THIS PROCESS HOLDS: the registry, the canonical pointer, and
 	 * the folds over them.
@@ -298,7 +298,7 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			db: prepared.db,
 			store: prepared.store,
 			processor: prepared.processor,
-			...(prepared.streamBuilder ? {streamBuilder: prepared.streamBuilder} : {}),
+			streamWriter: prepared.streamWriter,
 			container: prepared.container,
 			host: prepared.host,
 			stopped,

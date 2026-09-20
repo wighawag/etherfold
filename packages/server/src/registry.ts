@@ -348,6 +348,18 @@ export type IndexerResolver<Env extends Bindings = Bindings> = (
  */
 export function singleContextEntry(db: RemoteSQL, ingestion: LogIngestion): IndexerRegistryEntry {
 	const live = [ingestion] as const;
+	if (!ingestion.generation) {
+		// REFUSED rather than answered `undefined`. This entry's whole claim is that the
+		// generation which answers reads is the one THIS receiver folds, and a receiver
+		// with no fold behind it -- the STREAM WRITER a generation container holds at a
+		// stream's address (ADR-0087) -- cannot say that. Such a host has generations, so
+		// it registers through `indexerEntryOn` and the CONTAINER answers the pointer.
+		throw new Error(
+			`this receiver names no generation, so it cannot be registered as a single-context entry: the entry's ` +
+				`canonical generation IS the fold behind the receiver, and there is none. A host holding a GENERATION ` +
+				`CONTAINER registers it with \`indexerEntryOn\` instead, which asks the container.`,
+		);
+	}
 	return {
 		db,
 		liveIngestions: async () => live,

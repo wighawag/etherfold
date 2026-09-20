@@ -6,7 +6,7 @@ import {
 	SLOT_NAMES,
 	UnknownGenerationError,
 	UnknownStreamError,
-	writerOf,
+	fetcherOf,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistryPort,
@@ -61,9 +61,19 @@ function memoryPort() {
 	const calls: Call[] = [];
 	const keyOf = (id: GenerationId) => `${id.stream}\u0000${id.processor}`;
 
+	/**
+	 * The STREAM RECORDS: every stream this indexer HOLDS, folded or not (ADR-0087).
+	 *
+	 * Deliberately separate from `streams` above, which is the SUBTREES that
+	 * physically exist -- the whole point of the sweep is that the two can disagree,
+	 * and a pre-generation orphan is exactly a subtree with no record here.
+	 */
+	const kept = new Set<string>();
+
 	const snapshot = (): GenerationRegistryState => ({
 		generations: [...generations.values()],
 		slots: Object.fromEntries(slots),
+		keptStreams: [...kept],
 	});
 
 	const port: GenerationRegistryPort = {
@@ -80,6 +90,14 @@ function memoryPort() {
 			}
 			if (write.put) {
 				generations.set(keyOf(write.put), write.put);
+			}
+			// RECORDED first and forgotten after, so a commit that does both ends with the
+			// stream gone: an ASKED-FOR deletion wins over a registration in one write.
+			if (write.keepStream !== undefined) {
+				kept.add(write.keepStream);
+			}
+			for (const digest of write.forgetStreams ?? []) {
+				kept.delete(digest);
 			}
 			for (const name of SLOT_NAMES) {
 				const assigned = write.slots?.[name];
@@ -477,7 +495,7 @@ describe('a cap REFUSES and names what to delete', () => {
 	});
 });
 
-describe('deleting a generation, and reaping the stream when its last one goes', () => {
+describe('deleting a generation, and reaping its stream only when ASKED', () => {
 	it('drops the state store and LEAVES the stream another generation is using', async () => {
 		const world = memoryPort();
 		const registry = await openGenerationRegistry(world.port, CAPS);
@@ -498,7 +516,11 @@ describe('deleting a generation, and reaping the stream when its last one goes',
 		expect(await registry.list()).toEqual([blue]);
 	});
 
-	it('reaps the stream when the LAST generation on it goes', async () => {
+	it('KEEPS the stream when the last generation on it goes, because nobody asked for it', async () => {
+		// ADR-0087: a stream is what CHAIN FETCHES bought and it OUTLIVES every fold
+		// over it. "No registered generation folds it" is precisely the state a stream is
+		// in between an old fold being dropped and a new one being built, which is when
+		// its value is highest -- so the reap that used to fire here is gone.
 		const world = memoryPort();
 		const registry = await openGenerationRegistry(world.port, CAPS);
 		await registry.create(idOf(STREAM_A, PROC_A));
@@ -507,10 +529,44 @@ describe('deleting a generation, and reaping the stream when its last one goes',
 
 		const report = await registry.deleteGeneration(onB);
 
+		expect(report.reaped).toBeUndefined();
+		expect(world.streams.has(STREAM_B)).toBe(true);
+		expect(world.streams.has(STREAM_A)).toBe(true);
+		// no generation is left on it, and the registry still HOLDS it
+		expect(await registry.streams()).toEqual([STREAM_A]);
+		expect(await registry.keptStreams()).toEqual([STREAM_A, STREAM_B].sort());
+	});
+
+	it('reaps the stream when the caller ASKS and nothing else folds it', async () => {
+		// The operator's verb (`ReceivingIndexer.reclaim`) is the one caller that asks.
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		await registry.create(idOf(STREAM_A, PROC_A));
+		const onB = await registry.create(idOf(STREAM_B, PROC_A));
+		world.writeStreamSubtree(STREAM_A, STREAM_B);
+
+		const report = await registry.deleteGeneration(onB, {reapStream: true});
+
 		expect(report.reaped).toBe(STREAM_B);
 		expect(world.streams.has(STREAM_B)).toBe(false);
 		expect(world.streams.has(STREAM_A)).toBe(true);
-		expect(await registry.streams()).toEqual([STREAM_A]);
+		// ...and the RECORD goes with the bytes, so the sweep does not spare an orphan
+		expect(await registry.keptStreams()).toEqual([STREAM_A]);
+	});
+
+	it('does NOT reap on an asked-for delete while another generation still folds it', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const blue = await registry.create(idOf(STREAM_A, PROC_A));
+		const green = await registry.create(idOf(STREAM_A, PROC_B));
+		world.writeStreamSubtree(STREAM_A);
+		world.writeState(blue);
+		world.writeState(green);
+
+		const report = await registry.deleteGeneration(green, {reapStream: true});
+
+		expect(report.reaped).toBeUndefined();
+		expect(world.streams.has(STREAM_A)).toBe(true);
 	});
 
 	it('removes the RECORD before the bytes, so a crash leaks rather than lies', async () => {
@@ -521,7 +577,7 @@ describe('deleting a generation, and reaping the stream when its last one goes',
 		world.writeStreamSubtree(STREAM_B);
 		world.calls.length = 0;
 
-		await registry.deleteGeneration(onB);
+		await registry.deleteGeneration(onB, {reapStream: true});
 
 		// a registry that still claimed a generation whose state had gone would
 		// answer from nothing; an orphan subtree is collected by the sweep on the
@@ -551,12 +607,14 @@ describe('deleting a generation, and reaping the stream when its last one goes',
 	});
 });
 
-describe('the WRITER of a stream is the oldest surviving generation on it', () => {
+describe('the generation a stream was FETCHED FOR is the oldest surviving one on it', () => {
 	/**
-	 * ADR-0044 says the writer is the FIRST generation held on a stream and never
-	 * the canonical one. What happens when THAT generation is deleted is
-	 * ADR-0044's amendment: the duty passes to the next oldest, and it passes in
-	 * the same commit as the delete because nothing stores it.
+	 * It was `writerOf` and it ELECTED the one generation per stream that held the
+	 * pen. ADR-0087 takes that duty off the generation entirely -- the DEPLOYMENT
+	 * fetches a stream and appends to it -- and what survives here is the question
+	 * that ADR says may survive: WHICH generation this stream was fetched for. The
+	 * derivation is unchanged (oldest surviving, registration order, stored nowhere),
+	 * and nothing reads it as permission to append.
 	 */
 	it('is the oldest, and is deliberately not the canonical one', async () => {
 		const world = memoryPort();
@@ -565,10 +623,10 @@ describe('the WRITER of a stream is the oldest surviving generation on it', () =
 		const successor = await registry.create(idOf(STREAM_A, PROC_B));
 		await registry.moveCanonicalTo(successor);
 
-		expect(await registry.writerOf(STREAM_A)).toEqual(original);
+		expect(await registry.fetcherOf(STREAM_A)).toEqual(original);
 	});
 
-	it('succeeds to the next oldest when the writer is deleted, with nothing written for it', async () => {
+	it('moves to the next oldest when that generation is deleted, with nothing written for it', async () => {
 		const world = memoryPort();
 		const registry = await openGenerationRegistry(world.port, CAPS);
 		const original = await registry.create(idOf(STREAM_A, PROC_A));
@@ -578,13 +636,17 @@ describe('the WRITER of a stream is the oldest surviving generation on it', () =
 
 		await registry.deleteGeneration(original);
 
-		expect(await registry.writerOf(STREAM_A)).toEqual(successor);
+		expect(await registry.fetcherOf(STREAM_A)).toEqual(successor);
 		// ONE commit: succession is atomic with the drop because it is stored
 		// nowhere, so there is no second write for a crash to land between
 		expect(world.calls.filter((call) => call.op === 'commit')).toHaveLength(1);
 	});
 
-	it('has nobody to hand the duty to when the last generation goes, which is why the stream is reaped', async () => {
+	it('answers NOTHING when the last generation goes, and the stream STAYS', async () => {
+		// The old sentence here was "which is why the stream is reaped". That reasoning
+		// rested on the answer being a DUTY: with nobody to hand it to, nothing could
+		// append, so the bytes were pointless. Under ADR-0087 the DEPLOYMENT appends, so
+		// no answer here is nobody's permission to do anything, and the stream is kept.
 		const world = memoryPort();
 		const registry = await openGenerationRegistry(world.port, CAPS);
 		await registry.create(idOf(STREAM_A, PROC_A));
@@ -593,8 +655,8 @@ describe('the WRITER of a stream is the oldest surviving generation on it', () =
 
 		await registry.deleteGeneration(alone);
 
-		expect(await registry.writerOf(STREAM_B)).toBeUndefined();
-		expect(world.streams.has(STREAM_B)).toBe(false);
+		expect(await registry.fetcherOf(STREAM_B)).toBeUndefined();
+		expect(world.streams.has(STREAM_B)).toBe(true);
 	});
 
 	it('reads the answer from the records alone, oldest first and ties broken on the identity', () => {
@@ -604,9 +666,9 @@ describe('the WRITER of a stream is the oldest surviving generation on it', () =
 			{stream: STREAM_B, processor: PROC_A, createdAt: 500},
 		];
 
-		expect(writerOf(records, STREAM_A)).toEqual(records[1]);
-		expect(writerOf(records, STREAM_B)).toEqual(records[2]);
-		expect(writerOf(records, STREAM_C)).toBeUndefined();
+		expect(fetcherOf(records, STREAM_A)).toEqual(records[1]);
+		expect(fetcherOf(records, STREAM_B)).toEqual(records[2]);
+		expect(fetcherOf(records, STREAM_C)).toBeUndefined();
 	});
 });
 
@@ -629,6 +691,28 @@ describe('deleting a stream', () => {
 		expect(world.streams.has(STREAM_B)).toBe(false);
 		expect(await registry.list()).toEqual([keep]);
 		expect(world.streams.has(STREAM_A)).toBe(true);
+	});
+
+	it('takes a KEPT stream no generation folds, which is the ordinary state of one', async () => {
+		// A stream OUTLIVES every fold over it (ADR-0087), so "no registered generation
+		// is on this digest" stopped meaning "this indexer has no such stream". Refusing
+		// there would make exactly the streams the keep exists for the ones an operator
+		// could not delete -- immortal bytes, which is not the trade the ADR makes.
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		await registry.create(idOf(STREAM_A, PROC_A));
+		const onB = await registry.create(idOf(STREAM_B, PROC_A));
+		world.writeStreamSubtree(STREAM_A, STREAM_B);
+		await registry.deleteGeneration(onB);
+		expect(world.streams.has(STREAM_B)).toBe(true);
+
+		const report = await registry.deleteStream(STREAM_B);
+
+		expect(report.generations).toEqual([]);
+		expect(report.digest).toBe(STREAM_B);
+		expect(world.streams.has(STREAM_B)).toBe(false);
+		// ...and the RECORD went with the bytes, so the sweep does not spare an orphan
+		expect(await registry.keptStreams()).toEqual([STREAM_A]);
 	});
 
 	it('refuses the stream the canonical generation folds, and a digest it does not hold', async () => {

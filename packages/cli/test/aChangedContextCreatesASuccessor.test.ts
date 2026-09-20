@@ -19,6 +19,8 @@ import {
 	applySchema,
 	EMISSION_STREAM_TABLE,
 	emissionAppenderFor,
+	streamCursorSourceOn,
+	storedEmissionReplaySource,
 	GENERATION_TABLE,
 	generationRegistryPortOnSQL,
 	type SQLGenerationRegistryOptions,
@@ -28,7 +30,19 @@ import {createClient} from '@libsql/client';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
-import {abi, CONTRACT, nftProcessor, SOURCE, START_BLOCK, timestampOf, ZERO, ALICE, BOB} from './utils/chain.js';
+import {
+	abi,
+	addressTopic,
+	CONTRACT,
+	nftProcessor,
+	SOURCE,
+	START_BLOCK,
+	timestampOf,
+	TRANSFER_TOPIC,
+	ZERO,
+	ALICE,
+	BOB,
+} from './utils/chain.js';
 import {identityOf} from './utils/processorIdentity.js';
 import {generationStateSeamsOn} from './utils/generationState.js';
 
@@ -102,6 +116,8 @@ async function openIndexer(
 		source: SOURCE,
 		stream: {finality: FINALITY},
 		appendEmissions: emissionAppenderFor(db, INDEXER),
+		streamCursor: streamCursorSourceOn(db, INDEXER),
+		replay: storedEmissionReplaySource(db, INDEXER),
 		generation: {
 			// CLAIMED, because this fold WRITES: the ability to mutate is obtained by
 			// claiming (ADR-0077), exactly as the CLI's own `buildFolding` does it.
@@ -140,12 +156,16 @@ function transferEvent(
 		removed: false,
 		address: CONTRACT,
 		data: '0x',
-		topics: [],
+		// REAL TOPICS, so a REPLAY can `reparse` this row. It used to be `topics: []`
+		// with a pre-decoded `args`, which was enough while a fold was fed by the WIRE:
+		// the decoded half arrived with the batch. Since ADR-0087 every generation
+		// advances by re-folding the stream the deployment STORED, and a stored row
+		// carries the raw log alone (`args` is what SOME ABI made of those bytes,
+		// ADR-0034) -- so a fixture with no `topic0` is one no fold can decode.
+		topics: [TRANSFER_TOPIC, addressTopic(from), addressTopic(to), `0x${id.toString(16).padStart(64, '0')}`],
 		transactionHash: `0x${logCounter.toString(16).padStart(64, '0')}`,
 		logIndex: 0,
 		extra: undefined,
-		eventName: 'Transfer',
-		args: {from, to, id},
 	} as unknown as LogEvent<typeof abi>;
 }
 
@@ -186,6 +206,23 @@ async function tablesIn(db: RemoteSQL): Promise<string[]> {
 	return rows.results.map((row) => row.name);
 }
 
+/**
+ * Carry every fold this container holds to the end of the stream as it stands.
+ *
+ * Since ADR-0087 no generation fetches: the deployment appends to the stream and
+ * every generation READS it, taking each delta live where it is level and reading
+ * the rows back where it is behind. A fold that comes up behind -- a successor over
+ * a database that already holds the history -- therefore advances by re-folding,
+ * and a caller that wants it level says so.
+ */
+async function rebuildToLevel(indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>): Promise<void> {
+	for (let guard = 0; guard < 50; guard++) {
+		const reports = await indexer.rebuildMore();
+		if (reports.every((report) => report.complete)) return;
+	}
+	throw new Error('the rebuild never reported itself complete');
+}
+
 /** A database that has been folded by V1 up to the tip, exactly as a deployment leaves one. */
 async function anIndexerThatHasFolded(db: RemoteSQL) {
 	await applySchema(db);
@@ -208,24 +245,34 @@ describe('an upgraded fold against a database another fold wrote', () => {
 		const before = await stateOf(incumbent.state);
 		expect(before).toEqual({transfers: 1, owner: ALICE});
 
-		// the upgrade: same source, same stream config, a different fold
+		// the upgrade: same source, same stream config, a different fold. It is a new
+		// DEPLOYMENT over the same rows, so it fetches from where the STREAM reaches --
+		// not from `START_BLOCK`, which is where its own empty state would have said
+		// (ADR-0087). Asking for that range is now a refusal, so the position is read
+		// rather than written into the test.
 		const successor = await openIndexer(db, V2);
+		expect(await successor.ingestion.expectedFromBlock()).toBeGreaterThan(START_BLOCK);
 		await successor.ingestion.receive(
 			batch(successor, {
-				fromBlock: START_BLOCK,
-				toBlock: START_BLOCK + 20,
-				latestBlock: START_BLOCK + 100,
-				logs: [transferEvent(START_BLOCK + 10, '0xa10', ZERO, BOB, 1n)],
+				fromBlock: await successor.ingestion.expectedFromBlock(),
+				toBlock: START_BLOCK + 120,
+				latestBlock: START_BLOCK + 120,
 			}),
 		);
-
-		// STORY 2: the canonical generation's state is untouched, and it is still the
-		// one the pointer names
+		// STORY 2: the canonical generation's state is untouched, and while the successor
+		// is still catching up it is still the one the pointer names
 		expect(await stateOf(incumbent.state)).toEqual(before);
 		expect(await successor.canonical()).toMatchObject(incumbent.generation);
 
-		// and the successor folded into its OWN tables
-		expect(await stateOf(successor.state)).toEqual({transfers: 1, owner: BOB});
+		// the successor was BEHIND the stream, so it declined the delta and its rebuild
+		// is what carries it over the history the incumbent already fetched
+		await rebuildToLevel(successor);
+
+		// and the successor folded into its OWN tables, off the stored stream, having
+		// re-fetched nothing -- then the default policy promoted it, because it is level
+		expect(await stateOf(successor.state)).toEqual({transfers: 1, owner: ALICE});
+		expect(await stateOf(incumbent.state)).toEqual(before);
+		expect(await successor.canonical()).toMatchObject(successor.generation);
 		expect(successor.generation).not.toEqual(incumbent.generation);
 		expect(successor.streamDigest).toBe(incumbent.streamDigest);
 
@@ -243,24 +290,26 @@ describe('an upgraded fold against a database another fold wrote', () => {
 	it('does NOT append the stream a second time: only the writer of a stream stores it', async () => {
 		const db = oneDatabase();
 		const incumbent = await anIndexerThatHasFolded(db);
-		expect(incumbent.writesStream).toBe(true);
 		const stored = await emissionRows(db);
 		expect(stored).toBe(1);
 
 		const successor = await openIndexer(db, V2);
-		expect(successor.writesStream).toBe(false);
+		// the SAME range the incumbent already stored, re-offered: the position comes
+		// from the stream, so the deployment reaches back over the reorg window and no
+		// further -- and the log it re-delivers is one the stream already holds.
 		await successor.ingestion.receive(
 			batch(successor, {
-				fromBlock: START_BLOCK,
-				toBlock: START_BLOCK + 20,
-				latestBlock: START_BLOCK + 100,
-				logs: [transferEvent(START_BLOCK + 10, '0xa10', ZERO, BOB, 1n)],
+				fromBlock: await successor.ingestion.expectedFromBlock(),
+				toBlock: START_BLOCK + 120,
+				latestBlock: START_BLOCK + 120,
 			}),
 		);
+		await rebuildToLevel(successor);
 
-		// ADR-0052: the stream is ONE history, re-folded by every generation on it. A
-		// successor that appended what it re-folded would store it twice, and the
-		// duplicate would be indistinguishable from a real second emission.
+		// ADR-0052/ADR-0087: the stream is ONE history, re-folded by every generation on
+		// it and written by the DEPLOYMENT. A fold that appended what it re-folded would
+		// store it twice, and the duplicate would be indistinguishable from a real second
+		// emission -- which cannot happen, because no fold has an appender at all.
 		expect(await emissionRows(db)).toBe(stored);
 	});
 
@@ -274,8 +323,13 @@ describe('an upgraded fold against a database another fold wrote', () => {
 
 		const successor = await openIndexer(db, V2);
 		await successor.ingestion.receive(
-			batch(successor, {fromBlock: START_BLOCK, toBlock: START_BLOCK + 20, latestBlock: START_BLOCK + 100}),
+			batch(successor, {
+				fromBlock: await successor.ingestion.expectedFromBlock(),
+				toBlock: START_BLOCK + 120,
+				latestBlock: START_BLOCK + 120,
+			}),
 		);
+		await rebuildToLevel(successor);
 
 		const successorNamespace = generationDigestOf(successor.generation);
 		const tables = await tablesIn(db);

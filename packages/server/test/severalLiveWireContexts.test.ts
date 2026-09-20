@@ -19,6 +19,8 @@ import {
 	createServer,
 	emissionAppenderFor,
 	generationRegistryPortOnSQL,
+	streamCursorSourceOn,
+	storedEmissionReplaySource,
 	indexerEntryOn,
 } from '../src/index.js';
 import {
@@ -132,6 +134,8 @@ async function deploy(): Promise<Deployment> {
 		source: SOURCE,
 		stream: STREAM_CONFIG,
 		appendEmissions: emissionAppenderFor(db, NAME),
+		streamCursor: streamCursorSourceOn(db, NAME),
+		replay: storedEmissionReplaySource(db, NAME),
 		generation: foldOwningItsOwnState(),
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 	const successor = await indexer.add({source: RECONFIGURED_SOURCE, ...foldOwningItsOwnState()});
@@ -155,9 +159,14 @@ async function deploy(): Promise<Deployment> {
 			processor: indexer.processor as VersionedStateEventProcessor<TestABI>,
 		},
 		successor: {
-			// a DIFFERENT fetch filter, so a different stream, so a receiver of its own:
-			// only a fold on a stream this container already holds is a follower (ADR-0044)
-			context: (successor.ingestion as NonNullable<typeof successor.ingestion>).context,
+			// a DIFFERENT fetch filter, so a DIFFERENT STREAM -- and a stream is ONE address
+			// on the wire, so the container holds a second WRITER for it (ADR-0087). What is
+			// addressed is the stream, never the fold, so this is looked up by digest.
+			context: (
+				(await indexer.liveIngestions()).find((one) => one.streamDigest === successor.streamDigest) as NonNullable<
+					Awaited<ReturnType<typeof indexer.liveIngestions>>[number]
+				>
+			).context,
 			generation: {stream: successor.record.stream, processor: successor.record.processor},
 			processor: successor.processor as VersionedStateEventProcessor<TestABI>,
 		},
@@ -339,10 +348,13 @@ describe('a live context has a LIFETIME, and the registry is what says so', () =
 		);
 		expect(await expectedFor(deployment, deployment.successor.context)).toBe(107);
 
-		// the successor is dropped: its generation goes and, since it was the last
-		// one on its stream, the stream is REAPED with it
+		// the successor is dropped: its generation goes and its STREAM STAYS, because
+		// nobody asked for it to go (ADR-0087). What stops being live is the wire
+		// context, because no registered generation folds that stream here any more --
+		// a lifetime about FOLDS, not about bytes.
 		const deletion = await deployment.indexer.registry.deleteGeneration(deployment.successor.generation);
-		expect(deletion.reaped).toBe(deployment.successor.generation.stream);
+		expect(deletion.reaped).toBeUndefined();
+		expect(await deployment.indexer.registry.keptStreams()).toContain(deployment.successor.generation.stream);
 
 		const asked = await askWhereToStart(deployment);
 		expect(asked.contexts).toEqual([{context: deployment.incumbent.context, expectedFromBlock: START_BLOCK}]);
