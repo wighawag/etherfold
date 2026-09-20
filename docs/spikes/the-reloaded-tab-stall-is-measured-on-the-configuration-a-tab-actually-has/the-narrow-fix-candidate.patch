@@ -1,0 +1,17 @@
+diff --git a/packages/core/src/container.ts b/packages/core/src/container.ts
+index a1a1c1b6..d060571c 100644
+--- a/packages/core/src/container.ts
++++ b/packages/core/src/container.ts
+@@ -837,7 +837,11 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
+ 		// deleted, because there the deployment fetches and no generation ever holds the
+ 		// pen -- ADR-0087.)
+ 		const fetcher = fetcherOf(await this.registry.list(), record.stream);
+-		const follows = !!fetcher && !sameGeneration(fetcher, record);
++		// NARROW-FIX CANDIDATE, measured in
++		// `docs/spikes/the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has/`.
++		// NOT SHIPPED -- reverted before this task landed.
++		const fetcherIsHeldHere = !!fetcher && this.held.some((entry) => sameGeneration(entry.record, fetcher));
++		const follows = !!fetcher && !sameGeneration(fetcher, record) && fetcherIsHeldHere;
+ 		const config: ProvidedIndexerConfig<ABI> =
+ 			follows && this.config.keepStream
+ 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}
