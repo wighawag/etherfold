@@ -278,6 +278,23 @@ export type AnyGenerationSpec<ABI extends Abi, ProcessResultType = void> = Gener
 	/* eslint-disable-next-line */ any
 >;
 
+/**
+ * A generation BUILT AND REGISTERED, with no engine and nothing held yet.
+ *
+ * What phase one of `open` produces and phase two consumes. It exists because
+ * `follows` is a question about the whole fold set (ADR-0088), so the set has to
+ * be complete before the first engine is constructed -- and a generation cannot
+ * be NAMED any earlier than this, since a fold arriving as a module derives its
+ * identity inside `createProcessor` (ADR-0086).
+ */
+type RegisteredGeneration<ABI extends Abi, ProcessResultType> = {
+	spec: AnyGenerationSpec<ABI, ProcessResultType>;
+	/** This generation's own fetch filter, which is the container's unless the spec named one. */
+	source: IndexingSource<ABI>;
+	processor: EventProcessor<ABI, ProcessResultType>;
+	record: GenerationRecord;
+};
+
 /** What the container keeps per generation. Internal: `HeldGeneration` is what it hands out. */
 type HeldEntry<ABI extends Abi, ProcessResultType> = {
 	record: GenerationRecord;
@@ -683,10 +700,39 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		this.streamDigest = this.digestOf(this.source, this.config);
 	}
 
-	/** Build and register the generations, then resolve the canonical pointer onto one of them. */
+	/**
+	 * Build and register the generations, then resolve the canonical pointer onto
+	 * one of them.
+	 *
+	 * ## TWO PHASES, because which generation FETCHES is a fact about the whole set
+	 *
+	 * Every spec is REGISTERED first, and only then is an ENGINE built for any of
+	 * them. The split is ADR-0088's and it is not a tidy-up: `follows` is derived
+	 * from the oldest generation this container HOLDS on the stream, and `add`
+	 * freezes that answer into the engine's config at construction (`readOnlyStream`),
+	 * so a derivation taken while the set is still half-built answers a different
+	 * question for each spec and gives a different result per spec ORDER. Measured,
+	 * with the same two folds listed edited-first: TWO generations decide they fetch,
+	 * the same range is asked of the node twice, and one block's log is stored twice
+	 * (`docs/spikes/the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has/`).
+	 *
+	 * The identity cannot be read any earlier than phase one, which is why the phase
+	 * boundary is HERE and not before the factories: a fold arriving as a MODULE has
+	 * no bytes to hash, so `GenerationSpec.processorIdentity` is filled in from
+	 * inside `createProcessor` and a generation genuinely cannot be named before it
+	 * is built (ADR-0086).
+	 */
 	async open(specs: readonly AnyGenerationSpec<ABI, ProcessResultType>[]): Promise<void> {
+		const registered: RegisteredGeneration<ABI, ProcessResultType>[] = [];
 		for (const spec of specs) {
-			await this.add(spec);
+			registered.push(await this.registerGeneration(spec));
+		}
+		// EVERY FOLD THIS CONTAINER WILL HOLD, known before the first engine exists.
+		// The records carry their own `createdAt`, so ranking them is the registry's
+		// order and not the order the caller listed its specs in.
+		const willHold = registered.map((generation) => generation.record);
+		for (const generation of registered) {
+			await this.holdGeneration(generation, willHold);
 		}
 		await this.resolveCanonical();
 		// LAST: from here on, a generation handed to `add` is a SUCCESSOR beside a live
@@ -721,13 +767,14 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * revert (`IndexerGeneration.followMore`). ADR-0044 records the rule and the
 	 * options weighed against it.
 	 *
-	 * ## Which generation WRITES a stream: the first one held on it
+	 * ## Which generation FETCHES a stream: the oldest one this container HOLDS
 	 *
-	 * Registration order and not the canonical pointer, so the writer is stable:
-	 * moving the pointer is one small record write and must not silently hand the
-	 * append duty to a different engine mid-flight. The normal case makes the two
-	 * the same thing anyway, since the first generation registered is the one the
-	 * registry makes canonical.
+	 * Registration order among the folds PRESENT, and not the canonical pointer, so
+	 * the fetching is stable: moving the pointer is one small record write and must
+	 * not silently hand the append duty to a different engine mid-flight. The normal
+	 * case makes the two the same thing anyway, since the first generation registered
+	 * is the one the registry makes canonical. See `holdGeneration` for the
+	 * derivation and for why the candidates are the held folds (ADR-0088).
 	 *
 	 * The registry is written BEFORE the engine exists, which is the order its own
 	 * documentation asks for: a stream subtree no registered generation claims is
@@ -735,6 +782,28 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * registration.
 	 */
 	async add(spec: AnyGenerationSpec<ABI, ProcessResultType>): Promise<HeldGeneration<ABI, ProcessResultType>> {
+		const registered = await this.registerGeneration(spec);
+		// THE FOLD SET IS ALREADY COMPLETE HERE, which is what makes one call enough:
+		// this container is open, so everything else it holds it is already holding, and
+		// this generation is the only addition to the set (ADR-0088). `open` is the case
+		// that has to gather its set first, because it builds several at once.
+		return this.holdGeneration(registered, [...this.held.map((entry) => entry.record), registered.record]);
+	}
+
+	/**
+	 * PHASE ONE: build this generation and put its RECORD in the registry, with no
+	 * engine and nothing held.
+	 *
+	 * Split out of `add` so `open` can register every spec before deciding anything
+	 * about any of them: what a record ANSWERS -- whether this fold fetches its
+	 * stream or follows it -- is a question about the whole set, and a record is the
+	 * cheapest complete statement of a set member (it carries the `createdAt` the
+	 * ranking uses). Nothing here reads `this.held`, and nothing here may: at this
+	 * point it is half-built by construction.
+	 */
+	protected async registerGeneration(
+		spec: AnyGenerationSpec<ABI, ProcessResultType>,
+	): Promise<RegisteredGeneration<ABI, ProcessResultType>> {
 		const source = spec.source ?? this.source;
 		const context: GenerationContext = {
 			stream: spec.source ? this.digestOf(spec.source, this.config) : this.streamDigest,
@@ -767,7 +836,21 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// -- so a reload on the canonical processor stays canonical, and one on the
 		// generation a revert returned to is not re-armed by the act of starting up.
 		const record = await this.registry.create(wanted, {slot: 'successor'});
+		return {spec, source, processor, record};
+	}
 
+	/**
+	 * PHASE TWO: build the ENGINE for a registered generation and hold it, knowing
+	 * every fold this container will hold.
+	 *
+	 * `willHold` is that set, as records. It is the caller's to supply because only
+	 * the caller knows when it is complete: `add` adds one to what is already held,
+	 * `open` gathers all of its specs first.
+	 */
+	protected async holdGeneration(
+		{spec, source, processor, record}: RegisteredGeneration<ABI, ProcessResultType>,
+		willHold: readonly GenerationRecord[],
+	): Promise<HeldGeneration<ABI, ProcessResultType>> {
 		const existing = this.held.find((entry) => sameGeneration(entry.record, record));
 		if (existing) {
 			// The same generation, named twice. The registry RESOLVES rather than
@@ -788,12 +871,33 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// DETERMINED, and determined HERE: everything downstream reads this rather
 		// than re-deciding it, so there is one place the rule lives.
 		//
-		// Asked of the durable REGISTRY rather than of this process's `held` array,
-		// which is whatever order the caller passed its specs in and does not survive a
-		// restart. And asked as `fetcherOf` -- ADR-0044's own rule -- so "which
-		// generation fetches this stream" has ONE home and `follows` is simply "and it is
-		// not me". The duty is never REASSIGNED, so the first generation registered on a
-		// stream keeps it.
+		// Asked of the folds this container HOLDS -- `willHold`, which the caller has
+		// already completed -- and not of every record the durable REGISTRY carries
+		// (ADR-0088). And asked as `fetcherOf`, ADR-0044's own rule, so "which generation
+		// fetches this stream" has ONE home and `follows` is simply "and it is not me";
+		// what narrowed is the SET it is asked about and nothing else. The duty is never
+		// REASSIGNED, so within one process the oldest fold present keeps it -- and that
+		// set does not change under a promotion, which is the stability ADR-0044 chose
+		// registration order for.
+		//
+		// **THE REGISTERED SET WAS WRONG, and it was wrong in the direction that is
+		// silent.** The comment here used to argue FOR it: `this.held` "is whatever order
+		// the caller passed its specs in and does not survive a restart". The second half
+		// is true and is the point -- the registered set is exactly the set that can name
+		// a generation this process holds no fold for. Measured: a tab reloading after a
+		// PROMOTION holds the one fold its bundle carries, the superseded generation
+		// survives as `predecessor` because that is what a revert window IS, and it is
+		// older -- so the tab's only fold followed a stream nothing writes. It opened
+		// healthy, answered reads and reported `at-tip` for ever, two blocks behind a
+		// chain it asked nothing about after the load-time `eth_chainId` handshake.
+		//
+		// The FIRST half is answered by WHERE this now runs rather than by argument. A
+		// derivation over a half-built `held` array really is order-dependent, and
+		// measurably so -- two fetchers on one stream, one range asked twice, one log
+		// stored twice -- which is why this is phase TWO of a two-phase `open` and why
+		// `willHold` is a parameter: the answer is taken once the fold set is COMPLETE,
+		// which was not true of the array the old comment was written about. The records
+		// carry `createdAt`, so ranking them is still the registry's order.
 		//
 		// **ADR-0087 does not reach this line, and the reason is what the word means
 		// here.** On the RECEIVING side the thing that fetches a stream is the
@@ -830,21 +934,24 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// right for both, so it is what is asked.
 		//
 		// This is still the INITIAL derivation and nothing recomputes it: `follows`
-		// freezes `readOnlyStream` into the engine's config at construction. That only
-		// matters if the fetcher CHANGES while a fold is held; what a reload needs is
-		// this one derivation being right at the start. (The receiving side used to
-		// recompute it per cycle through `reconcileWriters`; that whole hand-over is
-		// deleted, because there the deployment fetches and no generation ever holds the
-		// pen -- ADR-0087.)
-		const fetcher = fetcherOf(await this.registry.list(), record.stream);
+		// freezes `readOnlyStream` into the engine's config at construction. That is what
+		// makes the COMPLETENESS of `willHold` load-bearing rather than tidy -- a
+		// half-built set cannot be corrected later -- and it is why the answer may only be
+		// taken once. It matters beyond that only if the fetcher CHANGES while a fold is
+		// held, and within one process the held set does not change under a promotion.
+		// (The receiving side used to recompute it per cycle through `reconcileWriters`;
+		// that whole hand-over is deleted, because there the deployment fetches and no
+		// generation ever holds the pen -- ADR-0087, which this does NOT extend to this
+		// runtime: here the thing that fetches genuinely IS a generation.)
+		const fetcher = fetcherOf(willHold, record.stream);
 		const follows = !!fetcher && !sameGeneration(fetcher, record);
 		const config: ProvidedIndexerConfig<ABI> =
 			follows && this.config.keepStream
 				? {...this.config, keepStream: readOnlyStream<ABI>(this.config.keepStream)}
 				: this.config;
 
-		// `record.processor` rather than the value resolved above, and they are the same
-		// value: `create` RESOLVES a generation already registered rather than
+		// `record.processor` rather than the identity the spec was read for, and they are
+		// the same value: `create` RESOLVES a generation already registered rather than
 		// duplicating it, so the record is the authority on what this fold is called.
 		const generation = this.createGeneration(this.provider, processor, source, config, record.processor);
 		const entry: HeldEntry<ABI, ProcessResultType> = {

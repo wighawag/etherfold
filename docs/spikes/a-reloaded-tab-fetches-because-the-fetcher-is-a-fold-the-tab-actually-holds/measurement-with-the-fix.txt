@@ -1,0 +1,92 @@
+# The reloaded-tab stall, measured
+
+
+### 0. THE DEFAULT CONFIGURATION: reload with changed handler code, MEMORY registry, one generation
+FETCHES -- no stall
+  follows: false
+  registeredOnReload: ["edited-by-3"]
+  chainReadsByMethod: {"eth_chainId":2,"eth_blockNumber":1,"eth_getLogs":1}
+  getLogsRanges: [{"from":102,"to":107}]
+  nodeTip: 107
+  tabCursor: 107
+  state: {"owners":{"1":"0x0000000000000000000000000000000000000022","2":"0x0000000000000000000000000000000000000033","3":"0x0000000000000000000000000000000000000044"},"transfers":18}
+
+### 1. TRIGGER A: changed-handler reload, DURABLE registry, ONE generation
+REFUSED: CanonicalGenerationNotHeldError
+  slotsAfterFirstSession: {"canonical":"the-app"}
+  slotsAtRefusal: {"canonical":"the-app","successor":"edited-by-3"}
+  chainReadsByMethod: {}
+  message: "the canonical generation {stream: b63b2d2373e0e3e74fb7c149dbfdb06e, processor: sha256:1db3775a7489ac61db9c069465f182f87bd75554c99fcb762ed2e60bf2e02491} is not one this indexer was built to hold, so nothing here can answer a read. Held: {stream: b63b2d2373e0e3e74fb7c149dbfdb06e, processor: sha256:a9995f43431a54e9b537c9d06f1a29780f765671ee0e0d511cffd5fdc8722f47}. Supply the spec that builds the canonical generation, or move the canonical pointer to one of the held generations before opening -- this is never fixed by promoting one of them here, because which generation answers reads is not a decision an open may take on its own."
+
+### 2a. TRIGGER B: reload after a PROMOTION, DURABLE registry, ONE generation (a fresh state, so it re-folds from the start)
+FETCHES -- no stall
+  slotsAfterPromotion: {"canonical":"edited-by-3","predecessor":"the-app"}
+  slotsAfterReload: {"canonical":"edited-by-3","predecessor":"the-app"}
+  follows: false
+  fetcherOnTheStream: "the-app"
+  heldByTheTab: ["edited-by-3"]
+  chainReadsByMethod: {"eth_chainId":2,"eth_blockNumber":1,"eth_getLogs":1}
+  getLogsRanges: [{"from":102,"to":107}]
+  nodeTip: 107
+  reportedPhase: "at-tip"
+  state: {"owners":{"1":"0x0000000000000000000000000000000000000022","2":"0x0000000000000000000000000000000000000033","3":"0x0000000000000000000000000000000000000044"},"transfers":18}
+  storedStream: {"events":6,"blocksPresent":[100,102,104,106],"deliveredTwice":[],"coversTo":107}
+  lastSync: {"lastToBlock":107,"latestBlock":107}
+
+### 2b. TRIGGER B: reload after a PROMOTION, DURABLE registry, ONE generation (the tab's own state SURVIVES the reload)
+FETCHES -- no stall
+  slotsAfterPromotion: {"canonical":"edited-by-3","predecessor":"the-app"}
+  slotsAfterReload: {"canonical":"edited-by-3","predecessor":"the-app"}
+  follows: false
+  fetcherOnTheStream: "the-app"
+  heldByTheTab: ["edited-by-3"]
+  chainReadsByMethod: {"eth_chainId":2,"eth_blockNumber":1,"eth_getLogs":1}
+  getLogsRanges: [{"from":102,"to":107}]
+  nodeTip: 107
+  reportedPhase: "at-tip"
+  state: {"owners":{"1":"0x0000000000000000000000000000000000000022","2":"0x0000000000000000000000000000000000000033","3":"0x0000000000000000000000000000000000000044"},"transfers":18}
+  storedStream: {"events":6,"blocksPresent":[100,102,104,106],"deliveredTwice":[],"coversTo":107}
+  lastSync: {"lastToBlock":107,"latestBlock":107}
+
+### 3. THE EXISTING TEST'S CONFIGURATION: reload holding BOTH folds, DURABLE registry
+FETCHES -- which is what that suite asserts
+  slots: {"canonical":"the-app","successor":"edited-by-3"}
+  follows: false
+  chainReadsByMethod: {"eth_chainId":3,"eth_blockNumber":1,"eth_getLogs":1}
+  getLogsRanges: [{"from":102,"to":107}]
+  nodeTip: 107
+  tabCursor: 107
+
+### 4. CONTROL: reload with UNCHANGED handler code, DURABLE registry, ONE generation
+FETCHES -- the baseline
+  follows: false
+  chainReadsByMethod: {"eth_chainId":2,"eth_blockNumber":1,"eth_getLogs":1}
+  getLogsRanges: [{"from":102,"to":107}]
+  nodeTip: 107
+  tabCursor: 107
+  state: {"owners":{"1":"0x0000000000000000000000000000000000000022","2":"0x0000000000000000000000000000000000000033","3":"0x0000000000000000000000000000000000000044"},"transfers":6}
+  storedStream: {"events":6,"blocksPresent":[100,102,104,106],"deliveredTwice":[],"coversTo":107}
+
+### 5. THE ORDER PROBE: the same two folds, listed edited-first
+ONE fetcher, as in scenario 3
+  followsByGeneration: {"edited-by-3":true,"the-app":false}
+  chainReadsByMethod: {"eth_chainId":3,"eth_blockNumber":1,"eth_getLogs":1}
+  getLogsRanges: [{"from":102,"to":107}]
+  storedStream: {"events":6,"blocksPresent":[100,102,104,106],"deliveredTwice":[],"coversTo":107}
+
+## Summary
+
+- 0. THE DEFAULT CONFIGURATION: reload with changed handler code, MEMORY registry, one generation
+  -> FETCHES -- no stall
+- 1. TRIGGER A: changed-handler reload, DURABLE registry, ONE generation
+  -> REFUSED: CanonicalGenerationNotHeldError
+- 2a. TRIGGER B: reload after a PROMOTION, DURABLE registry, ONE generation (a fresh state, so it re-folds from the start)
+  -> FETCHES -- no stall
+- 2b. TRIGGER B: reload after a PROMOTION, DURABLE registry, ONE generation (the tab's own state SURVIVES the reload)
+  -> FETCHES -- no stall
+- 3. THE EXISTING TEST'S CONFIGURATION: reload holding BOTH folds, DURABLE registry
+  -> FETCHES -- which is what that suite asserts
+- 4. CONTROL: reload with UNCHANGED handler code, DURABLE registry, ONE generation
+  -> FETCHES -- the baseline
+- 5. THE ORDER PROBE: the same two folds, listed edited-first
+  -> ONE fetcher, as in scenario 3

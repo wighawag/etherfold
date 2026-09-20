@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # The generation that FETCHES a stream is the oldest one PRESENT, not the oldest one REGISTERED
 
 On the chain-facing `Indexer` a stream is fetched by a generation, and which one is derived from registration order (`fetcherOf`, ADR-0044). That order is a fact about the durable RECORDS, while fetching is something a fold in THIS process does, and the two come apart at a page reload: **the oldest registered generation can be one the tab holds no fold for, so the tab's only fold becomes a follower of a stream nothing writes, opens healthy, answers reads, reports `at-tip`, and never asks the chain for another log.** We decide that the candidate set narrows from REGISTERED to PRESENT: `follows` is derived from the oldest generation the CONTAINER HOLDS on the stream, so there is always exactly one fetcher and it is always one that exists. `fetcherOf` keeps its meaning and its home; what changes is which set it is asked about. The fix is a follow-on task; this records the direction and what it costs.
@@ -55,4 +51,6 @@ The last two lines are why it is worse than a stall: `latestBlock` stays at 105 
 
 **ADR-0087 is not extended and is not contradicted.** Its amendment says the browser engine was deliberately not restructured, that there the thing which fetches IS a generation, and that the residue is precisely "the registered fetcher can still be a generation the tab holds no fold for". This decides that residue in the small, and leaves the restructure available as its own decision if the balance ever changes.
 
-**This `status` line comes off in the same change that lands the fix.** It is a claim about the code and it goes stale the moment the code lands (`work/protocol/ADR-FORMAT.md`); this family has already paid for that line surviving once.
+**This is BUILT.** `Indexer.open` registers every spec before it builds any engine and derives `follows` over the complete fold set (`registerGeneration` / `holdGeneration`, `@etherfold/core`); the promotion-then-reload tab fetches and the order probe still names one fetcher, measured over the same harness at `docs/spikes/a-reloaded-tab-fetches-because-the-fetcher-is-a-fold-the-tab-actually-holds/`. The `status` line came off with it, as this paragraph said it would: it is a claim about the code and it goes stale the moment the code lands (`work/protocol/ADR-FORMAT.md`).
+
+**One thing this decision got wrong, corrected in that change.** It said `CONTEXT.md` "stays true word for word", which is right about the one-writer sentence it quotes and wrong about the clause after it: the **follower** entry also said WHICH generation fetches is the oldest surviving one REGISTERED on the stream, which is the sentence this ADR exists to narrow. That entry now states the present-set rule and why the answer is taken once.

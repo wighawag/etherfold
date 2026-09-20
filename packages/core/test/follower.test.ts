@@ -2,7 +2,7 @@ import type {Abi} from 'abitype';
 import {describe, expect, it, vi} from 'vitest';
 import {openIndexer, type AnyGenerationSpec, type Indexer} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
-import {sameGeneration, fetcherOf, type GenerationRecord} from '../src/generation/registry.js';
+import {sameGeneration, fetcherOf, type GenerationRecord, type GenerationRegistry} from '../src/generation/registry.js';
 import {UnexpectedChainError} from '../src/errors.js';
 import {IndexerGeneration} from '../src/indexer.js';
 import {resolveStreamConfig} from '../src/internal/engine/utils.js';
@@ -151,7 +151,15 @@ function keyedStream() {
  * because "the follower issued no `eth_getLogs`" is a claim about one
  * generation's calls, and a shared counter cannot make it.
  */
-async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) {
+async function openWorld(
+	specs: {name: string; source?: IndexingSource<Abi>}[],
+	/**
+	 * A registry that already holds records, which is what a RELOAD opens over: the
+	 * durable one from the previous session, carrying generations this process may
+	 * or may not hold a fold for.
+	 */
+	options: {registry?: GenerationRegistry} = {},
+) {
 	const chain = {logs: {[ADDRESS]: [...BRANCH_A], [ADDRESS_B]: [...BRANCH_C]} as Record<string, StoredLogEvent[]>};
 	let tip = BRANCH_A_TIP;
 	const stream = keyedStream();
@@ -190,7 +198,7 @@ async function openWorld(specs: {name: string; source?: IndexingSource<Abi>}[]) 
 		stateOf: () => [],
 	});
 
-	const registry = await openMemoryGenerationRegistry({maxGenerations: 4, maxStreams: 2});
+	const registry = options.registry ?? (await openMemoryGenerationRegistry({maxGenerations: 4, maxStreams: 2}));
 	const indexer = await openIndexer<Abi, string[]>({
 		registry,
 		provider,
@@ -482,6 +490,101 @@ describe('a SHARED stream: the successor FOLLOWS and fetches nothing', () => {
 		expect(world.stateOf('A')).toEqual(BRANCH_B.map(idOf));
 		expect(world.stateOf('B')).toEqual(world.stateOf('A'));
 		expect(world.fetchesBy('B')).toEqual([]);
+	});
+});
+
+/**
+ * WHICH GENERATION FETCHES A STREAM: the oldest one PRESENT, not the oldest one
+ * REGISTERED (ADR-0088).
+ *
+ * `fetcherOf` is unchanged and so is ADR-0044's rule; what narrowed is the SET it
+ * is asked about. A registry OUTLIVES a process, so the oldest record on a stream
+ * can name a generation this container holds no fold for -- which is the ordinary
+ * shape after a promotion, since the superseded generation is KEPT as the revert
+ * target -- and a container that read it made its only fold a follower of a
+ * stream nothing writes.
+ *
+ * Both cases here open over a registry that ALREADY HOLDS RECORDS, which is what
+ * makes them discriminating: they are the input the note in the case above says
+ * cannot be built from specs alone. A container that asked the registry rather
+ * than the held set fails the first; one that asked a half-built held set fails
+ * the second.
+ */
+describe('the generation that FETCHES a stream is the oldest one PRESENT', () => {
+	const STREAM = streamDigestOf(SOURCE, STREAM_CONFIG);
+
+	/**
+	 * The registry a RELOAD opens over: records from the previous session, with the
+	 * canonical pointer where a PROMOTION left it.
+	 *
+	 * Written straight onto the registry rather than through a container, because
+	 * what is under test is what a container does with records it did not create.
+	 */
+	async function aRegistryThatOutlivedItsProcess(names: string[], canonical: string): Promise<GenerationRegistry> {
+		const registry = await openMemoryGenerationRegistry({maxGenerations: 4, maxStreams: 2});
+		for (const name of names) {
+			await registry.create({stream: STREAM, processor: identityOf(name)});
+		}
+		await registry.moveCanonicalTo({stream: STREAM, processor: identityOf(canonical)});
+		return registry;
+	}
+
+	it('FETCHES when the oldest REGISTERED generation is one no fold here was built for', async () => {
+		// `gone` is registered first, so it is the oldest on this stream, and the pointer
+		// has moved off it -- which is a promotion, and `gone` is the revert target it
+		// keeps. This process was handed the factories for `A` alone, which is all a page
+		// load can supply: the other fold's code is not in the bundle that just loaded.
+		const registry = await aRegistryThatOutlivedItsProcess(['gone', 'A'], 'A');
+		const world = await openWorld([{name: 'A'}], {registry});
+
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+
+		// ASSERTED ON THE FETCH. A stalled container had `follows: true` and every other
+		// flag looking right, so the evidence is what reached the node and what the fold
+		// arrived at -- both of which are impossible without a fetch.
+		expect(world.fetchesBy('A').length).toBeGreaterThan(0);
+		expect(world.stateOf('A')).toEqual(BRANCH_A.map(idOf));
+		expect(world.heldOf('A')?.follows).toBe(false);
+		// ...and the generation it does not hold is still registered, still the oldest,
+		// and still the way back: fetching was not bought by deleting it
+		expect((await registry.list()).map((record) => record.processor)).toContain(identityOf('gone'));
+		expect((await registry.fetcherOf(STREAM))?.processor).toBe(identityOf('gone'));
+	});
+
+	it.each([
+		{order: ['A', 'B'], listed: 'in registration order'},
+		{order: ['B', 'A'], listed: 'newest first'},
+	])('names ONE fetcher with the same two folds listed $listed', async ({order}) => {
+		// THE ORDER PROBE. `open` populates the held set one `add` at a time and `add`
+		// freezes the read-only stream view into the engine's config at construction, so
+		// a derivation over a HALF-BUILT held set answers per spec order: measured, the
+		// second order gives TWO generations that fetch, one range asked twice and one
+		// log stored twice. The answer must be a function of the SET.
+		const registry = await aRegistryThatOutlivedItsProcess(['A', 'B'], 'A');
+		const world = await openWorld(
+			order.map((name) => ({name})),
+			{registry},
+		);
+
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+		// ONE MORE CYCLE, because a generation steps in the order the container holds it:
+		// a follower listed BEFORE the fetcher has had its turn before the append it is
+		// following, so it takes the next one. That is ADR-0044's follower rule and not
+		// this derivation -- the claim being made here is about how many folds FETCH.
+		await world.indexer.indexMore();
+
+		// ONE fetcher, and it is the OLDEST RECORD either way round rather than whichever
+		// spec happened to be listed first
+		expect(world.indexer.generations.filter((held) => !held.follows).length).toBe(1);
+		expect(world.heldOf('A')?.follows).toBe(false);
+		expect(world.heldOf('B')?.follows).toBe(true);
+		// ...so the node was asked by one of them, and the stream was written by one of
+		// them: two fetchers show up as the same range requested twice
+		expect(world.fetchesBy('B')).toEqual([]);
+		expect(world.stream.eventsOf(SOURCE).map(idOf)).toEqual(BRANCH_A.map(idOf));
+		expect(world.stateOf('B')).toEqual(world.stateOf('A'));
 	});
 });
 

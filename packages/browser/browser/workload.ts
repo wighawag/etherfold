@@ -509,19 +509,36 @@ export type FetchedRange = {from: number; to: number};
  * The recording is the point on the resume path: "did this tab re-index from the
  * start block" is a question about the RANGES a reload asks for, and nothing in
  * the resulting state can answer it (re-indexing lands on the same rows).
+ *
+ * `calls` records EVERY method, in order, and `ranges` only the `eth_getLogs`
+ * ones, because those are two different facts and the difference is what a STALL
+ * looks like: a FOLLOWER's first advance still calls `load()`, and `load` opens
+ * with the `eth_chainId` identity handshake (ADR-0081), so a tab that fetches
+ * nothing for ever still makes one chain read. A count of calls cannot tell that
+ * apart from health; `{eth_chainId: 1}` and no ranges can
+ * (`docs/spikes/the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has/`).
  */
 export function fakeChain(branch: readonly RawLog[] = BRANCH_A, latestBlock: number = BRANCH_A_TIP) {
 	const ranges: FetchedRange[] = [];
+	const calls: string[] = [];
 	let served: readonly RawLog[] = branch;
 	let tip = latestBlock;
 	return {
 		ranges,
+		calls,
+		/** How many times each method was asked for, which is what an assertion quotes. */
+		callsByMethod(from = 0): Record<string, number> {
+			const counted: Record<string, number> = {};
+			for (const method of calls.slice(from)) counted[method] = (counted[method] ?? 0) + 1;
+			return counted;
+		},
 		serve(logs: readonly RawLog[], newTip: number) {
 			served = logs;
 			tip = newTip;
 		},
 		provider: {
 			async request(args: {method: string; params?: any}): Promise<any> {
+				calls.push(args.method);
 				switch (args.method) {
 					case 'eth_chainId':
 						return hex(Number(SOURCE.chainId));
