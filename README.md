@@ -165,11 +165,15 @@ Indexing it in a browser tab is two more lines. The first names WHERE the state 
 
 ```ts
 import {createBrowserStateStore, createIndexerState} from '@etherfold/browser';
-import {fromEntityProcessor} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 
 const indexer = createIndexerState({
-	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024)
-	createState: () => createBrowserStateStore(greetings.entities, {databaseName: 'greetings'}),
+	// versioned rows in IndexedDB: the browser default, decided on measurement (ADR-0024).
+	// `openForWriting` is what makes this tab the store's WRITER: building a store and
+	// claiming it are two acts, so a tab that only renders opens the same one and reads
+	// (ADR-0077). `signal` bounds the claim, so a storage that never answers is a refusal.
+	createState: async (context, {signal}) =>
+		openForWriting(await createBrowserStateStore(greetings.entities, {databaseName: 'greetings'}), {signal}),
 	createProcessor: (store) => fromEntityProcessor(greetings)(store),
 });
 

@@ -84,7 +84,7 @@ Read that as the floor on the wait rather than the wait itself. It measures the 
 
 ```ts
 import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
-import {fromEntityProcessor, openAndBootstrap} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openAndBootstrap, openForWriting} from '@etherfold/processor-entities';
 
 // Locations in priority order, freshest first: a rolling remote your build
 // NAMES, then the copy EMBEDDED in this build at a relative path. That last one
@@ -95,7 +95,7 @@ const SNAPSHOT_LOCATIONS = [SNAPSHOT_URI, '/indexed-states/token/state.json'];
 const indexer = createIndexerState({
 	// Seed the FOLD. Open snapshot-aware FIRST (that is what recovers a floor an
 	// earlier run recorded), then bootstrap only if this tab has never synced.
-	createState: async (context: GenerationContext) => {
+	createState: async (context: GenerationContext, {signal}) => {
 		const {store, outcome} = await openAndBootstrap(
 			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `app-${CHAIN.id}-${context.stream}`}),
 			SNAPSHOT_LOCATIONS,
@@ -110,7 +110,10 @@ const indexer = createIndexerState({
 		// unexplained empty app: {status: 'bootstrapped', at, from} | {status: 'kept-local',
 		// at} | {status: 'not-bootstrapped', reason}.
 		showSeedingStatus(outcome);
-		return store;
+		// CLAIMED on the way out, because `createState` hands back a store this
+		// generation may WRITE into and folding is writing (ADR-0077). The signal
+		// bounds the CLAIM alone, not the download above, which has its own timeouts.
+		return openForWriting(store, {signal});
 	},
 	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
 });
@@ -340,11 +343,18 @@ In the other direction, it does not move for a change the source text does not c
 `updateProcessor` reconfigures the generation that is answering reads, so the rebuild it costs is time your app has nothing to render. `addGeneration` is the other shape: it builds a **generation** *beside* the live one, which goes on answering every read while the new fold catches up.
 
 ```ts
+// A store name per GENERATION, so the new fold cannot land in the live one's.
+let saves = 0;
+
 await indexer.addGeneration({
-	createState: () => createBrowserStateStore(next.entities),
+	// ITS OWN store, and CLAIMED: folding is writing.
+	createState: async (context) =>
+		openForWriting(await createBrowserStateStore(next.entities, {databaseName: `app-${context.stream}-${++saves}`})),
 	createProcessor: (store) => fromEntityProcessor(next)(store),
 });
 ```
+
+**The new fold needs a store of its OWN, and that is the line to get right when you copy this.** `createBrowserStateStore` with no `databaseName` opens `etherfold-state`, which is the database the live generation is already folding into, and two generations sharing one `databaseName` are ONE store by IndexedDB's own definition, so they would collide on the rows and on the sync cursor until the writer claim demoted one of them ([ADR-0075](../../adr/0075-every-mutating-path-carries-a-writer-token-checked-in-the-transaction-that-writes.md), [ADR-0077](../../adr/0077-the-storage-seam-splits-at-the-interface-and-the-claim-is-taken-by-constructing-a-writer.md)). So name it per generation: `context.stream` is what keeps two apps on one origin apart, and the counter is what keeps this fold apart from the one it replaces. `openForWriting` is the other half of the same rule: `createState` hands back a store this generation has CLAIMED, and that call is the only way to obtain one. The hot-update recipe below is these same two lines, driven by your bundler's saves.
 
 A processor change does not move the fetch filter, so the new generation folds the stream that is already there and **fetches not one log**.
 
