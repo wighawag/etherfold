@@ -116,15 +116,17 @@ export type IndexerRegistryEntry = {
 	 *
 	 * At most one per stream, because a stream IS an address on the wire: a batch
 	 * carries `{source, config}` and nothing that could tell two folds over one
-	 * stream apart. A processor-change successor therefore has no receiver here at
-	 * all -- it re-folds the stream the writer stores (ADR-0044) -- and this list is
-	 * the filter-change case only.
+	 * stream apart -- and since ADR-0087 the receiver at that address is the
+	 * DEPLOYMENT's own writer of the stream rather than any fold over it. A
+	 * processor-change successor therefore adds no entry here at all, sharing the
+	 * stream it was created beside, so a SECOND entry is the filter-change case only.
 	 *
 	 * LIVE is derived from the registry and never from a rule about promotion: a
-	 * context is live while its generation is registered, and stops being live when
-	 * that generation is deleted (and its stream reaped with it, if it was the last
-	 * on it). A superseded generation is RETAINED under the caps, so being no longer
-	 * canonical is not by itself a reason to drop out of this list.
+	 * context is live while at least one registered generation folds that stream, and
+	 * stops being live when the last of them is deleted. The STREAM is not deleted
+	 * with it -- a stream outlives every fold over it and goes only when an operator
+	 * asks (ADR-0087) -- and a superseded generation is RETAINED under the caps, so
+	 * being no longer canonical is not by itself a reason to drop out of this list.
 	 *
 	 * ## OPTIONAL: absent means THIS NAME ACCEPTS NO INGESTION AT ALL
 	 *
@@ -142,8 +144,8 @@ export type IndexerRegistryEntry = {
 	 *
 	 * ## ABSENT is NOT an EMPTY list, and the two must never be conflated
 	 *
-	 * `[]` means "no live wire contexts RIGHT NOW" -- every generation deleted, its
-	 * streams reaped -- which is a legitimate TRANSIENT state on a host that DOES
+	 * `[]` means "no live wire contexts RIGHT NOW" -- every generation deleted,
+	 * whatever became of the streams they folded -- which is a legitimate TRANSIENT state on a host that DOES
 	 * accept ingestion, and which the ingest route already answers for: a batch is
 	 * refused as a foreign context (`400`, naming the empty `expected`) and the
 	 * cursor question answers with an empty list. Expressing a permanent refusal as

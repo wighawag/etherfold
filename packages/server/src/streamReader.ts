@@ -34,12 +34,13 @@ const logger = logs('@etherfold/server');
 // ## Read-only, structurally, and not by convention
 //
 // It goes out through `readOnlyStream`, so `saveNewEvents` and `clear` are
-// NO-OPS. That is the ONE-WRITER RULE made structural (ADR-0044): the generation
-// that INDEXES a stream appends to it through `EmissionAppender` (ADR-0052), and
-// everything else folding it is handed a view whose writes go nowhere. `clear`
-// matters more than the symmetry suggests -- the load path clears on every stream
-// shape it cannot use, and a re-fold takes those branches over a table another
-// generation is still appending to.
+// NO-OPS. That is the ONE-WRITER RULE made structural (ADR-0044), with the
+// subject it has on this runtime since ADR-0087: the DEPLOYMENT that FETCHES a
+// stream appends to it through `EmissionAppender` (ADR-0052), and every
+// generation folding it -- all of them here, the canonical one included -- is
+// handed a view whose writes go nowhere. `clear` matters more than the symmetry
+// suggests -- the load path clears on every stream shape it cannot use, and a
+// re-fold takes those branches over a table the deployment is still appending to.
 //
 // ## A REPLAY, not a fetch (ADR-0042)
 //

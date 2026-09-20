@@ -54,12 +54,18 @@ export type GenerationReport = {
 	/** Whether the canonical pointer names it: the ONE generation that answers reads. */
 	readonly canonical: boolean;
 	/**
-	 * Whether it is a FOLLOWER: a generation on a stream another one indexes, which
-	 * catches up by RE-FOLDING the stored stream rather than from the wire.
+	 * Whether it is a FOLLOWER: a generation that catches up by RE-FOLDING the
+	 * stored stream rather than from the wire.
 	 *
 	 * This is what says a REBUILD is what advances this entry, so `value` below is
 	 * how far that rebuild has got. The established word (ADR-0044) rather than a
 	 * second one meaning nearly the same thing.
+	 *
+	 * What it no longer DISTINGUISHES on a receiving deployment is two shapes of
+	 * fold: since ADR-0087 no generation fetches, so every fold there re-folds the
+	 * stream the deployment stored and every entry reports `true`. It stays on the
+	 * report because an operator comparing two deployments reads it, and because a
+	 * chain-facing host does still hold both shapes.
 	 */
 	readonly follows: boolean;
 	/**

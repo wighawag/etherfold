@@ -338,13 +338,23 @@ describe('a deployment restarted with a CHANGED processor', () => {
 		// fold is present appends, and re-appends the whole history underneath it,
 		// because a restarted successor's state is empty and its fetch would begin at
 		// `defaultFromBlock`: measured at 4 rows where 2 were correct. Assert the ROWS.
-		const {db, stored} = await aRestart({changed: true});
+		const {db, stored, chain} = await aRestart({changed: true});
 
 		const after = await until(
 			async () => emissions(db),
 			(rows) => rows.length > stored.length,
 			'the restarted deployment to append to the stream it is folding',
 		);
+
+		// ON THE WIRE, in the same case as the rows, because growth and no-duplication
+		// are ONE claim and the rejected option satisfied the first half by BUYING the
+		// history again. Not one range this process asked for reaches back to the
+		// source's own first block: the stream GREW and every byte of the growth is a
+		// block the previous deployment never bought.
+		expect(chain.logRanges.length).toBeGreaterThan(0);
+		for (const range of chain.logRanges) {
+			expect(range.from).toBeGreaterThan(START_BLOCK);
+		}
 
 		// no log is stored twice, on the log's own identity rather than on a count
 		expect(new Set(after.map(logIdentityOf)).size).toBe(after.length);
@@ -397,7 +407,11 @@ describe('a deployment restarted with a CHANGED processor', () => {
 		// ...and the deployment went on APPENDING all the while, which is the thing that
 		// would make an unheld generation's stream stop growing if any of this rested on
 		// a fold being present
-		expect((await emissions(db)).length).toBe(HISTORY.length + AFTER_THE_RESTART.length);
+		await until(
+			async () => emissions(db),
+			(rows) => rows.length === HISTORY.length + AFTER_THE_RESTART.length,
+			'the stream of an UNHELD canonical generation to go on growing',
+		);
 	});
 
 	it('reports one `/status` entry per generation HELD, which is the successor alone', async () => {
