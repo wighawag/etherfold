@@ -1,0 +1,66 @@
+---
+title: 'The reloaded-tab stall is MEASURED on the configuration a tab actually has, and the direction of its fix is decided'
+slug: the-reloaded-tab-stall-is-measured-on-the-configuration-a-tab-actually-has
+blockedBy: []
+covers: []
+---
+
+## What to build
+
+A measurement and a decision, with no behaviour change. This task deliberately does NOT fix the defect: it establishes whether the defect is real on the configuration production actually has, and produces the decision the fix needs. The fix is a follow-on task written after this one answers.
+
+**The signal.** `work/notes/observations/a-reloaded-tab-with-a-changed-handler-folds-its-stream-and-never-fetches.md` traces, through the source and NOT by running anything, that a browser tab reloaded after a handler change becomes a follower of its own stream and never fetches again. The chain is: `Indexer.indexMore()` routes each held entry by `entry.follows ? followMore() : indexMore()`, and a follower fetches nothing; a tab opens holding exactly ONE fold (`IndexerState.ts` and `host/serve.ts` both pass a single-element list); a reload with changed handler code is a NEW identity (ADR-0086) registered beside the previous session's generation, which survives, is OLDER, and is therefore what `fetcherOf` names; and the tab holds no fold for it, because the old handler's code is not in the new bundle.
+
+**That conclusion has since been REFUTED for the trigger it names, and the note carries the refutation as an `## Update`. Read it: it is most of this task's map.** Steps 1 to 4 are individually correct, but the note never checked `open`. Both real entry points default to a MEMORY registry (`IndexerState.ts:1202`, `host/serve.ts:374`) which by its own documentation does not survive a reload, so by default the registry is EMPTY on reload, the sole fold takes `canonical`, and the tab fetches. And with a DURABLE registry the changed-handler reload does not stall silently either -- `Indexer.open` ends in `resolveCanonical` (`container.ts:1718-1733`), which THROWS `CanonicalGenerationNotHeldError` when canonical is not held.
+
+**The live hypothesis is a different trigger: reload after a PROMOTION.** Session 1 promotes successor B beside A; `dropOnPromotion` defaults to false and a generation `predecessor` names is untouchable, so A survives as `predecessor`. Session 2 reloads with B's code only: B is already `canonical` so `open` succeeds, but `fetcherOf` names A -- older, unheld -- so B follows, and the tab opens, folds, answers reads, reports healthy and fetches nothing. This too is read off source and NOT run.
+
+**The second half of the signal, which is why this is not simply an uncovered case.** `packages/browser/test/aTabHoldsItsGenerationsInSlots.test.ts` reloads with a changed processor and asserts "AND IT STILL FETCHES, which is the half the slot contents cannot say" -- the right assertion. But it opens the reloaded container with BOTH generations, so the incumbent is held, is the fetcher, and fetches. A real app cannot supply that first element: it is the previous handler's code, which is not in the bundle that just loaded. So the property is asserted under a configuration the production path never produces, and the suite reads as covering this when it does not.
+
+### What this task delivers
+
+1. **The measurement.** Stand the browser container up the way a tab actually stands up -- ONE generation -- and record what it asks the chain for. **Establish FIRST which registry a real tab has**, because that decides everything: both entry points default to a memory registry that does not survive a reload, and nothing in `packages/*/src` or `docs/` passes the durable `openGenerationRegistryOnIndexedDB`. If the stall needs an opt-in durable registry, SAY SO -- that is the reachability answer, and it may be the whole finding. Report the actual methods and ranges, not a flag.
+2. **The verdict on the existing test**, stated either way: whether its two-generation configuration is reachable from any real entry point. Note that it holds both generations because opening with only the edited one would THROW, not merely fail -- the registry's canonical is the incumbent and `open` refuses when canonical is not held. So judge it as a constraint, not as an oversight. If it IS reachable, this note is wrong and that is the finding.
+3. **A decision, as an ADR in `docs/adr/`**, naming the direction of the fix and the trade-off, IF the defect reproduces. The two candidates, neither pre-chosen: extend ADR-0087's decision to the chain-facing container, so the TAB fetches and its generations only fold (the receiving twin of this was just built and is the worked precedent); or something narrower scoped to the reload case. The narrow family carries a known hazard -- letting the held fold take the wire is the hand-over ADR-0087 MEASURED as either duplicating the overlap or leaving a hole, with no observation point that is neither -- so a narrow proposal must say how it escapes that, or say that it does not and be rejected on those grounds.
+4. **The evidence, kept** under `docs/spikes/<this-slug>/`, so the follow-on build task does not pay for the measurement twice. That is where this family already keeps such things.
+
+**No behaviour change and no test left red.** Re-scoping the reload test to one generation is what the FIX task lands, green, together with the fix. If you re-scope it here it goes red and cannot land. Keep the measurement in the spike.
+
+## Acceptance criteria
+
+- [ ] Which registry a real tab actually has is established and stated, since both entry points default to a memory one that does not survive a reload. If the stall requires an opt-in durable registry, that is recorded as the reachability answer.
+- [ ] The stall is reproduced or refuted on a container opened with ONE generation over a DURABLE registry a previous session left behind, covering BOTH triggers: the changed-handler reload, and the reload-after-a-promotion case where canonical IS held while an older unheld record (a `predecessor`) remains on the same stream.
+- [ ] **If the container REFUSES to open** (e.g. `CanonicalGenerationNotHeldError`), that refusal IS the result: it is recorded as such, and the question then becomes whether the silent stall is reachable by any other one-generation configuration. A refusal is a materially different bug class from a silent stall and must not be reported as one.
+- [ ] The measurement is the chain reads the tab made (methods, and ranges where any), not a `follows` flag and not a slot listing, and it DISTINGUISHES the load-time `eth_chainId` handshake from log fetching -- a follower's first advance calls `load()` and so makes at least one chain read even when it fetches no logs.
+- [ ] Whether the existing reload test's two-generation configuration is reachable from any real entry point is answered explicitly, with the entry points named.
+- [ ] If the defect reproduces, an ADR in `docs/adr/` names the direction and the trade-off, and any narrow proposal states how it escapes the duplicate-or-hole result ADR-0087 measured, or is rejected on it.
+- [ ] If the defect does NOT reproduce, no ADR is written, an `## Update` is APPENDED to the observation with what was actually found (observations are append-only -- `WORK-CONTRACT.md`, "The three capture buckets" -- so it is never rewritten), and that is the whole deliverable. A refutation is a success here.
+- [ ] The evidence is kept under `docs/spikes/<this-slug>/`.
+- [ ] No behaviour change: no fix, no re-scoped reload test, nothing red. No file under `packages/*/src` OR `packages/*/test` changes; the measurement harness lives under `docs/spikes/<this-slug>/`.
+- [ ] A changeset only if something shipped in a package changed, which it should not.
+
+## Blocked by
+
+None -- can start immediately. It rests on ADR-0087's landed work only as context, not as a dependency.
+
+## Prompt
+
+The goal is to find out whether a reloaded browser tab silently stops fetching, on the configuration a real tab has, and to produce the decision its fix needs -- not to fix it.
+
+Read `work/notes/observations/a-reloaded-tab-with-a-changed-handler-folds-its-stream-and-never-fetches.md` first; it is the traced mechanism and it is explicit that it was NOT run. Then ADR-0087, which did exactly this move on the RECEIVING side and deliberately scoped itself away from the chain-facing container, including its two amendments recording what was measured against its own text. ADR-0044 is the follower rule; ADR-0086 is why changed code is a new identity; ADR-0084 is slots, which is why the previous session's generation survives a reload.
+
+**Treat the observation as a claim to CHECK, not an instruction to obey.** It was read off the source by a conductor reviewing someone else's work, and it has not been run. Five builders in this family have now contradicted their task text and every one of them was right to. If the mechanism is wrong at any step -- if a tab does not really open with one generation, if `fetcherOf` does not name what the note says, if something else fetches -- then say so, and that is the result.
+
+The decision most likely to be got wrong is scope. The pull to fix it while you are in there will be strong, especially if the fix looks small. Do not: the fix direction is a genuine fork with an ADR-gate trade-off, and choosing it silently inside a measurement task is how a fork gets decided by whoever happened to be holding it. Measure, decide, write it down.
+
+The second: measure the CHAIN READS. A tab whose `follows` flag looks wrong might still fetch, and a tab whose flags look right might not. The strongest work in this family reproduced a defect, patched the obvious fix, measured that it made things worse, and reported the numbers.
+
+The seam to test at is the browser package's own container tests, which already stand a container up over a durable registry and a fake chain and reload it.
+
+Done means: the stall is reproduced or refuted with numbers, the existing test's configuration is judged, and -- only if it reproduces -- an ADR names the direction and its trade-off.
+
+Two things so a mandatory drift-check does not bounce this task needlessly. ADR-0087's `status:` line still reads `accepted, not yet implemented` although its main task is in `work/tasks/done/` -- that is DELIBERATE: the family's closing task owns deleting the line, and it is blocked behind every leaf precisely so it is last. Treat it as a pending line, not as drift. And ADR-0087's scoping away from the chain-facing container is recorded in that done record's `## Decisions`, not in the ADR text, which is simply silent about the browser.
+
+FIRST, check this task against current reality. It was written immediately after ADR-0087's main piece landed, so the code it describes is days old at most, but check anyway.
+
+RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT. Do not write the done record, the commit message or the PR body yourself.
