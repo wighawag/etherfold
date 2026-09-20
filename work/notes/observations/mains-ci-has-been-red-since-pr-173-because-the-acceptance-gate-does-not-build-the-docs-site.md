@@ -57,3 +57,17 @@ Two separable things, and the second is the one that matters.
 **The gate gap** is the finding. A check that runs in CI and not in `verify` means the gate's green is not a claim about mergeability, and a contributor cannot get an honest answer locally. Either `docs:build` joins `verify`, so a broken docs site reds the gate where it is cheap to see, or it is deliberately excluded and that exclusion is written down with its reason -- but the current state, where it is excluded silently, is what let seven PRs merge onto a red `main` without anyone deciding to.
 
 There is a prior cost signal for the same shape: `check:refs` and `check:graph` were both ADDED to `verify` after the things they check had already gone wrong repeatedly. This is the same class, one step earlier.
+
+## Update -- 2026-09-20: one claim above is WRONG, and the real mechanism is worse
+
+Corrected after review. This note is append-only, so the text above stands as written; this is what it got wrong.
+
+**"The current state, where it is excluded silently" is FALSE.** The exclusion was deliberate and argued, in `.github/workflows/ci.yml`'s own `Build docs site` comment: "It belongs HERE and not in `dorfl.json`'s `verify`: it is ~35s, it needs no per-task feedback, and the failure it catches is a repo-wide one rather than something a single task's build agent can act on." So the fix was never "write the decision down"; it was **overturn a written decision**, which is a higher bar and was cleared on different grounds than this note gives.
+
+**The same comment records that this is the SECOND time.** "A spike README linked `../../../work/notes/findings/...`, which is outside the VitePress root, and `docs:build` was red on `main` from 00805ae until someone happened to run it locally." The CI step was added in response to that. It fired correctly this time too, and `main` went red for seven PRs anyway.
+
+**Which is the actual finding, and this note missed it.** The gap was never that nothing CHECKS the docs build. CI checks it, on every pull request, and it was red on all seven. The gap is that **a red check does not block the land path this repo uses**: work is squash-merged by the agent runner and its conductor, neither of which gates on a check run. "CI will catch it" is only true if a human reads CI. So the argument that the failure is "repo-wide rather than something a single task's build agent can act on" inverts: a repo-wide breakage that only a deploy notices is strictly worse than one the gate refuses while a build agent still owns the branch.
+
+The same reversal was already argued in the same file, one step up, on the `Typecheck` step: "A gate step that only one of the two runners executes is protecting nothing: whatever CI does not check, only a dorfl-driven land checks, and plenty lands by other routes." That is the reasoning that decided it, in both directions.
+
+**Also corrected:** the note counts the precedent for absolute GitHub links as five; it is at least ten in the browser guide alone, plus five spike READMEs. And a converse gap named in the same CI comment -- `verify` not running `pnpm build:examples` -- was closed at the same time; measured, it costs 3 seconds.

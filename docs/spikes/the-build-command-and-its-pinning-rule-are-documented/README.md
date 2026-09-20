@@ -1,6 +1,6 @@
 # What lands in a bundle's bytes, and therefore in its identity
 
-Evidence for the documented build command in [`packages/cli/README.md`](../../../packages/cli/README.md#producing-the-processor-bundle). A processor is named by the sha256 of its bundle ([ADR-0086](../../adr/0086-a-processors-identity-is-derived-from-its-code-and-never-declared.md)), so a flag that changes the output changes which GENERATION a deployment is, and an author needs to know which flags those are before they are told to pin them.
+Evidence for the documented build command in [`packages/cli/README.md`](https://github.com/wighawag/etherfold/blob/main/packages/cli/README.md#producing-the-processor-bundle). A processor is named by the sha256 of its bundle ([ADR-0086](../../adr/0086-a-processors-identity-is-derived-from-its-code-and-never-declared.md)), so a flag that changes the output changes which GENERATION a deployment is, and an author needs to know which flags those are before they are told to pin them.
 
 Three claims the documentation makes are measured here rather than asserted, by hashing real esbuild output:
 

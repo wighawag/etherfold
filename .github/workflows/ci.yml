@@ -91,8 +91,9 @@ jobs:
 
       # The docs embed the demo, and the examples import the published packages,
       # so they are the closest thing to a consumer of this workspace.
-      # Note the converse gap this does NOT close: `verify` does not run this, so
-      # an example whose `tsc` emit breaks passes the gate and fails here.
+      # The converse gap this used to leave open is CLOSED as of 2026-09-20:
+      # `verify` now runs this too (it costs 3s), so an example whose `tsc` emit
+      # breaks reds the gate instead of only reaching here.
       - name: Build examples
         run: pnpm build:examples
 
@@ -104,10 +105,30 @@ jobs:
       # VitePress root, and `docs:build` was red on `main` from 00805ae until
       # someone happened to run it locally.
       #
-      # It belongs HERE and not in `dorfl.json`'s `verify`: it is ~35s, it needs
-      # no per-task feedback, and the failure it catches is a repo-wide one rather
-      # than something a single task's build agent can act on. The guide is now
-      # user-facing product documentation with copyable recipes in it, so a dead
-      # link is a broken deliverable rather than cosmetic.
+      # It also belongs in `dorfl.json`'s `verify`, as of 2026-09-20, REVERSING
+      # what this comment used to say. The old reasoning was that it is ~35s, needs
+      # no per-task feedback, and catches a repo-wide failure rather than something
+      # a single task's build agent can act on. The first is true (measured: ~22s
+      # after `pnpm build`, which `verify` has already run) and the rest did not
+      # survive contact.
+      #
+      # What defeated it: a red check HERE does not block the land path this repo
+      # actually uses. Work is merged by the agent runner and its conductor, which
+      # squash-merge without gating on a check run, so "CI will catch it" is only
+      # true if someone reads CI. Nobody did -- `main` was red on ONE dead link
+      # from a05ba3d5 (2026-09-18) through SEVEN merged PRs, and it took a
+      # conductor bisecting an unrelated red to find it. That is the second time
+      # this precise bug landed: the paragraph above records the first.
+      #
+      # A failure being repo-wide is also not a reason to keep it out of the gate.
+      # It is a reason the gate should refuse it, because a repo-wide breakage that
+      # only a deploy notices is strictly worse than one a build agent is told
+      # about while it still owns the branch. The guide is user-facing product
+      # documentation with copyable recipes in it, so a dead link is a broken
+      # deliverable rather than cosmetic -- which argues for MORE gating, not less.
+      #
+      # Keeping it here too is deliberate: this is what covers the routes that do
+      # not go through `verify` at all. See the observation
+      # `mains-ci-has-been-red-since-pr-173-because-the-acceptance-gate-does-not-build-the-docs-site`.
       - name: Build docs site
         run: pnpm docs:build
