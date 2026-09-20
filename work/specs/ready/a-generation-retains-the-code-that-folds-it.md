@@ -1,5 +1,5 @@
 ---
-title: 'A generation retains the CODE that folds it, so a predecessor can be resumed and not merely read'
+title: 'A SERVER deployment retains the CODE that folds each generation, so a predecessor can be resumed and not merely read'
 slug: a-generation-retains-the-code-that-folds-it
 taskedAfter: [a-processor-is-a-bundle-and-its-hash-is-its-identity]
 ---
@@ -34,7 +34,7 @@ Note what cannot substitute for a bundle: retaining the author's source FILE. A 
 4. As a developer, I want the thing my deployment stores for a generation to be the same kind of thing ADR-0085 lets me push to it, so that there is one representation of "a processor" rather than two.
 5. As an operator reclaiming disk, I want a generation's retained code to go when the generation goes, so that retention has the same lifecycle as the thing it belongs to and cannot leak.
 6. As an operator holding a `predecessor`, I want to know that retention pins exactly one extra artifact and not an unbounded history, so that the revert promise has a bounded cost I can reason about.
-7. As a browser app developer, I want the per-generation artifact cost to be known and bounded at `BROWSER_GENERATION_CAPS`, so that adding this does not push a tab into a storage failure at an arbitrary write.
+7. WITHDRAWN (ADR-0089). This was the browser story: the per-generation artifact cost known and bounded at `BROWSER_GENERATION_CAPS`, so retention did not push a tab into a storage failure. A tab retains no artifacts, because it holds no `predecessor` and cannot instantiate retained bytes without a service worker. Kept as a numbered entry rather than renumbered, so the stories below keep the numbers anything already refers to at an arbitrary write.
 8. As a developer reading the code, I want "this generation is frozen because its code is gone" to be an expressible and REPORTED state if it can occur at all, so that a stalled deployment says why rather than merely stalling.
 
 ### Autonomy notes
@@ -49,8 +49,8 @@ Made at launch, in answer to the shape of the problem:
 - **The bytes live in the DATABASE, beside the generation's state.** One namespace then holds everything a generation is, which is the same grouping ADR-0053 already chose for state, and it means a generation's storage is reclaimed by one mechanism rather than two. It also keeps the artifact on the substrate the deployment already has, rather than introducing a filesystem dependency on a runtime (a Worker) that has none.
 - **A bundle dies with its generation.** `reclaim` (`a-generation-no-slot-names-is-reclaimed-on-request`) takes the artifact with the row and the state namespace, exactly as it already takes the state. Nothing retains an artifact whose generation no slot names.
 - **Retention is therefore bounded by the slots.** `canonical`, `successor` and `predecessor` pin at most three artifacts, so `predecessor` retention costs exactly one extra bundle rather than an unbounded history. That is the same bound ADR-0084 already established for state, which is the point: the code follows the generation, so it inherits the generation's lifecycle rather than needing one of its own.
-- **The browser cost is ACCEPTED**, subject to story 7's measurement. At `BROWSER_GENERATION_CAPS` of two this is at most two artifacts in a tab. The number is a DELIVERABLE of the build rather than a question blocking it: only building it answers it, and nothing here turns on the answer.
-- **A retained bundle is instantiated ON DEMAND, not at open.** Loading every slotted generation at open would mean three live engines where there are three occupied slots, which in a browser tab is three times the memory for two generations nobody is currently reading. The `predecessor`'s bundle is instantiated when a revert actually moves the pointer onto it, which is the moment its answers start mattering and the only moment it needs to fold.
+- **There is NO browser cost, because there is no browser half** (ADR-0089). This decision previously accepted a bound of at most two artifacts in a tab at `BROWSER_GENERATION_CAPS`. A tab now retains nothing: it holds no `predecessor`, and it could not instantiate a retained bundle under a realistic CSP without a service worker, which was declined. Everything below is the server.
+- **A retained bundle is instantiated ON DEMAND, not at open.** Loading every slotted generation at open would mean three live engines where there are three occupied slots, which on a server is three live engines for two generations nobody is currently reading. The `predecessor`'s bundle is instantiated when a revert actually moves the pointer onto it, which is the moment its answers start mattering and the only moment it needs to fold.
 - **The AUTHOR bundles, and the CLI stays dumb.** No bundler in the CLI's dependency tree and no build step on its start path. It also keeps the identity a function of an artifact the author produced and can reproduce, rather than of whatever the CLI happened to bundle with.
 - **`esbuild` is the documented default**, as one command producing a single ESM file. `rollup` is named as the alternative where output stability matters more than speed. `tsup` is deliberately not recommended: it is esbuild with a wrapper and adds no determinism.
 - **The bundle is MINIFIED.** Minification strips comments, so a comment-only edit does not move the identity, which is exactly the spurious re-fold worth avoiding once the hash IS the identity (ADR-0086). The cost, that minified output shifts more between bundler versions, is bounded by the pinning rule below.
@@ -78,9 +78,19 @@ Exactly one class of test needs more: the resume round trip (a generation is ret
 
 Stating this here because a tasker who misses it has two failure modes, and both are expensive: cutting a task that puts a build step in 41 places, or inventing a way to declare an identity without bytes, which is the deleted `version` growing back under another name.
 
-## Open risk being spiked
+## The open risk was spiked, and it closed this spec's BROWSER half
 
-Whether a browser tab CAN instantiate retained bytes at all is not yet known, and it is the one thing that could invalidate this spec's browser half. A strict Content-Security-Policy can block `blob:` and `data:` script execution, and `script-src 'self'` alone is enough. `a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp` answers it before this spec is tasked; if the answer is no under realistic policies, the browser revert promise has to be met another way or withdrawn honestly, which is a needs-attention outcome rather than something to design around here. Nothing in the SERVER half depends on the answer.
+**Resolved 2026-09-20. This spec is now SERVER-ONLY, and the browser is out of scope by decision rather than by omission (ADR-0089).**
+
+The risk parked here was whether a browser tab can instantiate retained bytes at all, since a strict Content-Security-Policy can block `blob:` and `data:` script execution and `script-src 'self'` alone is enough. `a-tab-can-or-cannot-instantiate-a-processor-from-bytes-under-a-csp` answered it, across three engines and eight policies, and the conclusions are in `work/notes/findings/a-tab-instantiates-retained-bytes-only-through-a-same-origin-url.md`.
+
+The answer is sharp in both directions. `blob:` and `data:` module imports and `new Function` are DEAD under every policy a real app ships, including the reference deployment's own gateway. And a tab can still do it, through exactly one mechanism: a service worker holding the retained bytes and answering a SAME-ORIGIN URL with them, which worked under all eight policies in all three engines.
+
+That mechanism is real, and it was declined. Requiring a service worker is a large, permanent addition to what embedding this library means, and ADR-0089 decided the thing it would buy is worth nothing on that runtime: a browser tab holds no `predecessor`, because in development the processor is the code in the editor and reverting an edit costs a keystroke, and in a production build the previous processor is not in the bundle at all, so a slot naming it names something the tab cannot instantiate. Going back in a browser means supplying the old code, which resolves to the same generation by identity (ADR-0086) and re-folds from the stream ADR-0087 keeps.
+
+So the browser half is not deferred, blocked or unbuilt. It is decided against, and the finding above is retained as the evidence for that decision rather than as an open question. What follows is the SERVER problem, which is untouched by any of it.
+
+The browser promise was withdrawn honestly, which is what that sentence asked for. Nothing in the SERVER half ever depended on the answer, and nothing in it changes.
 
 ## Out of Scope
 
