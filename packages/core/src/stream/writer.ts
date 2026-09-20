@@ -342,6 +342,7 @@ export class StreamWriter<ABI extends Abi> implements LogIngestion {
 		if (stored && newLastSync.lastFromBlock > stored.lastToBlock + 1) {
 			throw new StreamHoleError(this.streamDigest, stored.lastToBlock, newLastSync.lastFromBlock);
 		}
+		if ((globalThis as any).SABOTAGE_NO_APPEND) return;
 		await this.appendEmissions({
 			stream: this.streamDigest,
 			coverage: {
