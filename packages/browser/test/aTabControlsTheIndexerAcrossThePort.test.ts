@@ -442,9 +442,14 @@ describe('a tab reconfiguring the source', () => {
 				value: EXPECTED_A_FROM_LATER_BLOCK.transfers,
 			});
 
-			// and nothing was discarded: the generation that was superseded still holds
-			// the complete fold the pointer can move back to.
-			expect(await stateOf(databaseName, incumbent.record)).toEqual(EXPECTED_A);
+			// ...and the promotion FINISHED, which a tab can see: the generation it
+			// superseded is no longer held and no longer registered, because on this runtime
+			// its code is absent from the build and it could never answer a read or fetch
+			// again (ADR-0090). What is left is the fold the tab is reading from.
+			expect((await port.generations()).map((generation) => generation.record.stream)).toEqual([
+				reconfigured.generation.record.stream,
+			]);
+			expect(incumbent.record.stream).not.toBe(reconfigured.generation.record.stream);
 			expect(await stateOf(databaseName, reconfigured.generation.record)).toEqual(EXPECTED_A_FROM_LATER_BLOCK);
 			expect(chain.ranges.some((range) => range.from === RECONFIGURED_FROM_BLOCK)).toBe(true);
 		} finally {
@@ -457,7 +462,11 @@ describe('a tab reconfiguring the source', () => {
 	it('reports which generations exist, how far each has got, and which one answers reads', async () => {
 		const ends = wire();
 		const chain = gatedChain();
-		const host = await hostOver(ends.host, freshName(), chain);
+		// the drop is turned OFF, because what is asserted is the REPORTING of several
+		// generations either side of a promotion: on this runtime a promotion discards
+		// what it superseded unless the embedder says otherwise (ADR-0090), and there
+		// would be one generation left to report on
+		const host = await hostOver(ends.host, freshName(), chain, {promotion: {dropOnPromotion: false}});
 		const port = connectToIndexerHost(ends.tab);
 
 		try {
@@ -538,10 +547,12 @@ describe('a tab reconfiguring the source', () => {
 		const port2 = connectToIndexerHost(chosen.tab);
 
 		try {
-			// The host selects NOTHING of its own, so what a tab is told is the one
-			// default there is everywhere.
-			expect(await port.promotion()).toEqual({policy: 'on-catch-up', dropOnPromotion: false});
-			expect(await port2.promotion()).toEqual({policy: 'immediate', dropOnPromotion: false});
+			// The host selects NOTHING of its own, so what a tab is told is what the
+			// CONTAINER resolved: the one policy default there is everywhere, and the drop
+			// default this runtime answers for, because a tab ships one processor and can
+			// never run the generation a promotion superseded (ADR-0090).
+			expect(await port.promotion()).toEqual({policy: 'on-catch-up', dropOnPromotion: true});
+			expect(await port2.promotion()).toEqual({policy: 'immediate', dropOnPromotion: true});
 
 			// ...and `immediate` does what it says from a tab too: canonical on
 			// creation, before it has caught up to anything (story 13).

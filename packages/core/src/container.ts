@@ -129,18 +129,27 @@ const namedLogger = logs('@etherfold/core');
  * code, which derives the same identity and RESOLVES to the same record
  * (ADR-0086), re-folding the stream already on disk (ADR-0087).
  *
+ * **AND A PROMOTION FINISHES THE JOB HERE (ADR-0090)**, which is the other axis
+ * this twin differs on and the one that makes the numbers work. `dropOnPromotion`
+ * DEFAULTS TO TRUE on this container (see the constructor): the generation a
+ * promotion superseded can never answer a read or fetch again on a runtime that
+ * ships one processor, so it goes -- row and state, never its stream (ADR-0087) --
+ * and the FETCH DUTY moves to the promoted generation in the same act
+ * (`dropSuperseded`). An embedder may still turn the drop off and keep a way back
+ * inside one session.
+ *
  * **What the browser's numbers mean after that**, stated because it is arithmetic
  * rather than taste, and MEASURED rather than reasoned: at `maxGenerations: 2` the
  * tab holds `canonical` + `successor` (the reconfigure loop, which is what this
- * makes unbounded) and never `canonical` + `predecessor`. But UNSLOTTED IS NOT
- * COLLECTED -- there is no `reclaim` verb on this runtime -- so what decides the
- * second seat after a promotion is whether the arriving registration may DROP the
- * superseded generation. A CROSS-STREAM save may (it is alone on its old stream)
- * and lands; a SAME-STREAM save loop may NOT, because that generation FETCHES the
- * stream the arriving fold is on (`wouldStrandAFollower`, ADR-0044), so the drop is
- * declined and the registration meets the cap and is REFUSED
- * (`GenerationCapReachedError`). The caps are deliberately unchanged by any of this
- * (ADR-0084's consequences).
+ * makes unbounded) and never `canonical` + `predecessor`. Every promotion frees the
+ * second seat, on BOTH kinds of save: a CROSS-STREAM save leaves the superseded
+ * generation alone on its old stream, and a SAME-STREAM save loop -- the developer
+ * editing a handler, the common case -- hands that stream to the promoted fold
+ * before dropping the writer. That second case is what used to WALL: the drop was
+ * declined (`wouldStrandAFollower`, ADR-0044), the save met the cap and was REFUSED
+ * (`GenerationCapReachedError`), and no page reload could clear it. The caps are
+ * deliberately unchanged by any of this (ADR-0084's consequences): what frees the
+ * seat is a promotion finishing, never an eviction at the bound.
  *
  * The DIRECTION of a move is still read from a slot, and that is `successor`'s job
  * rather than `predecessor`'s: a PROMOTION is a move onto what `successor` names,
@@ -706,7 +715,15 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		this.provider = options.provider;
 		this.source = options.source;
 		this.config = options.config ?? {};
-		this.promotionConfig = resolvePromotionConfig(options.promotion);
+		// THE DROP DEFAULTS TO ON HERE, and this is the ONE call site that says so
+		// (ADR-0090, point 1). This runtime ships ONE processor, so the generation a
+		// promotion superseded is not un-promoted but ABSENT FROM THE BUILD: it can never
+		// answer a read and never fetch, and retaining it spends the tightest caps in the
+		// system on a seat nothing can use. The POLICY beside it still has no per-runtime
+		// default and must never grow one -- that axis is development-versus-production,
+		// which nothing here can detect -- and an embedder that wants the old behaviour
+		// still says `{dropOnPromotion: false}` and gets it.
+		this.promotionConfig = resolvePromotionConfig(options.promotion, {dropOnPromotion: true});
 		this.createGeneration =
 			options.createGeneration ??
 			((provider, processor, source, config, processorIdentity) =>
@@ -789,6 +806,12 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * case makes the two the same thing anyway, since the first generation registered
 	 * is the one the registry makes canonical. See `holdGeneration` for the
 	 * derivation and for why the candidates are the held folds (ADR-0088).
+	 *
+	 * There is exactly ONE moment at which that answer changes under a held fold, and
+	 * it is not a pointer move on its own: a promotion that DROPS the writer hands the
+	 * stream to the generation the derivation names next, which is safe only because
+	 * that generation has provably reached the writer's cursor (`dropSuperseded`,
+	 * ADR-0090). Everywhere else the duty is exactly as stable as this paragraph says.
 	 *
 	 * The registry is written BEFORE the engine exists, which is the order its own
 	 * documentation asks for: a stream subtree no registered generation claims is
@@ -1458,15 +1481,12 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		 * generation a tab is structurally unable to instantiate, and the seat it holds
 		 * is a seat under `BROWSER_GENERATION_CAPS`.
 		 *
-		 * The generation the pointer moved off is therefore UNSLOTTED, which is
-		 * collectable by the ordinary rule and deleted by nothing here (ADR-0087's removal
-		 * of the automatic reap stands). Two things follow that are worth knowing before
-		 * reading a cap refusal on this runtime, both MEASURED rather than argued: a
-		 * CROSS-STREAM save really does free the seat, because the superseded generation
-		 * is alone on its old stream and a replacement may drop it; a SAME-STREAM save
-		 * loop still meets the cap, because that generation is the FETCHER of the stream
-		 * the arriving one is on (`wouldStrandAFollower`, ADR-0044) and the seat is held
-		 * by that duty rather than by any slot.
+		 * The generation the pointer moved off is therefore UNSLOTTED. What then happens
+		 * to it is `arrangeDrop`'s: on this runtime the promotion DISCARDS it by default
+		 * and takes its stream with it (ADR-0090), because it could never be run here
+		 * again -- and where an embedder turned that off, it is collectable by the
+		 * ordinary rule and deleted by nothing else here (ADR-0087's removal of the
+		 * automatic reap stands).
 		 *
 		 * The receiving twin passes nothing and keeps the assignment: there an operator
 		 * reverts without redeploying and the code arrives by a route a tab does not have.
@@ -1565,16 +1585,45 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * (ADR-0087). The stream is what the chain fetches bought and the state is derived
 	 * from it, so what the drop takes is the recomputable half.
 	 *
-	 * **It never drops the WRITER of a stream another held generation follows.**
-	 * Which generation writes a stream is the first one held on it and not the
-	 * canonical one (ADR-0044), precisely so a promotion does not hand the append
-	 * duty to a different engine mid-flight -- so dropping the writer would leave
-	 * its followers folding a stream nothing appends to, and the app would simply
-	 * stop advancing. That is worse than keeping a row and a state store nobody
-	 * reads, so the drop is DECLINED and said out loud. The case it costs is the
-	 * common reconfigure (a processor change, on the stream that is already there);
-	 * the case it serves is the filter change, where the retired generation is alone
-	 * on its stream and dropping it strands nothing.
+	 * ## THE STREAM CHANGES HANDS IN THE SAME ACT (ADR-0090, point 2)
+	 *
+	 * The common save is a handler edit, so both generations sit on ONE stream and the
+	 * successor was constructed as a FOLLOWER of the incumbent -- which made this drop
+	 * unreachable, because dropping a stream's writer would leave its follower folding
+	 * a stream nothing appends to (ADR-0044). That follower relationship is an artifact
+	 * of CONSTRUCTION ORDER and not a fact about the two generations: the same
+	 * successor, in a tab reloaded one second later, is built alone and IS the fetcher
+	 * (ADR-0088). So rather than weaken the guard, the promotion does what the reload
+	 * already does -- the promoted generation STOPS FOLLOWING and takes the stream
+	 * (`takeOverStream`), in the same act as the drop.
+	 *
+	 * **Why THIS moment and no other.** The hand-over is safe exactly because the
+	 * promoted generation is provably AT the writer's position: under `on-catch-up`
+	 * the promotion IS the event "the successor reached the incumbent's cursor", and
+	 * under `immediate` the deferral above has already waited for that same condition
+	 * before this runs. There is no gap for an append to be lost in. This is
+	 * deliberately NOT a fetcher that can change at any time under a held fold: the
+	 * initial derivation is taken ONCE and its completeness is load-bearing
+	 * (`holdGeneration`), and ADR-0090 rejects continuous recomputation explicitly.
+	 *
+	 * ## THE DECLINE IS NARROWED, NOT DELETED
+	 *
+	 * What the hand-over removes is the CASE the guard was declining, and the guard
+	 * stays for every case it does not cover. The question is asked as ADR-0088's --
+	 * who fetches a stream among the folds this container HOLDS -- so it is one rule at
+	 * both sites rather than two dialects:
+	 *
+	 * - the superseded generation does not fetch this stream, so dropping it strands
+	 *   nobody and no hand-over is needed;
+	 * - it fetches, and NOTHING this container holds is left on that stream, so again
+	 *   there is nothing to strand and nothing to hand over (the cross-stream save);
+	 * - it fetches, and the fold the derivation names NEXT is the promoted generation:
+	 *   the hand-over makes reality match that derivation, and the drop proceeds;
+	 * - it fetches, and somebody ELSE is next. The promoted generation has not been
+	 *   following that stream and is at no position on it, so there is nothing to hand
+	 *   over, and the next fetcher is a fold frozen as a follower at construction.
+	 *   Dropping the writer would leave a fold on a stream nothing appends to, so the
+	 *   drop is DECLINED and said out loud, exactly as it always was.
 	 */
 	protected async dropSuperseded(
 		superseded: HeldEntry<ABI, ProcessResultType>,
@@ -1583,21 +1632,33 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		if (!this.held.includes(superseded)) {
 			return;
 		}
-		const strands = this.held.some(
-			(entry) => entry !== superseded && entry.follows && entry.record.stream === superseded.record.stream,
-		);
-		if (!superseded.follows && strands) {
-			namedLogger.info(
-				`drop-on-promotion DECLINED for {stream: ${superseded.record.stream}, processor: ` +
-					`${superseded.record.processor}}: it WRITES a stream another generation follows, and dropping it would ` +
-					`leave that one folding a stream nothing appends to. It is retained; delete it explicitly once nothing ` +
-					`follows its stream.`,
-			);
-			return;
+		const stream = superseded.record.stream;
+		let handOver: HeldEntry<ABI, ProcessResultType> | undefined;
+		if (this.fetcherAmongHeld(stream) === superseded) {
+			// WHO THE DERIVATION NAMES NEXT, which is the only generation the duty may go
+			// to: the oldest fold this container holds on that stream once this one goes.
+			const next = this.fetcherAmongHeld(stream, superseded);
+			if (next && next !== successor) {
+				namedLogger.info(
+					`drop-on-promotion DECLINED for {stream: ${superseded.record.stream}, processor: ` +
+						`${superseded.record.processor}}: it FETCHES a stream this container still folds, and the generation ` +
+						`that would fetch it next ({processor: ${next.record.processor}}) is not the one the promotion ` +
+						`demonstrated anything about -- so there is nothing that has provably reached this writer's cursor to ` +
+						`hand the stream to, and dropping it would leave that fold folding a stream nothing appends to ` +
+						`(ADR-0044). It is retained; delete it explicitly once nothing follows its stream.`,
+				);
+				return;
+			}
+			handOver = next;
 		}
 		// Out of the held list FIRST, so nothing drives an engine whose state store is
 		// being dropped underneath it.
 		this.held.splice(this.held.indexOf(superseded), 1);
+		// ...and the pen changes hands with NO await in between, so no cycle can observe
+		// this stream with two writers on it or with none.
+		if (handOver) {
+			this.handOverTheStream(handOver, superseded);
+		}
 		try {
 			// NO REAP: a promotion nobody asked to delete a stream for does not delete one
 			// (ADR-0087). The stream stays, and is what the next generation over it re-folds
@@ -1619,6 +1680,64 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				err,
 			);
 		}
+	}
+
+	/**
+	 * WHICH FOLD THIS CONTAINER HOLDS FETCHES THIS STREAM, as an entry.
+	 *
+	 * `fetcherOf` over the records of the folds PRESENT, which is ADR-0088's rule and
+	 * the same question `holdGeneration` asks when it derives `follows` and
+	 * `wouldStrandAFollower` asks when it declines a drop. One question, one set, one
+	 * home: what differs between the three sites is only WHEN it is asked.
+	 *
+	 * `excluding` is how the drop asks it about the moment AFTER: who fetches this
+	 * stream once that generation is gone. It is a HYPOTHETICAL and nothing is
+	 * removed by asking.
+	 */
+	protected fetcherAmongHeld(
+		stream: string,
+		excluding?: HeldEntry<ABI, ProcessResultType>,
+	): HeldEntry<ABI, ProcessResultType> | undefined {
+		const present = this.held.filter((entry) => entry !== excluding);
+		const fetcher = fetcherOf(
+			present.map((entry) => entry.record),
+			stream,
+		);
+		return fetcher && present.find((entry) => sameGeneration(entry.record, fetcher));
+	}
+
+	/**
+	 * HAND THE STREAM OVER to the generation a promotion just moved the pointer to
+	 * (ADR-0090, point 2).
+	 *
+	 * Two halves and they must not come apart: the ENTRY stops following, which is
+	 * what makes the container advance it with `indexMore` rather than `followMore`,
+	 * and the ENGINE is handed the keeper itself in place of the read-only view it was
+	 * constructed with, which is what makes its appends land. Marked without the
+	 * second half the generation would fetch and write nowhere; given the second half
+	 * without the first it would never fetch at all.
+	 *
+	 * A container with NO keeper has no stream for anyone to hold, so there is only
+	 * the first half to do: `follows` still decides which verb advances this fold.
+	 *
+	 * The CALLER is `dropSuperseded` and only it, because what makes this safe is the
+	 * pair of facts only a promotion has: the generation losing the stream is going in
+	 * the same act, and this one is provably at its cursor.
+	 */
+	protected handOverTheStream(
+		taking: HeldEntry<ABI, ProcessResultType>,
+		from: HeldEntry<ABI, ProcessResultType>,
+	): void {
+		taking.follows = false;
+		if (this.config.keepStream) {
+			taking.generation.takeOverStream(this.config.keepStream);
+		}
+		namedLogger.info(
+			`the stream ${taking.record.stream} CHANGES HANDS: {processor: ${taking.record.processor}} stops following it ` +
+				`and FETCHES it from here on, because the promotion that superseded {processor: ${from.record.processor}} ` +
+				`proved it had reached that generation's cursor. Exactly one generation fetches this stream at every ` +
+				`moment, including this one (ADR-0044, ADR-0090).`,
+		);
 	}
 
 	// ------------------------------------------------------------------------------------------------------------------
@@ -1680,8 +1799,11 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * that reloads and sits there collects nothing, because the fold it arrives with is
 	 * the one `canonical` names and the shared rule displaces nothing for it.
 	 *
-	 * What it does NOT do is drop anything at a PROMOTION, move the fetch duty or touch
-	 * the caps: those are ADR-0090's points 1 and 2.
+	 * What happens at a PROMOTION is `arrangeDrop`'s and `dropSuperseded`'s (ADR-0090,
+	 * points 1 and 2): there the superseded generation goes and its stream CHANGES
+	 * HANDS, because the promoted fold has provably reached its cursor. Nothing of that
+	 * belongs here -- a registration demonstrates nothing -- so this path still drops
+	 * only what it may drop safely, and the caps are untouched by either.
 	 */
 	protected async replaceTheSuccessor(
 		arriving: GenerationId,
@@ -1733,9 +1855,16 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * stream with it -- no drop reaps one any more (ADR-0087) -- so the hazard here is
 	 * the missing appender and only that.
 	 *
-	 * It reads the RECORDS rather than a held entry's `follows`, because the generation
-	 * the slot names may be one this process holds no engine for at all -- which is
-	 * exactly the reload case, and the case the durable slot exists for.
+	 * **It takes RECORDS in and answers about FOLDS, and that pairing is the point.**
+	 * It has to take records, because the caller hands it rows: the record it is asked
+	 * about may be one this container holds no fold for at all, which is the reload
+	 * case and the one ADR-0090's point 3 collects. What it answers with is the
+	 * derivation over the folds this container HOLDS (below), so such a record is never
+	 * named as a fetcher and strands nobody -- which is exactly what makes it
+	 * collectable. The justification this paragraph used to give was the generation "the
+	 * slot names" being unheld; that is stale twice over, because no slot names a
+	 * superseded generation on this runtime at all (ADR-0089) and an unheld row is what
+	 * the narrowing below FILTERS OUT rather than a reason to widen.
 	 *
 	 * ## WHO FETCHES IS ASKED OF THE FOLDS THIS CONTAINER HOLDS (ADR-0088)
 	 *
@@ -1757,6 +1886,15 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 *
 	 * The FOLLOWER half of the question was always asked of the held set (below), so
 	 * this makes one question about one set rather than half of each.
+	 *
+	 * ## AND IT IS NOT NARROWED BY THE HAND-OVER (ADR-0090)
+	 *
+	 * A PROMOTION may now hand a stream to the generation it promoted and drop the
+	 * writer (`dropSuperseded`), because that generation has provably reached the
+	 * writer's cursor. A REGISTRATION has no such thing: a fold arriving beside the live
+	 * one is at no position at all, and nothing about it demonstrates anything. So this
+	 * question keeps its full force, and its decline is the one that still stops a save
+	 * deleting the generation that is fetching for it.
 	 */
 	protected wouldStrandAFollower(
 		record: GenerationRecord,
@@ -1879,9 +2017,14 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			record: entry.record,
 			generation: entry.generation,
 			processor: entry.processor,
-			follows: entry.follows,
-			// GETTERS, so a caller holding this object sees the drain complete and the
-			// cursor move rather than the values they had when the object was built
+			// GETTERS, so a caller holding this object sees the drain complete, the cursor
+			// move and the STREAM CHANGE HANDS rather than the values they had when the
+			// object was built. `follows` joined them when a promotion became able to move
+			// the fetch duty (ADR-0090): a caller that kept this object across one would
+			// otherwise be told the promoted generation is still following.
+			get follows(): boolean {
+				return entry.follows;
+			},
 			get lastSync(): LastSync<ABI> | undefined {
 				return entry.lastSync;
 			},

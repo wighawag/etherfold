@@ -109,6 +109,12 @@ const SLOW_REST = 600;
 function hostOver(access: HostAccess, databaseName: string, chain: ReturnType<typeof fakeChain>, tipInterval: number) {
 	return serveIndexerHost<TestABI, EntityStateView>(
 		{
+			// RETAINING what a promotion supersedes, because every case here holds TWO
+			// generations at once and asserts that BOTH reached the tip -- which is the
+			// claim about the loop. On this runtime a promotion discards what it superseded
+			// unless the embedder says otherwise (ADR-0090), which is a different subject and
+			// would leave one generation to assert about.
+			promotion: {dropOnPromotion: false},
 			// ONE STORE PER GENERATION, keyed on the generation's own stream. Load-bearing
 			// for every case here, because all of them hold two generations at once: two
 			// generations under one database are ONE store, and their cursors collide under
@@ -263,7 +269,9 @@ describe('the main-thread driver rests on the same rule', () => {
 				createProcessor: (state) => entityProcessorOver(state, processor),
 				processorIdentity: identityOf('the-app'),
 			},
-			{keepStream: keepStreamOnIndexedDB<TestABI>(freshName())},
+			// RETAINING, for the reason the worker host above states: what is asserted is
+			// that BOTH generations reached the tip without a rest between cycles
+			{keepStream: keepStreamOnIndexedDB<TestABI>(freshName()), promotion: {dropOnPromotion: false}},
 		);
 
 		try {

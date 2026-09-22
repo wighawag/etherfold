@@ -63,17 +63,20 @@ test('a tab starts, stops and reconfigures the indexer across the port', async (
 			canonicalAtOnce: false,
 			sameStream: false,
 		});
-		expect(run.results.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: false});
+		// the POLICY is the one default there is everywhere; the DROP is the one value
+		// this runtime answers for, because a tab ships one processor and can never run
+		// the generation a promotion superseded again (ADR-0090)
+		expect(run.results.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: true});
 
 		// ...so the app was still reading complete OLD answers while the new fold
 		// caught up, and reads the NEW ones once the pointer moved.
 		expect(run.results.duringCatchUp).toBe(run.results.expectedBefore);
 		expect(run.results.afterPromotion).toBe(run.results.expectedAfter);
 
-		// TWO generations, one of them canonical, both level with the tip: nothing
-		// was discarded to get there.
+		// ONE generation, canonical and level with the tip: the promotion FINISHED, so
+		// the generation it superseded is gone rather than kept as an un-runnable row
+		// (ADR-0090). Its STREAM is kept, which is the expensive half (ADR-0087).
 		expect(run.results.generations).toEqual([
-			{canonical: false, follows: false, lastToBlock: BRANCH_A_TIP, blocksBehind: 0},
 			{canonical: true, follows: false, lastToBlock: BRANCH_A_TIP, blocksBehind: 0},
 		]);
 

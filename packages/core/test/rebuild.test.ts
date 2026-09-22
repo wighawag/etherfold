@@ -523,8 +523,14 @@ describe('the canonical generation is served throughout, and the pointer moves O
 });
 
 describe('the promotion policy is applied here and re-decided nowhere', () => {
-	it('defaults to `on-catch-up` with nothing dropped, as in every runtime', async () => {
+	it('defaults to `on-catch-up` with nothing dropped, which is THIS runtime`s answer', async () => {
 		const {incumbent} = await anIncumbentThatHasFolded();
+		// The POLICY is the one default there is everywhere. The DROP is the one value a
+		// RUNTIME answers for, and this runtime answers FALSE: here an operator reverts
+		// without redeploying and the fold they return to arrives by a route a browser
+		// does not have, so what a promotion superseded is kept and `predecessor` names
+		// it. The chain-facing twin answers TRUE, because a tab ships one processor and
+		// could never run that fold again (ADR-0090, whose point 4 is this line).
 		expect(incumbent.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: false});
 	});
 

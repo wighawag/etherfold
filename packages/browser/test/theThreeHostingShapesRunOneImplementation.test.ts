@@ -209,7 +209,11 @@ describe('the three hosting shapes run one implementation', () => {
 			// answered: the new source starts at block 102, so block 100's two transfers
 			// are not in it.
 			expect(await transfers(port)).toBe(EXPECTED_A_FROM_LATER_BLOCK.transfers);
-			expect((await port.generations()).length).toBe(2);
+			// ...and the promotion FINISHED: what it superseded is gone, because a tab
+			// ships one processor and could never run that fold again (ADR-0090). One
+			// generation is left and it is the one answering.
+			expect((await port.generations()).length).toBe(1);
+			expect((await port.generations())[0].record.stream).toBe(reconfigured.generation.record.stream);
 		} finally {
 			port.close();
 			indexer.dispose();

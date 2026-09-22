@@ -130,10 +130,15 @@ describe('the default is `on-catch-up` in the browser too, because nothing here 
 
 	it('reports the same policy the core resolves, rather than a browser one', async () => {
 		const app = await anAppAtTheTip();
-		// the assertion is that this runtime adds NO default of its own: an
+		// the assertion is that this PACKAGE adds NO default of its own: an
 		// `import.meta.env.DEV` sniff here would be a guess with `immediate`'s
-		// consequences, and there is nothing in a browser build to sniff
-		expect(app.indexer.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: false});
+		// consequences, and there is nothing in a browser build to sniff. The DROP is
+		// the one value the runtime answers for, and it is answered ONCE, by the
+		// chain-facing container itself (ADR-0090) -- a tab ships one processor, so the
+		// generation a promotion superseded is absent from the build and can never run
+		// again. So what is reported here is still what the core resolved, not a second
+		// default this package invented.
+		expect(app.indexer.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: true});
 		app.indexer.dispose();
 	});
 });
@@ -192,7 +197,11 @@ describe('`immediate` is the opt-in, and it degrades HONESTLY', () => {
 
 describe('`manual` waits to be asked, and the explicit verb is never gated', () => {
 	it('promotes only when told, and moves BACK the same way', async () => {
-		const app = await anAppAtTheTip({policy: 'manual'});
+		// the drop is turned OFF, because this case moves the pointer BACK and needs
+		// the generation it moves back to: on this runtime a promotion discards what it
+		// superseded unless the embedder says otherwise (ADR-0090), and that is a
+		// different subject from `manual` waiting to be asked
+		const app = await anAppAtTheTip({policy: 'manual', dropOnPromotion: false});
 		const successor = await app.reconfigure();
 		await app.drive();
 

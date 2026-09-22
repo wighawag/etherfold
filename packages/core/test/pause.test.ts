@@ -350,6 +350,11 @@ async function openWorld() {
 		provider: chain.provider,
 		source: SOURCE,
 		config: {stream: {finality: FINALITY}, keepStream: stream.keeper, streamWriteRetry: {delaySeconds: 0}},
+		// RETAINING what a promotion supersedes, because this suite MOVES THE POINTER
+		// BACK to a paused generation and asserts it answers exactly what it answered.
+		// This runtime drops the superseded generation by default (ADR-0090), which is a
+		// different subject and would take the generation under test with it.
+		promotion: {dropOnPromotion: false},
 		generations: [specFor(A), specFor(B)],
 		createGeneration: (provider, processor, source, config, processorIdentity) => {
 			const generation = new IndexerGeneration<Abi, string[]>(provider, processor, source, config, {processorIdentity});

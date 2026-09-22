@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {Abi} from 'abitype';
 import type {EventProcessor, IndexingSource} from '../src/types.js';
 import {openIndexer, UnheldGenerationError, type GenerationSpec} from '../src/container.js';
+import type {PromotionConfig} from '../src/generation/promotion.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
 import {
 	unslottedGenerations,
@@ -116,16 +117,30 @@ async function slotsOf(registry: GenerationRegistry) {
 	return {canonical: name(held.canonical), successor: name(held.successor), predecessor: name(held.predecessor)};
 }
 
-async function openContainer(folds: Fold[], registry?: GenerationRegistry) {
+/**
+ * A container over these folds.
+ *
+ * `promotion` is how a case says what it is about. This runtime DROPS what a
+ * promotion superseded by default (ADR-0090), so a case whose subject is
+ * something else -- the read path following the pointer, a slot assignment, the
+ * registration path's own guard -- turns the drop off and says so, rather than
+ * having its second generation disappear underneath it. The drop itself is
+ * asserted where it belongs, in `promotion.test.ts`.
+ */
+async function openContainer(folds: Fold[], registry?: GenerationRegistry, promotion?: PromotionConfig) {
 	const held = registry ?? (await openMemoryGenerationRegistry({maxGenerations: 4, maxStreams: 2}));
 	const indexer = await openIndexer<Abi, Handle>({
 		registry: held,
 		provider: makeProvider(),
 		source: SOURCE,
+		...(promotion ? {promotion} : {}),
 		generations: folds.map(specFor),
 	});
 	return {indexer, registry: held};
 }
+
+/** What a case says when its subject is NOT the drop: keep what a promotion superseded. */
+const RETAINING: PromotionConfig = {dropOnPromotion: false};
 
 describe('the generation container', () => {
 	it('BUILDS each generation from its factories: state first, then the fold over it', async () => {
@@ -250,7 +265,9 @@ describe('the state handle is INDIRECT', () => {
 	it('follows the pointer BACK, which is what makes a promotion revertible', async () => {
 		const a = makeFold('A');
 		const b = makeFold('B');
-		const {indexer} = await openContainer([a, b]);
+		// RETAINING, because what is asserted is the HANDLE following the pointer in
+		// both directions, and a move back needs a generation to move back to
+		const {indexer} = await openContainer([a, b], undefined, RETAINING);
 		const handle = indexer.state;
 
 		await indexer.promote(indexer.generations[1].record);
@@ -387,7 +404,11 @@ describe('a generation is held by a durable named SLOT', () => {
 
 	it('assigns NO `predecessor` on a promotion, leaving the superseded generation UNSLOTTED (ADR-0089)', async () => {
 		const {registry, dropped} = await registryRecordingDrops();
-		const {indexer} = await openContainer([makeFold('A')], registry);
+		// RETAINING, because the subject is the SLOT and not the drop: with this
+		// runtime's own default the superseded generation also GOES (ADR-0090), which
+		// would leave nothing to observe the assignment on. What ADR-0089 decides is
+		// that no slot names it, whatever then happens to it.
+		const {indexer} = await openContainer([makeFold('A')], registry, RETAINING);
 		const b = await indexer.add(specFor(makeFold('B')));
 
 		await indexer.promote(b.record);
@@ -406,7 +427,11 @@ describe('a generation is held by a durable named SLOT', () => {
 
 	it('never displaces what `canonical` names, and keeps the superseded generation that FETCHES the stream', async () => {
 		const {registry, dropped} = await registryRecordingDrops();
-		const {indexer} = await openContainer([makeFold('A')], registry);
+		// RETAINING, so that the superseded generation is still here for a REGISTRATION
+		// to be refused against: that guard is the subject, and it is untouched by the
+		// hand-over a promotion does (ADR-0090 narrows the PROMOTION's decline, not this
+		// one)
+		const {indexer} = await openContainer([makeFold('A')], registry, RETAINING);
 		const b = await indexer.add(specFor(makeFold('B')));
 		await indexer.promote(b.record);
 
@@ -485,9 +510,17 @@ describe('a generation this container holds NO FOLD for is COLLECTED when a regi
 		return {registry, dropped};
 	}
 
-	/** Session one: index on A, save B beside it, and let the pointer move to B. */
+	/**
+	 * Session one: index on A, save B beside it, and let the pointer move to B.
+	 *
+	 * RETAINING, which is what leaves a superseded generation to be collected LATER
+	 * at all. With this runtime's default the promotion drops it there and then
+	 * (ADR-0090, points 1 and 2) and there is no row for a reload to inherit -- so
+	 * this is the embedder that turned the drop off, which is the configuration the
+	 * rule below still has to be right for.
+	 */
 	async function aContainerThatSavedAndPromoted(registry: GenerationRegistry) {
-		const session = await openContainer([makeFold('A')], registry);
+		const session = await openContainer([makeFold('A')], registry, RETAINING);
 		const promoted = await session.indexer.add(specFor(makeFold('B')));
 		await session.indexer.promote(promoted.record);
 		return session;
@@ -501,7 +534,7 @@ describe('a generation this container holds NO FOLD for is COLLECTED when a regi
 		// the previous session left. Opening collects NOTHING -- the fold it arrives with
 		// is the one `canonical` already names, so it takes nobody's place -- which is
 		// what keeps this a registration rather than a sweep.
-		const reloaded = await openContainer([makeFold('B')], registry);
+		const reloaded = await openContainer([makeFold('B')], registry, RETAINING);
 		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['A', 'B']);
 		expect(dropped).toEqual([]);
 
@@ -529,9 +562,10 @@ describe('a generation this container holds NO FOLD for is COLLECTED when a regi
 		await session.indexer.add(specFor(makeFold('C')));
 
 		// it is the FETCHER of the stream the arriving fold is on, so dropping it would
-		// leave that fold folding a stream nothing appends to (ADR-0044). This is the case
-		// ADR-0090's points 1 and 2 answer with a HAND-OVER at the promotion, and this
-		// task must not partially implement them.
+		// leave that fold folding a stream nothing appends to (ADR-0044). A REGISTRATION
+		// has nothing that has provably reached this writer's cursor, which is exactly
+		// what a PROMOTION has and what lets that one hand the stream over instead
+		// (ADR-0090, points 1 and 2): the guard is narrowed there and untouched here.
 		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['A', 'B', 'C']);
 		expect(dropped).toEqual([]);
 		expect(await registry.fetcherOf(session.indexer.canonical.record.stream)).toMatchObject({
@@ -567,7 +601,9 @@ describe('the read unit of work is the interval between notifications', () => {
 	it('publishes the INDIRECT handle to the notification, not the generation it came from', async () => {
 		const a = makeFold('A');
 		const b = makeFold('B');
-		const {indexer} = await openContainer([a, b]);
+		// RETAINING: the case moves the pointer back at the end, so it needs the
+		// generation it moves back to
+		const {indexer} = await openContainer([a, b], undefined, RETAINING);
 
 		let published: Handle | undefined;
 		indexer.onStateUpdated = (state) => {

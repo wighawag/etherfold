@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A browser promotion FINISHES THE JOB: the superseded generation goes, and the stream CHANGES HANDS
 
 ADR-0089 stopped a browser promotion from naming a `predecessor`. It did not make the superseded generation GO, and measurement showed it does not go at all: it keeps its registry row and its state namespace for ever, and the developer's next save meets `maxGenerations` and is REFUSED (measured in the observation `an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing`, and asserted in `packages/browser/test/aTabHoldsItsGenerationsInSlots.test.ts`). We decide that on the CHAIN-FACING container a promotion DISCARDS what it superseded, and that the FETCH DUTY moves to the promoted generation in the same act. The receiving container is untouched: there an operator reverts, and `predecessor`, `reclaim` and the retention default all stay exactly as they are.
@@ -62,3 +58,5 @@ ADR-0084 declined to port `reclaim` to this runtime and declined to fire it on a
 **ADR-0089's "What it wins" gets its second correction, and this time upward.** The cross-stream headroom it claims stays true, and the same-stream save loop it could not fix is what this ADR fixes.
 
 **This is a browser-shaped decision and does not generalise to the receiving runtime**, where the deployment fetches and no generation holds the pen at all (ADR-0087), so points 1 to 3 have no subject there.
+
+**ALL FOUR POINTS ARE BUILT**, and the `status` line came off with the last of them, as `work/protocol/ADR-FORMAT.md` asks. Point 3 landed first (`a-generation-this-tab-holds-no-fold-for-is-collected-when-room-is-needed`, with ADR-0088's second site narrowed for it). Points 1 and 2 are `Indexer`'s: `dropOnPromotion` defaults to TRUE at the chain-facing container's own constructor -- the ONE call site that can honestly say which runtime it is, passed as a RUNTIME DEFAULT to `resolvePromotionConfig` beside the policy, which still has none and must never grow one -- and `dropSuperseded` performs the hand-over in the same act as the drop, giving the stream to the fold the derivation names NEXT and declining exactly where that fold is not the promoted one. The engine's half is one method (`IndexerGeneration.takeOverStream`), which swaps the read-only view a follower was built with for the keeper itself; the container's half sets `follows` to false so the next cycle advances it with `indexMore`. The save loop it exists for is asserted on what the tab asks the chain (`packages/browser/test/aTabHoldsItsGenerationsInSlots.test.ts`), and the narrowed decline is asserted on a case the hand-over cannot cover (`packages/core/test/promotion.test.ts`).
