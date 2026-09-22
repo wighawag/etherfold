@@ -9,6 +9,7 @@ import {
 	type GenerationRecord,
 	type GenerationRegistry,
 	type Indexer,
+	type IndexingSource,
 } from '@etherfold/core';
 import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import type {EntityProcessor, EntityEventProcessor, EntityStateView} from '@etherfold/processor-entities';
@@ -34,6 +35,7 @@ import {
 	processorVariant,
 	readState,
 	SOURCE,
+	SOURCE_FROM_LATER_BLOCK,
 	START_BLOCK,
 	streamOf,
 	type TestABI,
@@ -108,6 +110,8 @@ function generationOver(
 	definition: EntityProcessor<TestABI>,
 	/** What the ARRIVAL that produced this fold derived: the identity it is registered under. */
 	processorIdentity: string,
+	/** ITS OWN FETCH FILTER, where the case is a reconfigure rather than a handler edit: a different filter is a different STREAM. */
+	source?: IndexingSource<TestABI>,
 ): AnyGenerationSpec<TestABI, EntityStateView> {
 	let fold: EntityEventProcessor<TestABI> | undefined;
 	return {
@@ -115,6 +119,7 @@ function generationOver(
 		createProcessor: (state) => (fold = entityProcessorOver(state as WritableStateStore, definition)),
 		stateOf: () => (fold as EntityEventProcessor<TestABI>).state,
 		processorIdentity,
+		...(source ? {source} : {}),
 	};
 }
 
@@ -366,9 +371,10 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
  * This is the shape a real tab HAS, and it is the one the stall lived in. A save
  * registers the edited fold beside the live one, the default `on-catch-up`
  * policy promotes it, and `dropOnPromotion` defaults to false -- so the previous
- * generation SURVIVES as `predecessor`, which is the revert window slots exist
- * for. The reload then supplies exactly ONE fold, because that is all a tab can
- * supply: the previous handler's code is not in the bundle that just loaded.
+ * generation SURVIVES, named by no slot at all since ADR-0089 and collected by
+ * nothing on this runtime. The reload then supplies exactly ONE fold, because that
+ * is all a tab can supply: the previous handler's code is not in the bundle that
+ * just loaded.
  *
  * The generation that fetches a stream used to be the oldest one REGISTERED on
  * it, so it was the one this tab does not hold -- and the tab's only fold became
@@ -415,13 +421,15 @@ describe('a tab that reloads AFTER A PROMOTION goes on FETCHING', () => {
 		const name = freshName();
 		const chain = fakeChain();
 		const {registry, keepStream, savedState} = await aTabThatSavedAndPromoted(name, chain);
-		// the promotion happened, the previous generation survives as the revert target,
-		// and it is the one this tab is about to NOT hold
+		// the promotion happened and NOTHING is slotted behind it (ADR-0089); the previous
+		// generation survives anyway, unslotted, and it is the one this tab is about to
+		// NOT hold -- which is the configuration the stall lived in
 		expect(await slotsBy(registry)).toEqual({
 			canonical: 'edited-by-3',
 			successor: undefined,
-			predecessor: 'the-app',
+			predecessor: undefined,
 		});
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['the-app', 'edited-by-3']);
 
 		// THE CHAIN MOVES ON while the tab is closed. Without it, "asked for nothing"
 		// means "already at the tip" and the measurement says nothing.
@@ -461,13 +469,14 @@ describe('a tab that reloads AFTER A PROMOTION goes on FETCHING', () => {
 			deliveredTwice: [],
 			coversTo: BRANCH_A_EXTENDED_TIP,
 		});
-		// the tab still holds exactly what a tab can hold, and the revert target is still
-		// there: fetching is not bought by dropping the generation that named it
+		// the tab still holds exactly what a tab can hold, and the superseded generation
+		// is still registered and still named by no slot: fetching is not bought by
+		// dropping it, and nothing here deletes it either
 		expect(afterReload.generations.length).toBe(1);
 		expect(await slotsBy(reloaded.registry)).toEqual({
 			canonical: 'edited-by-3',
 			successor: undefined,
-			predecessor: 'the-app',
+			predecessor: undefined,
 		});
 	});
 
@@ -569,20 +578,23 @@ describe('a tab that reloads AFTER A PROMOTION goes on FETCHING', () => {
 	});
 });
 
-describe('a replacement can never reach the canonical generation or the revert target', () => {
+describe('a replacement can never reach the canonical generation, and a promotion slots NOTHING behind it', () => {
 	/**
-	 * THE SAFETY PROPERTY, asserted directly as it is in the receiving twin.
+	 * THE SAFETY PROPERTY, and the one axis on which this twin differs (ADR-0089).
 	 *
-	 * "Not canonical right now" is not the test, and this is why: after a promotion
-	 * the REVERT TARGET is not canonical either, and a rule that dropped what was
-	 * merely not canonical would silently destroy the way back. The test is the
-	 * SLOT -- a generation `canonical` or `predecessor` names is unreachable from a
-	 * replacement.
+	 * "Not canonical right now" is not the test on the receiving runtime, because
+	 * there the REVERT TARGET is not canonical either and a rule that dropped what
+	 * was merely not canonical would destroy the way back. HERE there is no revert
+	 * target to protect: a pointer move in a tab assigns no `predecessor`, since the
+	 * code that fold needs is not in the build. So what this asserts is the half that
+	 * survives -- `canonical` is unreachable from a replacement -- plus the new fact,
+	 * which is that the superseded generation is named by NOTHING and is dropped by
+	 * nothing here either.
 	 *
-	 * It needs room for THREE generations, because three slots occupied at once is
-	 * three generations; what the browser's own two mean is the next test.
+	 * It keeps room for THREE generations so the replacement has a pending successor
+	 * to reach past; what the browser's own two mean is the next describe.
 	 */
-	it('leaves canonical and predecessor exactly where they are', async () => {
+	it('leaves canonical where it is, and names the superseded generation by no slot', async () => {
 		const name = freshName();
 		const {registry, dropped} = await durableRegistry(name, {maxGenerations: 3});
 		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
@@ -596,51 +608,109 @@ describe('a replacement can never reach the canonical generation or the revert t
 		});
 		const promoted = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
 		await container.promote(promoted.record);
-		// the pointer moved, so the generation it moved OFF is what `predecessor`
-		// names: the one a revert returns to
-		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: 'the-app'});
+		// the pointer moved, and the generation it moved OFF is named by no slot: this
+		// runtime can never instantiate it, so reserving a seat for it reserves nothing
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
+		// ...and it is COLLECTABLE, not collected: nothing here deletes it
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['the-app', 'edited-by-2']);
+		expect(dropped).toEqual([]);
 
 		const pending = await container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3)));
 		expect(await slotsBy(registry)).toEqual({
 			canonical: 'edited-by-2',
 			successor: 'edited-by-3',
-			predecessor: 'the-app',
+			predecessor: undefined,
 		});
 		expect(dropped).toEqual([]);
 
-		// ...and a save on top of it replaces the PENDING one and reaches neither of
-		// the other two
+		// ...and a save on top of it replaces the PENDING one and reaches neither the
+		// generation that answers reads nor the superseded one, which is retained here
+		// for a reason that is no longer a slot: it FETCHES the stream all three are on
+		// (ADR-0044), so dropping it would leave them folding a stream nothing appends to
 		await container.add(generationOver(await memoryStore(editedTo(4)), editedTo(4), identityFor(4)));
 
 		expect(await slotsBy(registry)).toEqual({
 			canonical: 'edited-by-2',
 			successor: 'edited-by-4',
-			predecessor: 'the-app',
+			predecessor: undefined,
 		});
 		expect(dropped).toEqual([{stream: pending.record.stream, processor: pending.record.processor}]);
-		// the way back is still there, and still exact
-		await container.promote((await registry.slots()).predecessor as GenerationRecord);
+		expect(markerOf((await registry.fetcherOf(promoted.record.stream))?.processor)).toBe('the-app');
+		// ...so while this session still holds its fold, the pointer can still be moved
+		// back to it -- by NAMING it, which is what a revert in a browser always was
+		await container.promote({stream: promoted.record.stream, processor: APP_IDENTITY});
 		expect((await slotsBy(registry)).canonical).toBe('the-app');
 	});
 });
 
-describe('what a cap of TWO means under three slots', () => {
+describe('what a cap of TWO means after a promotion', () => {
 	/**
-	 * THE ARITHMETIC, stated as a test because prose cannot settle it.
+	 * THE ARITHMETIC, stated as a test because prose cannot settle it -- and
+	 * MEASURED, because the prose this replaces was wrong.
 	 *
-	 * There are three slots and `BROWSER_GENERATION_CAPS` is two generations, so a
-	 * tab holds `canonical` + `successor` (the reconfigure loop above, which this
-	 * change makes unbounded) OR `canonical` + `predecessor` (the revert window a
-	 * promotion opens), and never all three. A registration that would need all
-	 * three meets the cap and is REFUSED.
+	 * `BROWSER_GENERATION_CAPS` is two generations and a promotion here now slots
+	 * NOTHING behind the pointer (ADR-0089), so the obvious reading is that the
+	 * second seat is freed and the save loop always has room. It is not, and the
+	 * difference is the whole of these two cases: UNSLOTTED does not mean COLLECTED,
+	 * and on this runtime nothing collects an unslotted generation -- there is no
+	 * `reclaim` verb here, and a registration deliberately leaves a record no slot
+	 * names alone unless dropping it is safe.
 	 *
-	 * The refusal is the right end of that trade and is deliberately not softened:
-	 * dropping the revert target to make room would be an EVICTION, and no policy
-	 * can know which generation was being kept -- while a refusal costs one action
-	 * and cannot lose a state that may not be re-indexable at all from a public
-	 * node. The caps are unchanged by this change (ADR-0084).
+	 * So what decides the seat is whether the superseded generation may be DROPPED by
+	 * the arriving registration, which is `wouldStrandAFollower` (ADR-0044):
+	 *
+	 * 1. a CROSS-STREAM save (a source or filter edit) leaves it alone on its old
+	 *    stream, so it is dropped and the third save lands;
+	 * 2. a SAME-STREAM save loop -- the developer editing a handler, which is the
+	 *    common case -- leaves it as the FETCHER of the stream the arriving fold is
+	 *    on, so dropping it would leave that fold folding a stream nothing appends to.
+	 *    It is retained and the save meets the cap, exactly as it did before.
+	 *
+	 * The refusal in case 2 is therefore still the right end of the trade and is
+	 * deliberately not softened; the caps are UNCHANGED by this change (ADR-0084),
+	 * and what would clear it is a collector this runtime does not have
+	 * (`work/notes/observations/an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing.md`).
 	 */
-	it('REFUSES a third generation rather than dropping the revert target', async () => {
+	it('FREES the seat on a cross-stream save, because the superseded generation is alone on its stream', async () => {
+		const name = freshName();
+		const {registry, dropped} = await durableRegistry(name);
+		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
+
+		const container = await openIndexer<TestABI, EntityStateView>({
+			registry,
+			provider: fakeChain().provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
+		});
+		// a RECONFIGURE, not a handler edit: a different fetch filter is a different
+		// stream, so the app's generation is the only one left on the old one
+		const reconfigured = await container.add(
+			generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2), SOURCE_FROM_LATER_BLOCK),
+		);
+		await container.promote(reconfigured.record);
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
+
+		// THE REGISTRATION THAT USED TO BE REFUSED: under `predecessor` the app's
+		// generation was untouchable, so this third save met `maxGenerations` and threw
+		const saved = await container.add(
+			generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3), SOURCE_FROM_LATER_BLOCK),
+		);
+
+		expect(await slotsBy(registry)).toEqual({
+			canonical: 'edited-by-2',
+			successor: 'edited-by-3',
+			predecessor: undefined,
+		});
+		// the seat came from the superseded generation being DROPPED by the arriving
+		// registration -- the row and the state -- and the cap is untouched at two
+		expect(dropped.map((id) => markerOf(id.processor))).toEqual(['the-app']);
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['edited-by-2', 'edited-by-3']);
+		expect(registry.caps.maxGenerations).toBe(2);
+		expect(saved.record.stream).toBe(reconfigured.record.stream);
+	});
+
+	it('still REFUSES a same-stream save, because that seat is held by the stream`s FETCHER and not by a slot', async () => {
 		const name = freshName();
 		const {registry, dropped} = await durableRegistry(name);
 		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
@@ -654,16 +724,20 @@ describe('what a cap of TWO means under three slots', () => {
 		});
 		const successor = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
 		await container.promote(successor.record);
-		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: 'the-app'});
+		// no slot names the superseded generation any more...
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
 
 		await expect(
 			container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3))),
 		).rejects.toThrow(GenerationCapReachedError);
 
-		// nothing was evicted to make room, and the thing that was NOT evicted is
-		// precisely the generation a revert needs
+		// ...and it still holds the second seat, because it is what FETCHES the stream
+		// the arriving fold is on: dropping it would leave that fold folding a stream
+		// nothing appends to (ADR-0044), so the drop is DECLINED and the cap is met.
+		// Nothing was evicted to make room, which is what a cap is for.
 		expect(dropped).toEqual([]);
-		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: 'the-app'});
+		expect(markerOf((await registry.fetcherOf(successor.record.stream))?.processor)).toBe('the-app');
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
 		expect((await registry.list()).length).toBe(2);
 	});
 });

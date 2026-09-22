@@ -113,7 +113,12 @@ export type GenerationRecord = GenerationId & {
  *   was last moved OFF. It is ASSIGNED by the move that creates one and is never
  *   INFERRED, because it cannot be: with the pointer at C and a newer generation
  *   N, "N was never canonical" and "N was canonical and the pointer was reverted
- *   away from it" are indistinguishable from the rows (ADR-0084).
+ *   away from it" are indistinguishable from the rows (ADR-0084). It is assigned
+ *   by the RECEIVING runtime ONLY (ADR-0089): a move on the chain-facing container
+ *   assigns none, because in a browser the code that generation's fold needs is
+ *   absent from the build, so the slot would name something that runtime cannot
+ *   instantiate. The NAME stays in the vocabulary either way -- what differs is
+ *   which runtime assigns it, never what it means. See `moveCanonicalTo`.
  *
  * There are EXACTLY three and arbitrary named slots are deliberately not built:
  * with three fixed names each word means one thing, and a generation is a
@@ -457,8 +462,15 @@ export type GenerationRegistry = {
 	 * the sweep on open compares against. See `GenerationRegistryState.keptStreams`.
 	 */
 	keptStreams(): Promise<string[]>;
-	/** Move the canonical pointer. Forwards it is promotion; backwards it is revert. */
-	moveCanonicalTo(id: GenerationId): Promise<GenerationRecord>;
+	/**
+	 * Move the canonical pointer. Forwards it is promotion; backwards it is revert.
+	 *
+	 * `assignPredecessor` is the CALLING RUNTIME's answer to whether a move here
+	 * leaves a revert window, and it defaults to TRUE -- see `moveCanonicalTo`'s
+	 * implementation for why the chain-facing container is the one that says `false`
+	 * (ADR-0089).
+	 */
+	moveCanonicalTo(id: GenerationId, options?: {assignPredecessor?: boolean}): Promise<GenerationRecord>;
 	/**
 	 * HOW FAR THE FOLD IN THIS GENERATION'S STATE GOT, for a generation the caller
 	 * may hold no fold for. See `GenerationRegistryPort.readStateCursor`.
@@ -994,9 +1006,34 @@ export async function openGenerationRegistry(
 		 * incumbent now and no longer something being built beside one. Nothing else
 		 * is touched: a pending successor stays pending across a revert, which is what
 		 * lets a developer keep iterating while an operator moves the pointer.
+		 *
+		 * ## ...unless the CALLER says its runtime can never run one (ADR-0089)
+		 *
+		 * `assignPredecessor: false` makes this a move that assigns NOTHING behind it:
+		 * the generation the pointer came off is left named by no slot, and is
+		 * collectable by the same rule as any other generation no slot names. The
+		 * CHAIN-FACING container passes it (`Indexer.movePointerTo`) and nothing else
+		 * does, because in a browser the code a predecessor's fold needs is ABSENT FROM
+		 * THE BUILD -- so the slot would name something that runtime is structurally
+		 * unable to instantiate. On the receiving runtime the slot is genuinely useful,
+		 * an operator reverts without redeploying, and the default is therefore the
+		 * assignment: a caller that says nothing keeps its revert window.
+		 *
+		 * It is read BEFORE the commit and applied INSIDE the plan, so the assignment is
+		 * never DRAFTED rather than being drafted and undone. A clear afterwards would be
+		 * a second act that can fail on its own and leave the slot populated, which is
+		 * exactly the partially-assigned state the one-commit rule above exists to make
+		 * unreachable.
+		 *
+		 * It is deliberately NOT in `GenerationCaps`, which is documented as a COUNT and
+		 * never a policy, and deliberately not a property of the REGISTRY either: what
+		 * differs is the container doing the moving, not the substrate holding the rows
+		 * (one runtime opens a memory registry in a test and a durable one in a tab, and
+		 * both are the same chain-facing container).
 		 */
-		async moveCanonicalTo(id: GenerationId): Promise<GenerationRecord> {
+		async moveCanonicalTo(id: GenerationId, options?: {assignPredecessor?: boolean}): Promise<GenerationRecord> {
 			const wanted = assertIdentity(id);
+			const assignPredecessor = options?.assignPredecessor !== false;
 			let target: GenerationRecord | undefined;
 			await port.commit((current) => {
 				const found = current.generations.find((record) => sameGeneration(record, wanted));
@@ -1011,7 +1048,7 @@ export async function openGenerationRegistry(
 					return undefined;
 				}
 				const slots: SlotAssignmentDraft = {canonical: identityOf(found)};
-				if (movedOff) {
+				if (movedOff && assignPredecessor) {
 					slots.predecessor = identityOf(movedOff);
 				}
 				if (slotHolding(current.slots, found) === 'successor') {

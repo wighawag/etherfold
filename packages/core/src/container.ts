@@ -97,7 +97,8 @@ const namedLogger = logs('@etherfold/core');
  *
  * The registry holds three assignments and `canonical` is merely the first:
  * `successor` is the generation being built beside the incumbent and holds AT
- * MOST ONE, and `predecessor` is what a revert moves back to. `add` registers
+ * MOST ONE, and `predecessor` is what a revert moves back to on the runtime that
+ * assigns one, which is not this one (see below). `add` registers
  * into `successor`, so a second registration REPLACES the first pending one --
  * and because the slot is a ROW, a RELOADED TAB replaces what it finds there
  * having registered nothing and remembered nothing, which is the property no
@@ -116,25 +117,37 @@ const namedLogger = logs('@etherfold/core');
  * repeated here, because a fold on this side is an ENGINE and stopping one is
  * this container's own business.
  *
- * **What the browser's numbers mean under three slots**, stated because it is
- * arithmetic rather than taste: at `maxGenerations: 2` the tab can hold
- * `canonical` + `successor` (the reconfigure loop, which is what this makes
- * unbounded) or `canonical` + `predecessor` (the revert window after a
- * promotion), and NOT all three. A registration that would need all three meets
- * the cap and is REFUSED, which is what a cap is for -- the revert target is
- * never dropped to make room, because no policy can know which generation was
- * being kept (`GenerationCapReachedError`). The caps are deliberately unchanged
- * by this (ADR-0084's consequences).
+ * **NO `predecessor` IS ASSIGNED HERE (ADR-0089)**, and it is the one axis on
+ * which this twin differs from the receiving one. A revert needs the code of the
+ * fold it returns to, and a tab cannot have it: a production bundle ships ONE
+ * processor, so the superseded generation's code is not un-promoted but ABSENT
+ * FROM THE BUILD, and in development the way back is the editor. The move
+ * therefore never DRAFTS the assignment (`movePointerTo`), and the generation the
+ * pointer came off is UNSLOTTED -- collectable by the ordinary rule, deleted by
+ * nothing here. Going back in a browser is what it always was: supply the old
+ * code, which derives the same identity and RESOLVES to the same record
+ * (ADR-0086), re-folding the stream already on disk (ADR-0087).
  *
- * `predecessor` is ASSIGNED by the pointer move that creates one, in the same
- * commit, and is never inferred -- which generation a revert wants is precisely
- * the fact the rows never held, and the reason a boolean (`everCanonical`) used
- * to stand on each held entry. It answered "has the pointer EVER named this
- * generation, as far as THIS container has seen", which after a reload was `false`
- * for everything, so a restarted tab read every move as a revert. The slots answer
- * it durably and better: a PROMOTION is a move onto what `successor` names, and
- * every other move -- back to what `predecessor` names, or onto any other
- * registered generation -- drops nothing.
+ * **What the browser's numbers mean after that**, stated because it is arithmetic
+ * rather than taste, and MEASURED rather than reasoned: at `maxGenerations: 2` the
+ * tab holds `canonical` + `successor` (the reconfigure loop, which is what this
+ * makes unbounded) and never `canonical` + `predecessor`. But UNSLOTTED IS NOT
+ * COLLECTED -- there is no `reclaim` verb on this runtime -- so what decides the
+ * second seat after a promotion is whether the arriving registration may DROP the
+ * superseded generation. A CROSS-STREAM save may (it is alone on its old stream)
+ * and lands; a SAME-STREAM save loop may NOT, because that generation FETCHES the
+ * stream the arriving fold is on (`wouldStrandAFollower`, ADR-0044), so the drop is
+ * declined and the registration meets the cap and is REFUSED
+ * (`GenerationCapReachedError`). The caps are deliberately unchanged by any of this
+ * (ADR-0084's consequences).
+ *
+ * The DIRECTION of a move is still read from a slot, and that is `successor`'s job
+ * rather than `predecessor`'s: a PROMOTION is a move onto what `successor` names,
+ * and every other move drops nothing. It is the reason a boolean (`everCanonical`)
+ * used to stand on each held entry, answering "has the pointer EVER named this
+ * generation, as far as THIS container has seen" -- which after a reload was
+ * `false` for everything, so a restarted tab read every move as a revert. The slot
+ * answers it durably and better.
  * ------------------------------------------------------------------------- */
 
 /** What both of a generation's factories are told about the generation being built. */
@@ -886,8 +899,9 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// is true and is the point -- the registered set is exactly the set that can name
 		// a generation this process holds no fold for. Measured: a tab reloading after a
 		// PROMOTION holds the one fold its bundle carries, the superseded generation
-		// survives as `predecessor` because that is what a revert window IS, and it is
-		// older -- so the tab's only fold followed a stream nothing writes. It opened
+		// survives -- as `predecessor` when that was measured, and unslotted since
+		// ADR-0089, which changes nothing here because nothing collects it either way --
+		// and it is older, so the tab's only fold followed a stream nothing writes. It opened
 		// healthy, answered reads and reported `at-tip` for ever, two blocks behind a
 		// chain it asked nothing about after the load-time `eth_chainId` handshake.
 		//
@@ -1419,9 +1433,12 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		 * A PROMOTION is a move onto what `successor` names: that generation was built
 		 * beside the incumbent precisely to take over, so a promotion demonstrated
 		 * something and drop-on-promotion may discard what it superseded. EVERY OTHER
-		 * MOVE DROPS NOTHING -- a move back to what `predecessor` names is a revert, and
-		 * an operator naming any other generation is treated the same way, which is the
-		 * safe direction: the only consequence is that a generation is kept.
+		 * MOVE DROPS NOTHING -- naming any other registered generation is a move back, and
+		 * that is the safe direction: the only consequence is that a generation is kept.
+		 * It is read from `successor` alone here, and it has to be: no move on this
+		 * runtime assigns a `predecessor` for the other side of the question to read
+		 * (ADR-0089), so a going-back move is exactly a move this rule does not call a
+		 * promotion.
 		 *
 		 * This is what `everCanonical` used to approximate in memory, and it is strictly
 		 * better: that flag was `false` for everything after a reload, so a reloaded tab
@@ -1430,7 +1447,30 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		 */
 		const slotsBefore = await this.registry.slots();
 		const wasPromotion = !!slotsBefore.successor && sameGeneration(slotsBefore.successor, entry.record);
-		const record = await this.registry.moveCanonicalTo(entry.record);
+		/**
+		 * NO `predecessor` IS ASSIGNED HERE, and this is the ONE line of ADR-0089.
+		 *
+		 * `predecessor` is what a revert moves BACK to, and a revert needs the code of
+		 * the fold it returns to. THIS runtime cannot have it: in a production bundle the
+		 * superseded generation's processor is not un-promoted, it is ABSENT FROM THE
+		 * BUILD, and in development the way back is the editor. So the slot would name a
+		 * generation a tab is structurally unable to instantiate, and the seat it holds
+		 * is a seat under `BROWSER_GENERATION_CAPS`.
+		 *
+		 * The generation the pointer moved off is therefore UNSLOTTED, which is
+		 * collectable by the ordinary rule and deleted by nothing here (ADR-0087's removal
+		 * of the automatic reap stands). Two things follow that are worth knowing before
+		 * reading a cap refusal on this runtime, both MEASURED rather than argued: a
+		 * CROSS-STREAM save really does free the seat, because the superseded generation
+		 * is alone on its old stream and a replacement may drop it; a SAME-STREAM save
+		 * loop still meets the cap, because that generation is the FETCHER of the stream
+		 * the arriving one is on (`wouldStrandAFollower`, ADR-0044) and the seat is held
+		 * by that duty rather than by any slot.
+		 *
+		 * The receiving twin passes nothing and keeps the assignment: there an operator
+		 * reverts without redeploying and the code arrives by a route a tab does not have.
+		 */
+		const record = await this.registry.moveCanonicalTo(entry.record, {assignPredecessor: false});
 		// It is canonical: it is no longer waiting to become so, and a REVERT past it
 		// later must not re-promote it on the next cycle.
 		entry.candidate = false;
@@ -1493,10 +1533,9 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * and the drop happens then.
 	 *
 	 * A MOVE THAT IS NOT A PROMOTION DROPS NOTHING. A promotion is a move onto what
-	 * the `successor` slot names; a move back to what `predecessor` names is a
-	 * REVERT, and an operator naming any other registered generation is treated the
-	 * same way. Dropping what such a move left behind would delete the very thing the
-	 * developer might move forwards to again.
+	 * the `successor` slot names; a move onto any other registered generation is a
+	 * going-back move and is treated as one. Dropping what such a move left behind
+	 * would delete the very thing the developer might move forwards to again.
 	 */
 	protected async arrangeDrop(
 		superseded: HeldEntry<ABI, ProcessResultType>,
@@ -1590,9 +1629,12 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * what takes it.
 	 *
 	 * The container knew ONE kind of supersession and it is a PROMOTION: the incumbent
-	 * becomes the predecessor and is RETAINED, because the pointer must be able to
-	 * move back to it (`dropSuperseded`, above). This is the other half, and it is the
-	 * half a browser tab lives in. A successor that is still catching up and that a
+	 * is RETAINED, and on the receiving runtime it is retained BY a slot, since the
+	 * pointer must be able to move back to it (`dropSuperseded`, above). Here it is
+	 * retained by nothing at all -- no move assigns a `predecessor` on this runtime
+	 * (ADR-0089) -- so what protects it from this path is only the strand rule below,
+	 * where it applies. This is the other half, and it is the half a browser tab lives
+	 * in. A successor that is still catching up and that a
 	 * NEWER one has just replaced is dead work in every case and a WALL in this one:
 	 * it keeps its registry row, keeps its state store and keeps being advanced by
 	 * every cycle, so a developer saving twice reaches `maxGenerations` -- two here --
@@ -1600,9 +1642,10 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 *
 	 * ## The PREDICATE is the whole safety argument, and it is now a ROW
 	 *
-	 * "Not canonical right now" is NOT the test: a predecessor kept for a revert is not
-	 * canonical right now either, and dropping it would silently destroy the way back.
-	 * Nor is it "has never been canonical", which is the question the rows cannot
+	 * "Not canonical right now" is NOT the test, and the reason is the receiving twin's
+	 * -- one rule, one home: a predecessor kept for a revert is not canonical right now
+	 * either, and dropping it would silently destroy the way back. Nor is it "has never
+	 * been canonical", which is the question the rows cannot
 	 * answer and which `everCanonical` approximated IN MEMORY, from what one tab had
 	 * seen since the page loaded -- so a RELOAD answered "nothing" and dropped
 	 * nothing, which is exactly the shape that reloads most. The test is now the SLOT,
@@ -1723,10 +1766,10 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			`the generation {stream: ${record.stream}, processor: ${record.processor}} was what the \`successor\` slot ` +
 				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
 				`AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was replaced -- it is ` +
-				`neither the canonical generation nor what \`predecessor\` holds, so nothing can revert to it and re-folding ` +
-				`it would be work for a result nobody will ever ask for. Its state store is gone and the stream ` +
+				`not the canonical generation, so nothing reads from it and re-folding it would be work for a result ` +
+				`nobody will ever ask for. Its state store is gone and the stream ` +
 				`${record.stream} is KEPT: a stream outlives every fold over it and is deleted only when asked. ` +
-				`The canonical generation and the revert target are untouched.`,
+				`The canonical generation is untouched.`,
 		);
 		return true;
 	}
