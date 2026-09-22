@@ -1,0 +1,59 @@
+---
+title: 'A browser promotion DROPS what it superseded and TAKES the stream'
+slug: a-browser-promotion-drops-what-it-superseded-and-takes-the-stream
+blockedBy: [a-generation-this-tab-holds-no-fold-for-is-collected-when-room-is-needed]
+covers: []
+---
+
+## What to build
+
+ADR-0090, points 1 and 2, and the removal of its status line. Read it first; it carries the argument and this task does not repeat it.
+
+**The rule.** On the CHAIN-FACING container a promotion DISCARDS the generation it superseded, and the FETCH DUTY moves to the promoted generation in the same act. `dropOnPromotion` becomes this runtime's default rather than an operator's opt-in. On the RECEIVING container nothing changes: there the deployment fetches and no generation holds the pen (ADR-0087), so neither half has a subject.
+
+**Most of this is already built, and knowing that is most of the task.** `dropOnPromotion` exists. Its `immediate` behaviour is already the careful one: an `immediate` promotion demonstrates nothing, so the drop is DEFERRED and retention continues until the promoted generation reaches the cursor the superseded one had at the promotion. Leave that alone; it is what makes this decision safe under that policy, and it already answers the objection that the tab would show an empty state.
+
+**What is genuinely missing is the STREAM.** In the common case a save keeps the same source and filter, so both generations sit on one stream, and the promoted generation was constructed as a FOLLOWER of the superseded one because that one was held at the time. So the drop is declined today, correctly: dropping the writer would leave the follower folding a stream nothing appends to (ADR-0044). The hand-over is what removes that case.
+
+**Why the promotion is the right moment, and the only one this task may use.** Under `on-catch-up` the promotion IS the event "the successor reached the incumbent's cursor", and under `immediate` the existing deferral has already waited for that same condition. So at the moment of the drop the promoted generation is provably at the writer's position, and there is no gap in which an append can be lost. Do NOT generalise this into a fetcher that can change at any time under a held fold: the initial derivation is deliberately taken once, its completeness is load-bearing, and ADR-0090 rejects continuous recomputation explicitly.
+
+**The existing decline must NOT simply be deleted.** It stays as the guard for every case the hand-over does not cover. What this task removes is the case it was declining, not the guard itself. A version of this change that deletes the decline and calls the tests green has removed the only thing standing between a future change and a silently stranded fold.
+
+**How the hand-over is performed is yours to decide** and it is the decision this task exists to make well. It must leave exactly one fetcher per stream, and it must leave the promoted generation genuinely fetching rather than merely marked as such. Record what you chose and why in `## Decisions`, and if you conclude the hand-over cannot be made safe at this moment, STOP and say so rather than weakening the decline to make a test pass.
+
+## Acceptance criteria
+
+- [ ] A same-stream save loop no longer walls. A tab at `BROWSER_GENERATION_CAPS` that saves, promotes, saves, promotes and saves again keeps working, without a reload and without raising `GenerationCapReachedError`. This is the behaviour the whole decision exists for.
+- [ ] After a promotion the superseded generation's registry row and state namespace are GONE, and the STREAM is KEPT (ADR-0087).
+- [ ] The promoted generation FETCHES the stream afterwards, asserted by observing that the tab goes on asking the chain for logs after the promotion, not merely by reading a flag. A test that only asserts an internal field does not cover this.
+- [ ] Exactly ONE generation fetches a given stream at every point, including across the hand-over. Two writers on one stream is the measured data-loss defect this must not reintroduce.
+- [ ] Under the `immediate` policy the EXISTING deferral is unchanged: the superseded generation is retained until the promoted one reaches the cursor it had at the promotion, and the drop happens then.
+- [ ] The strand decline still FIRES for a case the hand-over does not cover, proven by a test rather than asserted in prose. The guard is narrowed, not deleted.
+- [ ] A move that is NOT a promotion still drops nothing, and a cross-stream promotion still behaves as it does today.
+- [ ] The RECEIVING container is unchanged and proven so.
+- [ ] ADR-0044 is amended to record that a PROMOTION is a moment at which the fetch duty may legitimately change, because the new holder has provably reached the old one's cursor. Its rule that the duty belongs to exactly one generation per stream is unchanged; use the dated amendment form this repo already uses and do not rewrite the decision.
+- [ ] **ADR-0090's `status: accepted, not yet implemented` line is REMOVED, and only once the decision is actually implemented.** The correct end state is NO status line at all, because `work/protocol/ADR-FORMAT.md` says an absent status means accepted and current. Do not invent a value: `accepted, implemented` is not one of its seven and a previous build in this repo had to have it reverted. **This task is the LAST one in ADR-0090's chain and therefore owns the removal**; its sibling deliberately left the line in place.
+- [ ] Tests cover the new behaviour, mirroring the repo's existing test style.
+- [ ] A changeset accompanies the change (`pnpm changeset`).
+
+## Blocked by
+
+- `a-generation-this-tab-holds-no-fold-for-is-collected-when-room-is-needed` — it lands ADR-0090's point 3 and narrows the strand rule's fetcher question to the held set, which this task builds directly on. They also both edit the chain-facing container, so the dependency serialises them and keeps the rebase trivial.
+
+## Prompt
+
+The goal is that a promotion in a browser tab FINISHES: the generation it replaced goes, and the promoted generation holds everything a running deployment holds, including the pen.
+
+Read `docs/adr/0090-a-browser-promotion-finishes-the-job-the-superseded-generation-goes-and-the-stream-changes-hands.md` in full and build its points 1 and 2. Then read ADR-0044 for the rule that one generation per stream holds the fetch duty and why a survivor may have to wait for it, ADR-0088 for why the fetcher is the oldest generation PRESENT rather than the oldest REGISTERED, ADR-0087 for why the stream outlives every fold over it, and ADR-0089 for why this runtime keeps no revert target at all.
+
+Start by reading what already exists, because the smallest correct change here is much smaller than it looks: `dropOnPromotion` and its `immediate` deferral are built and tested, and the drop is currently declined for exactly one reason. Find that decline and understand it before you change anything. The follower relationship it protects is an artifact of which folds were held when the successor was constructed, which is why the same generation, built alone after a reload, is the fetcher instead.
+
+The decision most likely to be got wrong is deleting the decline rather than removing the case it declines. The second is performing the hand-over at a moment that is not the promotion, where the promoted generation has not provably reached the writer's cursor and an append can be lost. The third is scope: this does not touch the caps, does not add a sweep or a timer, and does not change the receiving container, where no generation holds the pen at all.
+
+The seam to test at is the browser package's container tests, which stand a container up over a durable registry and a fake chain, plus the core container tests for the drop and decline rules. Assert the fetch duty by what the tab ASKS THE CHAIN after a promotion, not by an internal flag.
+
+Done means: the save loop keeps working without a reload; the superseded generation and its state are gone while its stream is kept; exactly one generation fetches at every moment including across the hand-over; the guard still fires where it must; and ADR-0090 stops saying it is unimplemented.
+
+FIRST, check this task against current reality. It was written on 2026-09-22, before its blocker landed, so the code underneath it will have changed by the time you claim it -- in particular the strand rule's fetcher question should by then be answered from the held set. If the blocker landed differently than this task assumes, do NOT build on the stale premise: route this to needs-attention with the discrepancy. Builders in this repo have contradicted their task text repeatedly and have been right to every time.
+
+RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT, in particular how the hand-over is performed, how you guarantee exactly one fetcher across it, and what the narrowed decline still guards. Do not write the done record, the commit message or the PR body yourself.

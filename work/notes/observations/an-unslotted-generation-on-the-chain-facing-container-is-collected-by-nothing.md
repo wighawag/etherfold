@@ -38,3 +38,17 @@ What survives untouched is ADR-0089's **structural** argument, which is the load
 The second half is ADR-0044 territory and is why this is not a small gap: in-session, the generation occupying the seat is the stream's fetcher, and ADR-0044's rule is that the duty is never reassigned. Any collector must therefore either decline exactly the case that matters, or change who may fetch. `ReceivingIndexer.reclaim` is an operator verb on a runtime that HAS an operator and an `ADMIN_TOKEN`; a browser tab has neither, which is precisely why ADR-0084 declined to port it, so "just port `reclaim`" is not available without answering what fires it.
 
 **New evidence for a deferred decision.** ADR-0084's 2026-09-16 amendment explicitly deferred raising `BROWSER_GENERATION_CAPS.maxGenerations` to three as "a separate decision with its own storage argument". This measurement is evidence for it: it is the only route that relieves the seat pressure **without** adding a deleter and without reopening ADR-0044. Recorded here rather than opened, deliberately.
+
+## 2026-09-22, appended: the blockers are TWO and this note named the second one first
+
+The question above points at ADR-0044 as the blocker. That is the IN-SESSION blocker and it is real, but reading this note as written leads to a fix that cannot work, so the ordering is corrected here.
+
+**In the RELOAD case the strand rule is never reached.** `replaceTheSuccessor` builds its candidate list through `displacedBySuccessor`, passing an INJECTED "do I hold a fold for this" predicate, and that function's last clause is `return heldHere(record)`. An unheld, unslotted record is filtered out THERE, so `wouldStrandAFollower` never sees it. Narrowing the strand rule alone therefore changes nothing in this case. The primary blocker is the displacement predicate, plus ADR-0084's refusal to make collection automatic on a runtime with no operator.
+
+The strand rule is still a SECOND, dependent blocker: clear the first and the drop is still declined, because `wouldStrandAFollower` derives the fetcher from the REGISTERED set, where the dead row is the oldest and so still reads as the fetcher, even though `follows` on the live fold was derived from the HELD set (ADR-0088) and says the live fold fetches. Two sites, two answers, one of them about a generation that no longer exists in any fold.
+
+**In the IN-SESSION case the blocker is neither of those.** It is `dropSuperseded`'s `if (!superseded.follows && strands)` decline, and behind it the fact that `follows` is frozen into the engine config at construction. The superseded generation fetches the stream the promoted one was built to follow, and that relationship is an artifact of which folds were held when the successor was constructed: the same successor, built alone after a reload, IS the fetcher.
+
+**The mechanism is cheaper than this note implies.** `heldHere` is injected per container, so the chain-facing side can widen what counts as collectable without touching the receiving container's rule at all. What is missing is a decision, not a refactor.
+
+Both halves, and the hand-over that makes the in-session case work, are now proposed in ADR-0090. This note stays until that decision lands or is refused.
