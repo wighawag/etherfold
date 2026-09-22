@@ -1,4 +1,4 @@
-<!-- dorfl-sidecar: item=task:a-promotion-in-a-browser-tab-assigns-no-predecessor type=task slug=a-promotion-in-a-browser-tab-assigns-no-predecessor allAnswered=false -->
+<!-- dorfl-sidecar: item=task:a-promotion-in-a-browser-tab-assigns-no-predecessor type=task slug=a-promotion-in-a-browser-tab-assigns-no-predecessor allAnswered=true -->
 
 ## Q1
 
@@ -30,3 +30,31 @@
 <!-- q1 fields: id=q1 kind=stuck -->
 
 **Your answer** (write below this line):
+
+**SPLIT (option a), with one correction to your own framing. This answer is AUTHORITATIVE and OVERRIDES acceptance criterion 5 as written in the task body. Build it.**
+
+Your STOP was right and your measurement was verified independently against the source before this answer was written. Confirmed: `container.ts:1674` (`record.stream === arrivingStream` returns `true`), `registry.ts:594` (`return heldHere(record)` leaves an unheld, unslotted record alone), and ADR-0084's 2026-09-16 amendment stating the chain-facing container has no `reclaim` verb.
+
+**THE CORRECTION, because your re-scope suggestion repeats the error it diagnoses.** You proposed landing the assignment change partly because it "removes ADR-0088's trigger at the root: no predecessor, no surviving A". That is false, by your own finding. **A survives either way**, because nothing collects an unslotted generation. And ADR-0088's stall is already unreachable by ADR-0088's own fix: `follows` is derived from `fetcherOf(willHold, ...)` at `packages/core/src/container.ts:946`, the set the container WILL HOLD, so an unheld A is never named as the fetcher whatever any slot says. Do not repeat this claim anywhere in the change. BOTH of ADR-0089's stated wins are false, and they share one root: the ADR assumes UNSLOTTED implies COLLECTED, and on this runtime it does not.
+
+What still justifies landing this is ADR-0089's STRUCTURAL argument, untouched and still sound: in a browser the code a predecessor's fold needs is absent from the build, so the slot names something the tab cannot instantiate. This lands as correctness and hygiene, NOT as a win. Do not let it claim otherwise.
+
+**What to build.**
+
+1. **The assignment change, as you already implemented it.** A runtime distinction read before the commit and applied INSIDE the plan so the assignment is never drafted; `ReceivingIndexer` untouched; not in `GenerationCaps`. Your `moveCanonicalTo(id, options?: {assignPredecessor?: boolean})` shape is approved, but the placement is still yours to justify in `## Decisions`.
+
+2. **Criterion 5 is REPLACED, not deleted.** Assert BOTH halves of the measurement so it lands as a test rather than evaporating: (i) a CROSS-stream promotion DOES free the seat, the superseded generation being alone on its old stream and the drop proceeding; (ii) a SAME-stream save loop after a promotion is STILL refused with `GenerationCapReachedError`, and that refusal is correct because the seat is held by the stream's fetcher. Name the reason in the test so the next reader does not rediscover it.
+
+3. **Criterion 4 is UNCHANGED.** Add no deleter, do not touch the caps, do not touch `dropOnPromotion`.
+
+4. **ADR-0089: correct the BODY IN PLACE. Do NOT add a dated amendment.** This is a deliberate departure from the repo's amendment convention, decided by the human on the grounds that the ADR is two days old and those claims never described reality for even one commit, so preserving them as a reasoning trail would only mislead a future reader with an irrelevant falsehood. Rewrite "What it wins" so it states what is true: the structural argument, and cross-stream headroom only. Remove the save-loop claim and the ADR-0088-at-the-root claim entirely. The "ADR-0088's rule is NOT reverted" paragraph stays true and stays.
+
+5. **ADR-0089's `status: accepted, not yet implemented` line is REMOVED**, leaving NO status line at all. Do not invent a value: `accepted, implemented` is not one of ADR-FORMAT's seven and a previous build in this repo had it reverted. The DECISION is what the status line is about, and after this change it is fully implemented.
+
+6. **The rest of the task is unchanged and still in scope:** the ADR-0084 dated amendment (`predecessor` is assigned by the receiving runtime only; its three slots and their meanings stand, do not rewrite the decision), `CONTEXT.md` including the cap arithmetic paragraph rewritten rather than deleted, tests in the repo's existing style, and a changeset.
+
+**`CONTEXT.md`, specifically, since the arithmetic changed differently than the task assumed.** The honest teaching is no longer "the third seat is never occupied". It is that a browser tab never holds `canonical` + `predecessor`, that the second seat after a promotion is held by the superseded generation as the stream's FETCHER rather than by a slot, and that the seat is therefore freed by a cross-stream change and not by a same-stream save loop.
+
+**OUT OF SCOPE, deliberately, and do not drift into it.** What COLLECTS an unslotted generation on the chain-facing container, and whether the fetch duty may leave a generation being collected, is ADR-0044 territory, wants its own ADR, and is captured in the observation `an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing`. Raising `BROWSER_GENERATION_CAPS` to three stays deferred per ADR-0084. If you conclude either is unavoidable, STOP again rather than widening.
+
+Contradict this answer if you measure it wrong. That is what the last build did and it was right to.

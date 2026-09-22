@@ -3,8 +3,9 @@ title: 'A promotion on the chain-facing container assigns no `predecessor`, beca
 slug: a-promotion-in-a-browser-tab-assigns-no-predecessor
 blockedBy: []
 covers: []
-needsAnswers: true
 ---
+
+> **DRIFT CORRECTION (2026-09-22): THIS TASK WAS RE-SCOPED AFTER A MEASURED STOP. READ THE ANSWERED SIDECAR FIRST; IT IS AUTHORITATIVE WHERE IT DISAGREES WITH THE TEXT BELOW.** A previous build implemented this decision in full, measured it, and found that BOTH wins ADR-0089 claims are false, for one shared reason: the ADR assumes UNSLOTTED implies COLLECTED, and on the chain-facing container nothing collects an unslotted generation. **Acceptance criterion 5 is OVERRIDDEN** (it is replaced, not deleted, by two assertions covering the cross-stream and same-stream cases), and ADR-0089's body is corrected IN PLACE rather than amended. The task is otherwise unchanged and still in scope. The deferred half, what collects an unslotted generation on this runtime, is out of scope and carried by the observation `an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing`.
 
 ## What to build
 
