@@ -199,8 +199,8 @@ describe('reporting STOPS at the promotion', () => {
 		await app.drive();
 		await app.indexer.promote(successor.record);
 
-		// the predecessor is kept (that is what makes moving the pointer BACK a revert
-		// rather than a re-index), so it is a non-canonical generation and says so --
+		// the superseded generation is kept -- unslotted on this runtime (ADR-0089) and
+		// dropped by nothing here -- so it is a non-canonical generation and says so --
 		// level, at distance 0, which is how an app tells it apart from one building
 		expect(app.reported().map((generation) => generation.record.processor)).toEqual([previous.record.processor]);
 		expect(app.reported()[0].blocksBehind).toBe(0);

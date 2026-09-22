@@ -2,7 +2,11 @@ import type {Abi} from 'abitype';
 import {describe, expect, it} from 'vitest';
 import {generationDigestOf} from '../src/generation/identity.js';
 import {createMemoryGenerationRegistryPort} from '../src/generation/memory.js';
-import {GenerationCapReachedError, type GenerationRegistryPort} from '../src/generation/registry.js';
+import {
+	GenerationCapReachedError,
+	type GenerationRecord,
+	type GenerationRegistryPort,
+} from '../src/generation/registry.js';
 import {openReceivingIndexer, SERVER_GENERATION_CAPS} from '../src/receivingContainer.js';
 import type {EmissionWrite, StreamCoverage} from '../src/emissionStream.js';
 import type {ReplayRead, ReplaySource} from '../src/generation/rebuild.js';
@@ -455,6 +459,45 @@ describe('the generation caps, on the runtime that supplies them', () => {
 			identityOf('v1'),
 			identityOf('v2'),
 		]);
+	});
+});
+
+/**
+ * THE RUNTIME THE `predecessor` SLOT IS STILL FOR (ADR-0089).
+ *
+ * The chain-facing twin assigns NO `predecessor`, because the code a revert needs
+ * is not in a tab's build. That decision is taken by the CONTAINER and passed to
+ * the shared registry, so the hazard it carries is a fix applied one level too low:
+ * a registry that stopped assigning for everybody would silently close the SERVER's
+ * revert window, which is the one place the slot earns its seat -- an operator
+ * reverts without redeploying, and the fold they return to arrives by a route a
+ * browser does not have.
+ *
+ * So this is the twin of `container.test.ts`'s `assigns NO predecessor` case, and
+ * the pair of them is the assertion: same registry, same move, two runtimes, two
+ * answers.
+ */
+describe('a promotion on the RECEIVING container still opens a revert window', () => {
+	it('ASSIGNS `predecessor`, and the pointer moves BACK to what it names', async () => {
+		const world = substrate();
+		const incumbent = await anIndexerThatHasFolded(world);
+		const deployed = await open(world, 'v2');
+		const [v1, v2] = await deployed.generations();
+
+		await deployed.promote(v2);
+
+		// the generation the pointer moved OFF is NAMED, in the commit that moved it:
+		// that is the fact the rows cannot answer afterwards, and it is what the operator
+		// route reports and reverts to
+		expect(await deployed.slots()).toMatchObject({canonical: v2, predecessor: v1});
+		expect(await deployed.canonical()).toMatchObject({processor: identityOf('v2')});
+
+		// ...and the way back is real: one small write, no re-index, and the state the
+		// incumbent folded is exactly where it was
+		await deployed.promote((await deployed.slots()).predecessor as GenerationRecord);
+		expect(await deployed.canonical()).toMatchObject({processor: identityOf('v1')});
+		expect(await deployed.slots()).toMatchObject({canonical: v1, predecessor: v2});
+		expect(world.rowsIn(generationDigestOf(incumbent.generation))).toEqual(['v1@101']);
 	});
 });
 

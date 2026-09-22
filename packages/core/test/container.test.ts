@@ -3,7 +3,12 @@ import type {Abi} from 'abitype';
 import type {EventProcessor, IndexingSource} from '../src/types.js';
 import {openIndexer, UnheldGenerationError, type GenerationSpec} from '../src/container.js';
 import {openMemoryGenerationRegistry} from '../src/generation/memory.js';
-import type {GenerationId, GenerationRecord, GenerationRegistry} from '../src/generation/registry.js';
+import {
+	unslottedGenerations,
+	type GenerationId,
+	type GenerationRecord,
+	type GenerationRegistry,
+} from '../src/generation/registry.js';
 import {bundleBytes, identityOf, identityOfBytes, markerOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
@@ -319,8 +324,14 @@ describe('a discard is PUBLISHED and not merely applied', () => {
  * application of them in `receivingContainer.test.ts`. What is asserted here is
  * this container's half: `add` registers into `successor`, so a generation added
  * beside the live one REPLACES the pending one rather than piling up, and the
- * replacement can reach neither the generation that answers reads nor the one a
- * revert returns to.
+ * replacement can never reach the generation that answers reads.
+ *
+ * **A move HERE assigns no `predecessor` (ADR-0089)**, which is the one place the
+ * two containers differ about slots: in a browser the code a superseded fold needs
+ * is absent from the build, so the slot would name something this runtime cannot
+ * instantiate. The receiving twin's half -- where the assignment is exactly as it
+ * always was, because an operator reverts there without redeploying -- is asserted
+ * in `receivingContainer.test.ts`.
  *
  * The runtime the rule was written FOR is a browser tab, and the claims that are
  * only observable there -- a RELOAD over the same IndexedDB, the state keyspace
@@ -374,22 +385,46 @@ describe('a generation is held by a durable named SLOT', () => {
 		expect(indexer.generations.map((held) => held.record)).toEqual([indexer.canonical.record, c.record]);
 	});
 
-	it('never displaces what `canonical` or `predecessor` names', async () => {
+	it('assigns NO `predecessor` on a promotion, leaving the superseded generation UNSLOTTED (ADR-0089)', async () => {
+		const {registry, dropped} = await registryRecordingDrops();
+		const {indexer} = await openContainer([makeFold('A')], registry);
+		const b = await indexer.add(specFor(makeFold('B')));
+
+		await indexer.promote(b.record);
+
+		// the pointer moved and NOTHING is slotted behind it: a tab can never run the
+		// fold a `predecessor` would name, because that code is not in the build
+		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: undefined, predecessor: undefined});
+		// ...and it is COLLECTABLE rather than collected: no deleter is added here, and
+		// the row and the state are exactly where the promotion found them
+		expect(
+			unslottedGenerations(await registry.list(), await registry.slots()).map((r) => markerOf(r.processor)),
+		).toEqual(['A']);
+		expect(dropped).toEqual([]);
+		expect((await registry.list()).map((record) => record.processor)).toEqual([identityOf('A'), identityOf('B')]);
+	});
+
+	it('never displaces what `canonical` names, and keeps the superseded generation that FETCHES the stream', async () => {
 		const {registry, dropped} = await registryRecordingDrops();
 		const {indexer} = await openContainer([makeFold('A')], registry);
 		const b = await indexer.add(specFor(makeFold('B')));
 		await indexer.promote(b.record);
-		// the pointer moved, so what it moved OFF is what `predecessor` names
-		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: undefined, predecessor: 'A'});
 
 		const c = await indexer.add(specFor(makeFold('C')));
 		await indexer.add(specFor(makeFold('D')));
 
-		// the replacement reached the PENDING successor and nothing else: "not
-		// canonical right now" would have taken the revert target with it
-		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: 'D', predecessor: 'A'});
+		// the replacement reached the PENDING successor and nothing else: "not canonical
+		// right now" would have taken the generation that answers reads with it
+		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: 'D', predecessor: undefined});
 		expect(dropped).toEqual([{stream: c.record.stream, processor: c.record.processor}]);
-		// ...so the way back is still there, and still exact
+		// A is named by no slot and survives anyway, and the reason is worth stating: it
+		// is the FETCHER of the stream every one of these folds is on (ADR-0044), so
+		// dropping it would leave them folding a stream nothing appends to. What keeps it
+		// is the strand rule and no longer a slot.
+		expect((await registry.list()).map((record) => record.processor)).toContain(identityOf('A'));
+		expect(await registry.fetcherOf(b.record.stream)).toMatchObject({processor: identityOf('A')});
+		// ...so a move back to it is still a move to a registered generation this
+		// container holds a fold for, and it still answers from its own state
 		await indexer.promote({stream: c.record.stream, processor: identityOf('A')});
 		expect(indexer.state.read()).toBe('A');
 	});

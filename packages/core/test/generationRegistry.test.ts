@@ -11,6 +11,7 @@ import {
 	type GenerationRecord,
 	type GenerationRegistryPort,
 	type GenerationRegistryState,
+	type GenerationRegistryWrite,
 	type SlotName,
 } from '../src/generation/registry.js';
 
@@ -369,6 +370,46 @@ describe('a generation is held by a durable named SLOT', () => {
 		await registry.moveCanonicalTo(incumbent);
 		// ...and a move back is the same rule: `predecessor` names what this one came off
 		expect(await registry.slots()).toEqual({canonical: incumbent, predecessor: successor});
+	});
+
+	it('assigns NO `predecessor` where the RUNTIME has no revert window, and drafts none either (ADR-0089)', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+		const mark = world.calls.length;
+
+		await registry.moveCanonicalTo(successor, {assignPredecessor: false});
+
+		// the pointer moved and the generation it moved OFF is named by NOTHING: on a
+		// chain-facing runtime the code that fold needs is not in the build, so the slot
+		// would name something the tab cannot instantiate
+		expect(await registry.slots()).toEqual({canonical: successor});
+		expect(await registry.list()).toEqual([incumbent, successor]);
+
+		// ...and it was NEVER DRAFTED, which is the half an end-state assertion cannot
+		// reach: ONE commit, whose slot draft has no `predecessor` key at all. A move
+		// followed by a clear is a second act that can fail on its own and leave the slot
+		// populated, and that partially-assigned state is what this makes unreachable.
+		const commits = world.calls.slice(mark).filter((call) => call.op === 'commit');
+		expect(commits).toHaveLength(1);
+		const drafted = (commits[0].detail as GenerationRegistryWrite).slots as Record<string, unknown>;
+		expect(Object.keys(drafted).sort()).toEqual(['canonical', 'successor']);
+		expect('predecessor' in drafted).toBe(false);
+	});
+
+	it('ASSIGNS `predecessor` by DEFAULT, so a runtime that says nothing keeps its revert window', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+
+		// the option is the CHAIN-FACING container's to pass and nobody else's: a caller
+		// that does not name it gets the receiving runtime's behaviour, which is the one
+		// an operator reverts on
+		await registry.moveCanonicalTo(successor, {});
+
+		expect(await registry.slots()).toEqual({canonical: successor, predecessor: incumbent});
 	});
 
 	it('leaves a PENDING successor pending across a revert', async () => {

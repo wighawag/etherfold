@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A browser tab holds no PREDECESSOR, because it can never run one
 
 `predecessor` is the slot a revert moves back to (ADR-0084), and it is retained so that moving the canonical pointer back is a revert rather than a re-index. On a server that is worth what it costs. **In a browser it is worth nothing, because the code that fold needs is not in the build, and the tab cannot go and get it.** We decide that a pointer move on the CHAIN-FACING container assigns no `predecessor`: the superseded generation is not named by a slot, and is collectable like any other unslotted generation. The slot itself stays in the vocabulary and stays live on the receiving runtime.
@@ -35,13 +31,17 @@ So undoing an edit, which restores the same handler source text and therefore th
 
 That is the entire cost, and it is accepted on the grounds that the developer reverting an edit has the editor open.
 
-## What it wins
+## What it wins, stated as what was MEASURED
 
-**A tab stops having to choose between a revert window and a save loop.** At `BROWSER_GENERATION_CAPS` (`maxGenerations: 2`) a tab can hold `canonical` + `successor` or `canonical` + `predecessor`, and not all three; a registration needing the third meets the cap and is REFUSED with `GenerationCapReachedError`. That refusal is correct under the current model and simply disappears under this one, because the third seat is never occupied. The save loop always has room.
+This section is deliberately narrow, and it is narrower than the first draft of this ADR claimed. That draft argued the change frees the second seat outright and removes ADR-0088's defect at the root. Both claims assumed UNSLOTTED implies COLLECTED, and on this runtime it does not: there is no `reclaim` verb on the chain-facing container, and a registration deliberately leaves a record no slot names alone unless dropping it is safe. The claims were built, measured and found false before this decision was implemented, so they are corrected here rather than preserved: they never described the code for even one commit, and keeping them as a reasoning trail would only mislead.
 
-**It removes ADR-0088's defect at the root**, which is the strongest evidence that the slot was doing harm rather than nothing on this runtime. That ADR's stall reproduces because "`dropOnPromotion` defaults to `false` and a generation `predecessor` names is untouchable, so A survives" and is then named as the fetcher while unheld. With no predecessor assigned there is no surviving A and the trigger is unreachable.
+**What this change IS, then, is correctness and hygiene: a tab stops reserving a seat for a generation it could never run.** A slot is a claim about what a deployment is USING, and a claim no code on this runtime can act on is a wrong claim, whatever it costs. That argument is structural and stands on its own.
 
-**ADR-0088's rule is NOT reverted and is not weakened.** Deriving the fetcher from the folds a container HOLDS is correct independently of what any slot names, and it is the rule that makes the answer true by construction rather than true by luck. This removes one way of reaching the old bug; that ADR removes the class.
+**The seat it frees is the CROSS-STREAM one.** After a promotion the superseded generation is named by nothing, so an arriving registration may drop it -- and on a source or filter edit it is alone on its old stream, so the drop proceeds and a save that previously met `maxGenerations` now lands. That is real headroom and it is asserted (`packages/browser/test/aTabHoldsItsGenerationsInSlots.test.ts`).
+
+**The SAME-STREAM save loop still meets the cap, and that refusal is correct.** A developer editing a handler stays on one stream, and there the superseded generation is the FETCHER of the stream the arriving fold is on: dropping it would leave that fold folding a stream nothing appends to, so the drop is declined (ADR-0044) and the second seat stays occupied. The seat is held by the FETCH DUTY, not by a slot, which is why removing the slot cannot free it. What would free it is something that COLLECTS an unslotted generation on this runtime, plus an answer to whether the fetch duty may leave a generation being collected; that is ADR-0044 territory, it wants its own decision, and it is deliberately not taken here (`work/notes/observations/an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing.md`).
+
+**ADR-0088's rule is NOT reverted and is not weakened.** Deriving the fetcher from the folds a container HOLDS is correct independently of what any slot names, and it is the rule that makes the answer true by construction rather than true by luck. Nor does this change touch that stall in either direction: the superseded generation survives here whether or not a slot names it, since nothing collects an unslotted one, and `follows` is already derived from the set the container WILL HOLD, so an unheld generation is never named as a fetcher whatever any slot says. That ADR removes the class, and it removes it alone.
 
 ## Considered options
 
@@ -53,7 +53,7 @@ That is the entire cost, and it is accepted on the grounds that the developer re
 
 ## Consequences
 
-**The assignment must not be made and then undone.** `moveCanonicalTo` sets `canonical` and `predecessor` in ONE commit, deliberately, and the registry's own comment says that atomicity is the point. So this is a decision the pointer move itself takes, not a clear-afterwards: a move that assigns nothing must be a move that never drafted the assignment. Where the runtime's answer lives is an implementation choice; it must be readable at the moment of the commit, and `GenerationCaps` is not it (that type is documented as a COUNT and never a policy).
+**The assignment must not be made and then undone.** `moveCanonicalTo` sets `canonical` and `predecessor` in ONE commit, deliberately, and the registry's own comment says that atomicity is the point. So this is a decision the pointer move itself takes, not a clear-afterwards: a move that assigns nothing must be a move that never drafted the assignment. Where the runtime's answer lives is an implementation choice; it must be readable at the moment of the commit, and `GenerationCaps` is not it (that type is documented as a COUNT and never a policy). As built it is an OPTION ON THE MOVE -- `moveCanonicalTo(id, {assignPredecessor: false})`, passed by `Indexer.movePointerTo` and by nothing else, read before the commit and applied inside the plan -- because what differs is the CONTAINER doing the moving rather than the substrate holding the rows, and the default is the assignment, so a caller that says nothing keeps its revert window.
 
 **ADR-0084 is amended on one axis.** Its three slots stand and their meanings are unchanged. What changes is that `predecessor` is assigned by the RECEIVING runtime only, so its statement that a browser tab holds `canonical` + `predecessor` after a promotion stops describing anything reachable.
 
@@ -61,4 +61,4 @@ That is the entire cost, and it is accepted on the grounds that the developer re
 
 **No migration.** Nothing is published and no disk anywhere holds state this project must preserve (`CONTEXT.md`), so a registry that already assigned a `predecessor` is not a case to carry forward.
 
-**What a superseded browser generation becomes is UNSLOTTED, not deleted on the spot.** It is collectable, by the same rule as any generation no slot names; nothing here adds a new deleter, and ADR-0087's removal of the automatic reap is untouched.
+**What a superseded browser generation becomes is UNSLOTTED, not deleted on the spot.** It is collectable, by the same rule as any generation no slot names; nothing here adds a new deleter, and ADR-0087's removal of the automatic reap is untouched. And on this runtime COLLECTABLE is all it is: the `reclaim` verb belongs to the receiving container (ADR-0084's amendment of 2026-09-16), so nothing collects such a generation here at all. That gap is deliberate, it is the reason the wins above are narrow, and it is captured rather than closed (`work/notes/observations/an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing.md`).
