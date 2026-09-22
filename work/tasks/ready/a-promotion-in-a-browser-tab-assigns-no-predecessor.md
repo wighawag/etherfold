@@ -3,6 +3,7 @@ title: 'A promotion on the chain-facing container assigns no `predecessor`, beca
 slug: a-promotion-in-a-browser-tab-assigns-no-predecessor
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
