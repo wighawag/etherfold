@@ -1604,7 +1604,14 @@ export class ReceivingIndexer<
 	 * declined drop leaves behind. A generation this container holds no fold for and no
 	 * slot names is left alone: reclaiming those is an operator's verb
 	 * (`a-generation-no-slot-names-is-reclaimed-on-request`), not something a
-	 * registration does to rows it never touched.
+	 * registration does to rows it never touched. That is `unheldIsCollectable: false`,
+	 * stated at this call site rather than defaulted, and it is the ONE axis on which
+	 * the shared rule differs between the runtimes: the chain-facing twin answers TRUE,
+	 * because there nothing else will ever collect such a row and it can never run again
+	 * (ADR-0090, points 3 and 4). Here it can: an operator RUNS `reclaim`, and a
+	 * registration that collected for them would delete with nobody present -- the
+	 * decision ADR-0084 declined to make -- taking whichever generation they were
+	 * keeping with it.
 	 *
 	 * ## "THE SAME ROLE" MEANS THE SLOT, REGARDLESS OF STREAM
 	 *
@@ -1634,9 +1641,10 @@ export class ReceivingIndexer<
 		registered: readonly GenerationRecord[],
 		slots: SlottedGenerations,
 	): Promise<void> {
-		const displaced = displacedBySuccessor(arriving, registered, slots, (record) =>
-			this.folds.some((fold) => sameGeneration(fold.record, record)),
-		);
+		const displaced = displacedBySuccessor(arriving, registered, slots, {
+			heldHere: (record) => this.folds.some((fold) => sameGeneration(fold.record, record)),
+			unheldIsCollectable: false,
+		});
 
 		for (const record of displaced) {
 			await this.dropReplaced(record, arriving);

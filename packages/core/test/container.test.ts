@@ -109,6 +109,13 @@ function specFor(fold: Fold): GenerationSpec<Abi, Handle, {name: string; opened:
 	};
 }
 
+/** What each slot holds, as the fold that names it, so an assertion reads as a sentence. */
+async function slotsOf(registry: GenerationRegistry) {
+	const held = await registry.slots();
+	const name = (record: GenerationRecord | undefined) => markerOf(record?.processor);
+	return {canonical: name(held.canonical), successor: name(held.successor), predecessor: name(held.predecessor)};
+}
+
 async function openContainer(folds: Fold[], registry?: GenerationRegistry) {
 	const held = registry ?? (await openMemoryGenerationRegistry({maxGenerations: 4, maxStreams: 2}));
 	const indexer = await openIndexer<Abi, Handle>({
@@ -350,13 +357,6 @@ describe('a generation is held by a durable named SLOT', () => {
 		return {registry, dropped};
 	}
 
-	/** What each slot holds, as the fold that names it, so an assertion reads as a sentence. */
-	async function slotsBy(registry: GenerationRegistry) {
-		const held = await registry.slots();
-		const name = (record: GenerationRecord | undefined) => markerOf(record?.processor);
-		return {canonical: name(held.canonical), successor: name(held.successor), predecessor: name(held.predecessor)};
-	}
-
 	it('registers a generation added beside the live one INTO `successor`', async () => {
 		const {registry} = await registryRecordingDrops();
 		const {indexer} = await openContainer([makeFold('A')], registry);
@@ -364,11 +364,11 @@ describe('a generation is held by a durable named SLOT', () => {
 		// the first generation of an empty registry takes `canonical` whatever slot
 		// was asked for, because a registry holding generations and pointing at none
 		// of them answers nothing
-		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: undefined, predecessor: undefined});
+		expect(await slotsOf(registry)).toEqual({canonical: 'A', successor: undefined, predecessor: undefined});
 
 		await indexer.add(specFor(makeFold('B')));
 
-		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'B', predecessor: undefined});
+		expect(await slotsOf(registry)).toEqual({canonical: 'A', successor: 'B', predecessor: undefined});
 	});
 
 	it('REPLACES what `successor` held, and drops it: the slot holds AT MOST ONE', async () => {
@@ -378,7 +378,7 @@ describe('a generation is held by a durable named SLOT', () => {
 
 		const c = await indexer.add(specFor(makeFold('C')));
 
-		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
+		expect(await slotsOf(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
 		// the row, the state, and this container's driving of it: all three go
 		expect(dropped).toEqual([{stream: b.record.stream, processor: b.record.processor}]);
 		expect((await registry.list()).map((record) => record.processor)).toEqual([identityOf('A'), identityOf('C')]);
@@ -394,7 +394,7 @@ describe('a generation is held by a durable named SLOT', () => {
 
 		// the pointer moved and NOTHING is slotted behind it: a tab can never run the
 		// fold a `predecessor` would name, because that code is not in the build
-		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: undefined, predecessor: undefined});
+		expect(await slotsOf(registry)).toEqual({canonical: 'B', successor: undefined, predecessor: undefined});
 		// ...and it is COLLECTABLE rather than collected: no deleter is added here, and
 		// the row and the state are exactly where the promotion found them
 		expect(
@@ -415,7 +415,7 @@ describe('a generation is held by a durable named SLOT', () => {
 
 		// the replacement reached the PENDING successor and nothing else: "not canonical
 		// right now" would have taken the generation that answers reads with it
-		expect(await slotsBy(registry)).toEqual({canonical: 'B', successor: 'D', predecessor: undefined});
+		expect(await slotsOf(registry)).toEqual({canonical: 'B', successor: 'D', predecessor: undefined});
 		expect(dropped).toEqual([{stream: c.record.stream, processor: c.record.processor}]);
 		// A is named by no slot and survives anyway, and the reason is worth stating: it
 		// is the FETCHER of the stream every one of these folds is on (ADR-0044), so
@@ -438,9 +438,106 @@ describe('a generation is held by a durable named SLOT', () => {
 		// this is the RESTART, and no in-memory rule could reach it
 		await openContainer([makeFold('A'), makeFold('C')], registry);
 
-		expect(await slotsBy(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
+		expect(await slotsOf(registry)).toEqual({canonical: 'A', successor: 'C', predecessor: undefined});
 		expect(dropped).toEqual([{stream: abandoned.record.stream, processor: abandoned.record.processor}]);
 		expect((await registry.list()).map((record) => record.processor)).toEqual([identityOf('A'), identityOf('C')]);
+	});
+});
+
+/**
+ * A GENERATION THIS CONTAINER HOLDS NO FOLD FOR IS COLLECTED WHEN A REGISTRATION
+ * NEEDS ROOM (ADR-0090, point 3).
+ *
+ * The shape is a PROMOTION followed by a RELOAD. A save registers the edited fold,
+ * the policy promotes it, and the superseded generation is left named by no slot
+ * (ADR-0089). The next page load holds exactly ONE fold, because that is all a tab
+ * can supply -- the previous processor's code is not in the bundle -- so the
+ * superseded generation's row survives as something that can never answer a read
+ * and can never fetch, and nothing on this runtime collects it: there is no
+ * `reclaim` verb here (ADR-0084). Measured, the developer's next save then met
+ * `maxGenerations` and no page reload could clear it.
+ *
+ * **The two cases below differ in ONE fact and it is the whole decision**: whether
+ * this container holds a fold for the superseded generation. Held, it is retained,
+ * because it is what FETCHES the stream the arriving fold is on and dropping it
+ * would leave that fold folding a stream nothing appends to (ADR-0044). Unheld,
+ * there is no fold to strand and nothing to keep it for, so it goes. Neither case
+ * touches `dropOnPromotion`, the promotion path or the caps: this collects at a
+ * REGISTRATION and at no other moment.
+ *
+ * The receiving twin's answer to the same question is the opposite one and is
+ * asserted in `receivingContainer.test.ts` (a registration leaves it alone) and in
+ * `@etherfold/cli`'s `aGenerationNoSlotNamesIsReclaimed.test.ts` (an operator's
+ * verb takes it).
+ */
+describe('a generation this container holds NO FOLD for is COLLECTED when a registration needs room', () => {
+	/** A registry at the browser's own arithmetic -- two generations -- recording what it dropped. */
+	async function registryAtTheTightCap(maxGenerations = 2) {
+		const dropped: GenerationId[] = [];
+		const registry = await openMemoryGenerationRegistry(
+			{maxGenerations, maxStreams: 2},
+			{
+				dropState: async (id) => {
+					dropped.push(id);
+				},
+			},
+		);
+		return {registry, dropped};
+	}
+
+	/** Session one: index on A, save B beside it, and let the pointer move to B. */
+	async function aContainerThatSavedAndPromoted(registry: GenerationRegistry) {
+		const session = await openContainer([makeFold('A')], registry);
+		const promoted = await session.indexer.add(specFor(makeFold('B')));
+		await session.indexer.promote(promoted.record);
+		return session;
+	}
+
+	it('collects it on the SAVE after a reload, and the save lands where it was REFUSED', async () => {
+		const {registry, dropped} = await registryAtTheTightCap();
+		await aContainerThatSavedAndPromoted(registry);
+
+		// THE RELOAD: a container holding the one fold the bundle carries, over records
+		// the previous session left. Opening collects NOTHING -- the fold it arrives with
+		// is the one `canonical` already names, so it takes nobody's place -- which is
+		// what keeps this a registration rather than a sweep.
+		const reloaded = await openContainer([makeFold('B')], registry);
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['A', 'B']);
+		expect(dropped).toEqual([]);
+
+		// THE SAVE THAT USED TO BE REFUSED: `A` is named by no slot, this container holds
+		// no fold for it, and it is not canonical, so it goes and the registration lands.
+		const saved = await reloaded.indexer.add(specFor(makeFold('C')));
+
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['B', 'C']);
+		expect(dropped.map((id) => markerOf(id.processor))).toEqual(['A']);
+		// ...the pointer never moved, so the generation answering reads is untouched...
+		expect(await slotsOf(registry)).toEqual({canonical: 'B', successor: 'C', predecessor: undefined});
+		expect(reloaded.indexer.state.read()).toBe('B');
+		// ...and the STREAM they are all on is KEPT, because no drop reaps one (ADR-0087):
+		// the new fold re-folds bytes already on disk rather than asking a node for
+		// history it may refuse
+		expect(await registry.keptStreams()).toEqual([saved.record.stream]);
+	});
+
+	it('RETAINS it in-session, because a fold here follows the stream it fetches', async () => {
+		const {registry, dropped} = await registryAtTheTightCap(3);
+		const session = await aContainerThatSavedAndPromoted(registry);
+
+		// the same records, the same slots and the same arriving save -- and this container
+		// HOLDS the superseded fold, which is the one difference
+		await session.indexer.add(specFor(makeFold('C')));
+
+		// it is the FETCHER of the stream the arriving fold is on, so dropping it would
+		// leave that fold folding a stream nothing appends to (ADR-0044). This is the case
+		// ADR-0090's points 1 and 2 answer with a HAND-OVER at the promotion, and this
+		// task must not partially implement them.
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['A', 'B', 'C']);
+		expect(dropped).toEqual([]);
+		expect(await registry.fetcherOf(session.indexer.canonical.record.stream)).toMatchObject({
+			processor: identityOf('A'),
+		});
+		expect(session.indexer.generations.map((held) => markerOf(held.record.processor))).toEqual(['A', 'B', 'C']);
 	});
 });
 

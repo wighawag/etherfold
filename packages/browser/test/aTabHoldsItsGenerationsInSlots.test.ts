@@ -177,6 +177,34 @@ async function storedStream(keepStream: {
 	};
 }
 
+/**
+ * SESSION ONE, which every case after a promotion starts from: index on the app's
+ * fold, save an edited one beside it, and let the default `on-catch-up` policy
+ * promote it once it is level.
+ *
+ * What it leaves behind is the shape a real tab is in: the pointer on the saved
+ * fold, and the previous generation named by NO slot (ADR-0089) with its row and
+ * its state still there.
+ */
+async function aTabThatSavedAndPromoted(name: string, chain: ReturnType<typeof fakeChain>) {
+	const {registry} = await durableRegistry(name);
+	const keepStream = keepStreamOnIndexedDB<TestABI>(name);
+	const session = await openIndexer<TestABI, EntityStateView>({
+		registry,
+		provider: chain.provider,
+		source: SOURCE,
+		config: {keepStream, stream: {finality: FINALITY}},
+		generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
+	});
+	await driveToTip(session);
+	// THE SAVE: the developer edits the handler, the tab registers the new fold
+	// beside the live one, and the default policy promotes it once it is level.
+	const savedState = await memoryStore(editedTo(3));
+	await session.add(generationOver(savedState, editedTo(3), identityFor(3)));
+	await driveToTip(session);
+	return {registry, keepStream, savedState};
+}
+
 async function slotsBy(registry: GenerationRegistry): Promise<Record<string, string | undefined>> {
 	const held = await registry.slots();
 	const marker = (record: GenerationRecord | undefined) => markerOf(record?.processor);
@@ -371,10 +399,11 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
  * This is the shape a real tab HAS, and it is the one the stall lived in. A save
  * registers the edited fold beside the live one, the default `on-catch-up`
  * policy promotes it, and `dropOnPromotion` defaults to false -- so the previous
- * generation SURVIVES, named by no slot at all since ADR-0089 and collected by
- * nothing on this runtime. The reload then supplies exactly ONE fold, because that
- * is all a tab can supply: the previous handler's code is not in the bundle that
- * just loaded.
+ * generation SURVIVES, named by no slot at all since ADR-0089. The reload then
+ * supplies exactly ONE fold, because that is all a tab can supply: the previous
+ * handler's code is not in the bundle that just loaded. Nothing collects that
+ * survivor while the tab merely indexes; what collects it is the next SAVE, which
+ * is the describe after the caps (ADR-0090 point 3).
  *
  * The generation that fetches a stream used to be the oldest one REGISTERED on
  * it, so it was the one this tab does not hold -- and the tab's only fold became
@@ -391,26 +420,6 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
  * afterwards are the evidence.
  */
 describe('a tab that reloads AFTER A PROMOTION goes on FETCHING', () => {
-	/** Session 1: index on the app's fold, save an edited one beside it, let the policy promote it. */
-	async function aTabThatSavedAndPromoted(name: string, chain: ReturnType<typeof fakeChain>) {
-		const {registry} = await durableRegistry(name);
-		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
-		const session = await openIndexer<TestABI, EntityStateView>({
-			registry,
-			provider: chain.provider,
-			source: SOURCE,
-			config: {keepStream, stream: {finality: FINALITY}},
-			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
-		});
-		await driveToTip(session);
-		// THE SAVE: the developer edits the handler, the tab registers the new fold
-		// beside the live one, and the default policy promotes it once it is level.
-		const savedState = await memoryStore(editedTo(3));
-		await session.add(generationOver(savedState, editedTo(3), identityFor(3)));
-		await driveToTip(session);
-		return {registry, keepStream, savedState};
-	}
-
 	/** The state the extended branch folds to under the saved handler: six transfers counted by three. */
 	const EXPECTED_AFTER_THE_RELOAD = {owners: {'1': BOB, '2': CAROL, '3': DAN, '4': undefined}, transfers: 18};
 
@@ -471,8 +480,15 @@ describe('a tab that reloads AFTER A PROMOTION goes on FETCHING', () => {
 		});
 		// the tab still holds exactly what a tab can hold, and the superseded generation
 		// is still registered and still named by no slot: fetching is not bought by
-		// dropping it, and nothing here deletes it either
+		// dropping it, and a tab that reloads and then INDEXES collects nothing at all --
+		// no timer, no sweep at `open`, and the fold this session arrived with is the one
+		// the pointer already names, so it takes nobody's place (ADR-0090 point 3)
 		expect(afterReload.generations.length).toBe(1);
+		expect((await reloaded.registry.list()).map((record) => markerOf(record.processor))).toEqual([
+			'the-app',
+			'edited-by-3',
+		]);
+		expect(reloaded.dropped).toEqual([]);
 		expect(await slotsBy(reloaded.registry)).toEqual({
 			canonical: 'edited-by-3',
 			successor: undefined,
@@ -652,9 +668,10 @@ describe('what a cap of TWO means after a promotion', () => {
 	 * NOTHING behind the pointer (ADR-0089), so the obvious reading is that the
 	 * second seat is freed and the save loop always has room. It is not, and the
 	 * difference is the whole of these two cases: UNSLOTTED does not mean COLLECTED,
-	 * and on this runtime nothing collects an unslotted generation -- there is no
-	 * `reclaim` verb here, and a registration deliberately leaves a record no slot
-	 * names alone unless dropping it is safe.
+	 * and while this session still HOLDS the superseded fold nothing collects it --
+	 * there is no `reclaim` verb here, and a registration may only drop a record no
+	 * slot names where dropping it is safe. (The fold this session holds NO fold for is
+	 * the other case entirely, and it is the describe below.)
 	 *
 	 * So what decides the seat is whether the superseded generation may be DROPPED by
 	 * the arriving registration, which is `wouldStrandAFollower` (ADR-0044):
@@ -666,10 +683,12 @@ describe('what a cap of TWO means after a promotion', () => {
 	 *    on, so dropping it would leave that fold folding a stream nothing appends to.
 	 *    It is retained and the save meets the cap, exactly as it did before.
 	 *
-	 * The refusal in case 2 is therefore still the right end of the trade and is
-	 * deliberately not softened; the caps are UNCHANGED by this change (ADR-0084),
-	 * and what would clear it is a collector this runtime does not have
-	 * (`work/notes/observations/an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing.md`).
+	 * The refusal in case 2 is therefore still the right end of the trade here and is
+	 * deliberately not softened; the caps are UNCHANGED by this change (ADR-0084). What
+	 * clears it is the HAND-OVER of the fetch duty at the promotion, which is ADR-0090's
+	 * points 1 and 2 and belongs to its own task -- so case 2 is also the assertion that
+	 * collecting a generation NO FOLD EXISTS FOR (point 3, the next describe) did not
+	 * partially implement them.
 	 */
 	it('FREES the seat on a cross-stream save, because the superseded generation is alone on its stream', async () => {
 		const name = freshName();
@@ -739,6 +758,89 @@ describe('what a cap of TWO means after a promotion', () => {
 		expect(markerOf((await registry.fetcherOf(successor.record.stream))?.processor)).toBe('the-app');
 		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
 		expect((await registry.list()).length).toBe(2);
+	});
+});
+
+/**
+ * A RELOADED TAB COLLECTS THE GENERATION IT CAN NEVER RUN, ON A SAVE AND ONLY ON A
+ * SAVE (ADR-0090, point 3).
+ *
+ * This is the wall a page reload could not clear, and it is the case the caps
+ * arithmetic above ends in. After a promotion the superseded generation is named by
+ * no slot (ADR-0089); after a RELOAD it is also a generation this tab holds no fold
+ * for, because its code is not in the bundle that just loaded -- so it can never
+ * answer a read and can never fetch, and until now nothing on this runtime ever
+ * collected it (measured in
+ * `work/notes/observations/an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing.md`,
+ * where the developer's next save met `GenerationCapReachedError` with a row no
+ * reload could remove).
+ *
+ * **It is collected at a REGISTRATION and at no other moment.** Nothing fires on a
+ * timer, nothing sweeps at `open`, and there is no new background deleter: the
+ * reload above collects nothing at all, because the fold it arrives with is the one
+ * `canonical` already names and so takes nobody's place. The deletion is a
+ * consequence of an act the developer just performed, which is exactly the property
+ * ADR-0084 refused an automatic reclaim for lacking.
+ *
+ * The STREAM is kept (ADR-0087), which is what makes the loss cheap: supplying the
+ * old code again derives the same identity (ADR-0086) and re-folds bytes already on
+ * disk, rather than asking a public node for history it may refuse.
+ */
+describe('a RELOADED tab COLLECTS the generation it holds no fold for, when a save needs room', () => {
+	it('collects it on the SAVE, so the save that used to be REFUSED lands', async () => {
+		const name = freshName();
+		const chain = fakeChain();
+		const {registry, keepStream} = await aTabThatSavedAndPromoted(name, chain);
+		const streamBefore = await storedStream(keepStream);
+
+		// THE RELOAD: a fresh process over the same IndexedDB, holding the ONE fold the
+		// bundle carries -- and the superseded generation's row is still there, because
+		// opening collects nothing
+		const reloaded = await durableRegistry(name);
+		const afterReload = await openIndexer<TestABI, EntityStateView>({
+			registry: reloaded.registry,
+			provider: chain.provider,
+			source: SOURCE,
+			config: {keepStream, stream: {finality: FINALITY}},
+			generations: [generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3))],
+		});
+		await driveToTip(afterReload);
+		expect(afterReload.generations.length).toBe(1);
+		expect((await reloaded.registry.list()).map((record) => markerOf(record.processor))).toEqual([
+			'the-app',
+			'edited-by-3',
+		]);
+		expect(reloaded.dropped).toEqual([]);
+		const answeredBeforeTheSave = await readState(afterReload.state);
+
+		// THE NEXT SAVE, which is where this used to end in `GenerationCapReachedError`
+		const saved = await afterReload.add(generationOver(await memoryStore(editedTo(4)), editedTo(4), identityFor(4)));
+
+		// the row went, and its state namespace went with it...
+		expect((await reloaded.registry.list()).map((record) => markerOf(record.processor))).toEqual([
+			'edited-by-3',
+			'edited-by-4',
+		]);
+		expect(reloaded.dropped.map((id) => markerOf(id.processor))).toEqual(['the-app']);
+		// ...the save landed in the slot, under a cap nothing raised and nothing evicted
+		// at the bound: what freed the seat is a generation that could never run, not
+		// pressure
+		expect(await slotsBy(reloaded.registry)).toEqual({
+			canonical: 'edited-by-3',
+			successor: 'edited-by-4',
+			predecessor: undefined,
+		});
+		expect(reloaded.registry.caps.maxGenerations).toBe(2);
+		expect(markerOf(saved.record.processor)).toBe('edited-by-4');
+		// ...the UI is untouched: the canonical generation answers exactly what it
+		// answered before the collection, and it is still the one that FETCHES
+		expect(await readState(afterReload.state)).toEqual(answeredBeforeTheSave);
+		expect(afterReload.canonical.follows).toBe(false);
+		expect(markerOf((await reloaded.registry.fetcherOf(saved.record.stream))?.processor)).toBe('edited-by-3');
+		// ...and the STREAM is KEPT, every event of it: no drop reaps one (ADR-0087), so
+		// the fold that just arrived re-folds bytes already on disk
+		expect(await storedStream(keepStream)).toEqual(streamBefore);
+		expect(await reloaded.registry.keptStreams()).toEqual([saved.record.stream]);
 	});
 });
 

@@ -501,6 +501,73 @@ describe('a promotion on the RECEIVING container still opens a revert window', (
 	});
 });
 
+/**
+ * THE RUNTIME WHERE COLLECTING A GENERATION IS AN OPERATOR'S VERB AND NOTHING
+ * ELSE (ADR-0084; ADR-0090 point 4).
+ *
+ * The chain-facing twin now COLLECTS a generation it holds no fold for when a
+ * registration needs room, because on that runtime nothing else ever will: there
+ * is no `reclaim` verb in a browser tab and the row can never answer a read again
+ * (ADR-0090 point 3). The rule those two share has ONE home
+ * (`displacedBySuccessor`), so the hazard that decision carries is a widening
+ * applied one level too low: a registration that collected on THIS runtime too
+ * would delete, with nobody present, exactly the generations an operator keeps
+ * until they run the verb -- and ADR-0084 refused an automatic reclaim here in as
+ * many words.
+ *
+ * So this is the twin of `container.test.ts`'s `holds NO FOLD for` case, and the
+ * pair of them is the assertion: same shared rule, same registration, two
+ * runtimes, two answers.
+ *
+ * The DURABLE half -- four generations over one database, the namespace really
+ * dropped and the stream reaped -- is asserted in `@etherfold/cli`'s
+ * `aGenerationNoSlotNamesIsReclaimed.test.ts`.
+ */
+describe('a registration on the RECEIVING container leaves a generation no slot names ALONE', () => {
+	/**
+	 * A deployment upgraded twice and then RESTARTED, which is the ordinary way a
+	 * generation stops being named by anything: `predecessor` holds exactly one, so the
+	 * second promotion leaves the first fold named by no slot, and the restart holds no
+	 * fold for it.
+	 */
+	async function aDeploymentUpgradedTwiceThenRestarted(world: Substrate) {
+		await anIndexerThatHasFolded(world);
+		const second = await open(world, 'v2');
+		await second.promote((await second.generations())[1]);
+		const third = await open(world, 'v3');
+		await third.promote((await third.generations())[2]);
+		// the REDEPLOY, holding a fourth fold and no fold for what the slots left behind
+		return open(world, 'v4');
+	}
+
+	it('leaves it registered, and the operator VERB is still what collects it', async () => {
+		const world = substrate();
+		const restarted = await aDeploymentUpgradedTwiceThenRestarted(world);
+
+		// the registration took the `successor` slot and displaced nothing: `v1` is named
+		// by no slot, this deployment holds no fold for it, and it is STILL THERE
+		expect((await restarted.generations()).map((record) => record.processor)).toEqual([
+			identityOf('v1'),
+			identityOf('v2'),
+			identityOf('v3'),
+			identityOf('v4'),
+		]);
+		expect(await restarted.slots()).toMatchObject({
+			canonical: {processor: identityOf('v3')},
+			predecessor: {processor: identityOf('v2')},
+			successor: {processor: identityOf('v4')},
+		});
+
+		// ...and it goes when an operator ASKS, which is the only thing that collects one
+		// here: nothing fires on a timer, nothing sweeps at `open`, and a registration
+		// does not do it to rows it never touched
+		const report = await restarted.reclaim();
+		expect(report.outcome).toBe('reclaimed');
+		expect(report.reclaimed.map((one) => one.generation.processor)).toEqual([identityOf('v1')]);
+		expect((await restarted.generations()).map((record) => record.processor)).not.toContain(identityOf('v1'));
+	});
+});
+
 describe('one container, SEVERAL live wire contexts', () => {
 	/** A DIFFERENT fetch filter, so `streamDigestOf` moves: a new stream, not a fork. */
 	const OTHER_SOURCE: IndexingSource<TestABI> = {
