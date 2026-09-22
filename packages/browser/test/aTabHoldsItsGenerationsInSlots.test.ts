@@ -845,11 +845,9 @@ describe('what a cap of TWO means after a promotion', () => {
  * arithmetic above ends in. After a promotion the superseded generation is named by
  * no slot (ADR-0089); after a RELOAD it is also a generation this tab holds no fold
  * for, because its code is not in the bundle that just loaded -- so it can never
- * answer a read and can never fetch, and until now nothing on this runtime ever
- * collected it (measured in
- * `work/notes/observations/an-unslotted-generation-on-the-chain-facing-container-is-collected-by-nothing.md`,
- * where the developer's next save met `GenerationCapReachedError` with a row no
- * reload could remove).
+ * answer a read and can never fetch, and until ADR-0090 nothing on this runtime ever
+ * collected it: the developer's next save met `GenerationCapReachedError` with a row
+ * no reload could remove, which is the wall this test is the fix for.
  *
  * **It is collected at a REGISTRATION and at no other moment.** Nothing fires on a
  * timer, nothing sweeps at `open`, and there is no new background deleter: the
