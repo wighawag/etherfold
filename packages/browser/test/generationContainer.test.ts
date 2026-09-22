@@ -209,6 +209,10 @@ describe('the entities-path handle is INDIRECT', () => {
 			provider: chain.provider,
 			source: SOURCE,
 			config: {stream: {finality: FINALITY}},
+			// the drop is turned OFF, because this case moves the pointer BACK at the end:
+			// what is asserted is the HANDLE following it, and on this runtime a promotion
+			// discards what it superseded unless an embedder says otherwise (ADR-0090)
+			promotion: {dropOnPromotion: false},
 			generations: [
 				generationOver(storeA, processor, identityOf('generation-A')),
 				generationOver(storeB, definitionV2, identityOf('generation-B')),

@@ -182,9 +182,17 @@ async function storedStream(keepStream: {
  * fold, save an edited one beside it, and let the default `on-catch-up` policy
  * promote it once it is level.
  *
- * What it leaves behind is the shape a real tab is in: the pointer on the saved
- * fold, and the previous generation named by NO slot (ADR-0089) with its row and
- * its state still there.
+ * **It RETAINS what the promotion superseded, and that is now something it has to
+ * SAY.** This runtime discards it by default (ADR-0090), so a session that said
+ * nothing would leave the previous generation's row gone and the cases below with
+ * no survivor to be wrong about. `{dropOnPromotion: false}` is the embedder that
+ * turned the drop off -- a supported configuration, and the one these cases are
+ * about: what a tab does when it OPENS onto a record it holds no fold for
+ * (ADR-0088) and when a save then needs that row's room (ADR-0090, point 3).
+ *
+ * What it leaves behind is therefore the shape those cases need: the pointer on
+ * the saved fold, and the previous generation named by NO slot (ADR-0089) with
+ * its row and its state still there.
  */
 async function aTabThatSavedAndPromoted(name: string, chain: ReturnType<typeof fakeChain>) {
 	const {registry} = await durableRegistry(name);
@@ -194,6 +202,7 @@ async function aTabThatSavedAndPromoted(name: string, chain: ReturnType<typeof f
 		provider: chain.provider,
 		source: SOURCE,
 		config: {keepStream, stream: {finality: FINALITY}},
+		promotion: {dropOnPromotion: false},
 		generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 	});
 	await driveToTip(session);
@@ -397,13 +406,21 @@ describe('a RELOAD replaces what it finds in the slot, having remembered nothing
  * A TAB THAT RELOADS AFTER A PROMOTION GOES ON INDEXING (ADR-0088).
  *
  * This is the shape a real tab HAS, and it is the one the stall lived in. A save
- * registers the edited fold beside the live one, the default `on-catch-up`
- * policy promotes it, and `dropOnPromotion` defaults to false -- so the previous
+ * registers the edited fold beside the live one, the `on-catch-up` policy
+ * promotes it, and this session RETAINS what that promotion superseded -- the
+ * embedder turned the drop off (`aTabThatSavedAndPromoted`) -- so the previous
  * generation SURVIVES, named by no slot at all since ADR-0089. The reload then
  * supplies exactly ONE fold, because that is all a tab can supply: the previous
  * handler's code is not in the bundle that just loaded. Nothing collects that
  * survivor while the tab merely indexes; what collects it is the next SAVE, which
  * is the describe after the caps (ADR-0090 point 3).
+ *
+ * **On the DEFAULT there is no survivor at all**, because a promotion discards
+ * what it superseded and hands it the stream in the same act (ADR-0090, points 1
+ * and 2, asserted in the save-loop describe below). This describe is deliberately
+ * the retained configuration: the rule it pins -- the fetcher is a fold the tab
+ * actually HOLDS -- has to stay true for an embedder that keeps a way back, and
+ * that is precisely the configuration the stall was measured on.
  *
  * The generation that fetches a stream used to be the oldest one REGISTERED on
  * it, so it was the one this tab does not hold -- and the tab's only fold became
@@ -608,7 +625,10 @@ describe('a replacement can never reach the canonical generation, and a promotio
 	 * nothing here either.
 	 *
 	 * It keeps room for THREE generations so the replacement has a pending successor
-	 * to reach past; what the browser's own two mean is the next describe.
+	 * to reach past; what the browser's own two mean is the next describe. And it
+	 * RETAINS what the promotion superseded, because that generation is what a
+	 * replacement must be shown not to reach: on the default it would simply have gone
+	 * at the promotion (ADR-0090), which is a different claim, asserted below.
 	 */
 	it('leaves canonical where it is, and names the superseded generation by no slot', async () => {
 		const name = freshName();
@@ -620,6 +640,7 @@ describe('a replacement can never reach the canonical generation, and a promotio
 			provider: fakeChain().provider,
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
+			promotion: {dropOnPromotion: false},
 			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
 		const promoted = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
@@ -662,33 +683,25 @@ describe('a replacement can never reach the canonical generation, and a promotio
 describe('what a cap of TWO means after a promotion', () => {
 	/**
 	 * THE ARITHMETIC, stated as a test because prose cannot settle it -- and
-	 * MEASURED, because the prose this replaces was wrong.
+	 * MEASURED twice, because it has been wrong twice.
 	 *
-	 * `BROWSER_GENERATION_CAPS` is two generations and a promotion here now slots
-	 * NOTHING behind the pointer (ADR-0089), so the obvious reading is that the
-	 * second seat is freed and the save loop always has room. It is not, and the
-	 * difference is the whole of these two cases: UNSLOTTED does not mean COLLECTED,
-	 * and while this session still HOLDS the superseded fold nothing collects it --
-	 * there is no `reclaim` verb here, and a registration may only drop a record no
-	 * slot names where dropping it is safe. (The fold this session holds NO fold for is
-	 * the other case entirely, and it is the describe below.)
+	 * `BROWSER_GENERATION_CAPS` is two generations. A promotion here slots NOTHING
+	 * behind the pointer (ADR-0089), and it now also DISCARDS what it superseded and
+	 * takes that generation's stream in the same act (ADR-0090, points 1 and 2). So
+	 * after any promotion this tab holds exactly what it can use, and the second seat
+	 * is free for the next save -- on BOTH kinds of save, which is what the two cases
+	 * below are:
 	 *
-	 * So what decides the seat is whether the superseded generation may be DROPPED by
-	 * the arriving registration, which is `wouldStrandAFollower` (ADR-0044):
+	 * 1. a CROSS-STREAM save (a source or filter edit) leaves the superseded
+	 *    generation alone on its old stream, so the drop needs no hand-over at all;
+	 * 2. a SAME-STREAM save loop -- the developer editing a handler, the common case
+	 *    -- leaves it as the FETCHER of the stream the promoted fold is on, so the
+	 *    promotion hands the stream over and then drops it. This is the case that
+	 *    used to WALL: the drop was declined, the save met `maxGenerations` and the
+	 *    only remedy was a page reload, which could not clear it either.
 	 *
-	 * 1. a CROSS-STREAM save (a source or filter edit) leaves it alone on its old
-	 *    stream, so it is dropped and the third save lands;
-	 * 2. a SAME-STREAM save loop -- the developer editing a handler, which is the
-	 *    common case -- leaves it as the FETCHER of the stream the arriving fold is
-	 *    on, so dropping it would leave that fold folding a stream nothing appends to.
-	 *    It is retained and the save meets the cap, exactly as it did before.
-	 *
-	 * The refusal in case 2 is therefore still the right end of the trade here and is
-	 * deliberately not softened; the caps are UNCHANGED by this change (ADR-0084). What
-	 * clears it is the HAND-OVER of the fetch duty at the promotion, which is ADR-0090's
-	 * points 1 and 2 and belongs to its own task -- so case 2 is also the assertion that
-	 * collecting a generation NO FOLD EXISTS FOR (point 3, the next describe) did not
-	 * partially implement them.
+	 * The caps are UNCHANGED by any of this and nothing is evicted at the bound
+	 * (ADR-0084): what frees the seat is a promotion finishing, not pressure.
 	 */
 	it('FREES the seat on a cross-stream save, because the superseded generation is alone on its stream', async () => {
 		const name = freshName();
@@ -709,6 +722,9 @@ describe('what a cap of TWO means after a promotion', () => {
 		);
 		await container.promote(reconfigured.record);
 		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
+		// the promotion FINISHED: nothing on the old stream is left to hand anything to,
+		// so the drop needed no hand-over and took the row and the state at the move
+		expect(dropped.map((id) => markerOf(id.processor))).toEqual(['the-app']);
 
 		// THE REGISTRATION THAT USED TO BE REFUSED: under `predecessor` the app's
 		// generation was untouchable, so this third save met `maxGenerations` and threw
@@ -721,43 +737,103 @@ describe('what a cap of TWO means after a promotion', () => {
 			successor: 'edited-by-3',
 			predecessor: undefined,
 		});
-		// the seat came from the superseded generation being DROPPED by the arriving
-		// registration -- the row and the state -- and the cap is untouched at two
-		expect(dropped.map((id) => markerOf(id.processor))).toEqual(['the-app']);
 		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['edited-by-2', 'edited-by-3']);
 		expect(registry.caps.maxGenerations).toBe(2);
 		expect(saved.record.stream).toBe(reconfigured.record.stream);
 	});
 
-	it('still REFUSES a same-stream save, because that seat is held by the stream`s FETCHER and not by a slot', async () => {
+	/**
+	 * THE SAVE LOOP, which is the behaviour the whole decision exists for.
+	 *
+	 * A developer editing a handler stays on ONE stream, so every successor is built
+	 * as a FOLLOWER of the generation it will replace. That is what used to end the
+	 * session: the drop was declined -- rightly, since dropping a stream's writer
+	 * would leave its follower folding a stream nothing appends to (ADR-0044) -- so
+	 * the second save met `GenerationCapReachedError` and no reload could clear it.
+	 *
+	 * Now the promotion HANDS THE STREAM OVER and drops the writer in the same act,
+	 * so the loop keeps going: save, promote, save, promote, save. Asserted on what
+	 * the tab ASKS THE CHAIN after each promotion, because "it still fetches" is the
+	 * half a slot listing cannot say and the half a flag has already got wrong
+	 * (ADR-0088).
+	 */
+	it('LANDS a same-stream save loop at the cap, because the promotion took the stream with it', async () => {
 		const name = freshName();
+		const chain = fakeChain();
 		const {registry, dropped} = await durableRegistry(name);
 		const keepStream = keepStreamOnIndexedDB<TestABI>(name);
 
 		const container = await openIndexer<TestABI, EntityStateView>({
 			registry,
-			provider: fakeChain().provider,
+			provider: chain.provider,
 			source: SOURCE,
 			config: {keepStream, stream: {finality: FINALITY}},
 			generations: [generationOver(await memoryStore(), processor, APP_IDENTITY)],
 		});
-		const successor = await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
-		await container.promote(successor.record);
-		// no slot names the superseded generation any more...
-		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
+		await driveToTip(container);
+		expect(await readState(container.state)).toEqual(EXPECTED_A);
 
-		await expect(
-			container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3))),
-		).rejects.toThrow(GenerationCapReachedError);
-
-		// ...and it still holds the second seat, because it is what FETCHES the stream
-		// the arriving fold is on: dropping it would leave that fold folding a stream
-		// nothing appends to (ADR-0044), so the drop is DECLINED and the cap is met.
-		// Nothing was evicted to make room, which is what a cap is for.
-		expect(dropped).toEqual([]);
-		expect(markerOf((await registry.fetcherOf(successor.record.stream))?.processor)).toBe('the-app');
+		// THE FIRST SAVE: the edited fold follows the stream the app fetches, catches up,
+		// and the default policy promotes it
+		await container.add(generationOver(await memoryStore(editedTo(2)), editedTo(2), identityFor(2)));
+		await driveToTip(container);
 		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-2', successor: undefined, predecessor: undefined});
-		expect((await registry.list()).length).toBe(2);
+		expect(dropped.map((id) => markerOf(id.processor))).toEqual(['the-app']);
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['edited-by-2']);
+
+		// AND THE TAB GOES ON ASKING THE CHAIN, which is the fetch duty and not a flag:
+		// the chain moves on and the promoted generation is what requests the new range
+		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		const callMark = chain.calls.length;
+		const rangeMark = chain.ranges.length;
+		await driveToTip(container);
+		expect(chain.callsByMethod(callMark)).toMatchObject({eth_blockNumber: expect.any(Number), eth_getLogs: 1});
+		expect(chain.ranges.slice(rangeMark)).toEqual([{from: 102, to: BRANCH_A_EXTENDED_TIP}]);
+		expect(container.canonical.lastSync?.lastToBlock).toBe(BRANCH_A_EXTENDED_TIP);
+		expect(container.canonical.lastSync?.latestBlock).toBe(BRANCH_A_EXTENDED_TIP);
+		// ...and it wrote what it fetched ONCE: two writers on one stream is the measured
+		// data-loss defect this must not reintroduce
+		expect(await storedStream(keepStream)).toEqual({
+			events: 6,
+			blocksPresent: [100, 102, 104, 106],
+			deliveredTwice: [],
+			coversTo: BRANCH_A_EXTENDED_TIP,
+		});
+
+		// THE SECOND SAVE, which is where this used to end in `GenerationCapReachedError`
+		await container.add(generationOver(await memoryStore(editedTo(3)), editedTo(3), identityFor(3)));
+		await driveToTip(container);
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-3', successor: undefined, predecessor: undefined});
+		expect(dropped.map((id) => markerOf(id.processor))).toEqual(['the-app', 'edited-by-2']);
+
+		// AND A THIRD, with no reload anywhere in this test
+		await container.add(generationOver(await memoryStore(editedTo(4)), editedTo(4), identityFor(4)));
+		await driveToTip(container);
+
+		// the count never climbed and the cap was never met: the seat was freed by a
+		// promotion finishing, not by an eviction at the bound
+		expect(registry.caps.maxGenerations).toBe(2);
+		expect((await registry.list()).map((record) => markerOf(record.processor))).toEqual(['edited-by-4']);
+		expect(await slotsBy(registry)).toEqual({canonical: 'edited-by-4', successor: undefined, predecessor: undefined});
+		// the app is still indexing, the fold that answers is the one the developer just
+		// saved, and every log is still in the stream exactly once (ADR-0087 keeps it)
+		expect(await readState(container.state)).toEqual({
+			owners: {'1': BOB, '2': CAROL, '3': DAN, '4': undefined},
+			transfers: 24,
+		});
+		expect(await storedStream(keepStream)).toEqual({
+			events: 6,
+			blocksPresent: [100, 102, 104, 106],
+			deliveredTwice: [],
+			coversTo: BRANCH_A_EXTENDED_TIP,
+		});
+		expect(await registry.keptStreams()).toEqual([container.canonical.record.stream]);
+		// ...and the tab is still the one fetching that stream, after two hand-overs
+		const afterTheLoop = chain.ranges.length;
+		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP + 2);
+		await driveToTip(container);
+		expect(chain.ranges.length).toBeGreaterThan(afterTheLoop);
+		expect(container.canonical.lastSync?.lastToBlock).toBe(BRANCH_A_EXTENDED_TIP + 2);
 	});
 });
 

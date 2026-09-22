@@ -139,7 +139,28 @@ function keyedStream() {
 			stored.delete(digestOf(source));
 		},
 	};
-	return {keeper};
+	return {
+		keeper,
+		/**
+		 * WHAT IS ON DISK for a stream, which is the half a count of node requests
+		 * cannot say: a second writer shows up here as one log stored twice, and
+		 * nowhere else.
+		 */
+		storedOn(source: IndexingSource<Abi>) {
+			const held = stored.get(digestOf(source));
+			const seen = new Map<string, number>();
+			for (const event of held?.eventStream ?? []) {
+				const key = `${event.blockHash}:${event.logIndex}:${event.removed ? 'removed' : 'applied'}`;
+				seen.set(key, (seen.get(key) ?? 0) + 1);
+			}
+			return {
+				events: held?.eventStream.length ?? 0,
+				blocksPresent: [...new Set((held?.eventStream ?? []).map((event) => Number(event.blockNumber)))],
+				deliveredTwice: [...seen.entries()].filter(([, count]) => count > 1).map(([key, count]) => `${key} x${count}`),
+				coversTo: held?.lastSync.lastToBlock,
+			};
+		},
+	};
 }
 
 type GenerationWanted = {
@@ -188,6 +209,14 @@ async function openWorld(options?: {
 		},
 	} as never;
 
+	/**
+	 * WHO ASKED THE NODE FOR WHAT, which is how the FETCH DUTY is asserted.
+	 *
+	 * A flag saying a generation fetches is exactly what a stalled container
+	 * already had (ADR-0088), so the duty is read off the requests that reached the
+	 * node and off what landed in the stream, never off `follows`.
+	 */
+	const fetches: {by: string | undefined; fromBlock: number; toBlock: number}[] = [];
 	const throttles = new Map<string, number>();
 	const specFor = (wanted: GenerationWanted): AnyGenerationSpec<Abi, string[]> => {
 		throttles.set(identityOf(wanted.name), wanted.slowFetches ?? 0);
@@ -226,6 +255,7 @@ async function openWorld(options?: {
 			const by = processorIdentity;
 			(generation as unknown as {logEventFetcher: unknown}).logEventFetcher = {
 				async getLogEvents({fromBlock, toBlock}: {fromBlock: number; toBlock: number}) {
+					fetches.push({by: markerOf(by), fromBlock, toBlock});
 					const remaining = throttles.get(by) ?? 0;
 					const served = remaining > 0 ? fromBlock : toBlock;
 					throttles.set(by, Math.max(0, remaining - 1));
@@ -245,6 +275,12 @@ async function openWorld(options?: {
 		indexer,
 		registry,
 		dropped,
+		/** Every range asked of the node, and by which generation. */
+		fetches,
+		/** The ranges asked SINCE a mark, which is what a hand-over is measured over. */
+		fetchesSince: (mark: number) => fetches.slice(mark),
+		/** What is on disk for a stream: the duplicate half of the one-writer question. */
+		storedOn: (source: IndexingSource<Abi> = SOURCE) => stream.storedOn(source),
 		/** What the CANONICAL generation answers right now, snapshotted. */
 		read: () => [...indexer.state],
 		stateOf: (name: string) => [...(folds.get(name)?.state ?? [])],
@@ -298,12 +334,37 @@ describe('there are THREE policies and `on-catch-up` is the default EVERYWHERE',
 		expect(resolvePromotionConfig({dropOnPromotion: true}).policy).toBe('on-catch-up');
 	});
 
+	it('takes a RUNTIME default for the drop, which is the one knob that has one', () => {
+		// The POLICY has no per-runtime default and must not grow one (the axis that
+		// would select it is development-versus-production, which nothing can detect).
+		// The DROP is a different question -- whether this runtime can EVER run the
+		// generation a promotion superseded -- so a runtime answers it, at the ONE call
+		// site that knows which runtime it is (ADR-0090).
+		expect(resolvePromotionConfig(undefined, {dropOnPromotion: true})).toEqual({
+			policy: 'on-catch-up',
+			dropOnPromotion: true,
+		});
+		// ...and a deployment that SAYS so still wins, in both directions
+		expect(resolvePromotionConfig({dropOnPromotion: false}, {dropOnPromotion: true}).dropOnPromotion).toBe(false);
+		expect(resolvePromotionConfig({policy: 'manual'}, {dropOnPromotion: true})).toEqual({
+			policy: 'manual',
+			dropOnPromotion: true,
+		});
+	});
+
 	it('reports the resolved policy, so a runtime cannot select one silently', async () => {
+		// `dropOnPromotion` is TRUE here because this is the CHAIN-FACING container,
+		// which is the runtime that can never run what a promotion superseded
+		// (ADR-0090). The reporting is the point: a runtime default that nothing
+		// reported would be a silent selection.
 		const world = await openWorld();
-		expect(world.indexer.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: false});
+		expect(world.indexer.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: true});
 
 		const opted = await openWorld({promotion: {policy: 'immediate'}});
 		expect(opted.indexer.promotion.policy).toBe('immediate');
+
+		const kept = await openWorld({promotion: {dropOnPromotion: false}});
+		expect(kept.indexer.promotion).toEqual({policy: 'on-catch-up', dropOnPromotion: false});
 	});
 
 	it('refuses a policy that is not one of the three', async () => {
@@ -354,7 +415,11 @@ describe('the TRIGGER is the successor reaching the cursor the canonical generat
 	});
 
 	it('never moves the pointer BACKWARDS on its own', async () => {
-		const world = await openWorld();
+		// The drop is turned OFF, because a revert needs something to revert TO: on
+		// this runtime the default is now to drop what a promotion superseded
+		// (ADR-0090), and what this case is about is the TRIGGER never moving the
+		// pointer back on its own.
+		const world = await openWorld({promotion: {dropOnPromotion: false}});
 		await world.indexer.load();
 		await driveToTip(world.indexer);
 		await world.add({name: 'B'});
@@ -550,8 +615,11 @@ describe('a promotion says so, and re-publishes the cursor that now answers', ()
 });
 
 describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () => {
-	it('keeps every generation when it is not asked for, which is the default', async () => {
-		const world = await openWorld();
+	it('keeps every generation where the deployment turns the drop OFF', async () => {
+		// The OPT-OUT, which is what this used to assert as the DEFAULT: on this
+		// container the default is now to drop (ADR-0090), and an embedder that would
+		// rather keep a way back inside one session still says so and gets it.
+		const world = await openWorld({promotion: {dropOnPromotion: false}});
 		await world.indexer.load();
 		await driveToTip(world.indexer);
 		await world.add({name: 'B', source: SOURCE_B});
@@ -615,23 +683,6 @@ describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () =
 		expect(world.heldNames()).toEqual(['B']);
 	});
 
-	it('never drops a generation that WRITES a stream another one follows', async () => {
-		const world = await openWorld({promotion: {dropOnPromotion: true}});
-		await world.indexer.load();
-		await driveToTip(world.indexer);
-
-		// the same stream, so the successor FOLLOWS it -- and A is the writer
-		await world.add({name: 'B'});
-		await driveToTip(world.indexer);
-
-		expect(world.canonicalName()).toBe('B');
-		// dropping A would leave B following a stream nothing appends to, so the
-		// drop is DECLINED rather than taken (ADR-0044: the writer is the first
-		// generation held on a stream, and promotion does not move that duty)
-		expect(world.dropped).toEqual([]);
-		expect(world.heldNames()).toEqual(['A', 'B']);
-	});
-
 	it('does not drop on a REVERT: a backwards move supersedes nothing', async () => {
 		const world = await openWorld({promotion: {policy: 'manual', dropOnPromotion: true}});
 		await world.indexer.load();
@@ -642,7 +693,7 @@ describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () =
 		expect(world.heldNames()).toEqual(['B']);
 
 		// and the other direction, from a world where nothing was dropped
-		const kept = await openWorld({promotion: {policy: 'manual'}});
+		const kept = await openWorld({promotion: {policy: 'manual', dropOnPromotion: false}});
 		await kept.indexer.load();
 		await driveToTip(kept.indexer);
 		const newer = await kept.add({name: 'B', source: SOURCE_B});
@@ -654,9 +705,219 @@ describe('DROP-ON-PROMOTION applies only under `on-catch-up` and `manual`', () =
 	});
 });
 
+/**
+ * THE FETCH DUTY CHANGES HANDS AT THE PROMOTION, and the superseded writer GOES
+ * (ADR-0090, points 1 and 2).
+ *
+ * The common save is a handler edit, so both generations sit on ONE stream and
+ * the successor was built as a FOLLOWER of the incumbent -- which made the drop
+ * unreachable: dropping the writer would have left the follower folding a stream
+ * nothing appends to (ADR-0044), so it was DECLINED and the superseded generation
+ * kept its row, its state and the second seat under the caps for ever.
+ *
+ * The follower relationship is an artifact of CONSTRUCTION ORDER and not a fact
+ * about the two generations: the same successor, in a tab reloaded one second
+ * later, is built alone and IS the fetcher (ADR-0088). So the promotion does what
+ * the reload already does, at the ONE moment it is provably safe -- under
+ * `on-catch-up` the promotion IS the event "the successor reached the incumbent's
+ * cursor", and under `immediate` the existing deferral has already waited for
+ * that same condition, so there is no gap an append can be lost in.
+ *
+ * **Asserted on what reached the NODE and on what landed in the STREAM**, never
+ * on `follows`: a flag saying a generation fetches is exactly what the stalled
+ * container of ADR-0088 already had.
+ */
+describe('a PROMOTION hands the stream over, and the generation it superseded GOES', () => {
+	/** The same chain with one more block on it, so "it fetches" has something to fetch. */
+	const BRANCH_A_EXTENDED = [...BRANCH_A, makeLog(106, '0xa106')];
+	const BRANCH_A_EXTENDED_TIP = 107;
+
+	it('drops the superseded writer, and the promoted generation FETCHES the stream afterwards', async () => {
+		// THE SAVE LOOP: a handler edit, so B is on A's stream and is built following it
+		const world = await openWorld();
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+		await world.add({name: 'B'});
+		await driveToTip(world.indexer);
+
+		// the promotion FINISHED: the row and the state of what it superseded are gone...
+		expect(world.canonicalName()).toBe('B');
+		expect(world.dropped.map((id) => markerOf(id.processor))).toEqual(['A']);
+		expect(world.heldNames()).toEqual(['B']);
+		expect((await world.registry.list()).map((record) => markerOf(record.processor))).toEqual(['B']);
+		// ...and the STREAM is KEPT, because a stream outlives every fold over it (ADR-0087)
+		expect(await world.registry.keptStreams()).toEqual([world.indexer.canonical.record.stream]);
+
+		// AND IT FETCHES, which is the half no flag can say: the chain moves on, and the
+		// promoted generation is what asks the node for the new range
+		world.serve(ADDRESS, BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		const mark = world.fetches.length;
+		await driveToTip(world.indexer);
+
+		expect(world.fetchesSince(mark).length).toBeGreaterThan(0);
+		expect([...new Set(world.fetchesSince(mark).map((asked) => asked.by))]).toEqual(['B']);
+		expect(world.read()).toEqual(foldedBy('B', BRANCH_A_EXTENDED));
+		// ...and it WRITES what it fetched, once: two writers on one stream is the
+		// measured data-loss defect this must not reintroduce
+		expect(world.storedOn()).toEqual({
+			events: BRANCH_A_EXTENDED.length,
+			blocksPresent: [100, 102, 104, 106],
+			deliveredTwice: [],
+			coversTo: BRANCH_A_EXTENDED_TIP,
+		});
+	});
+
+	it('leaves exactly ONE generation asking the node, on both sides of the hand-over', async () => {
+		const world = await openWorld();
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+
+		// BEFORE: the incumbent writes and the successor re-folds the stored stream,
+		// so only A ever reaches the node
+		const beforeThePromotion = world.fetches.length;
+		await world.add({name: 'B', slowFetches: 2});
+		world.serve(ADDRESS, BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		await world.indexer.indexMore();
+		expect([...new Set(world.fetchesSince(beforeThePromotion).map((asked) => asked.by))]).toEqual(['A']);
+
+		// ACROSS: every round from here, including the one the pointer moves in
+		await driveToTip(world.indexer);
+		expect(world.canonicalName()).toBe('B');
+		expect(world.heldNames()).toEqual(['B']);
+		const askedByEach = new Map<string | undefined, number>();
+		for (const asked of world.fetchesSince(beforeThePromotion)) {
+			askedByEach.set(asked.by, (askedByEach.get(asked.by) ?? 0) + 1);
+		}
+		// two names, never at once: A asked until the hand-over and B from it
+		expect([...askedByEach.keys()]).toEqual(['A', 'B']);
+		// ...and the evidence that they did not overlap is the STREAM, where a second
+		// writer shows up as one log stored twice
+		expect(world.storedOn()).toEqual({
+			events: BRANCH_A_EXTENDED.length,
+			blocksPresent: [100, 102, 104, 106],
+			deliveredTwice: [],
+			coversTo: BRANCH_A_EXTENDED_TIP,
+		});
+		expect(world.read()).toEqual(foldedBy('B', BRANCH_A_EXTENDED));
+	});
+
+	it('waits for the `immediate` deferral, and hands over when the drop finally happens', async () => {
+		// `immediate` promotes a generation that has caught up to NOTHING, so the drop
+		// is DEFERRED until it reaches the cursor the previous one had at the promotion
+		// -- which is the same condition the hand-over needs, so the two happen together
+		// and never apart.
+		const world = await openWorld({promotion: {policy: 'immediate'}});
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+		await world.add({name: 'B'});
+
+		// canonical at once, and NOTHING has moved: A is retained and A still fetches
+		expect(world.canonicalName()).toBe('B');
+		expect(world.dropped).toEqual([]);
+		expect(world.heldNames()).toEqual(['A', 'B']);
+		world.serve(ADDRESS, BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		const mark = world.fetches.length;
+		await world.indexer.indexMore();
+		expect([...new Set(world.fetchesSince(mark).map((asked) => asked.by))]).toEqual(['A']);
+
+		// ...and once B has made up what A had at the promotion, the drop happens and
+		// the stream changes hands in the same act
+		await driveToTip(world.indexer);
+		expect(world.dropped.map((id) => markerOf(id.processor))).toEqual(['A']);
+		expect(world.heldNames()).toEqual(['B']);
+		const afterTheDrop = world.fetches.length;
+		await driveToTip(world.indexer);
+		expect([...new Set(world.fetchesSince(afterTheDrop).map((asked) => asked.by))]).toEqual(['B']);
+		expect(world.storedOn().deliveredTwice).toEqual([]);
+		expect(world.read()).toEqual(foldedBy('B', BRANCH_A_EXTENDED));
+	});
+
+	/**
+	 * THE GUARD IS NARROWED AND NOT DELETED, proven on a case the hand-over cannot
+	 * cover.
+	 *
+	 * The hand-over gives the stream to the PROMOTED generation, and it may only do
+	 * so where that generation is the one the derivation names next -- the oldest
+	 * fold this container holds on that stream once the superseded one goes
+	 * (ADR-0088). Where somebody ELSE is next, the promoted generation has not been
+	 * following that stream at all and is at no position on it, so there is nothing
+	 * to hand over: dropping the writer would leave a fold on a stream nothing
+	 * appends to, and the drop is DECLINED exactly as it always was (ADR-0044).
+	 *
+	 * The shape is reachable because `immediate` DEFERS: the promotion is
+	 * cross-stream, and a same-stream generation is added beside it before the
+	 * deferred drop comes due.
+	 */
+	it('still DECLINES the drop where the promoted generation is not the stream`s next fetcher', async () => {
+		const world = await openWorld({promotion: {policy: 'immediate'}});
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+
+		// a FILTER change: B is canonical at once and is on a stream of its OWN, so the
+		// drop of A is deferred until B reaches the cursor A had at that promotion
+		await world.add({name: 'B', source: SOURCE_B});
+		expect(world.canonicalName()).toBe('B');
+		// ...and then a handler edit lands back on A's stream, which C FOLLOWS, because
+		// A is the oldest fold present on it
+		const edited = await world.add({name: 'C'});
+		expect(edited.follows).toBe(true);
+		expect(world.heldNames()).toEqual(['A', 'B', 'C']);
+
+		await driveToTip(world.indexer);
+
+		// A's deferred drop came due and was DECLINED: the generation that would fetch
+		// its stream next is C, and the promotion that superseded A demonstrated
+		// something about B -- which is on another stream entirely and at no position on
+		// this one. So there is nothing to hand the stream to, and A keeps the pen.
+		// (B goes: its own promotion superseded it and it was alone on its stream, which
+		// is the ordinary cross-stream drop.)
+		expect(world.dropped.map((id) => markerOf(id.processor))).toEqual(['B']);
+		expect(world.heldNames()).toEqual(['A', 'C']);
+
+		const mark = world.fetches.length;
+		world.serve(ADDRESS, BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		await driveToTip(world.indexer);
+		// A is still the one fetching that stream, C still follows it, and the stream is
+		// still written by exactly one of them
+		expect([...new Set(world.fetchesSince(mark).map((asked) => asked.by))]).toEqual(['A']);
+		expect(world.storedOn().deliveredTwice).toEqual([]);
+		expect(world.read()).toEqual(foldedBy('C', BRANCH_A_EXTENDED));
+	});
+
+	it('drops nothing where the move was not a PROMOTION, and hands nothing over', async () => {
+		const world = await openWorld({promotion: {policy: 'manual'}});
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+		const successor = await world.add({name: 'B'});
+		await driveToTip(world.indexer);
+		await world.indexer.promote(successor.record);
+		expect(world.dropped.map((id) => markerOf(id.processor))).toEqual(['A']);
+
+		// a move BACK onto a registered generation drops nothing, and there is nothing
+		// to hand over either: the generation moved off is still the one fetching
+		const kept = await openWorld({promotion: {policy: 'manual', dropOnPromotion: false}});
+		await kept.indexer.load();
+		await driveToTip(kept.indexer);
+		const newer = await kept.add({name: 'B'});
+		await driveToTip(kept.indexer);
+		await kept.indexer.promote(newer.record);
+		await kept.indexer.promote(kept.indexer.generations[0].record);
+		expect(kept.dropped).toEqual([]);
+		expect(kept.heldNames()).toEqual(['A', 'B']);
+		const mark = kept.fetches.length;
+		kept.serve(ADDRESS, BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		await driveToTip(kept.indexer);
+		expect([...new Set(kept.fetchesSince(mark).map((asked) => asked.by))]).toEqual(['A']);
+	});
+});
+
 describe('a superseded generation is never EVICTED by a cap', () => {
 	it('refuses the new generation and names what to delete, holding on to the old one', async () => {
-		const world = await openWorld({caps: {maxGenerations: 2, maxStreams: 2}});
+		// The drop is turned OFF here, because what this asserts is the CAP: with the
+		// runtime default the superseded generation goes at the promotion and there is
+		// no pressure to meet. A cap still REFUSES rather than evicting, and that is
+		// the property, so this world keeps what a promotion superseded.
+		const world = await openWorld({promotion: {dropOnPromotion: false}, caps: {maxGenerations: 2, maxStreams: 2}});
 		await world.indexer.load();
 		await driveToTip(world.indexer);
 		await world.add({name: 'B'});

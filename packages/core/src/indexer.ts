@@ -6,6 +6,7 @@ import {logs} from 'named-logs';
 import type {
 	IndexingSource,
 	EventProcessor,
+	ExistingStream,
 	ProvidedIndexerConfig,
 	UsedIndexerConfig,
 	LastSync,
@@ -856,6 +857,42 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		}
 
 		return this._follow.ifNotExecuting();
+	}
+
+	/**
+	 * TAKE THE PEN of the stream this generation has been FOLLOWING: from here on it
+	 * fetches that stream and appends to it.
+	 *
+	 * A follower was handed a READ-ONLY VIEW of the keeper at construction
+	 * (`readOnlyStream`, ADR-0044), which is what makes the one-writer rule
+	 * structural rather than conventional -- read and write share one seam, so
+	 * "merely reading" is expressed by holding a stream whose writes go nowhere. This
+	 * swaps that view for the keeper itself, which is the ONLY way a fold can stop
+	 * being read-only, and it is deliberately the whole of the mechanism: nothing
+	 * else about the engine changes, because everything else a writer needs this fold
+	 * already has.
+	 *
+	 * **It is the CONTAINER's to call and only at a PROMOTION** (`Indexer`, ADR-0090
+	 * point 2). This engine cannot know that it is safe: what makes it safe is that
+	 * the generation losing the stream is being DROPPED in the same act, and that
+	 * this fold is provably AT that generation's cursor -- under `on-catch-up` the
+	 * promotion IS that event, and under `immediate` the deferred drop has already
+	 * waited for it. Called at any other moment it would make a second writer, which
+	 * is the measured data-loss defect the read-only view exists to prevent.
+	 *
+	 * Nothing is re-derived and nothing is re-loaded. `streamLastToBlock` is already
+	 * where the follow left it -- every follow cycle reads the stored cursor -- so
+	 * the hole guard (`streamCanReceive`) answers over the position this fold
+	 * actually has, and the first fetch reaches back over its own unconfirmed window,
+	 * which the replay built, so a re-read block is recognised rather than appended
+	 * twice.
+	 */
+	takeOverStream(keepStream: ExistingStream<ABI>): void {
+		this.config = {...this.config, keepStream};
+		// The half of the stream's IDENTITY that does not travel with each call, set
+		// exactly where `reinit` sets it: a keeper that ADDRESSES a stream has to be told
+		// which one, and this fold is taking over the addressing as well as the writing.
+		keepStream.setStreamConfig?.(this.config.stream);
 	}
 
 	disableProcessing() {

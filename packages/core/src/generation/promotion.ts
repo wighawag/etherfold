@@ -18,6 +18,17 @@
  * `process.env` sniff, an `import.meta.env.DEV` check or a per-package default
  * here or in any runtime: that is the mistake this shape exists to prevent.
  *
+ * **That rule is about the POLICY, and `dropOnPromotion` is a different
+ * question** (ADR-0090). The policy asks WHEN a pointer should move, whose answer
+ * depends on an undetectable intent; the drop asks whether this runtime can EVER
+ * run the generation a promotion superseded, which is a STRUCTURAL fact about the
+ * runtime and is perfectly detectable -- by the container, which knows which one
+ * it is. So the drop takes a RUNTIME DEFAULT, supplied at the one call site that
+ * can honestly state it (`resolvePromotionConfig`'s second argument, passed by
+ * the chain-facing `Indexer` and by nothing else), and a deployment that says
+ * something still wins in both directions. It is still not an environment sniff
+ * and must not become one.
+ *
  * ## What the POLICY does NOT gate
  *
  * `Indexer.promote(id)` -- the verb a human or an app CALLS -- is not gated by
@@ -57,11 +68,19 @@ export type PromotionConfig = {
 	/**
 	 * DROP-ON-PROMOTION: discard the superseded generation at the promotion.
 	 *
-	 * Defaults to `false`, which keeps it -- a generation that is no longer
-	 * canonical is what the pointer moves BACK to, and that revert is the whole
-	 * reason non-canonical generations are retained rather than evicted (story 4).
-	 * A deployment that would rather bound its storage than keep a way back opts
-	 * IN, and gets two generations transiently instead of N.
+	 * **The default is the RUNTIME's, and the two runtimes answer differently**
+	 * (ADR-0090). On the RECEIVING container it is `false`, which keeps it: a
+	 * generation that is no longer canonical is what the pointer moves BACK to, and
+	 * that revert is the whole reason non-canonical generations are retained rather
+	 * than evicted (story 4) -- there an operator reverts without redeploying, and
+	 * the code that fold needs arrives by a route that exists. On the CHAIN-FACING
+	 * container it is `true`: a tab ships ONE processor, so the superseded
+	 * generation's code is not un-promoted but ABSENT FROM THE BUILD, and retaining
+	 * a generation that can never answer a read and never fetch spends the tightest
+	 * caps in the system on nothing (ADR-0089, ADR-0090).
+	 *
+	 * A deployment that says something wins either way: an embedder in a tab may
+	 * still turn it OFF, and a server may still turn it ON to bound its storage.
 	 *
 	 * It is deliberately not called *retention*: retention is pinned to a distance
 	 * in BLOCK NUMBERS (ADR-0019), and this is not measured in anything.
@@ -79,10 +98,19 @@ export type UsedPromotionConfig = {
  * Fill in the defaults, in ONE place.
  *
  * Mirrors `resolveStreamConfig`: the default lives with the type it belongs to
- * rather than at each caller, so a second runtime cannot fork it -- which for
- * this particular default is the point rather than tidiness.
+ * rather than at each caller, so a second runtime cannot fork it -- which for the
+ * POLICY is the point rather than tidiness.
+ *
+ * `runtimeDefaults` is the one thing a caller may answer for, and only for the
+ * DROP (see the module JSDoc and `PromotionConfig.dropOnPromotion`): it is what
+ * this runtime does when the deployment says NOTHING, and a deployment that says
+ * something is never overridden by it. The resolution still happens here, once,
+ * so a runtime supplies a value rather than forking the shape of the answer.
  */
-export function resolvePromotionConfig(config?: PromotionConfig): UsedPromotionConfig {
+export function resolvePromotionConfig(
+	config?: PromotionConfig,
+	runtimeDefaults?: {dropOnPromotion?: boolean},
+): UsedPromotionConfig {
 	const policy = config?.policy ?? DEFAULT_PROMOTION_POLICY;
 	if (!PROMOTION_POLICIES.includes(policy)) {
 		throw new TypeError(
@@ -91,7 +119,7 @@ export function resolvePromotionConfig(config?: PromotionConfig): UsedPromotionC
 				`'${DEFAULT_PROMOTION_POLICY}' in every runtime.`,
 		);
 	}
-	return {policy, dropOnPromotion: config?.dropOnPromotion ?? false};
+	return {policy, dropOnPromotion: config?.dropOnPromotion ?? runtimeDefaults?.dropOnPromotion ?? false};
 }
 
 /**
