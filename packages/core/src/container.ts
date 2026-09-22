@@ -7,6 +7,7 @@ import {
 	displacedBySuccessor,
 	sameGeneration,
 	fetcherOf,
+	slotHolding,
 	type GenerationId,
 	type GenerationRecord,
 	type GenerationRegistry,
@@ -1660,6 +1661,27 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * be. That is also what frees a STREAM slot -- `maxStreams` counts the distinct
 	 * streams among registered generations, and a tab that reconfigures its SOURCE
 	 * meets that bound first.
+	 *
+	 * ## AND A GENERATION NO FOLD HERE EXISTS FOR GOES TOO, which is this runtime's
+	 * answer and not the shared rule's (ADR-0090, point 3)
+	 *
+	 * `unheldIsCollectable` is TRUE here and FALSE on the receiving twin, and that one
+	 * word is where the two runtimes differ. A row this container holds no fold for can
+	 * never answer a read and can never fetch on THIS runtime: after a page reload the
+	 * previous processor's code is not in the bundle that loaded, which is the same fact
+	 * ADR-0089 removed the `predecessor` assignment for. Nothing else here will ever
+	 * collect it either -- `reclaim` belongs to the container that HAS an operator
+	 * (ADR-0084) -- so it survived every session and the developer's next save met
+	 * `maxGenerations` with a wall no reload could clear.
+	 *
+	 * It is collected AT A REGISTRATION and at no other moment: nothing here fires on a
+	 * timer and nothing sweeps at `open`, so the deletion is a consequence of an act the
+	 * developer just performed rather than the authorless one ADR-0084 refused. A tab
+	 * that reloads and sits there collects nothing, because the fold it arrives with is
+	 * the one `canonical` names and the shared rule displaces nothing for it.
+	 *
+	 * What it does NOT do is drop anything at a PROMOTION, move the fetch duty or touch
+	 * the caps: those are ADR-0090's points 1 and 2.
 	 */
 	protected async replaceTheSuccessor(
 		arriving: GenerationId,
@@ -1667,9 +1689,10 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		slots: SlottedGenerations,
 		arrivingStream: string,
 	): Promise<void> {
-		const displaced = displacedBySuccessor(arriving, registered, slots, (record) =>
-			this.held.some((entry) => sameGeneration(entry.record, record)),
-		);
+		const displaced = displacedBySuccessor(arriving, registered, slots, {
+			heldHere: (record) => this.heldHere(record),
+			unheldIsCollectable: true,
+		});
 
 		const surviving = [...registered];
 		for (const record of displaced) {
@@ -1682,13 +1705,18 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 				);
 				continue;
 			}
-			if (await this.dropReplaced(record, arriving)) {
+			if (await this.dropReplaced(record, arriving, slotHolding(slots, record) === 'successor')) {
 				surviving.splice(
 					surviving.findIndex((held) => sameGeneration(held, record)),
 					1,
 				);
 			}
 		}
+	}
+
+	/** Whether this container holds a fold for that record, which is the question `follows` and a drop both ask. */
+	protected heldHere(record: GenerationId): boolean {
+		return this.held.some((entry) => sameGeneration(entry.record, record));
 	}
 
 	/**
@@ -1708,13 +1736,37 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * It reads the RECORDS rather than a held entry's `follows`, because the generation
 	 * the slot names may be one this process holds no engine for at all -- which is
 	 * exactly the reload case, and the case the durable slot exists for.
+	 *
+	 * ## WHO FETCHES IS ASKED OF THE FOLDS THIS CONTAINER HOLDS (ADR-0088)
+	 *
+	 * `fetcherOf` and ADR-0044's rule are unchanged; what narrowed is the SET it is
+	 * asked about, and this is the SECOND of the two sites that ask it. The first is the
+	 * `follows` derivation in `holdGeneration`, narrowed when ADR-0088 landed, and
+	 * leaving this one over every REGISTERED record made the two answer differently
+	 * about the same stream: after a reload the oldest record on it is the superseded
+	 * generation NO FOLD EXISTS FOR, so the held fold correctly derived that IT fetches
+	 * while this question still named the dead row as the fetcher -- and declined to
+	 * drop it to protect a follower that does not exist.
+	 *
+	 * The IN-SESSION case is unchanged by the narrowing and must be: there the
+	 * superseded generation IS held and IS the oldest fold present, so it is still named
+	 * here and the drop is still DECLINED. What the narrowing removes is only the answer
+	 * about a generation this process has no fold for, which is the same claim ADR-0088
+	 * removed from the derivation: a generation absent from this process cannot be
+	 * fetching for it.
+	 *
+	 * The FOLLOWER half of the question was always asked of the held set (below), so
+	 * this makes one question about one set rather than half of each.
 	 */
 	protected wouldStrandAFollower(
 		record: GenerationRecord,
 		registered: readonly GenerationRecord[],
 		arrivingStream: string,
 	): boolean {
-		const fetcher = fetcherOf(registered, record.stream);
+		const fetcher = fetcherOf(
+			registered.filter((candidate) => this.heldHere(candidate)),
+			record.stream,
+		);
 		if (!fetcher || !sameGeneration(fetcher, record)) return false;
 		if (record.stream === arrivingStream) return true;
 		return this.held.some(
@@ -1748,13 +1800,24 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * deletion an outage for the tab that is trying to move forward, and a tab is what
 	 * a user is looking at.
 	 */
-	protected async dropReplaced(record: GenerationRecord, arriving: GenerationId): Promise<boolean> {
+	protected async dropReplaced(
+		record: GenerationRecord,
+		arriving: GenerationId,
+		/**
+		 * Whether the `successor` slot NAMED it, which is the one thing the two cases this
+		 * path now covers differ by -- and therefore what the line an operator reads has to
+		 * say. The other case is a generation no slot names that no fold here exists for
+		 * (ADR-0090, point 3), and reporting that one as a replaced successor would give it
+		 * a cause it does not have.
+		 */
+		namedBySuccessor: boolean,
+	): Promise<boolean> {
 		try {
 			// NO REAP, which is the whole of ADR-0087's second half at this call site.
 			await this.registry.deleteGeneration(record);
 		} catch (err) {
 			namedLogger.error(
-				`failed to drop the replaced successor {stream: ${record.stream}, processor: ${record.processor}}; it is ` +
+				`failed to drop the generation {stream: ${record.stream}, processor: ${record.processor}}; it is ` +
 					`still registered, and the arriving generation takes the \`successor\` slot anyway -- so nothing names it ` +
 					`and it can be collected later`,
 				err,
@@ -1763,11 +1826,19 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		}
 		this.stopDriving(record);
 		namedLogger.info(
-			`the generation {stream: ${record.stream}, processor: ${record.processor}} was what the \`successor\` slot ` +
-				`held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the slot holds ` +
-				`AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was replaced -- it is ` +
-				`not the canonical generation, so nothing reads from it and re-folding it would be work for a result ` +
-				`nobody will ever ask for. Its state store is gone and the stream ` +
+			(namedBySuccessor
+				? `the generation {stream: ${record.stream}, processor: ${record.processor}} was what the \`successor\` ` +
+					`slot held, and {stream: ${arriving.stream}, processor: ${arriving.processor}} REPLACES it there: the ` +
+					`slot holds AT MOST ONE, so it has been DROPPED. It was safe because no slot named it once it was ` +
+					`replaced -- it is not the canonical generation, so nothing reads from it and re-folding it would be ` +
+					`work for a result nobody will ever ask for.`
+				: `the generation {stream: ${record.stream}, processor: ${record.processor}} was named by NO slot and ` +
+					`this container holds NO FOLD for it, so registering {stream: ${arriving.stream}, processor: ` +
+					`${arriving.processor}} COLLECTED it. On this runtime it could never answer a read and never fetch ` +
+					`again -- the code its fold needs is not in the build that is running -- and nothing else here would ` +
+					`ever have collected it (ADR-0090). Supplying that code again derives the same identity and re-folds ` +
+					`this stream.`) +
+				` Its state store is gone and the stream ` +
 				`${record.stream} is KEPT: a stream outlives every fold over it and is deleted only when asked. ` +
 				`The canonical generation is untouched.`,
 		);

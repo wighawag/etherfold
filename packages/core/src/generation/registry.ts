@@ -563,22 +563,26 @@ export function unslottedGenerations(
  * makes replacement safe and two copies of it in two containers is how a revert
  * target gets deleted by the twin nobody was reading.
  *
- * Two kinds of record come back, and they are the same rule seen twice:
+ * Kinds of record come back, and they are the same rule seen more than once:
  *
  * 1. What `successor` NAMES, whether or not this process holds a fold for it --
  *    after a restart it does not, and that is exactly the case the DURABLE slot
  *    exists for.
  * 2. Every generation this container HOLDS A FOLD FOR that no slot names, which
  *    is what a DECLINED drop leaves behind.
+ * 3. And, on a runtime that answers `unheldIsCollectable` (below), every record
+ *    no slot names that this container holds NO FOLD for either.
  *
- * A generation this container holds no fold for and no slot names is deliberately
- * LEFT ALONE: collecting those is an operator's verb (`ReceivingIndexer.reclaim`),
- * not something a registration does to rows it never touched.
+ * That third one is the ONE axis the two runtimes differ on, and the difference is
+ * whether anything ELSE would ever collect such a record: where an operator's
+ * `reclaim` will, a registration leaves rows it never touched alone.
  *
  * Nothing is displaced at all when the registry has no canonical generation (the
  * first registration takes `canonical` and supersedes nobody) or when some slot
  * ALREADY names the arriving generation (a restart on the canonical fold, or on
- * the one a revert returned to, takes nobody's place).
+ * the one a revert returned to, takes nobody's place). That second clause is also
+ * what keeps a page RELOAD from collecting anything: the fold a tab arrives with
+ * is the one `canonical` names.
  *
  * NEWEST FIRST, which is what lets a whole replaced chain go in ONE pass: the
  * ordinary churn leaves a replaced WRITER with a replaced FOLLOWER on its stream,
@@ -589,7 +593,7 @@ export function displacedBySuccessor(
 	arriving: GenerationId,
 	generations: readonly GenerationRecord[],
 	slots: GenerationSlots,
-	heldHere: (record: GenerationRecord) => boolean,
+	runtime: DisplacementRuntime,
 ): GenerationRecord[] {
 	if (!slots.canonical || slotHolding(slots, arriving)) {
 		return [];
@@ -602,11 +606,53 @@ export function displacedBySuccessor(
 			// is untouchable, which covers the incumbent and the revert target in ONE
 			// clause.
 			if (slot) return slot === 'successor';
-			// ...and what a declined drop left behind: a fold held here that no slot names.
-			return heldHere(record);
+			// ...and what a declined drop left behind: a fold held here that no slot names,
+			// plus -- where this runtime is the only thing that will ever collect one -- a
+			// row no fold here exists for at all.
+			return runtime.unheldIsCollectable || runtime.heldHere(record);
 		})
 		.sort((a, b) => b.createdAt - a.createdAt);
 }
+
+/**
+ * THE CALLING RUNTIME'S ANSWER to the one clause of `displacedBySuccessor` that is
+ * not the same on both containers.
+ *
+ * Both fields are stated at the call site rather than defaulted, because the
+ * DEFAULT is the thing that would be wrong: a widening that leaked to the
+ * receiving container would delete, with nobody present, exactly the generations
+ * an operator keeps until they run `reclaim`.
+ */
+export type DisplacementRuntime = {
+	/** Whether THIS container holds a fold for this record. */
+	readonly heldHere: (record: GenerationRecord) => boolean;
+	/**
+	 * Whether a generation NO FOLD HERE EXISTS FOR, that no slot names, is collectable
+	 * by an arriving registration -- which is a fact about the RUNTIME and not a policy
+	 * anybody configures.
+	 *
+	 * **`true` on the CHAIN-FACING container** (ADR-0090, point 3). There a row nothing
+	 * holds a fold for can never answer a read and can never fetch -- after a page
+	 * reload the previous processor's code is not in the bundle that loaded -- and
+	 * NOTHING ELSE on that runtime will ever collect it: `reclaim` is deliberately not
+	 * ported to a tab, which has neither an operator nor an `ADMIN_TOKEN` (ADR-0084).
+	 * So the choice there is not between collecting it now and collecting it later, it
+	 * is between collecting it at the one moment a developer's act makes room for and
+	 * carrying it for ever -- measured, a save loop that met `maxGenerations` with a row
+	 * no page reload could clear.
+	 *
+	 * **`false` on the RECEIVING container** (ADR-0090, point 4). There collecting one
+	 * is an operator's VERB and deliberately not a collector: `reclaim` deletes because
+	 * somebody ASKED, and a registration that took those rows as well would delete with
+	 * nobody present -- which is the decision ADR-0084 declined to make, and it would
+	 * take the generation an operator was keeping with it.
+	 *
+	 * It is NOT "is this record garbage": that question is the SLOTS' and is answered
+	 * above this clause, which only ever widens the candidates among records no slot
+	 * names.
+	 */
+	readonly unheldIsCollectable: boolean;
+};
 
 /**
  * WHICH generation a stream was FETCHED FOR: the OLDEST SURVIVING one registered

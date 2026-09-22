@@ -6,6 +6,7 @@ import {
 	SLOT_NAMES,
 	UnknownGenerationError,
 	UnknownStreamError,
+	displacedBySuccessor,
 	fetcherOf,
 	type GenerationId,
 	type GenerationRecord,
@@ -710,6 +711,90 @@ describe('the generation a stream was FETCHED FOR is the oldest surviving one on
 		expect(fetcherOf(records, STREAM_A)).toEqual(records[1]);
 		expect(fetcherOf(records, STREAM_B)).toEqual(records[2]);
 		expect(fetcherOf(records, STREAM_C)).toBeUndefined();
+	});
+});
+
+describe('WHAT A REGISTRATION INTO `successor` DISPLACES, and the one axis the two runtimes differ on', () => {
+	/**
+	 * The rule has ONE home and the two containers ask it the same question with a
+	 * different answer to ONE clause (ADR-0090 point 3, ADR-0084 point 4).
+	 *
+	 * `unheldIsCollectable` is that clause, and it is a fact about the RUNTIME rather
+	 * than a policy anybody configures: on the CHAIN-FACING container a generation no
+	 * fold exists for can never answer a read and can never fetch -- its code is not in
+	 * the bundle that loaded -- and no verb here collects it, so an arriving
+	 * registration is the one moment it can go. On the RECEIVING container it is an
+	 * operator's `reclaim` and nothing else, so a registration must leave rows it never
+	 * touched exactly where they are.
+	 *
+	 * Asserted here, over records alone, because this is the clause the whole
+	 * difference lives in: applied to BOTH runtimes it would delete a generation an
+	 * operator was keeping for a reclaim they had not run yet.
+	 */
+	const recordOf = (stream: string, processor: string, createdAt: number): GenerationRecord => ({
+		stream,
+		processor,
+		createdAt,
+	});
+
+	const CANONICAL = recordOf(STREAM_A, 'canonical', 1_000);
+	const NO_FOLD_HERE = recordOf(STREAM_A, 'no-fold-here', 2_000);
+	const PENDING = recordOf(STREAM_A, 'pending', 3_000);
+	const ARRIVING = idOf(STREAM_A, 'arriving');
+	const RECORDS = [CANONICAL, NO_FOLD_HERE, PENDING];
+	/** THIS container holds a fold for the incumbent and for the pending successor, and for nothing else. */
+	const heldHere = (record: GenerationRecord) => record !== NO_FOLD_HERE;
+
+	it('COLLECTS a generation no fold exists for where the runtime collects one, and only there', () => {
+		const slots = {canonical: CANONICAL, successor: PENDING};
+
+		// the CHAIN-FACING answer: the row nothing here can run goes with the replaced
+		// successor, newest first, which is the order that frees both in one pass
+		expect(
+			displacedBySuccessor(ARRIVING, RECORDS, slots, {heldHere, unheldIsCollectable: true}).map(
+				(record) => record.processor,
+			),
+		).toEqual(['pending', 'no-fold-here']);
+
+		// the RECEIVING answer, unchanged: the replaced successor goes and the row this
+		// process holds no fold for is left for the operator's verb
+		expect(
+			displacedBySuccessor(ARRIVING, RECORDS, slots, {heldHere, unheldIsCollectable: false}).map(
+				(record) => record.processor,
+			),
+		).toEqual(['pending']);
+	});
+
+	it('never reaches what ANOTHER slot names, under either answer', () => {
+		// THE SAFETY PROPERTY, which the widening does not touch: `canonical` answers
+		// reads and `predecessor` is the way back, and neither is reachable from a
+		// registration however the runtime answers the clause above.
+		const slots = {canonical: CANONICAL, predecessor: NO_FOLD_HERE, successor: PENDING};
+
+		for (const unheldIsCollectable of [true, false]) {
+			expect(
+				displacedBySuccessor(ARRIVING, RECORDS, slots, {heldHere, unheldIsCollectable}).map(
+					(record) => record.processor,
+				),
+			).toEqual(['pending']);
+		}
+	});
+
+	it('displaces NOTHING when the registry has no canonical generation or a slot already names the arrival', () => {
+		for (const unheldIsCollectable of [true, false]) {
+			// the first registration takes `canonical` and supersedes nobody...
+			expect(displacedBySuccessor(ARRIVING, RECORDS, {}, {heldHere, unheldIsCollectable})).toEqual([]);
+			// ...and a RELOAD on the fold the pointer already names takes nobody's place,
+			// which is what makes opening a tab collect nothing at all
+			expect(
+				displacedBySuccessor(
+					idOf(CANONICAL.stream, CANONICAL.processor),
+					RECORDS,
+					{canonical: CANONICAL},
+					{heldHere, unheldIsCollectable},
+				),
+			).toEqual([]);
+		}
 	});
 });
 
