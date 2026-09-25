@@ -1,8 +1,10 @@
 ---
 title: 'A processor artifact is PUSHED to a running deployment, for a process with no filesystem access to the build'
 slug: a-processor-artifact-is-pushed-to-a-running-deployment
-taskedAfter: [a-processor-is-a-bundle-and-its-hash-is-its-identity]
+taskedAfter: [a-processor-is-a-bundle-and-its-hash-is-its-identity, a-generation-retains-the-code-that-folds-it]
 ---
+
+> **DRIFT CORRECTION (2026-09-22): NODE ONLY, AND DELIBERATELY SEQUENCED AFTER CODE RETENTION.** The Problem Statement's FIRST case, "A Cloudflare Worker has no filesystem to read a module from", is ruled out: a Worker refuses every in-isolate route from bytes to running code, `import(data:)` included (ADR-0091, and the finding `a-worker-cannot-instantiate-a-processor-from-bytes`). Every other case it names is a Node process and stands. It is now `taskedAfter` `a-generation-retains-the-code-that-folds-it` on purpose: that spec builds the byte storage, the on-demand instantiation and the lifecycle a pushed artifact also needs, so once it lands this spec shrinks to what is genuinely its own (the route, the admin credential, the size bound, the content type and the refusal shapes). ADR-0085's own trigger still governs WHEN: build it when a deployment exists that the developer's build cannot write to.
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
 
