@@ -4,6 +4,8 @@ status: accepted
 
 # A generation is held by NAMED DURABLE SLOTS, and `canonical` is merely the first one
 
+> **AMENDED 2026-09-25 (ADR-0092):** the 2026-09-19 LANDED block's "nothing retains, re-imports or reconstructs past processor code" no longer describes the deployment; its dated amendment sits right under that sentence.
+
 A registry holds generations keyed by CONTENT (`GenerationId` is `{stream, processor}`) and exactly one durable named pointer at them, `canonical`. Every other lifecycle question -- which generation is a pending successor, which is dead work, which a revert returns to -- is answered in MEMORY, by what one container has done since it opened. We propose to record that a generation is held by a small set of DURABLE NAMED SLOTS, of which `canonical` is simply the one that already exists: a slot is an assignment pointing at a generation, `successor` holds at most one so registering into it REPLACES what it held, `predecessor` is what a revert returns to, and a generation no slot names is dead.
 
 ## One missing fact, showing up as four separate bugs
@@ -70,6 +72,8 @@ The working name through the design discussion was `staging`, and it is rejected
 >
 > 1. **The gate.** `applyPolicyTo` arms what `successor` names and nothing else; `opened` and the in-memory `candidates` set are DELETED, and `settlePromotion` reads the slot.
 > 2. **The TRIGGER had to be evaluable with no held fold for the canonical generation**, which is the restart shape itself: a redeployed process holds one fold, the new one, and the old processor's code is not in the build. A generation's position is now read the way the read tier already resolves its state -- by NAMESPACE, through an injected seam beside `dropState` (`GenerationRegistryPort.readStateCursor`) -- so measuring a generation needs no engine, exactly as ANSWERING from one does. Nothing retains, re-imports or reconstructs past processor code; the comparison needs a number, and the number is a row.
+>
+> **AMENDED 2026-09-25 (ADR-0092):** "nothing retains, re-imports or reconstructs past processor code" stopped being true of the deployment, though it is still true of this TRIGGER. A Node deployment now stores each generation's bundle beside its state (`a-generation-keeps-the-bundle-that-folds-it`), and a pointer move onto a same-stream generation the process holds no fold for instantiates it from those bytes so it folds (`a-revert-resumes-folding`). The comparison here still reads a number from a row and loads no code.
 > 3. **Something had to CALL the settle** in that shape: `run` gated its `rebuildMore` on holding a follower, and a successor registered at `open` is not one (it is fed by the wire), so the trigger was never reached at all.
 >
 > Asserted end to end on a deployment stood up, stopped and re-run over the same substrate with a changed processor, plus the revert case driven through a restart (`packages/cli/test/aRestartFinishesTheUpgrade.test.ts`). ADR-0046 carries the amendment for the arming rule it wrote; the chain-facing `Indexer` still arms in memory and is deliberately untouched here.

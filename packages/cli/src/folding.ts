@@ -27,6 +27,7 @@ import type {StatusReport} from '@etherfold/server';
 import type {VersionedStateStore as SQLiteStateStore} from '@etherfold/state-store-sqlite';
 import {
 	loadContracts,
+	loadProcessorArtifact,
 	processorArtifactIdentity,
 	resolveSource,
 	type ProcessorArrival,
@@ -643,6 +644,30 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		appendEmissions: server.emissionAppenderFor(db, context.indexer),
 		streamCursor: server.streamCursorSourceOn(db, context.indexer),
 		replay: server.storedEmissionReplaySource<ABI>(db, context.indexer),
+		// HOW A GENERATION THIS BUILD WAS NOT MADE WITH FOLDS AGAIN (ADR-0092): the bundle
+		// stored on its registry row goes through the SAME loader a `--processor` bundle
+		// goes through (ADR-0085), and the fold over it is assembled by the SAME
+		// `foldPartsFor` -- so its state is the namespace its identity names, which is the
+		// one it answered reads from, under this deployment's retention and finality. The
+		// container calls it when the pointer moves onto such a generation, which is the
+		// revert on a process redeployed with the new processor alone. It lives HERE and
+		// not in `@etherfold/core` because the loader is `@etherfold/utils`', which depends
+		// on core.
+		//
+		// The identity handed back is the loader's hash of the bytes, NOT the identity asked
+		// for: the container compares the two, so stored code that does not name its
+		// generation is refused rather than folded under a borrowed name.
+		instantiateGeneration: async (_id, bundle) => {
+			const outcome = await loadProcessorArtifact<ABI, ProcessResultType, EntityProcessor<ABI, any>>(bundle);
+			if (outcome.status === 'refused') {
+				throw new Error(`the stored bundle ${outcome.identity} was refused as ${outcome.reason}: ${outcome.why}`);
+			}
+			const resumed = await foldPartsFor<ABI, ProcessResultType>(outcome.processor, target, db, context.finalityDepth, {
+				identity: outcome.identity,
+				bundle,
+			});
+			return resumed.generation;
+		},
 		generation: parts.generation,
 	});
 

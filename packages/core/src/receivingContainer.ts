@@ -337,7 +337,78 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 * (ADR-0022).
 	 */
 	maxEmissionsPerChunk?: number;
+	/**
+	 * HOW STORED BYTES BECOME A FOLD: the host's answer, injected, and never this
+	 * package's (ADR-0092).
+	 *
+	 * A Node deployment stores each generation's bundle on its registry row, so the
+	 * generation a revert moves the pointer onto is something this deployment can RUN
+	 * again even when the running build carries only the new processor. Turning those
+	 * bytes into a processor is the loader's (`loadProcessorArtifact`,
+	 * `@etherfold/utils`), and `@etherfold/utils` depends on this package, so the
+	 * container cannot call it: the host supplies it, the same way it supplies
+	 * `dropState` and `readStateCursor`. What it hands back is what `add` is handed --
+	 * the state factory, the fold over it and the identity -- built by the host's own
+	 * namespacing convention, so a resumed generation folds into the very tables it
+	 * answered reads from.
+	 *
+	 * CALLED AT A POINTER MOVE and nowhere else: a generation is instantiated when it
+	 * has to FOLD, and the generation a revert lands on has to fold from that moment.
+	 * Nothing is instantiated at `open`.
+	 *
+	 * The `identity` it returns is CHECKED against the record it was asked for: the
+	 * host derives it from the bytes (ADR-0086), so a mismatch is stored code that does
+	 * not name the generation it is stored under, and it is refused with the rest of a
+	 * failed instantiation (`GenerationInstantiationError`).
+	 *
+	 * OPTIONAL because a host that stores no bytes (the in-memory test worlds, a host
+	 * that only reads) has nothing to instantiate; a pointer move onto a generation
+	 * such a host holds no fold for still moves, and says out loud that nothing here
+	 * folds what now answers reads.
+	 */
+	instantiateGeneration?: (
+		id: GenerationId,
+		bundle: Uint8Array,
+	) => Promise<Omit<ReceivedGenerationSpec<ABI, ProcessResultType, State>, 'bundle'>>;
 };
+
+/**
+ * A STORED GENERATION THAT COULD NOT BE MADE TO FOLD, so the pointer did NOT move
+ * onto it (ADR-0092).
+ *
+ * Raised by a pointer move onto a generation this container holds no fold for, when
+ * the host's `instantiateGeneration` cannot turn the stored bundle into one: no bytes
+ * are stored for it, the loader refused them, the identity they hash to is not the
+ * one the generation is registered under, or the fold's factories threw.
+ *
+ * ONLY BROKEN CODE is refused. A generation on a DIFFERENT stream than this
+ * container can name (a filter change's predecessor) is not: nothing here fetches
+ * its stream, so it is the freeze a filter change already is, and the pointer
+ * moves onto it with that said out loud (`promote`).
+ *
+ * REFUSED rather than moved-and-reported, because the move is the one thing that can
+ * still be declined: moving the pointer onto a generation nothing folds would have a
+ * deployment serve a state frozen at a known point while it went on folding the one
+ * the operator rejected -- the inverted state ADR-0092 exists to remove. Declining
+ * leaves everything exactly as it was, and the operator reads why.
+ */
+export class GenerationInstantiationError extends Error {
+	readonly name = 'GenerationInstantiationError';
+
+	constructor(
+		readonly id: GenerationId,
+		readonly why: string,
+		options?: {cause?: unknown},
+	) {
+		super(
+			`the generation {stream: ${id.stream}, processor: ${id.processor}} could not be instantiated from the bundle ` +
+				`stored for it, so the canonical pointer was NOT moved onto it: ${why}. A pointer moved onto a generation ` +
+				`nothing here folds would answer reads that never advance again (ADR-0092), so the move is refused and the ` +
+				`generation that answered reads before this call still does.`,
+			options,
+		);
+	}
+}
 
 /**
  * ONE FOLD this container holds: its generation record, the state it folds into,
@@ -374,6 +445,19 @@ export type HeldFold<ABI extends Abi, ProcessResultType = unknown, State = unkno
 	 */
 	readonly rebuild: GenerationRebuild<ABI, ProcessResultType>;
 };
+
+/**
+ * What a stored generation's bundle came to at a pointer move: a fold built from it,
+ * with what its stream's writer is built from and not yet held, or, for a generation
+ * on a stream this container cannot name, NO fold and the reason it stays frozen.
+ */
+type ResumedFold<ABI extends Abi, ProcessResultType> =
+	| {
+			readonly fold: HeldFold<ABI, ProcessResultType, unknown>;
+			readonly source: IndexingSource<ABI>;
+			readonly provided: ProvidedStreamConfig | undefined;
+	  }
+	| {readonly fold: undefined; readonly frozen: string};
 
 /**
  * A fold with no stream to fold, refused.
@@ -1110,14 +1194,40 @@ export class ReceivingIndexer<
 		// revert -- including the opening fold of a host that comes up already canonical.
 		const canonicalOnAdd = !canonicalBefore || sameGeneration(canonicalBefore, record);
 
-		const fold: HeldFold<ABI, ProcessResultType, S> = {
+		const fold = this.foldOf<S>(record, state, processor, source, streamConfig, replay);
+		this.hold(fold as HeldFold<ABI, ProcessResultType, unknown>, source, provided);
+		// WHICH fold answers reads, re-derived from what was just read and written rather
+		// than inferred later: it is the fold added here when the pointer named it or took
+		// it, and otherwise whichever held fold the pointer already named.
+		this.noteCanonical(canonicalOnAdd ? record : canonicalBefore);
+		await this.applyPolicyTo(fold as HeldFold<ABI, ProcessResultType, unknown>);
+		return fold;
+	}
+
+	/**
+	 * ONE FOLD, as this container holds one: the record, the state and processor the
+	 * factories built, and the bounded rebuild that advances it.
+	 *
+	 * Shared by `add` and by the resume of a stored generation (`instantiate`), so that
+	 * a fold registered here and a fold instantiated from bytes are ONE shape advanced by
+	 * ONE code path.
+	 */
+	private foldOf<S>(
+		record: GenerationRecord,
+		state: S,
+		processor: EventProcessor<ABI, ProcessResultType>,
+		source: IndexingSource<ABI>,
+		streamConfig: UsedStreamConfig,
+		replay: ReplaySource<ABI>,
+	): HeldFold<ABI, ProcessResultType, S> {
+		return {
 			record,
-			streamDigest: context.stream,
+			streamDigest: record.stream,
 			streamConfig,
 			state,
 			processor,
 			rebuild: new GenerationRebuild<ABI, ProcessResultType>(processor, source, {
-				stream: context.stream,
+				stream: record.stream,
 				streamConfig,
 				replay,
 				...(this.options.maxEmissionsPerChunk === undefined ? {} : {maxEmissions: this.options.maxEmissionsPerChunk}),
@@ -1127,23 +1237,114 @@ export class ReceivingIndexer<
 				processorIdentity: record.processor,
 			}),
 		};
-		this.folds.push(fold as HeldFold<ABI, ProcessResultType, unknown>);
+	}
+
+	/**
+	 * START DRIVING a fold: hold it, make sure its stream has a writer, and relay what
+	 * it reports.
+	 */
+	private hold(
+		fold: HeldFold<ABI, ProcessResultType, unknown>,
+		source: IndexingSource<ABI>,
+		provided: ProvidedStreamConfig | undefined,
+	): void {
+		this.folds.push(fold);
 		// ...and the STREAM's own writer, built once per stream and AFTER the record
 		// exists, for the reason the registry states: a stream subtree no registered
 		// generation claims is what the sweep collects, so nothing may write a stream
 		// ahead of its registration.
-		this.writerFor(context.stream, source, provided);
-		// WHICH fold answers reads, re-derived from what was just read and written rather
-		// than inferred later: it is the fold added here when the pointer named it or took
-		// it, and otherwise whichever held fold the pointer already named.
-		this.noteCanonical(canonicalOnAdd ? record : canonicalBefore);
+		this.writerFor(fold.streamDigest, source, provided);
 		// THE SIGNAL's relay, attached BEFORE anything folds and to EVERY fold rather
 		// than to the canonical one: the pointer moves, and a relay attached only to the
 		// fold that happens to be canonical now would have to be re-attached at every
 		// promotion. The filter is in `publishFoldReport`, at the moment a report arrives.
-		this.relayFoldReports(fold as HeldFold<ABI, ProcessResultType, unknown>, processor);
-		await this.applyPolicyTo(fold as HeldFold<ABI, ProcessResultType, unknown>);
-		return fold;
+		this.relayFoldReports(fold, fold.processor);
+	}
+
+	/**
+	 * BUILD A FOLD FOR A GENERATION ALREADY REGISTERED, from the bundle stored for it
+	 * (ADR-0092) -- without holding it yet.
+	 *
+	 * The host's `instantiateGeneration` turns the bytes into the same two factories
+	 * `add` is handed, and they are run in ADR-0043's order. Nothing is REGISTERED: the
+	 * generation already is, with these very bytes on its row, and no slot changes here.
+	 * The fold is returned rather than held so the caller can hold it only once the
+	 * pointer move it is for has actually happened.
+	 *
+	 * EVERY way the stored CODE can be broken is one `GenerationInstantiationError`,
+	 * naming why: no bytes stored, the host refused them, they hash to a different
+	 * identity than the generation is registered under, or the fold's factories threw.
+	 *
+	 * A generation on ANOTHER STREAM is not broken code, and is not refused: it comes
+	 * back with no fold and the reason it stays frozen. Its factories are never run,
+	 * since nothing here would fold what they build.
+	 */
+	private async resumable(
+		id: GenerationId,
+		instantiateGeneration: NonNullable<ReceivingIndexerOptions<ABI, ProcessResultType, State>['instantiateGeneration']>,
+	): Promise<ResumedFold<ABI, ProcessResultType> | undefined> {
+		// An identity nothing registered is the REGISTRY's refusal to make, by name, at
+		// the move itself (`UnknownGenerationError`): there are no bytes to look for.
+		const record = (await this.registry.list()).find((candidate) => sameGeneration(candidate, id));
+		return record ? this.instantiate(record, instantiateGeneration) : undefined;
+	}
+
+	private async instantiate(
+		record: GenerationRecord,
+		instantiateGeneration: NonNullable<ReceivingIndexerOptions<ABI, ProcessResultType, State>['instantiateGeneration']>,
+	): Promise<ResumedFold<ABI, ProcessResultType>> {
+		const id: GenerationId = {stream: record.stream, processor: record.processor};
+		const replay = this.options.replay;
+		if (!replay) refuseFoldWithNoStream(record.stream);
+		const bundle = await this.registry.bundleOf(id);
+		if (!bundle || bundle.length === 0) {
+			throw new GenerationInstantiationError(id, `no bundle is stored for it`);
+		}
+		let spec: Omit<ReceivedGenerationSpec<ABI, ProcessResultType, State>, 'bundle'>;
+		try {
+			spec = await instantiateGeneration(id, bundle);
+		} catch (err) {
+			throw new GenerationInstantiationError(
+				id,
+				`the host could not turn the stored bytes into a fold (${err instanceof Error ? err.message : String(err)})`,
+				{cause: err},
+			);
+		}
+		if (spec.processorIdentity !== record.processor) {
+			throw new GenerationInstantiationError(
+				id,
+				`the stored bytes name the fold ${JSON.stringify(spec.processorIdentity)}, not the generation they are stored ` +
+					`under`,
+			);
+		}
+		const source = spec.source ?? this.options.source;
+		const provided = spec.stream ?? this.options.stream;
+		const streamConfig = resolveStreamConfig(provided);
+		const context: GenerationContext = {stream: streamDigestOf(source, streamConfig)};
+		if (context.stream !== record.stream) {
+			// A FILTER CHANGE's generation, not broken code: its stream is not the one this
+			// deployment fetches, so the move goes ahead and it answers reads frozen, as a
+			// revert across a filter change always did (ADR-0057).
+			return {
+				fold: undefined,
+				frozen:
+					`its stream ${record.stream} is not one this deployment fetches (it fetches ${context.stream}), so its ` +
+					`code was loaded and nothing folds it: a revert across a filter change is a freeze`,
+			};
+		}
+		let state: State;
+		let processor: EventProcessor<ABI, ProcessResultType>;
+		try {
+			state = await spec.createState(context);
+			processor = await spec.createProcessor(state, context);
+		} catch (err) {
+			throw new GenerationInstantiationError(
+				id,
+				`its fold could not be built (${err instanceof Error ? err.message : String(err)})`,
+				{cause: err},
+			);
+		}
+		return {fold: this.foldOf(record, state, processor, source, streamConfig, replay), source, provided};
 	}
 
 	/**
@@ -1318,6 +1519,20 @@ export class ReceivingIndexer<
 	 * The refusal is therefore the REGISTRY's (`UnknownGenerationError`): a
 	 * generation nothing registered is refused rather than reported as a silent
 	 * success, and that is the one question worth asking here.
+	 *
+	 * ## ...and a target it holds no fold for is INSTANTIATED, so it FOLDS (ADR-0092)
+	 *
+	 * Answering reads is not enough: a generation the pointer names has to advance. So
+	 * where the host supplied `instantiateGeneration`, the target is built from the
+	 * bundle stored on its row before the pointer moves, and a target that cannot be
+	 * built refuses the move (`GenerationInstantiationError`) rather than leaving a
+	 * canonical generation nothing folds. A revert also stops folding the generation it
+	 * moved away from (`movePointer`).
+	 *
+	 * A target on a stream this container cannot name (a revert across a filter
+	 * change) is NOT refused: its code is not broken, its stream is simply not one
+	 * this deployment fetches. The pointer moves, nothing folds it, and that is logged
+	 * as an error, which is the freeze a filter change always was.
 	 */
 	async promote(id: GenerationId): Promise<GenerationRecord> {
 		return this.movePointer(id);
@@ -1522,7 +1737,27 @@ export class ReceivingIndexer<
 		 * move as a revert and a genuine promotion dropped nothing.
 		 */
 		const wasPromotion = !!slotsBefore.successor && sameGeneration(slotsBefore.successor, id);
+		/**
+		 * THE TARGET HAS TO FOLD FROM THIS MOMENT, so a generation this container holds
+		 * no fold for is INSTANTIATED from its stored bundle first (ADR-0092). BEFORE the
+		 * write, so an instantiation that fails refuses the move and leaves the deployment
+		 * exactly as it was (`GenerationInstantiationError`) rather than serving a state
+		 * nothing advances. Not on a no-op move: the pointer is not going anywhere.
+		 */
+		const moving = !supersededRecord || !sameGeneration(supersededRecord, id);
+		const resumed =
+			moving && this.options.instantiateGeneration && !this.folds.some((held) => sameGeneration(held.record, id))
+				? await this.resumable(id, this.options.instantiateGeneration)
+				: undefined;
 		const record = await this.registry.moveCanonicalTo(id);
+		if (resumed?.fold) {
+			this.hold(resumed.fold, resumed.source, resumed.provided);
+			namedLogger.info(
+				`the generation {stream: ${record.stream}, processor: ${record.processor}} was INSTANTIATED from the bundle ` +
+					`stored for it (ADR-0092): this process was not built with its code, and it folds again from where its ` +
+					`state stood.`,
+			);
+		}
 		if (!supersededRecord || !sameGeneration(supersededRecord, record)) {
 			// THE TOKEN ROTATES, because a DIFFERENT FOLD answers from here on and that is
 			// indistinguishable, to a cache, from "everything you hold may be wrong"
@@ -1555,10 +1790,38 @@ export class ReceivingIndexer<
 		namedLogger.info(
 			`the canonical pointer moved ${wasPromotion ? '' : 'BACK '}to {stream: ${record.stream}, processor: ` +
 				`${record.processor}}. The generation {stream: ${supersededRecord.stream}, processor: ` +
-				`${supersededRecord.processor}} is what \`predecessor\` names from here on: it keeps its own state, keeps ` +
-				`folding, and is what the pointer moves BACK to.`,
+				`${supersededRecord.processor}} is what \`predecessor\` names from here on: it keeps its own state and is ` +
+				`what the pointer moves BACK to.`,
 		);
 		const superseded = this.folds.find((held) => sameGeneration(held.record, supersededRecord));
+		if (!this.canonicalFold) {
+			// SAID OUT LOUD, because it is a deployment serving reads that will not advance:
+			// either its stream is not one this deployment fetches (a revert across a filter
+			// change), or this host was given no way to turn stored bytes into a fold. The
+			// generation moved away from keeps folding, so the stream it reads stays fetched.
+			const why =
+				resumed && !resumed.fold
+					? resumed.frozen
+					: `this container was given no \`instantiateGeneration\`, so the bundle stored for it cannot be run here`;
+			namedLogger.error(
+				`the canonical pointer now names {stream: ${record.stream}, processor: ${record.processor}}, and NOTHING in ` +
+					`this process folds it: it answers reads from its own state and does not advance. ${why} (ADR-0092).`,
+			);
+		} else if (superseded && !wasPromotion) {
+			// THE GENERATION MOVED AWAY FROM BY A REVERT STOPS BEING FOLDED. It stays
+			// registered, keeps its state and is what `predecessor` names, so a move forward
+			// again is still one write -- and instantiates it again from its stored bundle.
+			// Folding on would leave this process running the engine an operator REJECTED
+			// beside the one it now serves. Only when the new canonical generation IS folded
+			// here, so the stream always keeps a fold and its writer stays live.
+			this.stopDriving(supersededRecord);
+			namedLogger.info(
+				`the generation {stream: ${supersededRecord.stream}, processor: ${supersededRecord.processor}} was moved ` +
+					`away from by a move that is not a promotion, so this process no longer folds it. It is kept, with its ` +
+					`state and its stored bundle, and a move back onto it instantiates it again.`,
+			);
+			return record;
+		}
 		// A MOVE THAT IS NOT A PROMOTION DROPS NOTHING, which is the chain-facing
 		// container's rule (`arrangeDrop`) and ADR-0046's: drop-on-promotion discards a
 		// generation a promotion SUPERSEDED, and a revert supersedes nothing -- it moves
