@@ -30,7 +30,7 @@ import {
 	openFolding,
 	openFoldingDatabase,
 	openIndexingSource,
-	requireArrivalIdentity,
+	requireArrivedBundle,
 	streamConfigFor,
 } from './folding.js';
 import {reconfigurerFor} from './reconfigure.js';
@@ -80,30 +80,34 @@ export type IndexingDependencies = {
 	/** Loads the processor module. Defaults to a dynamic `import()`. */
 	importModule?: (specifier: string) => Promise<any>;
 	/**
-	 * WHAT THE INJECTED ARRIVAL IS CALLED: the identity an arrival substituted
-	 * through `importModule` derived, since a module object carries no bytes to hash.
+	 * THE BYTES THE INJECTED ARRIVAL STANDS FOR: what an arrival substituted through
+	 * `importModule` would have read off disk, since a module object carries no bytes
+	 * of its own.
 	 *
-	 * It is the other half of ONE seam and is meaningless without its partner. An
-	 * arrival derives an identity (ADR-0086) and the engine is handed one and never
-	 * asks where it came from; `importModule` lets a caller state WHAT comes back for
-	 * a `--processor` path, and this lets it state what that thing is NAMED. There is
-	 * nothing left to fall back on: an injected arrival that names itself nothing has
-	 * no identity at all, and the deployment is REFUSED (`requireArrivalIdentity`).
+	 * It is the other half of ONE seam and is meaningless without its partner.
+	 * `importModule` lets a caller state WHAT comes back for a `--processor` path, and
+	 * this lets it state the BUNDLE that thing is. Its identity is then DERIVED from
+	 * these octets exactly as a real bundle's is (ADR-0086), and the registration
+	 * stores them exactly as it stores a real bundle's (ADR-0092) -- so a substituted
+	 * arrival registers a generation the way a deployment does, and there is no route
+	 * that names a fold without keeping its code. It used to be `processorIdentity`, a
+	 * bare NAME, and a name with no bytes behind it is the one registration a Node
+	 * deployment must not be able to make. An injected arrival with neither is
+	 * REFUSED (`requireArrivedBundle`).
 	 *
-	 * **BYTES WIN, always.** Where the path names a real self-contained bundle, the
-	 * hash of those octets is the identity and this value is not consulted -- so it can
-	 * only SUPPLY a derivation where the injected arrival made none, never overrule
-	 * one. That ordering is why there is no refusal here: the two can disagree and the
-	 * disk is simply the answer.
+	 * The bytes are SYNTHETIC in every suite that supplies them and that is correct:
+	 * nothing evaluates them here (the module comes from `importModule`), and what is
+	 * under test is which generation answered and what was stored for it.
+	 *
+	 * **BYTES ON DISK WIN, always.** Where the path names a real self-contained bundle,
+	 * those octets are read, hashed and stored and this value is not consulted.
 	 *
 	 * It is NOT a way for an author to declare an identity, which is the one thing
 	 * ADR-0086 forbids. No flag and no environment variable reaches it, it sits beside
 	 * `importModule` in the type documented as what a TEST substitutes, and a
-	 * deployment substitutes neither. WHETHER an injected importer remains an accepted
-	 * arrival at all is `a-path-naming-an-unbundled-entry-point-is-refused`'s question,
-	 * and this neither answers it nor forecloses it.
+	 * deployment substitutes neither.
 	 */
-	processorIdentity?: string;
+	processorBundle?: Uint8Array;
 	/** The chain. Defaults to the rate-limited JSON-RPC provider this CLI owns. */
 	provider?: EIP1193ProviderWithoutEvents;
 	/** Builds the libSQL handle for the store. Defaults to `createNodeDB`. */
@@ -290,12 +294,12 @@ export async function prepareIndexing<
 	});
 	const {processorModule} = arrival;
 	const declared = arrival.processor;
-	// WHAT THIS DEPLOYMENT'S ARRIVAL DERIVED. Real bytes on a disk answer first and are
-	// never overruled; an arrival a caller SUBSTITUTED answers for itself, because a
-	// module object has nothing to hash (see `IndexingDependencies.processorIdentity`).
-	// Absent from both is a fold with no name at all, which is refused rather than
-	// papered over (`requireArrivalIdentity`).
-	const arrivalIdentity = requireArrivalIdentity(resolved.processor, arrival.identity ?? deps.processorIdentity);
+	// WHAT THIS DEPLOYMENT'S ARRIVAL READ: the bundle and the identity that is its hash.
+	// Real bytes on a disk answer first and are never overruled; an arrival a caller
+	// SUBSTITUTED states the bytes it stands for, because a module object has none (see
+	// `IndexingDependencies.processorBundle`). Absent from both is a fold with no name
+	// and no code, which is refused rather than papered over (`requireArrivedBundle`).
+	const arrived = requireArrivedBundle(resolved.processor, arrival, deps.processorBundle);
 
 	// derived ONCE and handed to both halves below: the sending fetcher host and the
 	// receiving stream builder hash this same object into the wire identity
@@ -342,10 +346,11 @@ export async function prepareIndexing<
 			// which is the whole reason this shape can store a stream at all: the emission
 			// table's key is `NOT NULL` and there was no fold-side value to put in it.
 			indexer: resolved.indexer,
-			// THE IDENTITY THE ARRIVAL DERIVED: a generation folded from a bundle is named by
-			// that bundle's hash, and the engine below this line never asks where the value
-			// came from (ADR-0086).
-			processorIdentity: arrivalIdentity,
+			// WHAT THE ARRIVAL READ: a generation folded from a bundle is named by that
+			// bundle's hash, and the engine below this line never asks where the value came
+			// from (ADR-0086) -- and it KEEPS those bytes, stored with its registration
+			// (ADR-0092).
+			arrived,
 			// WHEN a successor takes over, on the one command that TAKES the input. Only
 			// `run` resolves it (`OWNERSHIP`, `config.ts`): a one-shot's successor is settled
 			// under the DEFAULT policy before it exits, and whether it should also take the
@@ -410,7 +415,7 @@ export async function prepareIndexing<
 			// the SAME pair, so a re-read resolves the identity this process came up with
 			// rather than a second answer that would register a spurious successor on every
 			// call (`reconfigure.ts`)
-			...(deps.processorIdentity === undefined ? {} : {processorIdentity: deps.processorIdentity}),
+			...(deps.processorBundle === undefined ? {} : {processorBundle: deps.processorBundle}),
 		}),
 		index: () => driveCycles(command, host, container, deps),
 	};

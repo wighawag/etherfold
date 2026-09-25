@@ -21,7 +21,7 @@ import {
 	openFolding,
 	openFoldingDatabase,
 	openExplicitSource,
-	requireArrivalIdentity,
+	requireArrivedBundle,
 	streamConfigFor,
 } from './folding.js';
 import {DEFAULT_PRUNE_BUDGET, DEFAULT_PRUNE_INTERVAL_SECONDS, pruneHeldMore} from './pruning.js';
@@ -148,16 +148,16 @@ export type IndexDependencies = {
 	/** Loads the processor module. Defaults to a dynamic `import()`. */
 	importModule?: (specifier: string) => Promise<any>;
 	/**
-	 * What the arrival substituted through `importModule` is CALLED, on the same terms
-	 * the combined shapes take it (`IndexingDependencies.processorIdentity`, which
-	 * documents it): bytes on a disk win, and this only supplies a derivation where the
-	 * injected arrival made none.
+	 * The BYTES the arrival substituted through `importModule` stands for, on the same
+	 * terms the combined shapes take them (`IndexingDependencies.processorBundle`, which
+	 * documents it): bytes on a disk win, and these are named and stored only where the
+	 * injected arrival read none.
 	 *
 	 * It is here rather than left to the combined commands because one `--processor`
 	 * path must not name two different generations depending on which command was
 	 * pointed at it, and this half of the wire resolves its arrival itself.
 	 */
-	processorIdentity?: string;
+	processorBundle?: Uint8Array;
 	/** Builds the libSQL handle for the store. Defaults to `createNodeDB`. */
 	createDB?: (url: string) => RemoteSQL;
 	/** Substituted by a test; a deployment uses the Node adapter. */
@@ -293,10 +293,10 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			...(deps.importModule ? {importModule: deps.importModule} : {}),
 		});
 		const declared = arrival.processor;
-		// bytes on a disk answer first; an arrival a caller SUBSTITUTED answers for
-		// itself; neither answering is a fold with no name and is refused
-		// (`requireArrivalIdentity`).
-		const arrivalIdentity = requireArrivalIdentity(config.processor, arrival.identity ?? deps.processorIdentity);
+		// bytes on a disk answer first; an arrival a caller SUBSTITUTED states the bytes it
+		// stands for; neither answering is a fold with no name and no code, and is refused
+		// (`requireArrivedBundle`).
+		const arrived = requireArrivedBundle(config.processor, arrival, deps.processorBundle);
 
 		const providedStreamConfig = streamConfigFor(env);
 		const streamConfig = resolveStreamConfig(providedStreamConfig);
@@ -336,9 +336,9 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 				// addresses: one value, required here and never defaulted, because on this
 				// half it routes as well as keys (ADR-0036)
 				indexer: config.wire.indexer,
-				// the identity the ARRIVAL derived (ADR-0086) -- the bundle's hash, or what a
-				// caller that substituted the arrival named it
-				processorIdentity: arrivalIdentity,
+				// what the ARRIVAL read: the bundle, named by its hash (ADR-0086) and kept with
+				// the registration (ADR-0092)
+				arrived,
 			},
 		);
 

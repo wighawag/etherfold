@@ -148,15 +148,16 @@ export type LogIngestion = {
  */
 export type GenerationContainer = {
 	/**
-	 * RESOLVE-OR-CREATE the generation this identity names, and REFUSE at a cap.
+	 * RESOLVE the generation this identity names, and REFUSE what cannot be.
 	 *
 	 * Called on EVERY cursor read, so an implementation must be idempotent and
-	 * cheap: creating one already registered RESOLVES it (that is the registry's
-	 * own rule), and `ReceivingIndexer` memoises what it has already been
-	 * answered. A throw propagates -- a cap refusal is a decision, and a
-	 * successor that cannot be recorded must not be folded, because a stream
-	 * subtree no registered generation claims is what the registry's sweep
-	 * collects.
+	 * cheap, and `ReceivingIndexer` memoises what it has already been answered.
+	 * A throw propagates, because a generation that is not recorded must not be
+	 * folded: a stream subtree no registered generation claims is what the
+	 * registry's sweep collects. `ReceivingIndexer` REGISTERS nothing here -- it
+	 * resolves what `add` registered and refuses an identity it has never heard of,
+	 * since registering on that runtime stores the generation's bundle (ADR-0092)
+	 * and an identity alone carries none.
 	 */
 	resolveGeneration(id: GenerationId): Promise<GenerationRecord>;
 };

@@ -177,6 +177,30 @@ describe('the registry keeps its records beside the streams, hierarchically', ()
 	});
 });
 
+describe('a tab RETAINS NO CODE (ADR-0089), so this registry keeps no bundle (ADR-0092 is Node\u2019s)', () => {
+	it('REFUSES a registration carrying a bundle, and writes nothing for it', async () => {
+		const name = freshName();
+		const registry = await registryOver(name).open();
+
+		await expect(
+			registry.create({stream: DIGEST, processor: PROC_A}, {bundle: new TextEncoder().encode('export {}')}),
+		).rejects.toThrow(/retains no processor code/);
+
+		expect(await registry.list()).toEqual([]);
+		expect(await get(generationAddress(name).entry({stream: DIGEST, processor: PROC_A}))).toBeUndefined();
+	});
+
+	it('answers NO bundle for a generation it registered the only way a tab does, with none', async () => {
+		const name = freshName();
+		const registry = await registryOver(name).open();
+		const created = await registry.create({stream: DIGEST, processor: PROC_A});
+
+		expect(await registry.bundleOf(created)).toBeUndefined();
+		// ...and the entry it stored is the record and nothing beside it
+		expect(await get(generationAddress(name).entry(created))).toEqual(created);
+	});
+});
+
 describe('the canonical pointer moves forward and BACK, over real state stores', () => {
 	it('restores the previous generation\u2019s answers EXACTLY, with no re-indexing and no fetch', async () => {
 		const name = freshName();

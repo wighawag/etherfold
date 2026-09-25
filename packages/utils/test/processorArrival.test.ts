@@ -55,6 +55,18 @@ describe('a path naming a BUNDLE', () => {
 		expect(Object.keys(arrival.processorModule)).toContain('createProcessor');
 	});
 
+	it('hands on the very octets it hashed, so a deployment can STORE the code that names its generation', async () => {
+		// ADR-0092: a Node deployment keeps each generation's bundle beside its state.
+		// What it keeps must be the bytes the identity was derived FROM, and the arrival
+		// is the one thing holding them -- so they come back with it rather than being
+		// dropped once hashed.
+		const arrival = await openProcessorArrival(FIXTURE_BUNDLE);
+
+		expect(arrival.bundle).toBeInstanceOf(Uint8Array);
+		expect(Buffer.from(arrival.bundle as Uint8Array).equals(readFileSync(FIXTURE_BUNDLE))).toBe(true);
+		expect(processorArtifactIdentity(arrival.bundle as Uint8Array)).toBe(arrival.identity);
+	});
+
 	it('is the bytes and never the path, so the same artifact at two paths is one identity', async () => {
 		const elsewhere = await aFileHolding('shipped.js', readFileSync(FIXTURE_BUNDLE, 'utf-8'));
 		expect((await openProcessorArrival(elsewhere)).identity).toBe(
@@ -86,6 +98,9 @@ describe('a path naming something that is NOT a bundle', () => {
 		// NO identity: there are no bytes that describe this processor, so the author's
 		// declaration still names the fold
 		expect(arrival.identity).toBeUndefined();
+		// ...and no bytes either: an entry point's closure is not in its own file, so
+		// there is nothing here a deployment could store and run again
+		expect(arrival.bundle).toBeUndefined();
 		expect(seen).toEqual([path]);
 	});
 

@@ -5,7 +5,7 @@ import {afterEach, describe, expect, it} from 'vitest';
 import {run, type RunDependencies, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, entityModule, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE COMBINED PROCESS SERVES THE NAMED INDEXER IT FOLDS, AND STILL TAKES NO PUSHES
@@ -69,7 +69,7 @@ const ARRIVAL = identityOf('the-fold-this-run-serves');
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: RunDependencies = {}): RunDependencies {
 	return {
 		importModule: async () => entityModule,
-		processorIdentity: ARRIVAL,
+		processorBundle: bundleOf(ARRIVAL),
 		provider: chain.provider,
 		createDB: () => db,
 		sleep: async () => {

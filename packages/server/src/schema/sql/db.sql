@@ -249,6 +249,16 @@ CREATE TABLE IF NOT EXISTS _generations (
     -- reads, and what makes the WRITER of a stream (the oldest surviving
     -- generation on it) a question these rows can answer
     createdAt INTEGER NOT NULL,
+    -- THE CODE THAT FOLDS IT (ADR-0092): the exact bundle octets whose SHA-256 is
+    -- `processor`, written in the same statement as the row. A COLUMN on the row
+    -- rather than a table beside it, so the DELETE that removes a generation removes
+    -- its code with no second statement anybody has to remember: a reclaim, a
+    -- replaced successor and a drop on promotion all take it by taking the row.
+    -- Never read by a registry decision (those select the columns above by name).
+    -- NULL means this row retained no code, which is not something a Node
+    -- deployment's receiving container can register (it refuses a fold with no
+    -- bundle); a Cloudflare Worker writes no generation rows at all (ADR-0091).
+    bundle BLOB,
     -- the identity IS the key: two fields, compared element by element, never
     -- one delimited string in which one component could be read as another
     PRIMARY KEY (indexer, stream, processor)

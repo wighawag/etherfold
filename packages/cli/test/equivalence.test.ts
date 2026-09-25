@@ -46,7 +46,7 @@ import {
 	transfer,
 	ZERO,
 } from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 /**
  * THE UPGRADE a reconfigure reaching a long-running `run` would bring: the same
@@ -107,6 +107,8 @@ function successorSpec(db: RemoteSQL, declared: EntityProcessor<typeof abi>, ide
 			}),
 		createProcessor: (state: unknown) => new EntityEventProcessor<typeof abi>(state as never, declared) as never,
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 
@@ -389,7 +391,7 @@ async function startCombined(
 		},
 		{
 			importModule: async () => entityModule,
-			processorIdentity: V1_IDENTITY,
+			processorBundle: bundleOf(V1_IDENTITY),
 			provider: chain.provider,
 			// a follower waits between cycles, and a test must not
 			sleep: async () => {
@@ -409,7 +411,7 @@ async function startReceiver(db: string): Promise<RunningReceiver> {
 		{processor: './nfts.js', store: 'sqlite', db, port: '0', indexer: INDEXER, ingestToken: TOKEN},
 		{
 			importModule: async () => entityModule,
-			processorIdentity: V1_IDENTITY,
+			processorBundle: bundleOf(V1_IDENTITY),
 			handleSignals: false,
 			log: () => {},
 			env: DEPLOYMENT,
@@ -726,7 +728,7 @@ describe('`build` emits a database carrying the reorgs it concluded', () => {
 		const options: Options = {processor: './nfts.js', store: 'sqlite', db: artifact, nodeUrl: 'http://localhost:0'};
 		const deps = {
 			importModule: async () => entityModule,
-			processorIdentity: V1_IDENTITY,
+			processorBundle: bundleOf(V1_IDENTITY),
 			provider: chain.provider,
 			sleep: async () => {},
 			env: DEPLOYMENT,
@@ -838,7 +840,7 @@ describe('a `build` artifact and a `run` database, on the generation axis', () =
 				{processor: './nfts.js', store: 'sqlite', db: artifact, nodeUrl: 'http://localhost:0', indexer: INDEXER},
 				{
 					importModule: async () => entityModule,
-					processorIdentity: V1_IDENTITY,
+					processorBundle: bundleOf(V1_IDENTITY),
 					provider: buildChain.provider,
 					sleep: async () => {},
 					env: DEPLOYMENT,

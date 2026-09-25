@@ -6,7 +6,7 @@ import {run, runMain, type RunDependencies, type RunningIndexer} from '../src/in
 import {DEFAULT_INDEXER_NAME} from '../src/config.js';
 import type {StoreCursorReport} from '../src/cursorReport.js';
 import type {Options} from '../src/types.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 import {
 	ALICE,
@@ -85,7 +85,7 @@ const ARRIVAL = identityOf('the-fold-this-run-came-up-with');
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: RunDependencies = {}): RunDependencies {
 	return {
 		importModule: async () => entityModule,
-		processorIdentity: ARRIVAL,
+		processorBundle: bundleOf(ARRIVAL),
 		provider: chain.provider,
 		createDB: () => db,
 		// a follower waits between cycles, and a test must not: one tick instead of
@@ -501,7 +501,7 @@ describe('every input is resolved through the shared configuration path', () => 
 				{processor: './nfts.js', store: 'sqlite', db: ':memory:'},
 				{
 					importModule: async () => entityModule,
-					processorIdentity: ARRIVAL,
+					processorBundle: bundleOf(ARRIVAL),
 					provider: chain.provider,
 					handleSignals: false,
 					createDB: () => {
@@ -531,7 +531,7 @@ describe('every input is resolved through the shared configuration path', () => 
 			// to stop
 			run(
 				{processor: './nfts.js', store: 'sqlite', db: ':memory:'},
-				{importModule: async () => entityModule, processorIdentity: ARRIVAL, env: {}},
+				{importModule: async () => entityModule, processorBundle: bundleOf(ARRIVAL), env: {}},
 			),
 		).rejects.toThrow(/--node-url/);
 
@@ -542,7 +542,7 @@ describe('every input is resolved through the shared configuration path', () => 
 		await expect(
 			run(
 				{...RUN, ingestEndpoint: 'http://elsewhere'},
-				{importModule: async () => entityModule, processorIdentity: ARRIVAL},
+				{importModule: async () => entityModule, processorBundle: bundleOf(ARRIVAL)},
 			),
 		).rejects.toThrow(/--ingest-endpoint \(INGEST_ENDPOINT\) is not accepted by `etherfold run`/);
 	});

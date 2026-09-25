@@ -41,7 +41,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // TWO NAMED INDEXERS ON ONE HOST NEVER TOUCH EACH OTHER'S DATA
@@ -133,6 +133,8 @@ function openingFoldIn(db: RemoteSQL) {
 			}),
 		createProcessor: (state: VersionedStateEventProcessor<TestABI>) => state,
 		processorIdentity: PROCESSOR_IDENTITY,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(PROCESSOR_IDENTITY),
 	};
 }
 

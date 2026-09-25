@@ -10,7 +10,9 @@ These decisions were made in the spec `a-generation-retains-the-code-that-folds-
 
 ## The decisions
 
-**The bytes live in the DATABASE, beside the generation's state.** One namespace then holds everything a generation is, the grouping ADR-0053 already chose for state, and a generation's storage is reclaimed by one mechanism rather than two.
+**The bytes live in the DATABASE, beside the generation's state.** One named indexer's database then holds everything a generation is, the grouping ADR-0053 already chose for state, and a generation's storage is reclaimed by one mechanism rather than two.
+
+**Where in the database: a column on the generation's own REGISTRY ROW** (`_generations.bundle`), not a table inside its state namespace. This paragraph first said "one namespace", which read as the state namespace; it was corrected in place when the storage was built (`a-generation-keeps-the-bundle-that-folds-it`), before any code had followed the earlier wording. The row is the right home for two reasons. It is written by the SAME guarded statement that registers the generation, so no crash can leave a registered generation with no code or code with no generation; and it is removed by the SAME `DELETE` that removes the record, so every path that deletes a generation takes the bytes without knowing they exist. The state namespace is the state store's (ADR-0053 keeps the registry out of it on purpose), and a bundle is not state: putting it there would have made the bytes depend on the host's `dropState`, which runs after the registry commit and is a second step that can fail on its own.
 
 **A bundle dies with its generation.** Whatever deletes a generation (a `reclaim`, a replaced successor, a drop on promotion) takes its bytes with the row and the state namespace. Nothing retains an artifact whose generation is gone, so retention is bounded by the registered generations, which the caps already bound, and `predecessor` retention costs exactly one extra bundle rather than an unbounded history.
 

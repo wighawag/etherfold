@@ -49,8 +49,8 @@ import {
 // an arrival with no `identity` has a fold it cannot name: the CLI REFUSES such a
 // deployment, at configuration resolution and before it ever gets here
 // (`refuseUnbundledProcessor`, `etherfold`), and a TEST that substituted
-// the arrival states what it is called instead
-// (`IndexingDependencies.processorIdentity`). Refusing in here would take that
+// the arrival states the bytes it stands for instead
+// (`IndexingDependencies.processorBundle`). Refusing in here would take that
 // second case with it, and would put a configuration decision in a loader.
 // ---------------------------------------------------------------------------------------------------
 
@@ -81,6 +81,18 @@ export type ProcessorArrival<ABI extends Abi, ProcessResultType, EntityProcessor
 	 * identity LOOKS like a hash would be the first thing to.
 	 */
 	readonly identity?: string;
+	/**
+	 * THE OCTETS `identity` was derived from: the bundle exactly as it was read,
+	 * present exactly where `identity` is.
+	 *
+	 * Handed on rather than dropped once hashed, because a Node deployment STORES a
+	 * generation's code beside its state (ADR-0092): what it stores has to be the very
+	 * bytes that name the generation, and the only thing that holds them is the arrival
+	 * that read them. Reading the path a second time to get them would be a second
+	 * read that can disagree with the first -- a rebuild landing between the two would
+	 * file one bundle's bytes under another's name.
+	 */
+	readonly bundle?: Uint8Array;
 };
 
 export type OpenProcessorArrivalOptions = LoadProcessorModuleOptions & {
@@ -101,7 +113,7 @@ export type OpenProcessorArrivalOptions = LoadProcessorModuleOptions & {
 /**
  * WHAT A PROCESSOR PATH TURNS OUT TO BE: read it as bytes if it is a bundle,
  * resolve it through the module system if it is not, and hand back the same three
- * things either way.
+ * things either way -- plus, for a bundle, the bytes themselves.
  *
  * ## The ORDER, which is the part a caller depends on
  *
@@ -146,7 +158,12 @@ export async function openProcessorArrival<
 			'processorConfig' in options ? {processorConfig: options.processorConfig} : {},
 		);
 		if (outcome.status === 'refused') throw refusedArtifact(processorPath, outcome);
-		return {processor: outcome.processor, processorModule: outcome.processorModule, identity: outcome.identity};
+		return {
+			processor: outcome.processor,
+			processorModule: outcome.processorModule,
+			identity: outcome.identity,
+			bundle,
+		};
 	}
 
 	const processorModule = await loadProcessorModule<ABI, ProcessResultType>(processorPath, options);

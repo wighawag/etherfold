@@ -9,7 +9,7 @@ import {isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
-import {foldPartsFor, openIndexingSource, requireArrivalIdentity, streamConfigFor} from './folding.js';
+import {foldPartsFor, openIndexingSource, requireArrivedBundle, streamConfigFor} from './folding.js';
 import type {Options, RunConfig} from './types.js';
 
 const logger = logs('etherfold');
@@ -108,8 +108,8 @@ export type ReconfigureContext<ABI extends Abi = Abi, ProcessResultType = unknow
 	/** Substituted by a test; a deployment reloads through the cache-busting importer below. */
 	importModule?: (specifier: string) => Promise<any>;
 	/**
-	 * What the SUBSTITUTED arrival is called, carried through unchanged from
-	 * `IndexingDependencies.processorIdentity`, which documents it.
+	 * The BYTES the SUBSTITUTED arrival stands for, carried through unchanged from
+	 * `IndexingDependencies.processorBundle`, which documents it.
 	 *
 	 * It travels with `importModule` because the two are one seam: a re-read that
 	 * resolved the module the caller stated and then named it a different way would
@@ -117,7 +117,7 @@ export type ReconfigureContext<ABI extends Abi = Abi, ProcessResultType = unknow
 	 * is for. Bytes on a disk still win here exactly as they do at start-up, so a
 	 * REBUILT bundle is still a new identity.
 	 */
-	processorIdentity?: string;
+	processorBundle?: Uint8Array;
 };
 
 /**
@@ -202,7 +202,7 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 			// here exactly as it is at start-up, and the refusal is reported as `failed` with
 			// the deployment untouched, which is what this endpoint promises about everything
 			// that can go wrong in a re-read.
-			const arrivalIdentity = requireArrivalIdentity(resolved.processor, arrival.identity ?? held.processorIdentity);
+			const arrived = requireArrivedBundle(resolved.processor, arrival, held.processorBundle);
 			source = await openIndexingSource<ABI, ProcessResultType>(
 				resolved.source,
 				arrival.processorModule,
@@ -213,7 +213,7 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 				resolved.destination,
 				held.db,
 				streamConfig.finality,
-				arrivalIdentity,
+				arrived,
 			);
 			wanted = {stream: streamDigestOf(source, streamConfig), processor: parts.processorIdentity};
 		} catch (err) {

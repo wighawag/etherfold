@@ -353,7 +353,45 @@ export function generationRegistryPortOnSQL(
 		async readStateCursor(id) {
 			return options?.readStateCursor?.(id);
 		},
+
+		/**
+		 * The bundle stored on this generation's own row (ADR-0092), or nothing.
+		 *
+		 * The bytes live in a COLUMN of `_generations`, written by the same guarded
+		 * `INSERT` that writes the row, so they are exactly as durable as the record
+		 * and leave by the same `DELETE`. Nothing else in this substrate selects the
+		 * column: every commit decides from the rows it read by naming the columns it
+		 * needs, so a processor's worth of octets is carried only by this read.
+		 */
+		async readBundle(id) {
+			const rows = await db
+				.prepare(`SELECT bundle FROM ${GENERATION_TABLE} WHERE indexer = ?1 AND stream = ?2 AND processor = ?3`)
+				.bind(indexer, id.stream, id.processor)
+				.all<{bundle: unknown}>();
+			return bytesOf(rows.results[0]?.bundle);
+		},
 	};
+}
+
+/**
+ * A BLOB as the driver handed it back, as octets -- or nothing where the column is
+ * NULL.
+ *
+ * `RemoteSQL` promises no one shape for a BLOB, and the drivers behind it each pick
+ * their own: libSQL answers an `ArrayBuffer`, a Node driver may answer a `Buffer`
+ * (which IS a `Uint8Array`), and D1 answers an array of numbers. All three are the
+ * same bytes, and the one thing a caller must never be handed is a view it could
+ * mistake for something else, so each is copied into a fresh `Uint8Array`.
+ */
+function bytesOf(value: unknown): Uint8Array | undefined {
+	if (value === null || value === undefined) return undefined;
+	if (value instanceof Uint8Array) return new Uint8Array(value);
+	if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+	if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+	throw new TypeError(
+		`the bundle column of ${GENERATION_TABLE} held a ${typeof value}, which is not bytes: a generation's code is ` +
+			`stored as a BLOB (ADR-0092) and nothing else writes that column`,
+	);
 }
 
 /**
@@ -496,7 +534,9 @@ function statementsFor(
 	const guard = `COALESCE((SELECT revision FROM ${GENERATION_SLOT_TABLE} WHERE indexer = ?1), '')`;
 	const statements: SQLPreparedStatement[] = [];
 
-	// `remove` runs before `put`, as the registry's write contract says
+	// `remove` runs before `put`, as the registry's write contract says. Deleting the
+	// ROW is deleting the generation's BUNDLE too, which is a column on it (ADR-0092):
+	// that is the one deletion path, and there is deliberately no second statement.
 	for (const id of write.remove ?? []) {
 		statements.push(
 			db
@@ -512,11 +552,14 @@ function statementsFor(
 		statements.push(
 			db
 				.prepare(
-					`INSERT INTO ${GENERATION_TABLE} (indexer, stream, processor, createdAt)
-					 SELECT ?1, ?2, ?3, ?4 WHERE ${guard} = ?5
-					 ON CONFLICT (indexer, stream, processor) DO UPDATE SET createdAt = excluded.createdAt`,
+					`INSERT INTO ${GENERATION_TABLE} (indexer, stream, processor, createdAt, bundle)
+					 SELECT ?1, ?2, ?3, ?4, ?6 WHERE ${guard} = ?5
+					 ON CONFLICT (indexer, stream, processor) DO UPDATE SET createdAt = excluded.createdAt, bundle = excluded.bundle`,
 				)
-				.bind(indexer, write.put.stream, write.put.processor, write.put.createdAt, revision),
+				// THE CODE rides the SAME guarded statement as the row (ADR-0092): a commit that
+				// loses its guard writes neither, one that wins writes both, and no crash can
+				// land between them
+				.bind(indexer, write.put.stream, write.put.processor, write.put.createdAt, revision, write.bundle ?? null),
 		);
 	}
 

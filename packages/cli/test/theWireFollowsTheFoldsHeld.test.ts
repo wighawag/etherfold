@@ -6,7 +6,7 @@ import {describe, expect, it} from 'vitest';
 import {prepareIndexing, type IndexingDependencies} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, entityModule, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE COMBINED WIRE FEEDS WHAT THE CONTAINER HOLDS NOW, NOT WHAT IT HELD AT `open`
@@ -60,7 +60,7 @@ function oneDatabase(): RemoteSQL {
 function depsFor(db: RemoteSQL): IndexingDependencies {
 	return {
 		importModule: async () => entityModule,
-		processorIdentity: ARRIVAL,
+		processorBundle: bundleOf(ARRIVAL),
 		provider: fakeChain().serve(LOGS, TIP).provider,
 		createDB: () => db,
 		sleep: async () => {},

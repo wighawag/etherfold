@@ -35,7 +35,7 @@ import {
 	type TestABI,
 } from './feedHarness.js';
 import {generationDatabases, type GenerationDatabases} from './generationDatabases.js';
-import {identityOf} from './processorIdentity.js';
+import {bundleOf, identityOf} from './processorIdentity.js';
 import {openSignalStream, type SignalStream} from './signalStream.js';
 
 /**
@@ -122,6 +122,8 @@ function foldAt(states: GenerationDatabases, marker: string) {
 		createState: (context: {stream: string}) => states.open({stream: context.stream, processor: identity}),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 

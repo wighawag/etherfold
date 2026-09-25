@@ -11,7 +11,7 @@ import {
 import type {StoreCursorReport} from '../src/cursorReport.js';
 import type {Options} from '../src/types.js';
 import {abi, ALICE, BOB, entityModule, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {INDEXER} from './utils/receiver.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -110,7 +110,7 @@ const ARRIVAL = identityOf('the-fold-this-receiver-holds');
 function depsFor(extra: IndexDependencies = {}): IndexDependencies {
 	return {
 		importModule: async () => entityModule,
-		processorIdentity: ARRIVAL,
+		processorBundle: bundleOf(ARRIVAL),
 		// the test runner's process is not this command's to install handlers on
 		handleSignals: false,
 		log: () => {},

@@ -55,5 +55,31 @@ export function identityOfBytes(bundle: Uint8Array): string {
  * differently.
  */
 export function identityOf(marker: string): string {
-	return identityOfBytes(bundleBytes(marker));
+	const bytes = bundleBytes(marker);
+	const identity = identityOfBytes(bytes);
+	bytesBehind.set(identity, bytes);
+	return identity;
+}
+
+/** Every identity `identityOf` has produced in this module's lifetime, and the bytes behind it. */
+const bytesBehind = new Map<string, Uint8Array>();
+
+/**
+ * THE BYTES AN IDENTITY FROM `identityOf` IS THE HASH OF: what a receiving container
+ * is handed beside the identity, because registering a generation on a Node deployment
+ * STORES its bundle (ADR-0092).
+ *
+ * Answerable only for identities this suite made through `identityOf`, which is every
+ * one a spec here carries -- and REFUSED for anything else, rather than inventing
+ * bytes for a name, because a generation registered under a name its stored bytes do
+ * not hash to is exactly the lie retention must never tell.
+ */
+export function bundleOf(identity: string): Uint8Array {
+	const bytes = bytesBehind.get(identity);
+	if (!bytes) {
+		throw new Error(
+			`no bytes are known for ${identity}: build it with identityOf(marker) so the bundle is its preimage`,
+		);
+	}
+	return bytes;
 }

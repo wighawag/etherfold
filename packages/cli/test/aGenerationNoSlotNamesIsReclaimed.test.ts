@@ -19,6 +19,7 @@ import {
 import {
 	applySchema,
 	EMISSION_STREAM_TABLE,
+	GENERATION_TABLE,
 	emissionAppenderFor,
 	streamCursorSourceOn,
 	generationRegistryPortOnSQL,
@@ -43,7 +44,8 @@ import {
 	nftProcessor,
 	timestampOf,
 } from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {processorArtifactIdentity} from '@etherfold/utils';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {generationStateSeamsOn} from './utils/generationState.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -138,6 +140,8 @@ function specFor(db: RemoteSQL, identity: string, source?: IndexingSource<typeof
 		createProcessor: (state: WritableStateStore) =>
 			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 
@@ -231,6 +235,30 @@ async function tablesIn(db: RemoteSQL): Promise<string[]> {
 async function namespaceTables(db: RemoteSQL, id: GenerationId): Promise<string[]> {
 	const namespace = generationDigestOf(id);
 	return (await tablesIn(db)).filter((table) => table.includes(namespace));
+}
+
+/**
+ * THE CODE EACH GENERATION KEEPS (ADR-0092), read straight off the rows: every stored
+ * bundle under this name, RE-HASHED, so the answer is the identities the bytes name
+ * rather than the identities the rows claim. A stored bundle for a generation that
+ * has gone, or one whose bytes are not the ones that name it, shows up here as a
+ * mismatch against `registeredProcessors`.
+ */
+async function storedBundleIdentities(db: RemoteSQL): Promise<string[]> {
+	const rows = await db
+		.prepare(`SELECT bundle FROM ${GENERATION_TABLE} WHERE indexer = ?1 AND bundle IS NOT NULL ORDER BY createdAt`)
+		.bind(INDEXER)
+		.all<{bundle: ArrayBuffer}>();
+	return rows.results.map((row) => processorArtifactIdentity(new Uint8Array(row.bundle)));
+}
+
+/** Every generation registered under this name, oldest first, read off the rows. */
+async function registeredProcessors(db: RemoteSQL): Promise<string[]> {
+	const rows = await db
+		.prepare(`SELECT processor FROM ${GENERATION_TABLE} WHERE indexer = ?1 ORDER BY createdAt`)
+		.bind(INDEXER)
+		.all<{processor: string}>();
+	return rows.results.map((row) => row.processor);
 }
 
 /** How many stored emissions this stream still holds. */
@@ -364,6 +392,10 @@ describe('an operator RECLAIMS every generation no slot names, in one action', (
 		// the stream went with it, no registered generation being left folding it
 		expect(await namespaceTables(db, garbage)).toEqual([]);
 		expect(await emissionRows(db, garbage.stream)).toBe(0);
+		// ...and so did its CODE, which was on its row (ADR-0092): what is left is one
+		// bundle per generation still registered, each the bytes that name it
+		expect(await storedBundleIdentities(db)).not.toContain(garbage.processor);
+		expect(await storedBundleIdentities(db)).toEqual(await registeredProcessors(db));
 		// ...and it reached a generation this PROCESS was never built with, which is the
 		// ordinary operator case and what the durable slot rows make answerable at all
 		expect(indexer.held().map((fold) => fold.record.processor)).toEqual([indexer.generation.processor]);

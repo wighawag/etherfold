@@ -32,7 +32,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A SERVER-SHAPED DEPLOYMENT CAN SUBSCRIBE TO THE STATE-MOVED SIGNAL
@@ -93,6 +93,8 @@ async function deploy() {
 			createState: () => db,
 			createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 			processorIdentity: PROCESSOR_IDENTITY,
+			// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+			bundle: bundleOf(PROCESSOR_IDENTITY),
 		},
 	})) as ReceivingIndexer<TestABI, unknown, RemoteSQL>;
 

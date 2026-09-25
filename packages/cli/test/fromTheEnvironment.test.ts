@@ -6,7 +6,7 @@ import {prepareIndexing} from '../src/index.js';
 import {serve} from '../src/serve.js';
 import type {Options} from '../src/types.js';
 import {abi, ALICE, CONTRACT, entityModule, fakeChain, noChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -52,7 +52,7 @@ describe('`build`, configured from the environment', () => {
 		const prepared = await prepareIndexing('build', IMAGE, {
 			env: {DB: 'file:./from-the-environment.db', ETH_NODE_URI: 'http://node.from.env'},
 			importModule: async () => entityModule,
-			processorIdentity: ARRIVAL,
+			processorBundle: bundleOf(ARRIVAL),
 			provider: chain.provider,
 			createDB: (url) => {
 				opened.push(url);
@@ -84,7 +84,7 @@ describe('`build`, configured from the environment', () => {
 				}),
 			},
 			importModule: async () => entityModule,
-			processorIdentity: ARRIVAL,
+			processorBundle: bundleOf(ARRIVAL),
 			provider: chain.provider,
 			createDB: () => oneDatabase(),
 			sleep: async () => {},

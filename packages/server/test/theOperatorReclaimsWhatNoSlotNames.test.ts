@@ -36,7 +36,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE OPERATOR RECLAIMS WHAT NO SLOT NAMES, OVER HTTP
@@ -92,6 +92,8 @@ function foldAt(marker: string, source?: IndexingSource<TestABI>) {
 		createState: () => freshDatabase(),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, declared),
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 

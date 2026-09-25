@@ -31,7 +31,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {openSignalStream} from './utils/signalStream.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -118,6 +118,8 @@ async function deployReadOnly(): Promise<Deployment> {
 			createState: () => new VersionedStateEventProcessor<TestABI>(db, entityProcessor),
 			createProcessor: (state: VersionedStateEventProcessor<TestABI>) => state,
 			processorIdentity: PROCESSOR_IDENTITY,
+			// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+			bundle: bundleOf(PROCESSOR_IDENTITY),
 		},
 	})) as ReceivingIndexer<TestABI, unknown, VersionedStateEventProcessor<TestABI>>;
 

@@ -152,6 +152,20 @@ describe('a deployment configured with a BUNDLE', () => {
 		const db = await aDeploymentFolding(BUNDLE);
 		expect(await registeredIdentityIn(db)).toBe(IDENTITY_OF(BUNDLE));
 	});
+
+	it("KEEPS the bundle it read, on the generation's own row, byte for byte (ADR-0092)", async () => {
+		const db = await aDeploymentFolding(BUNDLE);
+
+		const rows = await db
+			.prepare(`SELECT processor, bundle FROM _generations`)
+			.all<{processor: string; bundle: ArrayBuffer | null}>();
+		expect(rows.results).toHaveLength(1);
+		const stored = new Uint8Array(rows.results[0]?.bundle as ArrayBuffer);
+		// the very octets on disk, and re-hashing them gives the name the row is filed
+		// under: what a deployment keeps is what names the generation
+		expect(Buffer.from(stored).equals(readFileSync(BUNDLE))).toBe(true);
+		expect(processorArtifactIdentity(stored)).toBe(rows.results[0]?.processor);
+	});
 });
 
 describe('the identity follows the BYTES, with no author action either way', () => {
@@ -223,8 +237,9 @@ export const createProcessor = () => ({entities, onTransfer() {}});
 
 	it('refuses an INJECTED arrival that named itself nothing either', async () => {
 		// `importModule` states what comes back for a path and
-		// `IndexingDependencies.processorIdentity` states what that thing is CALLED; the
-		// two are one seam, and half of it is a deployment with no name for its fold.
+		// `IndexingDependencies.processorBundle` states the BYTES that thing is; the two
+		// are one seam, and half of it is a deployment with no name for its fold and no
+		// code it could keep (ADR-0092).
 		const db = oneDatabase();
 		const chain = fakeChain().serve(LOGS, TIP);
 		await expect(

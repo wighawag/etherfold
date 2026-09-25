@@ -5,7 +5,7 @@ import {describe, expect, it} from 'vitest';
 import {main, prepareIndexing, type IndexingDependencies} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, entityModule, fakeChain, nftProcessor, START_BLOCK, transfer, ZERO} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -60,7 +60,7 @@ const ARRIVAL = identityOf('the-fold-this-one-shot-built');
 function depsFor(chain: ReturnType<typeof fakeChain>, db: RemoteSQL, extra: IndexingDependencies = {}) {
 	return {
 		importModule: async () => entityModule,
-		processorIdentity: ARRIVAL,
+		processorBundle: bundleOf(ARRIVAL),
 		provider: chain.provider,
 		createDB: () => db,
 		sleep: async () => {},

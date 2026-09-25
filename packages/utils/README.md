@@ -61,11 +61,12 @@ const arrival = await openProcessorArrival<Abi, unknown, EntityProcessor<Abi>>('
 // arrival.processor, arrival.processorModule, and:
 if (arrival.identity) {
 	// the path named a BUNDLE: this is `sha256:<hex>` over its octets, and it NAMES the
-	// generation the host is about to register. Nothing parses it.
+	// generation the host is about to register. Nothing parses it. `arrival.bundle` is
+	// those very octets, which a Node deployment STORES with the generation (ADR-0092).
 }
 ```
 
-A path whose bytes are **self-contained** is a bundle, read and hashed. Anything else -- a specifier that is not a readable file, a directory, an entry point that still imports its ABI -- goes through `loadProcessorModule` exactly as before and comes back with **no identity**, which is a fold nothing here can name: the author-declared identity this route used to fall back on is gone (ADR-0086), so `etherfold` REFUSES such a deployment. The refusal an author meets is made at CONFIGURATION RESOLUTION, with the build command in it (`refuseUnbundledProcessor`), and a structural backstop (`requireArrivalIdentity`) guarantees no fold is registered without a name whatever route the arrival took. Neither refusal lives here, because resolving a path is a separate capability from NAMING what came back and this unit does the first. `identity` is therefore read as present-or-absent and never inspected as a string: nothing in etherfold parses a processor identity, which is what lets an identity derived from bytes and one derived any other way coexist.
+A path whose bytes are **self-contained** is a bundle, read and hashed. Anything else -- a specifier that is not a readable file, a directory, an entry point that still imports its ABI -- goes through `loadProcessorModule` exactly as before and comes back with **no identity**, which is a fold nothing here can name: the author-declared identity this route used to fall back on is gone (ADR-0086), so `etherfold` REFUSES such a deployment. The refusal an author meets is made at CONFIGURATION RESOLUTION, with the build command in it (`refuseUnbundledProcessor`), and a structural backstop (`requireArrivedBundle`) guarantees no fold is registered without a name and the bytes that name it, whatever route the arrival took. Neither refusal lives here, because resolving a path is a separate capability from NAMING what came back and this unit does the first. `identity` is therefore read as present-or-absent and never inspected as a string: nothing in etherfold parses a processor identity, which is what lets an identity derived from bytes and one derived any other way coexist.
 
 The consequence worth knowing: an entry point that imports NOTHING is self-contained, so it is a bundle by this definition and is identified by its bytes. An injected `importModule` governs the module arm alone; to state what the BYTES are, inject `readBundle`.
 

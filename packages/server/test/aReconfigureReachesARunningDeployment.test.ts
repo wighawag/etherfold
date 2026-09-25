@@ -24,7 +24,7 @@ import {
 	type ReconfigureReport,
 } from '../src/index.js';
 import {ALICE, CONTRACT, SOURCE, STREAM_CONFIG, TOKEN, transfer, type TestABI} from './utils/feedHarness.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE TRIGGER: ONE ENDPOINT MAKES A RUNNING DEPLOYMENT RE-READ ITS OWN CONFIGURATION
@@ -70,6 +70,8 @@ function foldAt(marker: string) {
 		createState: () => freshDatabase(),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 

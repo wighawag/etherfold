@@ -73,3 +73,17 @@ const markers = new Map<string, string>();
 export function markerOf(identity: string | undefined): string | undefined {
 	return identity === undefined ? undefined : markers.get(identity);
 }
+
+/**
+ * WHAT AN ARRIVAL THAT READ `bundleBytes(marker)` HANDS A RECEIVING CONTAINER: the
+ * identity, and the very bytes it is the hash of (ADR-0092).
+ *
+ * Spread into a `ReceivedGenerationSpec`, so a suite registers a generation the way a
+ * Node deployment does -- name AND code -- and never a name with nothing behind it.
+ * The two are derived from ONE marker here, which is what keeps "the stored bytes
+ * are the bytes whose hash is the identity" true in every suite without each one
+ * saying so.
+ */
+export function arrivalOf(marker: string): {processorIdentity: string; bundle: Uint8Array} {
+	return {processorIdentity: identityOf(marker), bundle: bundleBytes(marker)};
+}
