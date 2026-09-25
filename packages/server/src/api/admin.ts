@@ -1,4 +1,5 @@
 import {
+	GenerationInstantiationError,
 	generationDigestOf,
 	slotHolding,
 	SLOT_NAMES,
@@ -220,7 +221,28 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				}
 
 				const previous = await held.entry.canonicalGeneration();
-				const moved = await held.promote(target);
+				let moved: GenerationRecord;
+				try {
+					moved = await held.promote(target);
+				} catch (err) {
+					if (!(err instanceof GenerationInstantiationError)) throw err;
+					// THE TARGET CANNOT BE MADE TO FOLD HERE, so the move was REFUSED and nothing
+					// changed (ADR-0092). `409` for the reason `reconfigure-failed` is: nothing
+					// about the request is wrong, the deployment's state conflicts with it, and
+					// the generation that answered reads before this call still does.
+					logger.error(`admin: ${JSON.stringify(held.name)} refused to move its pointer: ${err.message}`);
+					return c.json(
+						{
+							success: false,
+							error: 'generation-cannot-fold',
+							indexer: held.name,
+							requested: reported(target),
+							canonical: previous ? reported(previous) : undefined,
+							message: err.message,
+						} as const,
+						409,
+					);
+				}
 				logger.info(
 					`admin: the canonical pointer of ${JSON.stringify(held.name)} now names {stream: ${moved.stream}, ` +
 						`processor: ${moved.processor}} (it named ` +
