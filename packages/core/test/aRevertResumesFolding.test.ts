@@ -17,7 +17,9 @@ import {anIncumbentThatHasFolded, batch, idOf, reportFor, transfer, world} from 
 //  - the moment of instantiation is the POINTER MOVE, never `open`;
 //  - what it is handed is the bundle STORED for the generation;
 //  - the generation moved away from by a revert stops being folded;
-//  - an instantiation that fails REFUSES the move and changes nothing.
+//  - an instantiation that fails REFUSES the move and changes nothing;
+//  - a target on ANOTHER STREAM (a filter change's) is not broken code: the
+//    pointer moves, nothing folds it, and the generation left keeps folding.
 // ---------------------------------------------------------------------------------------------------
 
 type Container = ReceivingIndexer<TestABI, string[], MemoryStore>;
@@ -150,5 +152,27 @@ describe('a stored generation that cannot be instantiated REFUSES the move', () 
 		await expect(restarted.promote(bare)).rejects.toThrow(/no bundle is stored for it/);
 		expect((await restarted.canonical())?.processor).toBe(identityOf('v2'));
 		expect(w.instantiated).toEqual([]);
+	});
+});
+
+describe('a stored generation on ANOTHER STREAM is moved onto and FROZEN, not refused', () => {
+	it('moves the pointer, folds nothing for it, and keeps folding the generation it left', async () => {
+		const {world: w, restarted} = await aRestartOnTheNewCodeAlone();
+		// a FILTER CHANGE's generation: good code, stored with its bytes, on a stream this
+		// container does not fetch
+		const elsewhere = await restarted.registry.create(
+			{stream: 'a-stream-this-deployment-does-not-fetch', processor: identityOf('v1')},
+			{bundle: bundleBytes('v1')},
+		);
+
+		const moved = await restarted.promote(elsewhere);
+
+		expect(moved.stream).toBe(elsewhere.stream);
+		expect((await restarted.canonical())?.stream).toBe(elsewhere.stream);
+		// nothing folds it here, and the one left behind still does, so the stream stays fetched
+		expect(heldHere(restarted)).toEqual([identityOf('v2')]);
+		const later = await theStreamMovesOn(restarted);
+		expect(w.rowsIn('v2', restarted.streamDigest)).toContain(`${later}x10`);
+		expect(w.rowsIn('v1', elsewhere.stream)).toEqual([]);
 	});
 });

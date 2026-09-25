@@ -8,7 +8,19 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
 import {run, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
-import {ALICE, BOB, CAROL, fakeChain, nftProcessor, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {
+	abi,
+	ALICE,
+	BOB,
+	CAROL,
+	CONTRACT,
+	fakeChain,
+	nftProcessor,
+	SOURCE,
+	START_BLOCK,
+	transfer,
+	ZERO,
+} from './utils/chain.js';
 import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -102,7 +114,12 @@ function optionsFor(processor: string): Options {
 }
 
 /** START a deployment over a database that may already hold generations: a restart, when it does. */
-async function aRunOver(db: RemoteSQL, processorPath: string, chain: ReturnType<typeof fakeChain>) {
+async function aRunOver(
+	db: RemoteSQL,
+	processorPath: string,
+	chain: ReturnType<typeof fakeChain>,
+	env: Record<string, string> = {},
+) {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	running = await run(optionsFor(processorPath), {
 		provider: chain.provider,
@@ -112,7 +129,7 @@ async function aRunOver(db: RemoteSQL, processorPath: string, chain: ReturnType<
 		},
 		handleSignals: false,
 		log: () => {},
-		env: {MAX_BLOCKS_PER_FETCH: '20'},
+		env: {MAX_BLOCKS_PER_FETCH: '20', ...env},
 	});
 	return running;
 }
@@ -296,5 +313,56 @@ describe('a stored bundle that cannot be instantiated REFUSES the revert, and ch
 			return now !== undefined && now > TIP;
 		});
 		expect(await positionOf(indexer, incumbent)).toBe(TIP);
+	});
+});
+
+describe('a revert across a FILTER CHANGE moves the pointer and FREEZES, rather than being refused', () => {
+	it('answers from the old state, and the generation it left keeps folding its own stream', async () => {
+		const db = oneDatabase();
+		const path = await aProcessorPath();
+		// the first deployment indexes from START_BLOCK, so it counts BOTH transfers
+		const first = await aRunOver(db, path, fakeChain().serve(LOGS, TIP), {
+			INDEXING_SOURCE: JSON.stringify(SOURCE),
+		});
+		await waitFor(
+			'the first deployment folded to the tip',
+			async () => (await positionOf(first, (await canonicalOf(first))!)) === TIP,
+		);
+		const old = (await canonicalOf(first)) as string;
+		await stop();
+
+		// THE FILTER CHANGE: the same code, a later start block, so a NEW STREAM that sees
+		// only the second transfer. Nothing in this process can fetch the old one.
+		const chain = fakeChain().serve(LOGS, TIP);
+		const later = {...SOURCE, contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK + 15}]};
+		const indexer = await aRunOver(db, path, chain, {INDEXING_SOURCE: JSON.stringify(later)});
+		const filtered = (await listingOf(indexer)).generations.map((entry) => entry.digest).find((one) => one !== old);
+		expect(filtered, 'the filter change registered no new generation').toBeDefined();
+		expect((await identityOf(indexer, filtered as string)).stream).not.toBe((await identityOf(indexer, old)).stream);
+		await waitFor('the filtered generation was promoted', async () => (await canonicalOf(indexer)) === filtered);
+		const store = await canonicalStoreIn(db, nftProcessor.entities, {indexer: INDEXER});
+		expect((await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value).toBe(1);
+
+		const reverted = await pointAt(indexer, old);
+
+		// NOT refused: the code is fine, its stream is simply not one this deployment fetches
+		expect(reverted.status, JSON.stringify(reverted.body)).toBe(200);
+		expect(await canonicalOf(indexer)).toBe(old);
+		// the OLD state answers, which counted both transfers
+		const answering = await canonicalStoreIn(db, nftProcessor.entities, {indexer: INDEXER});
+		expect((await answering.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value).toBe(2);
+		// nothing folds it here, and the generation it left still folds the stream this
+		// deployment fetches
+		expect(foldedHere(indexer)).toEqual([(await identityOf(indexer, filtered as string)).processor]);
+
+		chain.serve(LATER, LATER_TIP);
+		await waitFor('the generation left behind advanced on its own stream', async () => {
+			const now = await positionOf(indexer, filtered as string);
+			return now !== undefined && now > TIP;
+		});
+		// FROZEN: the reverted-to generation stands where it stood, and answers from there
+		expect(await positionOf(indexer, old)).toBe(TIP);
+		expect(await canonicalOf(indexer)).toBe(old);
+		expect(await ownerAnswered(db)).toBe(BOB.toLowerCase());
 	});
 });

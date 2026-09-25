@@ -1,6 +1,8 @@
 # A browser tab holds no PREDECESSOR, because it can never run one
 
 > **AMENDED 2026-09-22 (ADR-0090): the two limits this ADR records under "What it wins" were LIFTED the same week, and the amendment at the end says which.** The decision here is unchanged and still stands: a pointer move on the chain-facing container assigns no `predecessor`. What no longer holds is the narrowness of what that bought, because a promotion on that runtime now discards what it superseded and hands over its stream.
+>
+> **AMENDED 2026-09-25 (ADR-0092): the Node problem this ADR calls "real and unaddressed" is addressed**; see the second amendment at the end.
 
 `predecessor` is the slot a revert moves back to (ADR-0084), and it is retained so that moving the canonical pointer back is a revert rather than a re-index. On a server that is worth what it costs. **In a browser it is worth nothing, because the code that fold needs is not in the build, and the tab cannot go and get it.** We decide that a pointer move on the CHAIN-FACING container assigns no `predecessor`: the superseded generation is not named by a slot, and is collectable like any other unslotted generation. The slot itself stays in the vocabulary and stays live on the receiving runtime.
 
@@ -76,3 +78,7 @@ So **"the seat it frees is the CROSS-STREAM one" is now too narrow** -- every pr
 The observation that carried the measurement was DISCHARGED into ADR-0090 and the tests, per the work contract's rule that a note leaves once a self-contained artifact carries its signal.
 
 **Appended 2026-09-22: half of that gap is now closed, and it is the RELOAD half.** ADR-0090's point 3 is built (`a-generation-this-tab-holds-no-fold-for-is-collected-when-room-is-needed`): on this runtime a generation NO FOLD EXISTS FOR, that no slot names and that is not canonical, is COLLECTED by an arriving registration. So "nothing collects such a generation here at all" is true only while this process still HOLDS its fold, which is the session that made it; after a page reload the survivor goes on the next save, and the wall that no reload could clear is gone. Nothing above is retro-fitted, because it described the code when it was written and the rest of it still does: the SAME-STREAM in-session refusal stands unchanged (that generation is held and is the stream's FETCHER, so the drop is still declined), and what frees that seat is the fetch-duty HAND-OVER of ADR-0090's points 1 and 2, which is not built yet. ADR-0088's rule is still not reverted; it is EXTENDED, to the second site that asks who fetches a stream (its amendment of the same date).
+
+## Amendment, 2026-09-25 (ADR-0092): the Node revert now folds
+
+"`a-generation-retains-the-code-that-folds-it` ... is re-scoped to the server, where the problem it names is real and unaddressed" was true when written. `a-revert-resumes-folding` addresses it: on a Node deployment a pointer move onto a same-stream generation the process holds no fold for instantiates that generation from the bundle stored on its registry row, and it folds. A revert across a filter change is still a freeze, since nothing fetches the old stream. Nothing about the browser decision above changes.
