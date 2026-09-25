@@ -291,8 +291,10 @@ async function settle(chain: {logRanges: {from: number; to: number}[]}): Promise
  *
  * The bundle at the path is REWRITTEN in between where `changed` is set, which is
  * a redeploy with an upgraded processor: the bytes moved and the identity with
- * them (ADR-0086), so the restarted process holds exactly one fold -- the
- * successor -- and none for the incumbent whose code is not in this build.
+ * them (ADR-0086), so the restarted process is BUILT with the successor alone:
+ * the incumbent's code is not in this build, and is held only because the
+ * canonical generation is instantiated at open from the bundle on its registry
+ * row (ADR-0092).
  */
 async function aRestart(options: {changed: boolean; promotion?: string}) {
 	const db = oneDatabase();
@@ -382,11 +384,16 @@ describe('a deployment restarted with a CHANGED processor', () => {
 		expect(after?.startBlock).toBe(claimed?.startBlock);
 	});
 
-	it('leaves the UNHELD incumbent answering reads, which is a pointer to a namespace and not an engine', async () => {
+	it('leaves the incumbent answering reads from its namespace, and now FOLDING from its stored bundle', async () => {
 		// ADR-0053: a read resolves the canonical pointer to a TABLE NAMESPACE, never to
-		// an engine. The restarted process holds NO fold for the incumbent -- the
-		// previous processor's code is not in this build -- and nothing in this family
-		// makes that generation less readable.
+		// an engine, and nothing in this family makes that generation less readable.
+		//
+		// CHANGED 2026-09-25 (ADR-0092, `an-upgrading-restart-keeps-the-incumbent-folding`):
+		// this case used to assert the restarted process held NO fold for the incumbent,
+		// because the previous processor's code was not in this build. It still is not in
+		// the build, but it is on the incumbent's registry row, and the canonical
+		// generation is instantiated from it at open -- so the incumbent is held, and
+		// its answers ADVANCE through the upgrade instead of freezing.
 		//
 		// `manual` promotion, so that WHICH generation the pointer names is decided by
 		// the operator rather than by how fast the successor caught up: the subject here
@@ -394,39 +401,42 @@ describe('a deployment restarted with a CHANGED processor', () => {
 		// being canonical mid-assertion.
 		const {db, indexer, incumbent} = await aRestart({changed: true, promotion: 'manual'});
 
-		// it is still the generation that answers reads, and this process holds no fold
-		// for it: the container holds one fold, the successor
+		// it is still the generation that answers reads, and this process folds it beside
+		// the successor
 		expect(await canonicalOf(indexer)).toBe(incumbent);
-		expect(heldBy(indexer)).not.toContain(incumbent);
-
-		// ...and it answers, from the state it folded before the restart
-		expect(await ownerOf(db, incumbent, 1n)).toBe(BOB.toLowerCase());
+		expect(heldBy(indexer)).toContain(incumbent);
 		const feed = (await (await fetch(`${indexer.url}/${INDEXER}/feed`)).json()) as {generation: string};
 		expect(feed.generation).toBe(incumbent);
 
-		// ...and the deployment went on APPENDING all the while, which is the thing that
-		// would make an unheld generation's stream stop growing if any of this rested on
-		// a fold being present
+		// ...and the deployment went on APPENDING all the while
 		await until(
 			async () => emissions(db),
 			(rows) => rows.length === HISTORY.length + AFTER_THE_RESTART.length,
-			'the stream of an UNHELD canonical generation to go on growing',
+			'the stream of the canonical generation to go on growing',
+		);
+
+		// ...and the incumbent FOLDED what was appended, with its own handler: it credits
+		// the recipient, so CAROL owns token 1. Frozen, it would still answer BOB.
+		await until(
+			async () => ownerOf(db, incumbent, 1n),
+			(owner) => owner === CAROL.toLowerCase(),
+			'the incumbent to fold the transfer appended after the restart',
 		);
 	});
 
-	it('reports one `/status` entry per generation HELD, which is the successor alone', async () => {
+	it('reports one `/status` entry per generation HELD, which is the successor AND the incumbent', async () => {
 		// The other half of the same fact, and the one an operator actually looks at:
-		// `/status` answers per fold this process HOLDS, so a restarted deployment reports
-		// ONE entry while the registry holds two generations. Unchanged by this family,
-		// asserted because the criterion names it.
+		// `/status` answers per fold this process HOLDS. CHANGED 2026-09-25 (ADR-0092):
+		// that used to be the successor alone; the canonical generation is now
+		// instantiated at open from its stored bundle, so both are held and reported.
 		const {indexer, incumbent} = await aRestart({changed: true, promotion: 'manual'});
 
 		const status = (await (await fetch(`${indexer.url}/status`)).json()) as {
 			cursor?: {generations?: {generation: string}[]};
 		};
 		expect(status.cursor?.generations?.map((entry) => entry.generation)).toEqual(heldBy(indexer));
-		expect(status.cursor?.generations?.length).toBe(1);
-		expect(status.cursor?.generations?.[0]?.generation).not.toBe(incumbent);
+		expect(status.cursor?.generations?.length).toBe(2);
+		expect(status.cursor?.generations?.map((entry) => entry.generation)).toContain(incumbent);
 	});
 });
 

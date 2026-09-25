@@ -352,9 +352,13 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 * namespacing convention, so a resumed generation folds into the very tables it
 	 * answered reads from.
 	 *
-	 * CALLED AT A POINTER MOVE and nowhere else: a generation is instantiated when it
-	 * has to FOLD, and the generation a revert lands on has to fold from that moment.
-	 * Nothing is instantiated at `open`.
+	 * CALLED WHEN A GENERATION HAS TO FOLD and this process holds no fold for it, which
+	 * is two moments and one act. At a POINTER MOVE, because the generation a revert
+	 * lands on has to fold from that moment. And at `open`, for the CANONICAL
+	 * generation ALONE, because it answers every read from the moment the process
+	 * starts: a restart with a changed processor would otherwise serve the incumbent
+	 * frozen for the whole of the successor's catch-up. No other stored generation is
+	 * instantiated at `open`: a `predecessor` nobody reads needs no engine.
 	 *
 	 * The `identity` it returns is CHECKED against the record it was asked for: the
 	 * host derives it from the bytes (ADR-0086), so a mismatch is stored code that does
@@ -747,6 +751,22 @@ export class ReceivingIndexer<
 	 */
 	private readonly advancing = new WeakMap<HeldFold<ABI, ProcessResultType, unknown>, Promise<unknown>>();
 
+	/**
+	 * THE FOLDS THIS PROCESS INSTANTIATED FROM STORED BYTES (ADR-0092), as opposed to
+	 * the ones it was HANDED (`add`: the fold it was built with, or a reconfigure).
+	 *
+	 * Such a fold exists only because its generation HAD TO FOLD -- it was canonical at
+	 * `open`, or a revert moved the pointer onto it -- so it is held for as long as the
+	 * pointer names it and no longer. A revert already stops folding what it leaves;
+	 * this is what lets a PROMOTION do the same for these folds, so an upgrading restart
+	 * does not end with an engine for the incumbent nobody reads any more. A fold that
+	 * was handed to this container keeps the retention it always had.
+	 *
+	 * In memory, rightly: which OBJECT this process built from bytes is a fact about
+	 * this process, like `canonicalFold`, and nothing durable is inferred from it.
+	 */
+	private readonly instantiatedHere = new WeakSet<HeldFold<ABI, ProcessResultType, unknown>>();
+
 	private readonly options: ReceivingIndexerOptions<ABI, ProcessResultType, State>;
 
 	/** The promotion policy this indexer runs under, with nothing left to decide. */
@@ -811,10 +831,14 @@ export class ReceivingIndexer<
 	 * `rebuildMore` before a chunk is replayed) as well as every move this process
 	 * makes itself.
 	 *
-	 * `undefined` is a real answer and the common one on a redeployed host: the
-	 * canonical generation needs no engine here (see the module JSDoc, rule 1), so a
-	 * process holding only a successor holds no canonical fold and publishes nothing
-	 * until the pointer moves onto one it does hold.
+	 * `undefined` is a real answer: the canonical generation needs no engine here
+	 * (see the module JSDoc, rule 1), so a process holding only a successor holds no
+	 * canonical fold and publishes nothing until the pointer moves onto one it does
+	 * hold. It is no longer the common one on a redeployed host where the host injects
+	 * `instantiateGeneration`, because the canonical generation is then instantiated at
+	 * `open` from its stored bundle (ADR-0092); it remains the answer for a host with
+	 * no such seam, a canonical generation on a stream this deployment does not fetch,
+	 * and one whose stored code could not be built.
 	 *
 	 * What it COSTS is stated rather than discovered: a pointer moved by ANOTHER
 	 * process is not seen until the next read, so this container can briefly publish
@@ -851,6 +875,74 @@ export class ReceivingIndexer<
 	 */
 	async open(): Promise<void> {
 		await this.add(this.options.generation);
+		await this.foldTheCanonicalGeneration();
+	}
+
+	/**
+	 * THE CANONICAL GENERATION FOLDS FROM `open`, whatever this process was built with
+	 * (ADR-0092).
+	 *
+	 * A restart with a changed processor holds a fold for the NEW one only, and the
+	 * canonical generation is the one every read is answered from, so without this its
+	 * answers froze for the whole time the successor took to catch up. So where the
+	 * pointer names a generation this process holds no fold for, it is instantiated
+	 * from the bundle stored on its row -- through the SAME `instantiate` a revert
+	 * uses, so there is one way stored bytes become a fold -- and folds until the
+	 * pointer leaves it (`movePointer`).
+	 *
+	 * EXACTLY ONE generation, and only the canonical one. ADR-0092 rules out
+	 * instantiating every stored generation at open (live engines for generations
+	 * nobody reads), and this is its "when it has to fold" applied at the one moment
+	 * the canonical generation starts having to.
+	 *
+	 * AFTER `add`, and that order is load-bearing. The policy has already spoken about
+	 * the configured fold by then, so under `immediate` (or an `on-catch-up` successor
+	 * that caught up in a previous process) the pointer has ALREADY left the incumbent
+	 * and nothing is instantiated for a generation nobody reads any more. It also keeps
+	 * `opening` the configured fold. Nothing here assumes the configured fold is the
+	 * successor: whatever the pointer names, and this process does not fold, is what is
+	 * instantiated.
+	 *
+	 * A generation whose stored code cannot be built does NOT stop the deployment
+	 * starting: it is logged as an error and the canonical generation answers reads
+	 * frozen, which is exactly what a restart did before retained code existed, while
+	 * the configured fold goes on catching up and can still be promoted. Refusing to
+	 * start would turn a broken predecessor bundle into an outage of the new build too.
+	 * A generation on a stream this deployment does not fetch (a filter change) is not
+	 * broken code and is not folded either, for `instantiate`'s reason.
+	 */
+	private async foldTheCanonicalGeneration(): Promise<void> {
+		const instantiateGeneration = this.options.instantiateGeneration;
+		if (!instantiateGeneration) return;
+		const canonical = this.noteCanonical(await this.registry.canonical());
+		if (!canonical || this.canonicalFold) return;
+		let resumed: ResumedFold<ABI, ProcessResultType>;
+		try {
+			resumed = await this.instantiate(canonical, instantiateGeneration);
+		} catch (err) {
+			if (!(err instanceof GenerationInstantiationError)) throw err;
+			namedLogger.error(
+				`the canonical generation {stream: ${canonical.stream}, processor: ${canonical.processor}} could not be ` +
+					`instantiated at open, so it answers reads from its own state and does NOT advance until the pointer ` +
+					`leaves it (ADR-0092): ${err.why}`,
+				err,
+			);
+			return;
+		}
+		if (!resumed.fold) {
+			namedLogger.error(
+				`the canonical generation {stream: ${canonical.stream}, processor: ${canonical.processor}} is not folded ` +
+					`by this process: it answers reads from its own state and does not advance. ${resumed.frozen} (ADR-0092).`,
+			);
+			return;
+		}
+		this.hold(resumed.fold, resumed.source, resumed.provided);
+		this.noteCanonical(canonical);
+		namedLogger.info(
+			`the canonical generation {stream: ${canonical.stream}, processor: ${canonical.processor}} was INSTANTIATED ` +
+				`at open from the bundle stored for it (ADR-0092): this process was not built with its code, and it goes ` +
+				`on folding, so the reads it answers keep advancing until the pointer leaves it.`,
+		);
 	}
 
 	/**
@@ -1344,7 +1436,13 @@ export class ReceivingIndexer<
 				{cause: err},
 			);
 		}
-		return {fold: this.foldOf(record, state, processor, source, streamConfig, replay), source, provided};
+		const fold = this.foldOf(record, state, processor, source, streamConfig, replay) as HeldFold<
+			ABI,
+			ProcessResultType,
+			unknown
+		>;
+		this.instantiatedHere.add(fold);
+		return {fold, source, provided};
 	}
 
 	/**
@@ -1408,7 +1506,12 @@ export class ReceivingIndexer<
 		for (const fold of [...this.folds]) {
 			if (fold.streamDigest !== delta.stream) continue;
 			try {
-				await this.advance(fold, () => fold.rebuild.follow(delta));
+				// STILL HELD by the time its turn comes: a pointer move serialised on this fold
+				// (`settlePromotion`) may have stopped driving it while this delta waited, and a
+				// fold nothing drives any more must not take one more block.
+				await this.advance(fold, async () => {
+					if (this.folds.includes(fold)) await fold.rebuild.follow(delta);
+				});
 			} catch (err) {
 				namedLogger.error(
 					`the fold {stream: ${fold.record.stream}, processor: ${fold.record.processor}} could not take the ` +
@@ -1637,6 +1740,25 @@ export class ReceivingIndexer<
 		const successor = slots.successor;
 		if (!current || !successor) return;
 
+		// THE INCUMBENT MAY BE MOVING (ADR-0092): where this process folds the canonical
+		// generation -- the one it opened with, or one instantiated at `open` so that an
+		// upgrade window is not a window of stale answers -- a delta can land on it between
+		// its cursor being read and the pointer leaving it. So the comparison AND the move
+		// run on that fold's own advance chain: nothing folds into the incumbent from the
+		// read to the move, the successor is promoted only at or past where the incumbent
+		// finally stood, and a reader's answers never step backwards across the promotion.
+		// With no held incumbent (nothing here folds it) the cursor cannot move under this
+		// process, and the read is as it was.
+		const incumbent = this.folds.find((fold) => sameGeneration(fold.record, current));
+		if (incumbent) {
+			await this.advance(incumbent, () => this.promoteIfLevel(current, successor));
+		} else {
+			await this.promoteIfLevel(current, successor);
+		}
+	}
+
+	/** The comparison half of the trigger, both cursors read live, and the move if it holds. */
+	private async promoteIfLevel(current: GenerationRecord, successor: GenerationRecord): Promise<void> {
 		const cursors = new Map<GenerationRecord, number | undefined>([
 			[current, await this.cursorOf(current)],
 			[successor, await this.cursorOf(successor)],
@@ -1829,6 +1951,19 @@ export class ReceivingIndexer<
 		// back.
 		if (this.promotionConfig.dropOnPromotion && superseded && wasPromotion) {
 			await this.dropSuperseded(superseded, record);
+		} else if (superseded && this.canonicalFold && this.instantiatedHere.has(superseded)) {
+			// A FOLD THIS PROCESS BUILT FROM STORED BYTES IS HELD WHILE THE POINTER NAMES IT,
+			// and a promotion is the pointer leaving it: the incumbent an upgrading restart
+			// kept folding through the catch-up stops being folded here (ADR-0092). It is
+			// RETAINED -- registered, with its state and its bundle, and named by
+			// `predecessor` -- so a revert is still one write, and instantiates it again.
+			this.stopDriving(supersededRecord);
+			namedLogger.info(
+				`the generation {stream: ${supersededRecord.stream}, processor: ${supersededRecord.processor}} was ` +
+					`instantiated here from its stored bundle only because it answered reads, so this process no longer ` +
+					`folds it now that the pointer has left it. It is kept, with its state and its bundle, and a move back ` +
+					`onto it instantiates it again.`,
+			);
 		}
 		return record;
 	}
