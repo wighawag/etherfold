@@ -55,6 +55,8 @@ type Call = {op: string; detail?: unknown};
  */
 function memoryPort() {
 	const generations = new Map<string, GenerationRecord>();
+	/** The bundle each record was registered with (ADR-0092), removed by the same `remove`. */
+	const bundles = new Map<string, Uint8Array>();
 	const slots = new Map<SlotName, GenerationId>();
 	const streams = new Set<string>();
 	const states = new Set<string>();
@@ -89,9 +91,11 @@ function memoryPort() {
 			if (!write) return;
 			for (const id of write.remove ?? []) {
 				generations.delete(keyOf(id));
+				bundles.delete(keyOf(id));
 			}
 			if (write.put) {
 				generations.set(keyOf(write.put), write.put);
+				if (write.bundle) bundles.set(keyOf(write.put), write.bundle);
 			}
 			// RECORDED first and forgotten after, so a commit that does both ends with the
 			// stream gone: an ASKED-FOR deletion wins over a registration in one write.
@@ -127,6 +131,10 @@ function memoryPort() {
 		async readStateCursor(id) {
 			calls.push({op: 'readStateCursor', detail: id});
 			return positions.get(keyOf(id));
+		},
+		async readBundle(id) {
+			calls.push({op: 'readBundle', detail: id});
+			return bundles.get(keyOf(id));
 		},
 	};
 

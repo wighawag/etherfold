@@ -9,7 +9,7 @@ import {describe, expect, it} from 'vitest';
 import {canonicalGenerationIn, prepareIndexing, type IndexingDependencies} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {entityModule, fakeChain, START_BLOCK, transfer, ALICE, ZERO} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleBytes, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN INJECTED ARRIVAL SUPPLIES ITS OWN IDENTITY, WHICH IS WHAT KEEPS THIS PACKAGE'S
@@ -23,12 +23,17 @@ import {identityOf} from './utils/processorIdentity.js';
 // fell through to the author-DECLARED identity, which is now deleted -- an
 // injected arrival that names itself nothing is REFUSED.
 //
-// `deps.processorIdentity` is the other half of that one seam: a suite that
-// injects an arrival names it too, exactly as a real arrival does when it reads
-// bytes off a disk. This file is the guard on it, and it exists because the
-// failure it prevents was SILENT while a declared identity still existed to fall
-// back on: a value that stopped reaching the registry left a dozen suites in this
-// package quietly naming their folds the author's way and still passing.
+// `deps.processorBundle` is the other half of that one seam: a suite that
+// injects an arrival states the BYTES it stands for, and those are then named by
+// their hash and STORED with the registration exactly as a real arrival's are
+// when it reads them off a disk (ADR-0086, ADR-0092). It used to be
+// `deps.processorIdentity`, a bare name; a name with no bytes behind it is the one
+// registration a Node deployment must not be able to make, because it keeps no
+// code it could ever run again. This file is the guard on the seam, and it exists
+// because the failure it prevents was SILENT while a declared identity still
+// existed to fall back on: a value that stopped reaching the registry left a dozen
+// suites in this package quietly naming their folds the author's way and still
+// passing.
 //
 // What it is NOT is a way to DECLARE an identity. It is not a flag, it is not an
 // environment variable and no configuration reaches it; and where the path names
@@ -68,6 +73,13 @@ async function aDeploymentFolding(processor: string, extra: IndexingDependencies
 	return db;
 }
 
+/** THE CODE the canonical generation's row keeps (ADR-0092), read straight off the row. */
+async function storedBundleIn(db: RemoteSQL): Promise<Uint8Array | undefined> {
+	const rows = await db.prepare(`SELECT bundle FROM _generations`).all<{bundle: ArrayBuffer | null}>();
+	const bundle = rows.results[0]?.bundle;
+	return bundle ? new Uint8Array(bundle) : undefined;
+}
+
 /** WHICH GENERATION ANSWERS READS here, read through the durable pointer (ADR-0053). */
 async function registeredIdentityIn(db: RemoteSQL): Promise<string> {
 	const canonical = await canonicalGenerationIn(db);
@@ -76,12 +88,12 @@ async function registeredIdentityIn(db: RemoteSQL): Promise<string> {
 }
 
 describe('a deployment whose arrival was INJECTED', () => {
-	it('registers the identity that arrival supplied', async () => {
+	it('registers the identity of the bytes that arrival supplied, and KEEPS those bytes', async () => {
 		const identity = identityOf('an-injected-arrival');
 
 		const db = await aDeploymentFolding('./nfts.js', {
 			importModule: async () => entityModule,
-			processorIdentity: identity,
+			processorBundle: bundleBytes('an-injected-arrival'),
 		});
 
 		// EXACTLY that value, which is also what says it did not fall through: the
@@ -90,6 +102,8 @@ describe('a deployment whose arrival was INJECTED', () => {
 		// hash to compare against, so that this file goes on passing when the contract
 		// task deletes the function that computes one.
 		expect(await registeredIdentityIn(db)).toBe(identity);
+		// ...and the registration kept the code, as it does for a bundle read off disk
+		expect(await storedBundleIn(db)).toEqual(bundleBytes('an-injected-arrival'));
 	});
 
 	it('names two folds by their arrivals, where nothing about the processor differs at all', async () => {
@@ -97,11 +111,11 @@ describe('a deployment whose arrival was INJECTED', () => {
 		// from the arrival rather than from anything the author wrote
 		const first = await aDeploymentFolding('./nfts.js', {
 			importModule: async () => entityModule,
-			processorIdentity: identityOf('the-incumbent-fold'),
+			processorBundle: bundleBytes('the-incumbent-fold'),
 		});
 		const second = await aDeploymentFolding('./nfts.js', {
 			importModule: async () => entityModule,
-			processorIdentity: identityOf('the-successor-fold'),
+			processorBundle: bundleBytes('the-successor-fold'),
 		});
 
 		expect(await registeredIdentityIn(first)).not.toBe(await registeredIdentityIn(second));
@@ -109,9 +123,10 @@ describe('a deployment whose arrival was INJECTED', () => {
 });
 
 describe('BYTES on a disk still win, so an injected value can never overrule a derivation', () => {
-	it('names a real bundle by its hash, whatever the injected identity says', async () => {
-		const db = await aDeploymentFolding(BUNDLE, {processorIdentity: identityOf('not-what-is-on-disk')});
+	it('names a real bundle by its hash, and keeps THOSE bytes, whatever the injected bytes say', async () => {
+		const db = await aDeploymentFolding(BUNDLE, {processorBundle: bundleBytes('not-what-is-on-disk')});
 
 		expect(await registeredIdentityIn(db)).toBe(processorArtifactIdentity(readFileSync(BUNDLE)));
+		expect(await storedBundleIn(db)).toEqual(new Uint8Array(readFileSync(BUNDLE)));
 	});
 });

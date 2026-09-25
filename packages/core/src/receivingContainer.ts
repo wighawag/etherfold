@@ -26,6 +26,7 @@ import {
 	type GenerationRegistry,
 	type GenerationRegistryPort,
 	type SlottedGenerations,
+	UnknownGenerationError,
 } from './generation/registry.js';
 import {resolveStreamConfig} from './internal/engine/utils.js';
 import {requireProcessorIdentity} from './internal/processorIdentity.js';
@@ -64,8 +65,8 @@ const namedLogger = logs('@etherfold/core');
  *
  * Generation identity, stream identity, the caps and their refusal, the
  * registration-resolves rule and the first-generation-is-canonical rule are all
- * `openGenerationRegistry`'s, and `resolveGeneration` is three lines over it
- * rather than a second copy of any of them. The two factories are `GenerationSpec`'s,
+ * `openGenerationRegistry`'s, and `resolveGeneration` is a lookup over it rather
+ * than a second copy of any of them. The two factories are `GenerationSpec`'s,
  * reached through a `Pick` (`ReceivedGenerationSpec`) so that this container
  * inherits the ORDER and the keying rule instead of restating them.
  *
@@ -206,6 +207,24 @@ export type ReceivedGenerationSpec<ABI extends Abi, ProcessResultType = unknown,
 > & {
 	/** The stream CONFIG this fold runs, when it is not the container's own. Hashed into both identities. */
 	stream?: ProvidedStreamConfig;
+	/**
+	 * THE BUNDLE THAT FOLDS THIS GENERATION: the exact octets whose hash is
+	 * `processorIdentity` (ADR-0086), which the registration STORES beside the
+	 * generation's state and deletes with it (ADR-0092).
+	 *
+	 * REQUIRED, because this container is what a Node deployment folds through, and on
+	 * that runtime holding a generation means holding something runnable rather than
+	 * something readable. A spec without one is REFUSED at `add` before anything is
+	 * built: an optional field would make two classes of generation, resumable and
+	 * frozen, differing invisibly until the day a revert needs the difference -- which
+	 * is the "optional bundling" ADR-0092 rejects, and ADR-0086's deleted `version`
+	 * growing back as a registration nothing names by its bytes.
+	 *
+	 * The container does not re-hash it: core cannot, since the derivation is the
+	 * ARRIVAL's (`processorArtifactIdentity`, `@etherfold/utils`), and a host hands
+	 * over the identity and the bytes that one arrival produced together.
+	 */
+	bundle: Uint8Array;
 };
 
 /**
@@ -397,6 +416,29 @@ function refuseContainerThatCannotFetch(missing: string): never {
 			`claim, and every generation merely reads it -- so without both \`appendEmissions\` (where the stream is ` +
 			`stored) and \`streamCursor\` (where it reaches) nothing would ever fetch a block, while the folds went on ` +
 			`looking healthy. Supply both, over the database this host owns.`,
+	);
+}
+
+/**
+ * A fold handed over WITHOUT the code that folds it, refused (ADR-0092).
+ *
+ * On this runtime a registered generation must be one the deployment can run
+ * again: that is what lets a revert resume folding instead of freezing at a known
+ * good point. So the bytes are required on the spec, and a caller that has none --
+ * a module resolved through the module system, a substituted arrival that stated a
+ * name instead of bytes -- is told so before any state is opened or anything is
+ * registered.
+ */
+function requireBundle(bundle: Uint8Array | undefined): Uint8Array {
+	if (bundle instanceof Uint8Array && bundle.length > 0) {
+		return bundle;
+	}
+	throw new Error(
+		`a generation on this container must be handed the BUNDLE that folds it, and this one supplied ` +
+			`${bundle instanceof Uint8Array ? 'an empty one' : JSON.stringify(bundle)}. A Node deployment stores each ` +
+			`generation's code beside its state (ADR-0092), so that holding a generation means holding something it can ` +
+			`run again -- and a generation registered with no bytes would be one a revert could move the pointer to and ` +
+			`never advance. Hand over the octets whose hash is the processor identity.`,
 	);
 }
 
@@ -1006,6 +1048,9 @@ export class ReceivingIndexer<
 	 * exactly as a fresh one does.
 	 */
 	async add<S>(spec: ReceivedGenerationSpec<ABI, ProcessResultType, S>): Promise<HeldFold<ABI, ProcessResultType, S>> {
+		// THE CODE FIRST, before any state is opened: a fold with no bundle is one this
+		// runtime could never resume, and refusing it here leaves nothing behind at all.
+		const bundle = requireBundle(spec.bundle);
 		const source = spec.source ?? this.options.source;
 		const provided = spec.stream ?? this.options.stream;
 		// The RESOLVED config, exactly as the writer and the rebuild resolve it, so the
@@ -1052,7 +1097,11 @@ export class ReceivingIndexer<
 		// `canonical` instead, and a generation some slot ALREADY names stays where it is
 		// -- so a restart on the canonical processor stays canonical, and one on the
 		// generation a revert returned to is not re-armed by the act of starting up.
-		const record = await this.registry.create(wanted, {slot: 'successor'});
+		//
+		// ...and WITH ITS BUNDLE, in the same commit as the record (ADR-0092). This is the
+		// ONE place this container registers a generation, so it is the one place its code
+		// is stored, however the bytes reached the host.
+		const record = await this.registry.create(wanted, {slot: 'successor', bundle});
 		noteSuccessor(canonicalBefore, record);
 		this.records.set(keyOf(record), record);
 		// WHETHER THIS FOLD IS THE ONE THE POINTER NAMES, derived rather than re-read:
@@ -1951,16 +2000,27 @@ export class ReceivingIndexer<
 		});
 	}
 
+	/**
+	 * RESOLVE a generation this indexer has REGISTERED, and refuse one it has not.
+	 *
+	 * It used to resolve OR CREATE, which made it a second registration route beside
+	 * `add` -- one that carried no bundle, so it could register a generation on a Node
+	 * deployment with no code stored for it (ADR-0092), which is precisely the class of
+	 * frozen generation retention exists to make unexpressible. On this container a
+	 * generation is registered by `add` and by nothing else, because `add` is what holds
+	 * the bytes; this answers for what `add` (or an earlier process) already registered.
+	 */
 	async resolveGeneration(id: GenerationId): Promise<GenerationRecord> {
 		const key = keyOf(id);
 		const known = this.records.get(key);
 		if (known) {
 			return known;
 		}
-		const canonicalBefore = await this.registry.canonical();
-		const record = await this.registry.create(id);
+		const record = (await this.registry.list()).find((candidate) => sameGeneration(candidate, id));
+		if (!record) {
+			throw new UnknownGenerationError({stream: id.stream, processor: id.processor});
+		}
 		this.records.set(key, record);
-		noteSuccessor(canonicalBefore, record);
 		return record;
 	}
 }

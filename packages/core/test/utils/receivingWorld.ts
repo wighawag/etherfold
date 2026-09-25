@@ -18,7 +18,7 @@ import type {
 } from '../../src/types.js';
 import {taggedBnReplacer, taggedBnReviver} from '../../src/utils/bigint.js';
 import {appliedBlocksOf, forkPointOf} from './stateMovedWorld.js';
-import {identityOf} from './processorIdentity.js';
+import {arrivalOf, identityOf} from './processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE WORLD A RECEIVING CONTAINER RUNS IN: a stored stream, a registry substrate,
@@ -344,7 +344,9 @@ export function world() {
 			createState: (context: {stream: string}) =>
 				storeFor(generationDigestOf({stream: context.stream, processor: identityOf(marker)})),
 			createProcessor: (state: MemoryStore) => foldingProcessor(marker, state, weight),
-			processorIdentity: identityOf(marker),
+			// the identity AND the bytes it names, as a Node deployment's arrival hands them
+			// over: registering stores the bundle beside the generation (ADR-0092)
+			...arrivalOf(marker),
 		};
 	}
 

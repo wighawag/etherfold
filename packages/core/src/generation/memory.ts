@@ -53,7 +53,15 @@ export function createMemoryGenerationRegistryPort(options?: {
 	 */
 	readStateCursor?: (id: GenerationId) => Promise<number | undefined>;
 }): GenerationRegistryPort {
-	const generations = new Map<string, GenerationRecord>();
+	/**
+	 * THE RECORDS, each with the BUNDLE it was registered with (ADR-0092).
+	 *
+	 * ONE entry per generation holding both, rather than a second map beside this one,
+	 * so a `remove` that deletes the record cannot leave the bytes behind: there is no
+	 * second place for anybody to forget. It is the same shape the SQL substrate gives
+	 * the bytes, a column on the record's own row.
+	 */
+	const generations = new Map<string, {record: GenerationRecord; bundle?: Uint8Array}>();
 	/**
 	 * THE STREAM RECORDS: every stream this indexer holds, folded or not (ADR-0087).
 	 *
@@ -72,7 +80,7 @@ export function createMemoryGenerationRegistryPort(options?: {
 	// IDENTITY stays two fields, per the registry.
 	const keyOf = (id: GenerationId) => `${id.stream}\u0000${id.processor}`;
 	const snapshot = (): GenerationRegistryState => ({
-		generations: [...generations.values()],
+		generations: [...generations.values()].map((entry) => entry.record),
 		slots: Object.fromEntries([...slots].map(([name, id]) => [name, {stream: id.stream, processor: id.processor}])),
 		keptStreams: [...streams],
 	});
@@ -91,7 +99,12 @@ export function createMemoryGenerationRegistryPort(options?: {
 				generations.delete(keyOf(id));
 			}
 			if (write.put) {
-				generations.set(keyOf(write.put), write.put);
+				// COPIED, so a caller that goes on to reuse its buffer cannot change the code a
+				// generation was registered with
+				generations.set(keyOf(write.put), {
+					record: write.put,
+					...(write.bundle ? {bundle: new Uint8Array(write.bundle)} : {}),
+				});
 			}
 			// RECORDED before anything is forgotten, and forgotten last, so one commit that
 			// did both ends with the stream gone: an ASKED-FOR deletion wins over the
@@ -130,6 +143,11 @@ export function createMemoryGenerationRegistryPort(options?: {
 
 		async readStateCursor(id) {
 			return options?.readStateCursor?.(id);
+		},
+
+		async readBundle(id) {
+			const bundle = generations.get(keyOf(id))?.bundle;
+			return bundle ? new Uint8Array(bundle) : undefined;
 		},
 	};
 }

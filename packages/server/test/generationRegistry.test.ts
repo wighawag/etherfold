@@ -20,6 +20,7 @@ import {
 	openGenerationRegistryOnSQL,
 	readStreamCoverage,
 } from '../src/index.js';
+import {bundleBytes, identityOf, identityOfBytes} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------
 // THE GENERATION REGISTRY, WHERE IT BECOMES ROWS
@@ -401,6 +402,88 @@ describe('reaping a stream takes its COVERAGE CLAIM with its rows', () => {
 // itself -- which resolves a stream by hashing the source it is asked about --
 // cannot be driven from this file.
 
+/** How many rows under this name carry a bundle, read straight off the table. */
+const bundleCount = async (db: RemoteSQL, indexer = INDEXER) =>
+	Number(
+		(
+			await rowsOf<{bundles: number}>(
+				db,
+				`SELECT COUNT(bundle) AS bundles FROM ${GENERATION_TABLE} WHERE indexer = ?1`,
+				indexer,
+			)
+		)[0]?.bundles ?? 0,
+	);
+
+describe('a generation KEEPS its bundle on its own row (ADR-0092)', () => {
+	it('stores the bytes with the record, readable back through the port', async () => {
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		const id = idOf(STREAM_A, identityOf('v1'));
+
+		await registry.create(id, {bundle: bundleBytes('v1')});
+
+		const stored = await generationRegistryPortOnSQL(db, INDEXER).readBundle(id);
+		expect(stored).toEqual(bundleBytes('v1'));
+		// the EXACT bytes the identity is the hash of, re-hashed off the row
+		expect(identityOfBytes(stored as Uint8Array)).toBe(id.processor);
+	});
+
+	it('is DURABLE: a restarted process reads the same bytes off the same file', async () => {
+		const file = onDisk();
+		const registry = await openGenerationRegistryOnSQL(await file.open(), INDEXER, {caps: CAPS});
+		const id = idOf(STREAM_A, identityOf('v1'));
+		await registry.create(id, {bundle: bundleBytes('v1')});
+
+		const restarted = await openGenerationRegistryOnSQL(await file.open(), INDEXER, {caps: CAPS});
+
+		expect(await restarted.bundleOf(id)).toEqual(bundleBytes('v1'));
+	});
+
+	it('goes with the ROW on `deleteGeneration`, by the one DELETE that takes the record', async () => {
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, identityOf('v1')), {bundle: bundleBytes('v1')});
+		await registry.create(idOf(STREAM_A, identityOf('v2')), {bundle: bundleBytes('v2')});
+
+		await registry.deleteGeneration(idOf(STREAM_A, identityOf('v2')));
+
+		expect(await registry.bundleOf(idOf(STREAM_A, identityOf('v2')))).toBeUndefined();
+		expect(await bundleCount(db)).toBe(1);
+	});
+
+	it('goes with every row on `deleteStream`', async () => {
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, identityOf('v1')), {bundle: bundleBytes('v1')});
+		await registry.create(idOf(STREAM_B, identityOf('v2')), {bundle: bundleBytes('v2')});
+		await registry.create(idOf(STREAM_B, identityOf('v3')), {bundle: bundleBytes('v3')});
+
+		await registry.deleteStream(STREAM_B);
+
+		expect(await bundleCount(db)).toBe(1);
+		expect(await registry.bundleOf(idOf(STREAM_A, identityOf('v1')))).toEqual(bundleBytes('v1'));
+	});
+
+	it('answers NOTHING for a row that kept no code, and for a generation it does not hold', async () => {
+		const db = await freshDB();
+		const registry = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		await registry.create(idOf(STREAM_A, PROC_A));
+
+		expect(await registry.bundleOf(idOf(STREAM_A, PROC_A))).toBeUndefined();
+		expect(await registry.bundleOf(idOf(STREAM_A, PROC_B))).toBeUndefined();
+	});
+
+	it('is SCOPED to one named indexer, like every other row', async () => {
+		const db = await freshDB();
+		const main = await openGenerationRegistryOnSQL(db, INDEXER, {caps: CAPS});
+		const other = await openGenerationRegistryOnSQL(db, OTHER_INDEXER, {caps: CAPS});
+		const id = idOf(STREAM_A, identityOf('v1'));
+		await main.create(id, {bundle: bundleBytes('v1')});
+
+		expect(await other.bundleOf(id)).toBeUndefined();
+	});
+});
+
 describe('a second handle on the same database', () => {
 	it('sees the same generations and the same canonical generation', async () => {
 		const file = onDisk();
@@ -583,7 +666,7 @@ describe('nothing about the CAPS is persisted by this substrate', () => {
 		expect(schema).not.toMatch(/maxGenerations|maxStreams|\bcaps?\b/i);
 	});
 
-	it('supplies exactly the six port operations', async () => {
+	it('supplies exactly the seven port operations', async () => {
 		const db = await freshDB();
 
 		expect(Object.keys(generationRegistryPortOnSQL(db, INDEXER)).sort()).toEqual([
@@ -592,6 +675,9 @@ describe('nothing about the CAPS is persisted by this substrate', () => {
 			'dropStreamSubtree',
 			'listStreamDigests',
 			'read',
+			// the code a generation was registered with (ADR-0092), which this substrate DOES
+			// own: it is a column on the generation's own row
+			'readBundle',
 			// the READ half of the state seam, beside the DROP: both are the host's fact
 			// about where a generation's state lives, and neither is this substrate's
 			'readStateCursor',

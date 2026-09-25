@@ -209,10 +209,34 @@ export type GenerationRegistryState = {
  * generation and clear the slots that named it in the same commit, which is what
  * keeps a slot from ever naming a record that has gone. An absent slot name means
  * LEAVE IT WHERE IT IS rather than clear it; see `SlotAssignment`.
+ *
+ * ## `remove` takes EVERYTHING the substrate keeps under that identity
+ *
+ * The record AND its `bundle` (ADR-0092), in the same commit and as one act. That is
+ * the whole of how a bundle dies with its generation: every path that deletes one --
+ * `deleteGeneration` (which a reclaim, a replaced successor and a drop on promotion
+ * all reach) and `deleteStream` -- writes a `remove`, and a substrate that kept the
+ * bytes anywhere a `remove` does not reach would have forked a second deletion
+ * mechanism nobody calls.
  */
 export type GenerationRegistryWrite = {
 	readonly remove?: readonly GenerationId[];
 	readonly put?: GenerationRecord;
+	/**
+	 * THE BUNDLE THAT FOLDS `put`: the exact octets whose hash is `put.processor`
+	 * (ADR-0086), written WITH the record and never without one (ADR-0092).
+	 *
+	 * Beside `put` rather than inside it, because a `GenerationRecord` is what every
+	 * listing, every slot resolution and every substrate's plain `put` of a record
+	 * handles, and bytes riding on it would be stored by a substrate that was never
+	 * meant to keep any: a browser tab retains no code (ADR-0089), and its port REFUSES a
+	 * write carrying one rather than storing it or silently dropping it.
+	 *
+	 * Absent means this registration retained no code. That is the chain-facing
+	 * container's every registration, and on the receiving container it is
+	 * unexpressible (`ReceivedGenerationSpec.bundle`).
+	 */
+	readonly bundle?: Uint8Array;
 	readonly slots?: SlotAssignment;
 	/** RECORD that this indexer holds this stream. Idempotent. See `GenerationRegistryState.keptStreams`. */
 	readonly keepStream?: string;
@@ -300,6 +324,20 @@ export type GenerationRegistryPort = {
 	 * is a ROW, addressed by an identity the registry holds.
 	 */
 	readStateCursor(id: GenerationId): Promise<number | undefined>;
+	/**
+	 * THE BUNDLE STORED FOR THIS GENERATION (ADR-0092), or `undefined` where none is.
+	 *
+	 * The READ half of `GenerationRegistryWrite.bundle`, and deliberately not part of
+	 * `read()`: that one is taken inside every commit's decision, and a bundle is a
+	 * whole processor's worth of octets that no decision needs. So the bytes are written
+	 * with the record and removed with the record, but READ only by somebody who asked
+	 * for this one generation's code.
+	 *
+	 * `undefined` is a real answer and never an error: a generation that is not
+	 * registered, and one registered by a runtime that retains no code (a tab, whose
+	 * port answers `undefined` for everything), both hold no bytes here.
+	 */
+	readBundle(id: GenerationId): Promise<Uint8Array | undefined>;
 };
 
 /** What `deleteGeneration` did. */
@@ -443,8 +481,18 @@ export type GenerationRegistry = {
 	 * deliberately no second entry point to put on a timer.
 	 */
 	readonly swept: readonly string[];
-	/** Register a generation over a stream, or resolve the one already registered. */
-	create(id: GenerationId, options?: {slot?: SlotName}): Promise<GenerationRecord>;
+	/**
+	 * Register a generation over a stream, or resolve the one already registered.
+	 *
+	 * `bundle` is the code that folds it (ADR-0092), stored WITH the record in the same
+	 * commit; see `GenerationRegistryWrite.bundle`.
+	 */
+	create(id: GenerationId, options?: {slot?: SlotName; bundle?: Uint8Array}): Promise<GenerationRecord>;
+	/**
+	 * THE BUNDLE STORED FOR THIS GENERATION, or `undefined` where none is. See
+	 * `GenerationRegistryPort.readBundle`.
+	 */
+	bundleOf(id: GenerationId): Promise<Uint8Array | undefined>;
 	/** Every registered generation, oldest first. */
 	list(): Promise<GenerationRecord[]>;
 	/** Every stream at least one registered generation folds. */
@@ -483,8 +531,9 @@ export type GenerationRegistry = {
 	 */
 	readStateCursor(id: GenerationId): Promise<number | undefined>;
 	/**
-	 * Drop a generation's row and its state store -- and its stream too, but ONLY
-	 * where the caller ASKED and no other generation is left folding it.
+	 * Drop a generation's row (and the bundle stored with it, ADR-0092) and its state
+	 * store -- and its stream too, but ONLY where the caller ASKED and no other
+	 * generation is left folding it.
 	 *
 	 * `reapStream` defaults to FALSE, which is the substance of ADR-0087's second
 	 * half: deletion is a VERB, so the stream goes when an operator says so
@@ -742,6 +791,25 @@ function assertIdentity(id: GenerationId): GenerationId {
 	return identityOf(id);
 }
 
+/**
+ * Bundle bytes, or nothing. Refused rather than stored when they are not bytes, or
+ * are NO bytes: an empty bundle hashes to an identity like any other and is no
+ * processor at all, so storing one would be a generation whose retained code could
+ * never fold it.
+ */
+function assertBundle(bundle: Uint8Array | undefined): Uint8Array | undefined {
+	if (bundle === undefined) {
+		return undefined;
+	}
+	if (!(bundle instanceof Uint8Array) || bundle.length === 0) {
+		throw new TypeError(
+			`a generation's bundle must be the non-empty octets that fold it (ADR-0092), got ` +
+				`${bundle instanceof Uint8Array ? 'an empty Uint8Array' : typeof bundle}`,
+		);
+	}
+	return bundle;
+}
+
 /** A slot name, or nothing. Refused rather than ignored: a misspelt slot is a silent no-op otherwise. */
 function assertSlot(slot: SlotName | undefined): SlotName | undefined {
 	if (slot === undefined) {
@@ -854,6 +922,11 @@ export async function openGenerationRegistry(
 			return port.readStateCursor(assertIdentity(id));
 		},
 
+		/** The host's own read of the bytes it stored with the record, forwarded unchanged. */
+		bundleOf(id: GenerationId): Promise<Uint8Array | undefined> {
+			return port.readBundle(assertIdentity(id));
+		},
+
 		/** Every stream this indexer holds, folded or not. See `GenerationRegistryState.keptStreams`. */
 		async keptStreams(): Promise<string[]> {
 			return [...((await port.read()).keptStreams ?? [])].sort();
@@ -901,10 +974,24 @@ export async function openGenerationRegistry(
 		 * written ahead of its registration is one another tab's open may take. The
 		 * cost is a re-fetch rather than a hole -- the keeper rebuilds a subtree that
 		 * is not there -- but it is a cost nothing pays by registering first.
+		 *
+		 * ## The BUNDLE is written with the record, in the same commit (ADR-0092)
+		 *
+		 * Storing the code is a property of REGISTERING, not of how the bytes arrived: a
+		 * bundle read off disk and one pushed over a wire reach the store by this one
+		 * call. It rides the commit that writes the record, so no crash can leave a
+		 * registered generation whose code never landed, or code for a generation that
+		 * was never registered -- and it leaves by the same `remove` that takes the record.
+		 *
+		 * A registration that RESOLVES writes no bytes. The identity is the hash of the
+		 * bytes (ADR-0086), so whatever this call carries is what the record was registered
+		 * with, and re-sending a processor's worth of octets on every restart would buy
+		 * nothing.
 		 */
-		async create(id: GenerationId, options?: {slot?: SlotName}): Promise<GenerationRecord> {
+		async create(id: GenerationId, options?: {slot?: SlotName; bundle?: Uint8Array}): Promise<GenerationRecord> {
 			const wanted = assertIdentity(id);
 			const into = assertSlot(options?.slot);
+			const bundle = assertBundle(options?.bundle);
 			let resolved: GenerationRecord | undefined;
 			await port.commit((current) => {
 				const found = current.generations.find((record) => sameGeneration(record, wanted));
@@ -981,7 +1068,12 @@ export async function openGenerationRegistry(
 				} else if (into) {
 					slots[into] = identityOf(resolved);
 				}
-				return {put: resolved, keepStream, ...(Object.keys(slots).length > 0 ? {slots} : {})};
+				return {
+					put: resolved,
+					...(bundle ? {bundle} : {}),
+					keepStream,
+					...(Object.keys(slots).length > 0 ? {slots} : {}),
+				};
 			});
 			return resolved as GenerationRecord;
 		},
@@ -1108,6 +1200,11 @@ export async function openGenerationRegistry(
 		/**
 		 * Delete a generation: drop its row and its state store -- and its stream too,
 		 * but only where the CALLER ASKED and nothing else is left folding it.
+		 *
+		 * Its BUNDLE (ADR-0092) goes with the row, in the SAME commit, because the port's
+		 * `remove` takes everything kept under the identity (`GenerationRegistryWrite`).
+		 * That is why a reclaim, a replaced successor and a drop on promotion all take
+		 * the bytes without any of them mentioning bytes: all three are this call.
 		 *
 		 * ## The reap is ASKED FOR now, and that is ADR-0087's second half
 		 *

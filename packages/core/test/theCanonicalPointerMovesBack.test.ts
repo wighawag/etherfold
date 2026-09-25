@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {UnknownGenerationError} from '../src/generation/registry.js';
 import {openReceivingIndexer, type ReceivingIndexer} from '../src/receivingContainer.js';
 import type {MemoryStore, TestABI, World} from './utils/receivingWorld.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleBytes, identityOf} from './utils/processorIdentity.js';
 import {
 	AT_101,
 	AT_106,
@@ -216,11 +216,12 @@ describe('the generation reverted FROM stays available, so a second move forward
 		});
 		const fromBlock = await incumbent.ingestion.expectedFromBlock();
 		await incumbent.ingestion.receive(batch(incumbent, {toBlock: 105, latestBlock: 105, logs: [AT_101]}, fromBlock));
-		// registered through the RESOLVE path, which puts it in NO slot
-		const other = await incumbent.resolveGeneration({
-			stream: incumbent.streamDigest,
-			processor: identityOf('v2'),
-		});
+		// registered on the REGISTRY into NO slot, with the bundle a registration on this
+		// runtime always carries (ADR-0092)
+		const other = await incumbent.registry.create(
+			{stream: incumbent.streamDigest, processor: identityOf('v2')},
+			{bundle: bundleBytes('v2')},
+		);
 
 		await incumbent.promote(other);
 

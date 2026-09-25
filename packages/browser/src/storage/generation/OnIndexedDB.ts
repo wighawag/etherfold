@@ -137,6 +137,13 @@ export function generationRegistryPortOnIndexedDB(
 									resolve();
 									return;
 								}
+								// A TAB RETAINS NO CODE (ADR-0089), so a write carrying a bundle is
+								// REFUSED before anything is written, rather than stored or silently
+								// dropped: nothing on this runtime registers with one, and the day
+								// something does is a day this should fail loudly.
+								if (write.bundle !== undefined) {
+									refuseRetainedBundle(name);
+								}
 								for (const id of write.remove ?? []) {
 									objectStore.delete(address.entry(id));
 								}
@@ -232,7 +239,27 @@ export function generationRegistryPortOnIndexedDB(
 		async readStateCursor(id) {
 			return options.readStateCursor?.(id);
 		},
+
+		/**
+		 * NOTHING, for every generation, and that is this runtime's answer rather than a
+		 * gap: a tab holds no `predecessor` and could instantiate retained bytes only
+		 * through a service worker (ADR-0089), so it stores none (ADR-0092 does not apply
+		 * here) and `commit` refuses a write that carries one.
+		 */
+		async readBundle() {
+			return undefined;
+		},
 	};
+}
+
+/** A registration that tried to retain code in a tab, refused. See `readBundle` above. */
+function refuseRetainedBundle(name: string): never {
+	throw new Error(
+		`the generation registry for '${name}' is a BROWSER registry, and a browser tab retains no processor code ` +
+			`(ADR-0089): it holds no predecessor, and could instantiate stored bytes only through a service worker. So a ` +
+			`registration carrying a bundle is refused here rather than stored. Retaining a generation's bundle is a Node ` +
+			`deployment's (ADR-0092).`,
+	);
 }
 
 /**

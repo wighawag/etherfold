@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {DEFAULT_MAX_EMISSIONS_PER_CHUNK, retryCanAdvance, type RebuildReport} from '../src/generation/rebuild.js';
 import {openReceivingIndexer} from '../src/receivingContainer.js';
 import type {MemoryStore, TestABI} from './utils/receivingWorld.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleBytes, identityOf} from './utils/processorIdentity.js';
 import {
 	AT_101,
 	AT_106,
@@ -87,15 +87,21 @@ describe('a successor on a SHARED stream is a FOLLOWER, determined and never con
 		// reads is sorted by, compares globally. Pinned because the weaker form passes
 		// every other case in this suite.
 		//
-		// The third one is registered through the RESOLVE path a receiver uses rather than
+		// The third one is registered on the REGISTRY directly, into no slot, rather than
 		// by adding a second successor: a second successor would make the first an
 		// ABANDONED SUCCESSOR and drop it, and what has to be observed here is how `create`
-		// stamps a record while the other two are PRESENT.
+		// stamps a record while the other two are PRESENT. It used to go through the
+		// container's resolve path, which no longer registers anything: registering on this
+		// container stores the generation's bundle (ADR-0092), so the bytes are supplied
+		// here exactly as `add` would supply them.
 		const w = world();
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
 		const incumbent = await w.open('zzz-incumbent', 1);
 		await incumbent.add(w.specFor('aaa-successor', 10));
-		await incumbent.resolveGeneration({stream: 'another-stream-digest', processor: 'mmm-other-stream'});
+		await incumbent.registry.create(
+			{stream: 'another-stream-digest', processor: identityOf('mmm-other-stream')},
+			{bundle: bundleBytes('mmm-other-stream')},
+		);
 		clock.mockRestore();
 
 		const created = (await w.port.read()).generations.map((record) => record.createdAt);

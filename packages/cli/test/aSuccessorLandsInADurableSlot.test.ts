@@ -44,7 +44,8 @@ import {
 	nftProcessor,
 	timestampOf,
 } from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {processorArtifactIdentity} from '@etherfold/utils';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {generationStateSeamsOn} from './utils/generationState.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -139,6 +140,8 @@ function specFor(db: RemoteSQL, identity: string, source?: IndexingSource<typeof
 		createProcessor: (state: WritableStateStore) =>
 			new EntityEventProcessor<typeof abi>(state, declared, {finalityDepth: FINALITY}),
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 
@@ -152,6 +155,7 @@ function specFor(db: RemoteSQL, identity: string, source?: IndexingSource<typeof
 async function openIndexer(
 	db: RemoteSQL,
 	identity: string = V1,
+	promotion?: {policy: 'manual'; dropOnPromotion: boolean},
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	// BOTH state seams, under the namespace convention `openFolding` uses: the DROP
 	// of a generation's namespace, and the READ of how far the fold in it got -- which
@@ -165,6 +169,7 @@ async function openIndexer(
 		appendEmissions: emissionAppenderFor(db, INDEXER),
 		streamCursor: streamCursorSourceOn(db, INDEXER),
 		replay: storedEmissionReplaySource(db, INDEXER),
+		...(promotion ? {promotion} : {}),
 		generation: specFor(db, identity),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
@@ -226,6 +231,21 @@ async function registeredProcessors(db: RemoteSQL): Promise<string[]> {
 		.bind(INDEXER)
 		.all<{processor: string}>();
 	return rows.results.map((row) => row.processor);
+}
+
+/**
+ * THE CODE EACH GENERATION KEEPS (ADR-0092), read straight off the rows: every stored
+ * bundle under this name, RE-HASHED, so the answer is the identities the bytes name
+ * rather than the identities the rows claim. A stored bundle for a generation that
+ * has gone, or one whose bytes are not the ones that name it, shows up here as a
+ * mismatch against `registeredProcessors`.
+ */
+async function storedBundleIdentities(db: RemoteSQL): Promise<string[]> {
+	const rows = await db
+		.prepare(`SELECT bundle FROM ${GENERATION_TABLE} WHERE indexer = ?1 AND bundle IS NOT NULL ORDER BY createdAt`)
+		.bind(INDEXER)
+		.all<{bundle: ArrayBuffer}>();
+	return rows.results.map((row) => processorArtifactIdentity(new Uint8Array(row.bundle)));
 }
 
 /**
@@ -324,6 +344,10 @@ describe('the `successor` slot holds ONE, so a second registration replaces the 
 		expect(await namespaceTables(db, idOf(second))).toEqual([]);
 		expect(await namespaceTables(db, idOf(third))).toEqual([]);
 		expect((await namespaceTables(db, idOf(fourth))).length).toBeGreaterThan(0);
+		// ...and so did the CODE: each replaced successor's bundle went with its row, so
+		// what is stored is exactly one bundle per registered generation, each one the
+		// bytes that name it (ADR-0092)
+		expect(await storedBundleIdentities(db)).toEqual(await registeredProcessors(db));
 	});
 
 	it('leaves the CANONICAL generation and its stream exactly where they were', async () => {
@@ -416,6 +440,10 @@ describe('the slot is DURABLE, so a RESTART replaces rather than accumulates', (
 			predecessor: null,
 		});
 		expect(first.caps).toEqual({maxGenerations: 4, maxStreams: 2});
+		// BOUNDED: eight deploys stored eight bundles and seven of them went with the
+		// generation each one folded, so exactly two remain -- one per registered
+		// generation, and each the bytes its identity is the hash of (ADR-0092)
+		expect(await storedBundleIdentities(db)).toEqual([first.generation.processor, V5]);
 	});
 
 	it('restarting on the CANONICAL generation registers nothing and displaces nothing', async () => {
@@ -435,6 +463,25 @@ describe('the slot is DURABLE, so a RESTART replaces rather than accumulates', (
 			successor: pending.record.processor,
 			predecessor: null,
 		});
+	});
+});
+
+describe('a generation dropped ON PROMOTION takes its code with it (ADR-0092)', () => {
+	it("deletes the superseded generation's bundle with its row, and keeps the promoted one's", async () => {
+		const db = oneDatabase();
+		await applySchema(db);
+		const indexer = await openIndexer(db, V1, {policy: 'manual', dropOnPromotion: true});
+		await feed(indexer, indexer.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
+		const promoted = await indexer.add(specFor(db, V2));
+		expect(await storedBundleIdentities(db)).toEqual([V1, V2]);
+
+		await indexer.promote(idOf(promoted));
+
+		// the drop is the same `deleteGeneration` a reclaim and a replaced successor reach,
+		// and the bundle is a column of the row it deletes: there is no second path to have
+		// forgotten
+		expect(await registeredProcessors(db)).toEqual([V2]);
+		expect(await storedBundleIdentities(db)).toEqual([V2]);
 	});
 });
 

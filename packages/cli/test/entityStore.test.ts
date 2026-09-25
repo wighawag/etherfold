@@ -7,7 +7,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {describe, expect, it, vi} from 'vitest';
 import {prepareIndexing} from '../src/index.js';
 import type {Options} from '../src/types.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {canonicalStoreIn} from './utils/reads.js';
 import {
 	abi,
@@ -76,7 +76,7 @@ async function indexOnce(options: Partial<Options>, chain: ReturnType<typeof fak
 		{...SQLITE, ...options},
 		{
 			importModule: async () => entityModule,
-			processorIdentity: ARRIVAL,
+			processorBundle: bundleOf(ARRIVAL),
 			provider: chain.provider,
 			createDB: () => db,
 			sleep: async () => {},
@@ -179,7 +179,7 @@ describe('--store sqlite', () => {
 			{...SQLITE, retention: '500'},
 			{
 				importModule: async () => entityModule,
-				processorIdentity: ARRIVAL,
+				processorBundle: bundleOf(ARRIVAL),
 				provider: chain.provider,
 				createDB: () => oneDatabase(),
 				sleep: async () => {},
@@ -216,7 +216,7 @@ describe('--store sqlite', () => {
 				{...SQLITE, retention: '3'},
 				{
 					importModule: async () => entityModule,
-					processorIdentity: ARRIVAL,
+					processorBundle: bundleOf(ARRIVAL),
 					provider: fakeChain().provider,
 					createDB: () => oneDatabase(),
 				},

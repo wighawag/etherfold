@@ -36,7 +36,7 @@ import {
 	transfer,
 	type TestABI,
 } from './utils/feedHarness.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // ONE REGISTRY ENTRY HOLDS SEVERAL LIVE WIRE CONTEXTS
@@ -106,6 +106,8 @@ function foldOwningItsOwnState() {
 		createState: () => freshDatabase(),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessor),
 		processorIdentity: PROCESSOR_IDENTITY,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(PROCESSOR_IDENTITY),
 	};
 }
 

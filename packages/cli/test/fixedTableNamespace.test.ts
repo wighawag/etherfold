@@ -7,7 +7,7 @@ import {describe, expect, it} from 'vitest';
 import {openFolding} from '../src/folding.js';
 import type {StoreTarget} from '../src/types.js';
 import {abi, nftProcessor, SOURCE} from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN ENTITY CANNOT BE NAMED AFTER A FIXED TABLE, BECAUSE THEY SHARE ONE DATABASE
@@ -66,7 +66,8 @@ async function foldInto(handle: RemoteSQL, declared: EntityProcessor<typeof abi,
 		source: SOURCE,
 		stream: {},
 		finalityDepth: FINALITY,
-		processorIdentity: ARRIVAL,
+		// what the arrival READ: the identity and the bytes it is the hash of (ADR-0092)
+		arrived: {identity: ARRIVAL, bundle: bundleOf(ARRIVAL)},
 		// the name the stored emission stream and the generation records are keyed on,
 		// which every folding command resolves before it gets here (ADR-0052): required,
 		// so that no shape can fold into a database without saying under which name it

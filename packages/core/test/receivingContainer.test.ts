@@ -13,7 +13,7 @@ import type {ReplayRead, ReplaySource} from '../src/generation/rebuild.js';
 import {StreamBuilder} from '../src/streamBuilder.js';
 import type {StreamCursorRead, StreamCursorSource, StreamWriter} from '../src/stream/writer.js';
 import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {arrivalOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A CHANGED CONTEXT CREATES A SUCCESSOR INSTEAD OF CALLING `processor.clear()`
@@ -226,8 +226,9 @@ function substrate() {
 				),
 			// The identity this fold ARRIVED with (ADR-0086), named from the same expression
 			// the namespace above is: ADR-0053's namespace is chosen before the processor
-			// exists and must be the one the registered generation owns.
-			processorIdentity: identityOf(marker),
+			// exists and must be the one the registered generation owns. The BYTES come with
+			// it, because registering on this container stores them (ADR-0092).
+			...arrivalOf(marker),
 			createProcessor: (state: {rows: string[]; lastSync?: LastSync<TestABI>}): EventProcessor<TestABI, void> => {
 				const processor: EventProcessor<TestABI, void> = {
 					// Answered because the seam requires it, and read by nothing on this side: it

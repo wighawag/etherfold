@@ -25,7 +25,13 @@ import type {StatusReport} from '@etherfold/server';
 // TYPE ONLY, so that naming the store this module builds costs no eager import of
 // libSQL: the value arrives through the dynamic import below.
 import type {VersionedStateStore as SQLiteStateStore} from '@etherfold/state-store-sqlite';
-import {loadContracts, resolveSource, type ProcessorModule} from '@etherfold/utils';
+import {
+	loadContracts,
+	processorArtifactIdentity,
+	resolveSource,
+	type ProcessorArrival,
+	type ProcessorModule,
+} from '@etherfold/utils';
 import type {RemoteSQL} from 'remote-sql';
 import {readStatusReport} from './cursorReport.js';
 import {reorgRecorderFor} from './reorgCounters.js';
@@ -290,7 +296,7 @@ export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
 	 */
 	generation: Pick<
 		ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>,
-		'createState' | 'createProcessor' | 'processorIdentity'
+		'createState' | 'createProcessor' | 'processorIdentity' | 'bundle'
 	>;
 };
 
@@ -320,15 +326,17 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 	/** The stream's own resolved finality, which the retention window is validated against. */
 	finalityDepth: number,
 	/**
-	 * The identity the ARRIVAL derived: the SHA-256 of the bundle this deployment was
-	 * configured with (ADR-0086).
+	 * What the ARRIVAL produced: the bundle this deployment was configured with and the
+	 * SHA-256 of it, which is the fold's identity (ADR-0086).
 	 *
 	 * REQUIRED, because nothing else can name this fold: the author-declared version
 	 * it used to fall back to is gone, and a processor built from bytes cannot state
-	 * what it is. A caller resolves it through `openProcessorArrival`
-	 * (`@etherfold/utils`) and REFUSES a path that produced none.
+	 * what it is. And the BYTES are required with the name, because registering the
+	 * generation stores them beside its state (ADR-0092). A caller resolves both
+	 * through `openProcessorArrival` (`@etherfold/utils`) and REFUSES a path that
+	 * produced none (`requireArrivedBundle`).
 	 */
-	identity: string,
+	arrived: ArrivedBundle,
 ): Promise<FoldParts<ABI, ProcessResultType>> {
 	const [{EntityEventProcessor}, {VersionedStateStore}] = await Promise.all([
 		import('@etherfold/processor-entities'),
@@ -360,7 +368,7 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 		});
 	// THE ARRIVAL'S, and nothing else: asking a processor built from bytes to state
 	// its own version is the question ADR-0086 says it cannot answer.
-	const processorIdentity = identity;
+	const processorIdentity = arrived.identity;
 
 	return {
 		stateFor,
@@ -370,6 +378,10 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 			// registry record, the table namespace above and the processor below are then one
 			// value handed to three places (ADR-0086).
 			processorIdentity,
+			// ...and the BYTES that value is the hash of, which the container stores with the
+			// registration (ADR-0092). Carried beside the identity from the one arrival that
+			// produced both, so the code a generation keeps is the code that names it.
+			bundle: arrived.bundle,
 			// CLAIMED here, which is the ONE place this process takes the store: folding is
 			// writing, and the ability to mutate is obtained by claiming (ADR-0077). A
 			// second process pointed at this database takes the claim and this one's next
@@ -392,37 +404,70 @@ export async function foldPartsFor<ABI extends Abi, ProcessResultType>(
 }
 
 /**
- * THE IDENTITY THIS ARRIVAL DERIVED, or a refusal naming the path that produced
- * none.
+ * WHAT A NODE DEPLOYMENT'S ARRIVAL PRODUCED: the bundle's octets, and the identity
+ * that is their hash (ADR-0086).
+ *
+ * ONE value rather than two parameters, because the two are one fact seen twice: a
+ * generation is NAMED by the identity and KEEPS the bytes (ADR-0092), and a pair a
+ * caller could assemble from two sources is a pair that can disagree -- a rebuild
+ * landing between a hash and a second read would file one bundle's code under
+ * another's name.
+ */
+export type ArrivedBundle = {
+	/** `sha256:<hex>` over `bundle`: the processor half of the generation identity. */
+	readonly identity: string;
+	/** The octets themselves, which the registration stores beside the generation's state. */
+	readonly bundle: Uint8Array;
+};
+
+/**
+ * THE BUNDLE THIS ARRIVAL READ, with its identity -- or a refusal naming the path
+ * that produced none.
  *
  * A processor's identity is derived from what it IS (ADR-0086): a `--processor`
  * path names a self-contained BUNDLE and the SHA-256 of those octets is the
- * generation's name. A path that resolves through the MODULE SYSTEM instead has no
- * bytes that describe it, and since the author-declared `version` it used to fall
- * back to is gone, such a deployment has no name for its fold at all.
+ * generation's name, and on this runtime those same octets are what the generation
+ * KEEPS (ADR-0092). A path that resolves through the MODULE SYSTEM instead has no
+ * bytes that describe it, so such a deployment has neither a name for its fold nor
+ * code it could store for it.
  *
  * So it is REFUSED, here, before a database is opened or a generation registered.
  * It is the STRUCTURAL refusal and deliberately not the kind one: the refusal an
  * author meets is made at CONFIGURATION RESOLUTION, in the shape ADR-0048 gives
  * every other command input and with the command that produces a bundle in it
  * (`refuseUnbundledProcessor`, `config.ts`). What is left here is the guarantee
- * that no fold is ever registered without a name, whatever route the arrival took.
+ * that no fold is ever registered without its bytes, whatever route the arrival
+ * took.
  *
  * Two arrivals can still reach it. A SUBSTITUTED one, which is the ordinary case:
  * a test that injects `importModule` states what comes back for a path, and
- * `IndexingDependencies.processorIdentity` states what that thing is called -- no
- * flag and no environment variable reaches either. And a path whose BYTES MOVED
- * between the configuration check and the read, where a half-landed rebuild fails
- * closed rather than being folded under a name nothing derived.
+ * `IndexingDependencies.processorBundle` states the BYTES that thing stands for,
+ * whose hash is then its name exactly as a real bundle's is -- so a test registers a
+ * generation the way a deployment does, bytes and all, and there is no route that
+ * names a fold without them. And a path whose BYTES MOVED between the configuration
+ * check and the read, where a half-landed rebuild fails closed rather than being
+ * folded under a name nothing derived.
+ *
+ * **BYTES ON DISK WIN**: the substituted bundle is consulted only where the arrival
+ * read none.
  */
-export function requireArrivalIdentity(processorPath: string, identity: string | undefined): string {
-	if (identity !== undefined) {
-		return identity;
+export function requireArrivedBundle(
+	processorPath: string,
+	arrival: Pick<ProcessorArrival<Abi, unknown, unknown>, 'identity' | 'bundle'>,
+	substituted?: Uint8Array,
+): ArrivedBundle {
+	if (arrival.identity !== undefined && arrival.bundle !== undefined) {
+		return {identity: arrival.identity, bundle: arrival.bundle};
+	}
+	if (substituted !== undefined) {
+		return {identity: processorArtifactIdentity(substituted), bundle: substituted};
 	}
 	throw new Error(
 		`the processor at ${processorPath} is not a self-contained bundle, so this deployment has no identity for its ` +
-			`fold: a processor is identified by the SHA-256 of its bytes (ADR-0086) and an entry point that still resolves ` +
-			`imports at run time has no bytes that describe it. Point --processor at a bundle that imports nothing.`,
+			`fold and no code it could keep for it: a processor is identified by the SHA-256 of its bytes (ADR-0086), a ` +
+			`Node deployment stores those bytes beside the generation they fold (ADR-0092), and an entry point that ` +
+			`still resolves imports at run time has no bytes that describe it. Point --processor at a bundle that ` +
+			`imports nothing.`,
 	);
 }
 
@@ -531,11 +576,11 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 */
 		promotion?: PromotionConfig;
 		/**
-		 * The identity the ARRIVAL derived -- the hash of the bundle this deployment was
-		 * configured with (ADR-0086). Passed straight through to `foldPartsFor`, and
-		 * REQUIRED there, because nothing else can name this fold.
+		 * What the ARRIVAL produced -- the bundle this deployment was configured with and
+		 * its hash, which names the fold (ADR-0086) and whose bytes the registration keeps
+		 * (ADR-0092). Passed straight through to `foldPartsFor`, and REQUIRED there.
 		 */
-		processorIdentity: string;
+		arrived: ArrivedBundle;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([
@@ -548,7 +593,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		// the state, the identity and the two factories, built the ONE way this
 		// deployment builds them -- so a fold added later by a RE-READ lands in the same
 		// database under the same convention (`foldPartsFor`).
-		foldPartsFor<ABI, ProcessResultType>(declared, target, db, context.finalityDepth, context.processorIdentity),
+		foldPartsFor<ABI, ProcessResultType>(declared, target, db, context.finalityDepth, context.arrived),
 	]);
 	const {stateFor} = parts;
 

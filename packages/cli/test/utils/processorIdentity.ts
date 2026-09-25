@@ -21,15 +21,14 @@ import {processorArtifactIdentity} from '@etherfold/utils';
 //
 // HOW IT REACHES A DEPLOYMENT depends on how that deployment was stood up, and
 // there are exactly two shapes in this package. A suite that builds a container
-// itself passes it as `processorIdentity` on the generation spec and as
-// `identity` on the processor. A suite that drives a COMMAND -- `run`, `build`,
-// `index` -- substitutes its arrival through `deps.importModule` and names it
-// through `deps.processorIdentity` beside it, which is one seam with two halves:
-// stating what comes back for a path and stating what that thing is called. A
-// command given the first and not the second has an arrival that derived NO
-// identity, so it falls back on the author-DECLARED one, which is the remainder
-// `no-suite-or-example-still-rests-on-the-declared-identity` removed and which
-// the contract task is about to delete. Bytes on a disk always win over the
+// itself passes it as `processorIdentity` on the generation spec, WITH the bytes
+// as `bundle` (`bundleOf`), because registering on a Node deployment stores them
+// (ADR-0092). A suite that drives a COMMAND -- `run`, `build`, `index` --
+// substitutes its arrival through `deps.importModule` and states the BYTES it
+// stands for through `deps.processorBundle` beside it, which is one seam with two
+// halves: stating what comes back for a path and stating the bundle that thing is.
+// A command given the first and not the second has an arrival with no bytes and no
+// name, and is refused. Bytes on a disk always win over the
 // injected value, so this can only supply a derivation and never overrule one.
 //
 // The derivation is IMPORTED rather than re-spelled, unlike the copies in
@@ -60,5 +59,31 @@ export function bundleBytes(marker: string): Uint8Array {
  * differently.
  */
 export function identityOf(marker: string): string {
-	return processorArtifactIdentity(bundleBytes(marker));
+	const bytes = bundleBytes(marker);
+	const identity = processorArtifactIdentity(bytes);
+	bytesBehind.set(identity, bytes);
+	return identity;
+}
+
+/** Every identity `identityOf` has produced in this module's lifetime, and the bytes behind it. */
+const bytesBehind = new Map<string, Uint8Array>();
+
+/**
+ * THE BYTES AN IDENTITY FROM `identityOf` IS THE HASH OF: what a receiving container
+ * is handed beside the identity, because registering a generation on a Node deployment
+ * STORES its bundle (ADR-0092).
+ *
+ * Answerable only for identities this suite made through `identityOf`, which is every
+ * one a spec here carries -- and REFUSED for anything else, rather than inventing
+ * bytes for a name, because a generation registered under a name its stored bytes do
+ * not hash to is exactly the lie retention must never tell.
+ */
+export function bundleOf(identity: string): Uint8Array {
+	const bytes = bytesBehind.get(identity);
+	if (!bytes) {
+		throw new Error(
+			`no bytes are known for ${identity}: build it with identityOf(marker) so the bundle is its preimage`,
+		);
+	}
+	return bytes;
 }

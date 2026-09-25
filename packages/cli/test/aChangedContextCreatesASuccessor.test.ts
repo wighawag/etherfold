@@ -43,7 +43,7 @@ import {
 	ALICE,
 	BOB,
 } from './utils/chain.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 import {generationStateSeamsOn} from './utils/generationState.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -133,6 +133,8 @@ async function openIndexer(
 					finalityDepth: FINALITY,
 				}) as unknown as EntityEventProcessor<typeof abi>,
 			processorIdentity: identity,
+			// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+			bundle: bundleOf(identity),
 		},
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }

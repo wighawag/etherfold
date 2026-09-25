@@ -24,7 +24,7 @@ import {
 } from '../src/index.js';
 import {ALICE, CONTRACT, SOURCE, STREAM_CONFIG, TOKEN, ZERO, transfer, type TestABI} from './utils/feedHarness.js';
 import {generationDatabases, type GenerationDatabases} from './utils/generationDatabases.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 // ---------------------------------------------------------------------------------------------------
 // THE OPERATOR MOVES THE CANONICAL POINTER BACK, OVER HTTP
@@ -97,6 +97,8 @@ function foldAt(states: GenerationDatabases, marker: string) {
 		createState: (context: {stream: string}) => states.open({stream: context.stream, processor: identity}),
 		createProcessor: (state: RemoteSQL) => new VersionedStateEventProcessor<TestABI>(state, entityProcessorFor(marker)),
 		processorIdentity: identity,
+		// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+		bundle: bundleOf(identity),
 	};
 }
 

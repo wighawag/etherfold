@@ -50,7 +50,7 @@ import {MemoryStateStore, type WritableStateStore} from '@etherfold/state-store'
 import {describe, expect, it} from 'vitest';
 import {BASE_ABANDONED, loadStream, stratagemsProcessor} from '../src/index.js';
 import type {StratagemsABI} from '../vendor/stratagems/abi.js';
-import {identityOf} from './utils/processorIdentity.js';
+import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 const FINALITY = 12;
 
@@ -180,6 +180,8 @@ async function aReceivingContainer() {
 			createState: () => openForWriting(new MemoryStateStore(stratagemsProcessor.entities)),
 			createProcessor: (store) => new EntityEventProcessor<StratagemsABI>(store, stratagemsProcessor),
 			processorIdentity: PROCESSOR_IDENTITY,
+			// ...and the bytes it is the hash of, which registering stores (ADR-0092)
+			bundle: bundleOf(PROCESSOR_IDENTITY),
 		},
 	});
 
