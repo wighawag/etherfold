@@ -1,0 +1,17 @@
+---
+title: 'A Cloudflare Worker cannot instantiate a processor from stored bytes: `import(data:)`, `import(blob:)`, `new Function` and `eval` are all refused in-isolate, and the only surviving route is a SEPARATE isolate through Dynamic Workers'
+slug: a-worker-cannot-instantiate-a-processor-from-bytes
+source: 'measured by docs/spikes/a-worker-cannot-instantiate-a-processor-from-bytes on workerd 2026-08-20 (the version the lockfile pins), compatibilityDate 2026-08-20, 2026-09-22, raw output in that folder''s results.txt. The eval/new Function refusal is also documented: Cloudflare Workers docs, "Web standards" (https://developers.cloudflare.com/workers/runtime-apis/web-standards/, page states "Last updated Apr 23, 2026"). Dynamic Workers: https://developers.cloudflare.com/dynamic-workers/getting-started/ (page states "Last updated Aug 27, 2026"), read, not exercised.'
+---
+
+The Worker counterpart of `a-tab-instantiates-retained-bytes-only-through-a-same-origin-url`, and the answer is the same shape, only harder.
+
+**On `workerd`, no route turns a string or bytes into running code inside the isolate.** `import()` of a `data:` URL, which is exactly how `loadProcessorArtifact` instantiates, fails with `No such module`. `URL.createObjectURL` is not implemented, so a `blob:` import cannot even be attempted. `new Function` and `eval` throw `EvalError: Code generation from strings disallowed for this context`, which the platform documents as a deliberate security rule with no switch. A control route in the same Worker runs, so these are refusals of the ROUTE, not a broken harness. The same processor imports fine through a `data:` URL under Node v24.19.0.
+
+**What that means for this repo, stated as consequences rather than decisions:**
+
+- A Worker that folds gets its processor the one way the platform allows, BUNDLED INTO ITS DEPLOYED SCRIPT. `platforms/cf-worker/src/worker.ts` already says so: "a deployment that DOES host one bundles its processor". So on a Worker the code a generation needs is present exactly when it was in the deployed build, which is ADR-0089's browser argument in a new place: a previous processor is absent from the build, and stored bytes cannot bring it back.
+- Two claims in the corpus rest on the opposite assumption and were never measured: ADR-0085's "No filesystem ... This is the shape a browser tab and a Worker have", and the spec `a-generation-retains-the-code-that-folds-it` storing bundles in the database "rather than introducing a filesystem dependency on a runtime (a Worker) that has none". The spec `a-processor-artifact-is-pushed-to-a-running-deployment` names "A Cloudflare Worker has no filesystem to read a module from" as its FIRST motivating deployment. Each of those works on Node and cannot work in-isolate on a Worker.
+- Node deployments are untouched by any of this: a CLI or server process, a container running a published image, anything with Node's module loader.
+
+**The one surviving route** is Dynamic Workers: a Worker Loader binding creates a NEW isolate from module strings and hands back an RPC stub. It is the Worker analogue of the browser's service worker, a real mechanism with a structural price: the processor would live in a different isolate from the fold engine, every handler call would cross RPC, and the deployment would need a binding it does not have. Not exercised here; whether it is worth paying is a decision, not a measurement.

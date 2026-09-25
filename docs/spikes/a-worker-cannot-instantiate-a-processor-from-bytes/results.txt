@@ -1,0 +1,8 @@
+workerd 2026-08-20
+import(data: base64): REFUSED -> Error: No such module "data:text/javascript;base64,ZXhwb3J0IGNvbnN0IGZvbGQgPSAocywgZSkgPT4gcyArIGU7".
+import(data: plain) : REFUSED -> Error: No such module "data:text/javascript,export%20const%20fold%20%3D%20(s%2C%20e)%20%3D%3E%20s%20%2B%20e%3B".
+import(blob:)       : REFUSED -> Error: URL.createObjectURL() is not implemented
+new Function        : REFUSED -> EvalError: Code generation from strings disallowed for this context
+eval                : REFUSED -> EvalError: Code generation from strings disallowed for this context
+CONTROL static code : OK -> plain code runs: 3
+node v24.19.0 import(data: base64): OK -> fold(1,2)=3
