@@ -415,6 +415,49 @@ export class GenerationInstantiationError extends Error {
 }
 
 /**
+ * WHY A GENERATION CAN FOLD NOWHERE HERE, each a different thing for an operator to do
+ * about it (ADR-0092).
+ *
+ * - **`no-bundle`**: no bytes are stored on its row. Its CODE IS GONE, so nothing can
+ *   ever make it fold again; this container's own `add` never registers such a
+ *   generation, so it is a row written some other way.
+ * - **`no-instantiator`**: bytes are stored and this host was given no
+ *   `instantiateGeneration`, so it cannot run them (a host that only reads, a test
+ *   world). Another host over the same database may.
+ * - **`instantiation-failed`**: THIS PROCESS tried and the stored code could not be
+ *   built (`GenerationInstantiationError`: the loader refused the bytes, they name
+ *   another fold, or its factories threw). Remembered from the attempt rather than
+ *   re-tried to answer a question, and forgotten when a later attempt succeeds.
+ * - **`stream-not-fetched`**: the code is fine and its stream is not the one this
+ *   deployment fetches (a filter change's generation), so a move onto it moves the
+ *   pointer and freezes, which is what a revert across a filter change is.
+ */
+export type FrozenReason = 'no-bundle' | 'no-instantiator' | 'instantiation-failed' | 'stream-not-fetched';
+
+/**
+ * WHETHER ONE REGISTERED GENERATION CAN FOLD ON THIS DEPLOYMENT, which is what an
+ * operator needs to know before a revert and what a stalled deployment otherwise
+ * never says (ADR-0092; the spec's stories 2 and 8).
+ *
+ * - **`held`**: this process folds it now.
+ * - **`instantiable`**: not folded here, and nothing known stops the bundle stored on
+ *   its row from being instantiated the moment it has to fold (a move onto it, or
+ *   `open` while it is canonical). A CLAIM, not a proof: proving it would mean
+ *   evaluating the code and opening its state for a generation nobody reads, which is
+ *   the eager instantiation ADR-0092 rejects. The attempt that finally makes it fold
+ *   is the proof, and if that attempt fails the answer becomes `frozen`.
+ * - **`frozen`**: neither, with the reason (`FrozenReason`) in words an operator can
+ *   act on. A frozen CANONICAL generation answers reads and does not advance.
+ */
+export type GenerationFolding =
+	| {readonly generation: GenerationRecord; readonly folding: 'held' | 'instantiable'}
+	| {
+			readonly generation: GenerationRecord;
+			readonly folding: 'frozen';
+			readonly frozen: {readonly reason: FrozenReason; readonly message: string};
+	  };
+
+/**
  * ONE FOLD this container holds: its generation record, the state it folds into,
  * the processor and the receiver addressed by its wire context.
  *
@@ -767,6 +810,18 @@ export class ReceivingIndexer<
 	 */
 	private readonly instantiatedHere = new WeakSet<HeldFold<ABI, ProcessResultType, unknown>>();
 
+	/**
+	 * WHAT THE LAST ATTEMPT TO INSTANTIATE A GENERATION CAME TO, where it did not end in a
+	 * fold: keyed like `records`, and read by `folding` (ADR-0092).
+	 *
+	 * It is how a generation whose stored code could not be built at `open` stops being a
+	 * silent stall: that attempt is logged and the deployment starts, and without this
+	 * the only other trace was a log line. In memory, like `instantiatedHere`: it is what
+	 * THIS process tried, and another process over the same rows may have a different
+	 * loader. A later attempt that succeeds deletes the entry.
+	 */
+	private readonly lastAttempt = new Map<string, {readonly reason: FrozenReason; readonly message: string}>();
+
 	private readonly options: ReceivingIndexerOptions<ABI, ProcessResultType, State>;
 
 	/** The promotion policy this indexer runs under, with nothing left to decide. */
@@ -1100,6 +1155,79 @@ export class ReceivingIndexer<
 	}
 
 	/**
+	 * WHETHER EACH REGISTERED GENERATION CAN FOLD HERE: held, instantiable from its
+	 * stored bundle, or frozen and why (`GenerationFolding`, ADR-0092).
+	 *
+	 * The operator's question before a revert, answered for every generation in the
+	 * order the registry lists them, so two generations that answer reads the same way
+	 * are no longer two states an operator cannot tell apart. It is also where a
+	 * generation whose stored code could not be built at `open` is REPORTED, which is
+	 * the spec's story 8: that deployment starts and serves the generation frozen, and
+	 * before this only a log line said why.
+	 *
+	 * It BUILDS NOTHING. `instantiable` is decided from what is known without running
+	 * the code: bytes are stored, this host can instantiate bytes, nothing in this
+	 * process has failed to, and the generation's stream is the one an instantiation
+	 * here would fold (the container's own, which is what a host whose seam names no
+	 * source of its own folds; such a host's own source is known only by trying, and the
+	 * try is remembered). Evaluating every stored bundle to answer a question would be
+	 * the eager instantiation ADR-0092 rejects, with state opened for generations nobody
+	 * reads.
+	 *
+	 * One read of the records, then one read of the stored bytes per generation not
+	 * held here, which the generation caps bound.
+	 */
+	async folding(): Promise<GenerationFolding[]> {
+		const registered = await this.registry.list();
+		const fetched = streamDigestOf(this.options.source, resolveStreamConfig(this.options.stream));
+		const reports: GenerationFolding[] = [];
+		for (const generation of registered) {
+			reports.push(await this.foldingOf(generation, fetched));
+		}
+		return reports;
+	}
+
+	/** One generation's answer for `folding`, the reasons in the order an operator would act on them. */
+	private async foldingOf(generation: GenerationRecord, fetched: string): Promise<GenerationFolding> {
+		if (this.folds.some((fold) => sameGeneration(fold.record, generation))) {
+			return {generation, folding: 'held'};
+		}
+		const frozen = (reason: FrozenReason, message: string): GenerationFolding => ({
+			generation,
+			folding: 'frozen',
+			frozen: {reason, message},
+		});
+		// THE CODE ITSELF FIRST: without bytes nothing anywhere can make it fold again,
+		// which outranks anything about this particular host.
+		const bundle = await this.registry.bundleOf(generation);
+		if (!bundle || bundle.length === 0) {
+			return frozen(
+				'no-bundle',
+				`no bundle is stored for it, so its code is gone: it answers reads from its own state and nothing can ` +
+					`make it fold again`,
+			);
+		}
+		if (!this.options.instantiateGeneration) {
+			return frozen(
+				'no-instantiator',
+				`its bundle is stored, and this host was given no \`instantiateGeneration\`, so it cannot run it here`,
+			);
+		}
+		const attempt = this.lastAttempt.get(keyOf(generation));
+		if (attempt) {
+			return frozen(attempt.reason, attempt.message);
+		}
+		if (generation.stream !== fetched) {
+			return frozen(
+				'stream-not-fetched',
+				`its stream ${generation.stream} is not one this deployment fetches (it fetches ${fetched}), so nothing ` +
+					`here would fold it: a move onto it is a freeze`,
+			);
+		}
+		return {generation, folding: 'instantiable'};
+	}
+
+	/**
 	 * WHICH GENERATION ANSWERS READS, as an identity a host can report -- or NOTHING,
 	 * which is a real answer and never an empty one.
 	 *
@@ -1382,6 +1510,29 @@ export class ReceivingIndexer<
 	}
 
 	private async instantiate(
+		record: GenerationRecord,
+		instantiateGeneration: NonNullable<ReceivingIndexerOptions<ABI, ProcessResultType, State>['instantiateGeneration']>,
+	): Promise<ResumedFold<ABI, ProcessResultType>> {
+		// WHAT THE ATTEMPT CAME TO is remembered for `folding`, so a generation whose code
+		// could not be built is REPORTED as frozen rather than merely logged (ADR-0092).
+		const key = keyOf(record);
+		try {
+			const resumed = await this.buildFromBundle(record, instantiateGeneration);
+			if (resumed.fold) {
+				this.lastAttempt.delete(key);
+			} else {
+				this.lastAttempt.set(key, {reason: 'stream-not-fetched', message: resumed.frozen});
+			}
+			return resumed;
+		} catch (err) {
+			if (err instanceof GenerationInstantiationError) {
+				this.lastAttempt.set(key, {reason: 'instantiation-failed', message: err.why});
+			}
+			throw err;
+		}
+	}
+
+	private async buildFromBundle(
 		record: GenerationRecord,
 		instantiateGeneration: NonNullable<ReceivingIndexerOptions<ABI, ProcessResultType, State>['instantiateGeneration']>,
 	): Promise<ResumedFold<ABI, ProcessResultType>> {

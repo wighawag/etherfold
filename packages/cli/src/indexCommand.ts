@@ -412,6 +412,9 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// the half whose disk fills up.
 							slots: () => container.slots(),
 							reclaim: () => container.reclaim(),
+							// ...and WHETHER EACH GENERATION CAN FOLD HERE (ADR-0092): held, instantiable from
+							// its stored bundle, or frozen and why -- what an operator reads before a revert.
+							folding: () => container.folding(),
 							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
 							// reached the same way and for the same reason: this command is the half of
 							// a split deployment that APPLIES the blocks, so it is the only half that

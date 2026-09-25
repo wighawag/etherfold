@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A generation's CODE is stored beside its state, and goes with it
 
 A generation is a stream plus a fold over it, and the fold is code. A Node deployment redeployed with a new processor holds no engine for any other generation, so a revert moves the pointer to a state that answers reads and can never advance again, and a restart-upgrade freezes the incumbent's answers for the whole catch-up. We decide that on a NODE deployment **each generation's bundle is stored in the database beside its state, instantiated when that generation has to fold, and deleted when the generation is deleted.** Holding a generation then means holding something runnable rather than something readable.
@@ -21,6 +17,8 @@ These decisions were made in the spec `a-generation-retains-the-code-that-folds-
 **The bytes are the ones ADR-0085's artifact already is.** Identity is the hash of those bytes (ADR-0086), so what is stored is exactly what names the generation, and there is one representation of "a processor" whether it was read from disk, pushed, or retained.
 
 **Instantiating is the HOST's, injected, and never `core`'s.** The loader lives in `@etherfold/utils`, which depends on `@etherfold/core`, so `core` cannot call it. The host supplies how to turn stored bytes into a fold, the same way it already supplies `dropState` and `readStateCursor`.
+
+**A generation SAYS whether it can fold here, and a stall is REPORTED.** `GET /{indexer}/admin/canonical-generation` gives each generation `folding`: `held` (this process folds it), `instantiable` (its stored bundle can be instantiated when it has to fold) or `frozen`, with the reason beside it (`no-bundle`, `no-instantiator`, `instantiation-failed`, `stream-not-fetched`). Without it, a revert target that resumes and one that never advances again read identically, which is the choice between two states an operator cannot tell apart. `instantiable` is a claim made WITHOUT running the code, because proving it would be the eager instantiation rejected below; an attempt that then fails is remembered by the process and reported as `instantiation-failed`. That is also how the one state this ADR can still leave silent is reported: a canonical generation whose stored code cannot be built at `open`, where the deployment starts and serves it frozen rather than refusing to start (`a-generation-says-whether-it-can-run-here`).
 
 ## Where it does NOT apply
 
