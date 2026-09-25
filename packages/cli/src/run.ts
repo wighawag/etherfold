@@ -231,6 +231,9 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// could be deleted and would otherwise hand over nothing to delete it with.
 							slots: () => prepared.container.slots(),
 							reclaim: () => prepared.container.reclaim(),
+							// ...and WHETHER EACH GENERATION CAN FOLD HERE (ADR-0092): held, instantiable from
+							// its stored bundle, or frozen and why -- what an operator reads before a revert.
+							folding: () => prepared.container.folding(),
 							// ...and the TRIGGER that gives an operator something to point AT: this
 							// process RE-READS its own configuration and registers whatever generation
 							// that now names, beside the live fold (`reconfigure.ts`). `run` is the shape

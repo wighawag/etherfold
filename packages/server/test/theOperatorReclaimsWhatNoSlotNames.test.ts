@@ -248,6 +248,46 @@ describe('an operator SEES what the deployment holds, slot by slot', () => {
 	});
 });
 
+describe('an operator SEES whether each generation can fold here, where the host can say (ADR-0092)', () => {
+	it('reports it per generation from the container, which folds all three of these', async () => {
+		const listed = await listGenerations(deployment);
+
+		// every fold this process was HANDED keeps folding after a promotion, so all three are held
+		const generations = listed.body.generations as {digest: string; folding?: string; frozen?: unknown}[];
+		expect(generations.map((one) => one.folding)).toEqual(['held', 'held', 'held']);
+		expect(generations.every((one) => one.frozen === undefined)).toBe(true);
+	});
+
+	it('WIDENS the listing and changes nothing else: a host that cannot say gets no such field', async () => {
+		const {indexer, db} = deployment;
+		const withoutFolding = createServer<TestEnv>({
+			getDB: () => db,
+			getEnv: () => ({INGEST_TOKEN: TOKEN, ADMIN_TOKEN}),
+			getIndexer: (_c, name) =>
+				name === NAME
+					? indexerEntryOn(db, {
+							canonicalGeneration: () => indexer.canonicalGeneration(),
+							generations: () => indexer.generations(),
+							promote: (id) => indexer.promote(id),
+							slots: () => indexer.slots(),
+							reclaim: () => indexer.reclaim(),
+						})
+					: undefined,
+		});
+
+		const narrow = await listGenerations({...deployment, app: withoutFolding});
+		const wide = await listGenerations(deployment);
+
+		const entries = (body: Record<string, unknown>) => body.generations as Record<string, unknown>[];
+		expect(entries(narrow.body).every((one) => !('folding' in one) && !('frozen' in one))).toBe(true);
+		// ...and what the narrow listing says, the wide one says identically beside the new field
+		expect(entries(wide.body).map(({folding: _folding, ...rest}) => rest)).toEqual(entries(narrow.body));
+		const {generations: _wide, ...wideRest} = wide.body;
+		const {generations: _narrow, ...narrowRest} = narrow.body;
+		expect(wideRest).toEqual(narrowRest);
+	});
+});
+
 describe('an operator RECLAIMS what no slot names, and is told what happened', () => {
 	it('takes it, names it, and says what came back with it', async () => {
 		expect(await emissionRows(deployment.db, deployment.garbage.stream)).toBe(1);

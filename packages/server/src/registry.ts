@@ -1,4 +1,5 @@
 import type {
+	GenerationFolding,
 	GenerationId,
 	GenerationRecord,
 	LogIngestion,
@@ -240,6 +241,23 @@ export type IndexerRegistryEntry = {
 	 */
 	reclaim?(): Promise<ReclaimReport>;
 	/**
+	 * WHETHER EACH GENERATION CAN FOLD ON THIS DEPLOYMENT: `held` (this process folds it),
+	 * `instantiable` (from the bundle stored on its row, the moment it has to fold) or
+	 * `frozen` with the reason (ADR-0092, `GenerationFolding`).
+	 *
+	 * The question an operator has to answer BEFORE a revert, which `generations` and
+	 * `slots` cannot: two generations that answer reads identically may be one that
+	 * resumes and one that never advances again. It is also where a canonical generation
+	 * that stalled because its stored code could not be built SAYS so, rather than a
+	 * deployment that merely stops advancing.
+	 *
+	 * OPTIONAL, and on its own account: it is a fact about the PROCESS answering (what it
+	 * folds and what it can instantiate), not about the registry, so a host may answer
+	 * the other questions without it. Absent, the admin listing simply carries no such
+	 * field, exactly as it carries no `slot` where `slots` is absent.
+	 */
+	folding?(): Promise<readonly GenerationFolding[]>;
+	/**
 	 * RE-READ THIS DEPLOYMENT'S OWN CONFIGURATION and register whatever generation
 	 * it now names, BESIDE the incumbent -- the trigger a watcher pulls after a
 	 * rebuild.
@@ -406,6 +424,7 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 			: {}),
 		...(holds.slots ? {slots: () => (holds.slots as () => Promise<SlottedGenerations>)()} : {}),
 		...(holds.reclaim ? {reclaim: () => (holds.reclaim as () => Promise<ReclaimReport>)()} : {}),
+		...(holds.folding ? {folding: () => (holds.folding as () => Promise<readonly GenerationFolding[]>)()} : {}),
 		...(holds.reconfigure ? {reconfigure: () => (holds.reconfigure as () => Promise<ReconfigureReport>)()} : {}),
 		...(holds.onStateMoved
 			? {

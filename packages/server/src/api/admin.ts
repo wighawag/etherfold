@@ -1,6 +1,8 @@
 import {
 	GenerationInstantiationError,
 	generationDigestOf,
+	type FrozenReason,
+	type GenerationFolding,
 	slotHolding,
 	SLOT_NAMES,
 	unslottedGenerations,
@@ -113,6 +115,14 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * way round: a read served from nothing would be a wrong answer, while "nothing
 			 * answers reads yet, and here is what is registered" is precisely the state an
 			 * operator opened this route to see.
+			 *
+			 * Each generation also says whether it CAN FOLD on this deployment, where the host
+			 * can say (`IndexerRegistryEntry.folding`, ADR-0092): `held` by this process,
+			 * `instantiable` from the bundle stored on its row, or `frozen` with a `frozen`
+			 * object naming the reason. That is what a revert target looks like BEFORE the move
+			 * -- one that resumes and one that never advances again otherwise read identically
+			 * here -- and it is where a canonical generation whose stored code could not be
+			 * built says why the deployment serving it has stopped advancing.
 			 */
 			.get('/:indexer/admin/canonical-generation', async (c) => {
 				const held = await resolveHeld(options, c as never);
@@ -125,6 +135,10 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				// the question an operator has to answer before deleting anything.
 				const slots = held.entry.slots ? await held.entry.slots() : undefined;
 				const unslotted = slots ? unslottedGenerations(generations, slots) : undefined;
+				// ...and WHETHER EACH CAN FOLD HERE, where the host can say (ADR-0092): the
+				// question an operator has to answer BEFORE a revert, and the place a canonical
+				// generation whose stored code could not be built says why it does not advance.
+				const folding = held.entry.folding ? await held.entry.folding() : undefined;
 				return c.json({
 					success: true,
 					indexer: held.name,
@@ -145,6 +159,9 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 						// acts on, so it is never rendered as a string that could be mistaken for a
 						// fourth slot name.
 						...(slots && slotHolding(slots, record) ? {slot: slotHolding(slots, record)} : {}),
+						// `held`, `instantiable` or `frozen` (with the reason beside it), or ABSENT where
+						// this host cannot say -- never a guess rendered as one of the three.
+						...(folding ? reportedFolding(folding, record) : {}),
 					})),
 				} as const);
 			})
@@ -524,6 +541,28 @@ function reportedSlots(slots: SlottedGenerations): Partial<Record<string, Return
 		if (record) held[name] = reported(record);
 	}
 	return held;
+}
+
+/**
+ * WHETHER ONE LISTED GENERATION CAN FOLD HERE, as this surface reports it: `folding`
+ * says which of the three, and `frozen` carries the reason and the words for it only
+ * where it is frozen, so a caller branches on one string (ADR-0092).
+ *
+ * Matched by IDENTITY against the host's answer rather than by position, because the
+ * two lists are separate reads and a generation registered between them is simply
+ * reported without the field.
+ */
+function reportedFolding(
+	folding: readonly GenerationFolding[],
+	record: GenerationId,
+): {folding?: GenerationFolding['folding']; frozen?: {reason: FrozenReason; message: string}} {
+	const one = folding.find(
+		(entry) => entry.generation.stream === record.stream && entry.generation.processor === record.processor,
+	);
+	if (!one) return {};
+	return one.folding === 'frozen'
+		? {folding: 'frozen', frozen: {reason: one.frozen.reason, message: one.frozen.message}}
+		: {folding: one.folding};
 }
 
 /** The `{stream, processor}` a request named, or nothing if it named no generation. */
