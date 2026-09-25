@@ -1,0 +1,33 @@
+---
+status: accepted, not yet implemented
+---
+
+# A generation's CODE is stored beside its state, and goes with it
+
+A generation is a stream plus a fold over it, and the fold is code. A Node deployment redeployed with a new processor holds no engine for any other generation, so a revert moves the pointer to a state that answers reads and can never advance again, and a restart-upgrade freezes the incumbent's answers for the whole catch-up. We decide that on a NODE deployment **each generation's bundle is stored in the database beside its state, instantiated when that generation has to fold, and deleted when the generation is deleted.** Holding a generation then means holding something runnable rather than something readable.
+
+These decisions were made in the spec `a-generation-retains-the-code-that-folds-it` and are relocated here when it was tasked, so the rationale outlives the spec's launch snapshot.
+
+## The decisions
+
+**The bytes live in the DATABASE, beside the generation's state.** One namespace then holds everything a generation is, the grouping ADR-0053 already chose for state, and a generation's storage is reclaimed by one mechanism rather than two.
+
+**A bundle dies with its generation.** Whatever deletes a generation (a `reclaim`, a replaced successor, a drop on promotion) takes its bytes with the row and the state namespace. Nothing retains an artifact whose generation is gone, so retention is bounded by the registered generations, which the caps already bound, and `predecessor` retention costs exactly one extra bundle rather than an unbounded history.
+
+**A bundle is instantiated when its generation has to FOLD, not eagerly.** Loading every registered generation at open would mean live engines for generations nobody is reading. The canonical generation answers every read, so it is needed from open; a `predecessor` is needed at the moment a revert moves the pointer onto it, which is when its answers start mattering.
+
+**The bytes are the ones ADR-0085's artifact already is.** Identity is the hash of those bytes (ADR-0086), so what is stored is exactly what names the generation, and there is one representation of "a processor" whether it was read from disk, pushed, or retained.
+
+**Instantiating is the HOST's, injected, and never `core`'s.** The loader lives in `@etherfold/utils`, which depends on `@etherfold/core`, so `core` cannot call it. The host supplies how to turn stored bytes into a fold, the same way it already supplies `dropState` and `readStateCursor`.
+
+## Where it does NOT apply
+
+**Not in a browser tab** (ADR-0089): a tab holds no `predecessor`, and could instantiate retained bytes only through a service worker. **Not on a Cloudflare Worker** (ADR-0091): a Worker refuses every in-isolate route from bytes to running code.
+
+## Considered options
+
+**Retain the author's source FILE instead.** Rejected: a processor module is an entry point, not a unit. Re-importing a saved V1 entry point inside a process whose dependencies are now V2's yields neither version, while its identity would still say V1.
+
+**Make bundling optional.** Rejected: two classes of generation, resumable and frozen, differing invisibly until the moment the difference matters.
+
+**Instantiate every slotted generation at open.** Rejected for the reason above: live engines for generations nobody is reading.
