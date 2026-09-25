@@ -6,6 +6,16 @@ blockedBy: [a-generation-keeps-the-bundle-that-folds-it]
 covers: [1]
 ---
 
+> **DRIFT CORRECTION (from the conductor, 2026-09-25): this block is authoritative over the rest of the body, and it is a Gate-3 BLOCK on PR #191 to be fixed on the KEPT branch, not a restart.** The kept branch's code is right and stays; change only what follows.
+>
+> 1. **A revert across a FILTER CHANGE is NOT refused.** The maintainer chose to split refusal by CAUSE. Refuse the move (`GenerationInstantiationError`, `409 generation-cannot-fold`) only when the stored CODE is broken: no bytes stored, the loader refuses them, the identity they hash to is not the generation's, or the fold's factories throw. A target on a DIFFERENT stream than this container can name is not broken code. It is the deliberate freeze a filter change already is: nothing fetches the old stream. So MOVE the pointer as ADR-0057 always did, fold nothing for it, and log LOUDLY (the same error the no-seam path logs) that the canonical generation answers reads and does not advance, because its stream is not one this deployment fetches. Assert it with a test: a cross-stream revert on the CLI moves the pointer and answers from the old state. Record it in `## Decisions`.
+> 2. **Amend the docs this change falsifies**, per `work/protocol/ADR-FORMAT.md`'s amendment rule (the text once described the code, so dated amendments, never silent rewrites):
+>    - `CONTEXT.md`, the **canonical pointer** entry: "It moves the pointer to any REGISTERED generation, holding a FOLD for it or not ... needs no engine". Say that on a Node deployment a same-stream target this process holds no fold for is instantiated from its stored bundle and folds (ADR-0092), a target whose code cannot be built is refused, and a cross-stream target still moves and is still frozen.
+>    - ADR-0057: "The refusal is therefore the registry's (`UnknownGenerationError`)" and "the only consequence is that nothing is dropped". Add `## Amendment, 2026-09-25 (ADR-0092): ...` plus a pointer under the title, covering the second refusal and that a revert now stops folding the generation it leaves (still a drop of nothing: the row, state, bundle and `predecessor` slot are kept).
+>    - ADR-0084's 2026-09-19 LANDED block: "Nothing retains, re-imports or reconstructs past processor code". Add a dated amendment pointing at ADR-0092.
+>    - Grep `docs/adr/` and `CONTEXT.md` for any other claim that a revert preserves state but not the ability to run, and amend it the same way.
+> 3. ADR-0092's status line STILL stays.
+
 ## What to build
 
 ADR-0092, the headline. An operator upgrades a Node deployment, the new processor is wrong, and they revert. Today the pointer moves back, the old state answers reads, and **the deployment never advances again**, because the process holds no engine for the generation it just reverted to. After this task, moving the pointer onto a generation this container holds no fold for instantiates that generation from its stored bundle, and it FOLDS.
