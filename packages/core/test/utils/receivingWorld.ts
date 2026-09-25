@@ -4,7 +4,11 @@ import {generationDigestOf} from '../../src/generation/identity.js';
 import {createMemoryGenerationRegistryPort} from '../../src/generation/memory.js';
 import type {RebuildReport, ReplayRead, ReplaySource} from '../../src/generation/rebuild.js';
 import type {GenerationRegistryPort} from '../../src/generation/registry.js';
-import {openReceivingIndexer, type ReceivingIndexer} from '../../src/receivingContainer.js';
+import {
+	openReceivingIndexer,
+	type ReceivingIndexer,
+	type ReceivingIndexerOptions,
+} from '../../src/receivingContainer.js';
 import type {StreamCursorRead, StreamCursorSource} from '../../src/stream/writer.js';
 import type {
 	EmittedLog,
@@ -340,6 +344,7 @@ export function world() {
 	 * and must be the namespace the registered generation owns.
 	 */
 	function specFor(marker: string, weight: number) {
+		weights.set(marker, weight);
 		return {
 			createState: (context: {stream: string}) =>
 				storeFor(generationDigestOf({stream: context.stream, processor: identityOf(marker)})),
@@ -358,8 +363,34 @@ export function world() {
 	 */
 	const reorgs: {blockNumber: number}[] = [];
 
+	/** The weight each marker's fold was first built with, so a fold INSTANTIATED from its bytes folds the same way. */
+	const weights = new Map<string, number>();
+
+	/**
+	 * THE HOST'S HALF OF ADR-0092 in this world: how STORED BYTES become a fold.
+	 *
+	 * The bytes are `bundleBytes(marker)`, so the marker is read back out of them --
+	 * which is this world's loader, standing where `loadProcessorArtifact` stands on a
+	 * Node deployment. Every call is recorded, so a suite can say WHEN a generation was
+	 * instantiated and from WHICH bytes.
+	 */
+	const instantiated: {processor: string; bundle: Uint8Array}[] = [];
+	async function instantiateFromBundle(
+		id: {stream: string; processor: string},
+		bundle: Uint8Array,
+	): Promise<ReturnType<typeof specFor>> {
+		instantiated.push({processor: id.processor, bundle});
+		const marker = /marker:"([^"]*)"/.exec(new TextDecoder().decode(bundle))?.[1];
+		if (marker === undefined) throw new Error(`these bytes are not a processor this world can build`);
+		return specFor(marker, weights.get(marker) ?? 1);
+	}
+
 	/** A CONTAINER over this world: a new object graph every time, over the same durable rows. */
-	function open(marker: string, weight: number): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
+	function open(
+		marker: string,
+		weight: number,
+		extra: Partial<ReceivingIndexerOptions<TestABI, string[], MemoryStore>> = {},
+	): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
 		return openReceivingIndexer<TestABI, string[], MemoryStore>({
 			port,
 			source: SOURCE,
@@ -374,11 +405,14 @@ export function world() {
 				reorgs.push({blockNumber: reorg.blockNumber});
 			},
 			generation: specFor(marker, weight),
+			...extra,
 		});
 	}
 
 	return {
 		port,
+		instantiateFromBundle,
+		instantiated,
 		stream,
 		stores,
 		specFor,
