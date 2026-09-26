@@ -6,6 +6,11 @@ blockedBy: [a-processor-bundle-is-uploaded-to-a-running-node]
 covers: [1, 2]
 ---
 
+> **FORWARD-POINTER, 2026-09-26 (conductor, after Gate 3 on PR #198).** Two things the route task left for this one:
+>
+> 1. **The route as it landed** (ADR-0085, section "The upload route as built, 2026-09-26"): `POST /{indexer}/admin/upload`, raw bundle octets, `Content-Type: text/javascript`, bound 16 MiB (`MAX_UPLOAD_BYTES` / `UPLOAD_CONTENT_TYPE` exported by `@etherfold/server`). `200` for `registered` / `unchanged`; `409 upload-failed` for every `failed`; `413 upload-too-large`, `415 upload-wrong-content-type`, `401` from the admin guard, `501 upload-not-held`. Build against that.
+> 2. **CONTEXT.md's `generation` entry** (not only the command-set entry) still says the pushed arrival "is decided and tasked" and, of the re-read route, that "a processor is code and cannot cross HTTP". With this task the arrival is complete: correct both in the same change (the re-read takes no body because it is a trigger; the code itself now arrives as BYTES by `upload`, ADR-0085), and name the route and the command there.
+
 ## What to build
 
 The SENDER half of the upload: a new CLI command, **`upload`** (named by the maintainer, 2026-09-26), that takes a bundle path, the target node's URL, the named indexer and the admin credential, uploads the bytes to the route `a-processor-bundle-is-uploaded-to-a-running-node` built, and reports what happened.
