@@ -1,3 +1,4 @@
+import {UPLOAD_CONTENT_TYPE} from '@etherfold/server';
 import {createClient} from '@libsql/client';
 import {processorArtifactIdentity} from '@etherfold/utils';
 import {copyFile, mkdtemp, rm, writeFile} from 'node:fs/promises';
@@ -10,6 +11,7 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
 import {
 	canonicalGenerationIn,
+	node,
 	prepareIndexing,
 	run,
 	type IndexingDependencies,
@@ -282,14 +284,17 @@ describe('a bundle that fails to instantiate', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------
-// ...AND A REBUILT BUNDLE REACHES A RUNNING DEPLOYMENT, ON THE ROUTE THAT ALREADY EXISTS
+// ...AND A REBUILT BUNDLE REACHES A RUNNING DEPLOYMENT, NAMED THE SAME WAY
 // ---------------------------------------------------------------------------------------------------
-// `POST /{indexer}/admin/reconfigure` RE-READS this process's own configuration,
-// and for a bundle that means re-reading the BYTES at the path and re-hashing
-// them. Asserted because it is the one place the two arrivals could have drifted
-// apart: a re-read that resolved the identity a different way from the start-up
-// would register a spurious successor on every call, which is the opposite of
-// what the endpoint is for.
+// A bundle reaches a Node deployment two ways: CONFIGURED, read off the path at START
+// (`run -p`), and UPLOADED to a running `node` (ADR-0094: the one way code reaches a
+// running Node process). Asserted because it is the one place the two arrivals could
+// have drifted apart: an upload that resolved the identity a different way from the
+// configured start-up would register a spurious successor for the very bytes the
+// database already folds, which is the opposite of what the arrival is for. So the
+// same database is opened by both: a `run` configured with the bundle, then a `node`
+// sent the same bytes. (This case used to ask a running `run` to re-read its path;
+// that endpoint is deleted.)
 // ---------------------------------------------------------------------------------------------------
 
 const ADMIN_TOKEN = 'the-operators-own-secret';
@@ -298,46 +303,50 @@ const INDEXER = 'nfts';
 describe('a rebuilt bundle reaches a running deployment', () => {
 	it('is unchanged while the bytes are, and registers the new hash once they move', async () => {
 		process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-		// a copy, because the case REPLACES it the way a rebuild does
-		const shipped = join(await aScratchDirectory(), 'processor.bundle.js');
-		await copyFile(BUNDLE, shipped);
-
-		const chain = fakeChain().serve(LOGS, TIP);
-		running = await run(
-			{...optionsFor(shipped), port: '0', indexer: INDEXER},
-			{
-				provider: chain.provider,
-				createDB: () => oneDatabase(),
-				sleep: async () => {
-					await new Promise((resolve) => setTimeout(resolve, 1));
-				},
-				handleSignals: false,
-				log: () => {},
-				env: SMALL_RANGES,
+		const db = oneDatabase();
+		const deps = {
+			createDB: () => db,
+			sleep: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
 			},
-		);
+			handleSignals: false,
+			log: () => {},
+			env: SMALL_RANGES,
+		};
 
-		const reconfigure = async () => {
-			const res = await fetch(`${running?.url}/${INDEXER}/admin/reconfigure`, {
+		// CONFIGURED: the bundle is read off the path at start, and registered by its hash
+		running = await run(
+			{...optionsFor(BUNDLE), port: '0', indexer: INDEXER},
+			{...deps, provider: fakeChain().serve(LOGS, TIP).provider},
+		);
+		expect(await registeredIdentityIn(db)).toBe(IDENTITY_OF(BUNDLE));
+		await running.stop();
+
+		// UPLOADED: the same database, now a `node`, sent bytes
+		running = await node(
+			{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
+			{...deps, provider: fakeChain().serve(LOGS, TIP).provider},
+		);
+		const upload = async (path: string) => {
+			const res = await fetch(`${running?.url}/${INDEXER}/admin/upload`, {
 				method: 'POST',
-				headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
+				headers: {'Content-Type': UPLOAD_CONTENT_TYPE, Authorization: `Bearer ${ADMIN_TOKEN}`},
+				body: new Uint8Array(readFileSync(path)),
 			});
 			return (await res.json()) as {outcome?: string; message?: string; generation?: {processor: string}};
 		};
 
 		// THE SAME BYTES: the identity cannot have moved, and the answer says why in
 		// the vocabulary of the arrival this deployment actually has
-		const unchanged = await reconfigure();
+		const unchanged = await upload(BUNDLE);
 		expect(unchanged.outcome).toBe('unchanged');
 		expect(unchanged.generation?.processor).toBe(IDENTITY_OF(BUNDLE));
-		expect(unchanged.message).toContain('BUNDLE');
+		expect(unchanged.message).toContain("bundle's bytes");
 		// ...and it does NOT tell an author who cannot declare one to bump a `version`
 		expect(unchanged.message).not.toContain('DECLARED version hash');
 
-		// THE REBUILD a watcher notices: one edited handler, same everything else
-		await copyFile(EDITED_BUNDLE, shipped);
-
-		const registered = await reconfigure();
+		// THE REBUILD a watcher sends: one edited handler, same everything else
+		const registered = await upload(EDITED_BUNDLE);
 		expect(registered.outcome).toBe('registered');
 		expect(registered.generation?.processor).toBe(IDENTITY_OF(EDITED_BUNDLE));
 	});

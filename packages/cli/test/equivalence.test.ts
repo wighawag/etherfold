@@ -49,7 +49,7 @@ import {
 import {bundleOf, identityOf} from './utils/processorIdentity.js';
 
 /**
- * THE UPGRADE a reconfigure reaching a long-running `run` would bring: the same
+ * THE UPGRADE a successor reaching a long-running process would bring: the same
  * logs, a DIFFERENT fold.
  *
  * It counts each transfer TWICE, so the incumbent and the successor answer
@@ -95,7 +95,7 @@ const V2_IDENTITY = identityOf('the-successor-fold');
  *
  * The same four lines `folding.ts` writes for the fold a command OPENS with --
  * written out here because this is the caller's side of `container.add`, which is
- * what a reconfigure reaching a running process is. The identity the ARRIVAL
+ * what an arrival reaching a running process (an upload to a `node`) is. The identity the ARRIVAL
  * supplied goes to the namespace, the fold and the registry record alike, so no
  * two of them can spell it differently.
  */
@@ -881,8 +881,8 @@ describe('a `build` artifact and a `run` database, on the generation axis', () =
 // WHAT `run` HAS THAT `build` HAS NOT: TIME
 // ---------------------------------------------------------------------------------------------------
 // The two commands hold the SAME container over the same durable registry, and
-// what differs is EXECUTION: a `run` is a long-running host, so a reconfigure can
-// reach it. A fold added beside the live one is a SUCCESSOR -- it shares the
+// what differs is EXECUTION: a `run` is a long-running host, so a successor can
+// catch up in it. A fold added beside the live one is a SUCCESSOR -- it shares the
 // stream, so it is a FOLLOWER (ADR-0044): no receiver, and a bounded rebuild over
 // the stored stream instead, which this process schedules between fetch cycles
 // (ADR-0022). When it reaches the canonical generation's cursor the pointer
@@ -911,7 +911,7 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 		const incumbent = await readsOver(combinedDB);
 		expect(incumbent).toMatchObject({byId: {transfers: {value: 3}}});
 
-		// THE RECONFIGURE, reaching a process that is running: a different fold over the
+		// THE SUCCESSOR, reaching a process that is running: a different fold over the
 		// same stream. Nothing is cleared and nothing is re-fetched -- the successor
 		// re-folds the stream this process already stored.
 		const successor = await combined.container.add(successorSpec(combined.db, V2, V2_IDENTITY));

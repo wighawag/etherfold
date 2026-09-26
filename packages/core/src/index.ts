@@ -119,12 +119,12 @@ export * from './generation/registry.js';
 /**
  * WHAT ONE ARRIVAL DID: `registered`, `unchanged` or `failed`.
  *
- * A processor reaches a running deployment in more than one way -- re-READ off
- * the filesystem behind an admin route, HANDED OVER as a module object by a
- * browser tab's own hot update -- and they are thin adapters in front of ONE
- * call (ADR-0085). So they answer ONE shape, and this is the only package all of
- * them already depend on: the re-read is the CLI's behind a `@etherfold/server`
- * route, the hot update is `@etherfold/browser`'s. A union declared twice would
+ * A processor reaches a running deployment in more than one way -- UPLOADED as a
+ * bundle's bytes to a running `etherfold node` behind an admin route, HANDED OVER
+ * as a module object by a browser tab's own hot update -- and they are thin
+ * adapters in front of ONE call (ADR-0085). So they answer ONE shape, and this is
+ * the only package all of them already depend on: the upload is the CLI's behind
+ * a `@etherfold/server` route, the hot update is `@etherfold/browser`'s. A union declared twice would
  * agree on the day it was written and drift afterwards, which is the claim the
  * type exists to make false. Core neither produces nor consumes one; it owns the
  * vocabulary the answer is written in.

@@ -249,7 +249,7 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'different pending successor is DISCARDED rather than left to be promoted. Either way what it held -- often ' +
 			'an upload still catching up -- is DELETED, row, state and stored bytes. An interactive start ASKS first; ' +
 			'a non-interactive one is REFUSED unless this is given, so a pipeline that redeploys per commit passes it ' +
-			'once in its deploy configuration. A re-read and an upload replace a pending successor without it',
+			'once in its deploy configuration. An upload to a running `node` replaces a pending successor without it',
 	},
 	to: {
 		flag: '--to <url>',
@@ -564,18 +564,24 @@ const NOTHING_TO_PRUNE_SERVE =
 	'something else wrote, and that writer is what schedules the prune.';
 
 // ---------------------------------------------------------------------------------------------------
-// WHY ONLY ONE COMMAND SELECTS A PROMOTION POLICY
+// WHY ONLY `run` AND `node` SELECT A PROMOTION POLICY
 // ---------------------------------------------------------------------------------------------------
-// The policy governs the move a CONTAINER makes ON ITS OWN when a successor is
-// added BESIDE a live fold (`generation/promotion.ts`, ADR-0046). So the question
-// a command has to answer to own this input is not "do I hold generations" but
-// "can a successor appear here while I am running", and today two commands can
-// say yes, both advancing the successor with a bounded rebuild between fetch
-// cycles: `node`, whose uploads (`POST /{indexer}/admin/upload`) register one
-// beside the live fold (ADR-0094), and `run`, which re-reads its own configuration
-// on `POST /{indexer}/admin/reconfigure`.
+// The policy governs the move a CONTAINER makes ON ITS OWN when a successor
+// catches up BESIDE a live fold that is answering reads
+// (`generation/promotion.ts`, ADR-0046). So the question a command has to answer
+// to own this input is not "do I hold generations" but "is a successor catching
+// up here while I serve", and two commands say yes, both advancing the successor
+// with a bounded rebuild between fetch cycles (ADR-0094):
 //
-// The other three that hold state cannot, each for its own structural reason, so
+//  - `node`, because its uploads (`POST /{indexer}/admin/upload`) register a
+//    successor beside the live fold WHILE IT RUNS;
+//  - `run`, because a successor registered at START -- a restart with a different
+//    `-p` or source, or one already pending in the database -- still catches up
+//    while the process runs, and whether it is promoted on catching up or held for
+//    an operator is a real choice. `run` receives no code while it runs; it is the
+//    catch-up, not the arrival, that the policy governs.
+//
+// The other three that hold state do not take it, each for its own reason, so
 // the flag is REFUSED there rather than accepted and ignored -- which is the rule
 // this whole module is built on, and the direction ADR-0048 says to be wrong in:
 // turning a refusal into an optional input later is additive, and taking an
@@ -592,12 +598,12 @@ const NOTHING_TO_PRUNE_SERVE =
 // inputs that nothing has answered; refusing it stays the honest answer under
 // ADR-0048, where refusal -> optional is additive and the reverse is breaking.
 const NEVER_PROMOTES_BUILD =
-	'this command takes no promotion input. A one-shot wires no reconfigure route, so the only successor it ' +
+	'this command takes no promotion input. A one-shot receives no code while it runs, so the only successor it ' +
 	'can hold is the one its own configuration named at start-up -- a re-run over a database it already wrote, ' +
 	'with changed processor bytes -- and that one is folded and settled under the DEFAULT policy before the ' +
 	'process exits. Choosing a different value for it is a question about this command\u2019s inputs that ' +
-	'nothing has answered yet; `run` and `node` are the shapes that take the flag today, and `run` is also the ' +
-	'shape that can be RE-configured while it runs (POST /{indexer}/admin/reconfigure).';
+	'nothing has answered yet; `run` and `node` are the shapes that take the flag today, and they SERVE while a ' +
+	'successor catches up.';
 
 const NEVER_PROMOTES_FETCH =
 	'a fetcher holds no generations at all -- no processor, no state and no canonical pointer (ADR-0003) -- so ' +
@@ -612,8 +618,8 @@ const NEVER_PROMOTES_FETCH =
 // its inputs that nothing has answered; refusing it stays the honest answer under
 // ADR-0048, where refusal -> optional is additive and the reverse is breaking.
 const NEVER_PROMOTES_INDEX =
-	'this command takes no promotion input. The receiving half registers no successor WHILE IT RUNS -- it wires ' +
-	'no reconfigure route -- so the only one it can hold is what its own configuration named at start-up, and that ' +
+	'this command takes no promotion input. The receiving half registers no successor WHILE IT RUNS -- it serves ' +
+	'no upload route -- so the only one it can hold is what its own configuration named at start-up, and that ' +
 	'one is carried to level and promoted under the DEFAULT policy by the rebuild this command schedules. Choosing ' +
 	'a different value for a restart-registered successor is a question about this command\u2019s inputs that nothing ' +
 	'has answered yet; `run` and `node` are the shapes that take the flag today.';

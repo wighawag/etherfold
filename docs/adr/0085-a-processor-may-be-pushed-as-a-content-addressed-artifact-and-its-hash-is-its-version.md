@@ -99,3 +99,13 @@ ADR-0094 gave each combined command ONE source of truth: `run` is CONFIGURED and
 
 Everything else stands: the credential, the identity, the bound, the content type, the answers, and `etherfold upload` as the sender, which now addresses a `node`.
 
+## Amendment, 2026-09-26 (ADR-0094, `the-re-read-endpoint-is-deleted`): the re-read is deleted, and the upload is the one arrival on a Node process
+
+ADR-0094 deleted the re-read endpoint (`POST /{indexer}/admin/reconfigure`) this ADR opened by describing, with the `re-read` arrival value and the server seam behind it. The upload is now the ONE way code reaches a running Node process, and a configured `run` changes its code by restarting. The context and Considered Options above are left as they were written, since they record why a second arrival was wanted; what they described as current code no longer exists. Four statements in the sections above cite the re-read as a neighbour, and are superseded here rather than edited:
+
+- **"beside the re-read and the pointer move"** (the relocated decisions) and **"beside `reconfigure`"** (the route as built): the upload route sits beside the pointer move and the reclaim, on the same `ADMIN_TOKEN`.
+- **"on the re-read's status codes"** (the route as built): the codes are the upload's own and unchanged, `200` for `registered` and `unchanged`, `409 upload-failed` for `failed`; the reason `409` is spent on a refusal the caller can repair by re-sending is now stated on the upload route itself (`packages/server/src/api/admin.ts`).
+- **"as a re-read after a filter change already is"** (the contract match): a successor on a new stream reaches a configured `run` by a RESTART with a changed source.
+- **"the re-read and the upload, already deliberate acts, replace as before"** (the three answers of 2026-09-26): the upload, the one deliberate act left on a running node, replaces a pending successor without a question; only the START is guarded (ADR-0084's amendment).
+
+`ReconfigureReport` keeps its name, and now has two arrivals, `upload` and `hot-update`.

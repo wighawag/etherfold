@@ -149,12 +149,12 @@ export async function openExplicitSource<ABI extends Abi>(origin: ExplicitSource
  * the only one that may cost an `eth_chainId` call, and it is the only one a
  * chain-free caller is refused (`requireExplicitSource`).
  *
- * It lives HERE, beside the fold it feeds, because it is run TWICE against one
- * deployment: once when the process assembles (`prepareIndexing`), and again
- * whenever that process is asked to RE-READ its configuration
- * (`reconfigure.ts`). A source change and a processor change arrive together, so
- * a re-read that reloaded the module and kept the old source would half-apply
- * the author's intent.
+ * It lives HERE, beside the fold it feeds, because it is run for more than one
+ * arrival against one deployment: once when the process assembles
+ * (`prepareIndexing`), and again for every bundle a `node` is sent (`upload.ts`,
+ * which names the contracts the uploaded module carries). A source and a
+ * processor arrive together, so resolving the source any other way would
+ * half-apply the author's intent.
  */
 export async function openIndexingSource<ABI extends Abi, ProcessResultType>(
 	origin: SourceOrigin<ABI>,
@@ -259,10 +259,10 @@ export async function openFoldingDatabase(
  *
  * Built by `foldPartsFor` and named as a type because it is assembled TWICE over
  * one running deployment: once by `openFolding` for the fold a process comes up
- * with, and again by a RE-READ for the processor that has just been rebuilt
- * (`reconfigure.ts`). The successor has to land in the same database, under the
+ * with, and again by an UPLOAD for the processor that has just been sent to a
+ * `node` (`upload.ts`). The successor has to land in the same database, under the
  * same namespacing convention and with the same retention and finality, or it
- * would not be the same deployment reconfigured -- so the assembly exists once
+ * would not be the same deployment upgraded -- so the assembly exists once
  * and both callers ask for it rather than each spelling it out.
  */
 export type FoldParts<ABI extends Abi, ProcessResultType = unknown> = {
@@ -643,7 +643,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		// stream means. What this module owns is which DATABASE and which NAME.
 		import('@etherfold/server'),
 		// the state, the identity and the two factories, built the ONE way this
-		// deployment builds them -- so a fold added later by a RE-READ lands in the same
+		// deployment builds them -- so a fold added later by an UPLOAD lands in the same
 		// database under the same convention (`foldPartsFor`).
 		foldPartsFor<ABI, ProcessResultType>(declared, target, db, context.finalityDepth, context.arrived),
 	]);

@@ -1,4 +1,5 @@
 import {generationDigestOf} from '@etherfold/core';
+import {UPLOAD_CONTENT_TYPE} from '@etherfold/server';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {createClient} from '@libsql/client';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
@@ -7,7 +8,7 @@ import {join} from 'node:path';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {node, run, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, CAROL, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
@@ -174,6 +175,36 @@ async function aRunOver(
 	});
 	running = started;
 	return {indexer: started, chain};
+}
+
+/** START a `node` over `db`: no processor and no source, so its code arrives by upload (ADR-0094). */
+async function aNodeOver(db: RemoteSQL, logs = HISTORY, tip = FIRST_TIP) {
+	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+	const chain = fakeChain().serve(logs, tip);
+	const started = await node(
+		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
+		{
+			provider: chain.provider,
+			createDB: () => db,
+			sleep: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			},
+			handleSignals: false,
+			log: () => {},
+			env: {MAX_BLOCKS_PER_FETCH: '20'},
+		},
+	);
+	running = started;
+	return {indexer: started, chain};
+}
+
+/** WHAT `etherfold upload` SENDS: a self-contained bundle's bytes, on the admin credential. */
+async function uploadSource(indexer: RunningIndexer, source: string): Promise<Response> {
+	return fetch(`${indexer.url}/${INDEXER}/admin/upload`, {
+		method: 'POST',
+		headers: {'Content-Type': UPLOAD_CONTENT_TYPE, Authorization: `Bearer ${ADMIN_TOKEN}`},
+		body: source,
+	});
 }
 
 async function stop(): Promise<void> {
@@ -460,33 +491,31 @@ describe('a deployment restarted with the SAME processor, which DOES hold its ow
 	});
 });
 
-describe('the RECONFIGURE path through the running endpoint', () => {
+describe('the UPLOAD path to a running `node`', () => {
 	it('is unaffected: a successor registered beside a live fold does not stop the appends', async () => {
-		// The other way a successor arrives (`POST /{indexer}/admin/reconfigure`), on a
-		// process that never stopped. Under the defect this path WORKED -- the incumbent
-		// was held here, so it kept the pen -- which is exactly why it is asserted: the
-		// fix must not pay for the restart case with this one.
+		// The other way a successor arrives, on a process that never stopped: an UPLOAD to a
+		// running `node` (ADR-0094; this case used to reach it through the deleted re-read
+		// endpoint on `run`). Under the defect this path WORKED -- the incumbent was held
+		// here, so it kept the pen -- which is exactly why it is asserted: the fix must not
+		// pay for the restart case with this one.
 		const db = oneDatabase();
-		const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
-		const first = await aRunOver(db, path, [...HISTORY, ...AFTER_THE_RESTART], SECOND_TIP);
+		const first = await aNodeOver(db, [...HISTORY, ...AFTER_THE_RESTART], SECOND_TIP);
+		expect((await uploadSource(first.indexer, processorBundleSource({credit: 'to'}))).status).toBe(200);
 		const stored = await until(
 			async () => emissions(db),
 			(rows) => rows.length >= HISTORY.length,
 			'the deployment to store the history',
 		);
 
-		await writeFile(path, processorBundleSource({credit: 'from'}), 'utf-8');
-		const reconfigured = await fetch(`${first.indexer.url}/${INDEXER}/admin/reconfigure`, {
-			method: 'POST',
-			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
-		});
-		expect(reconfigured.status, await reconfigured.clone().text()).toBe(200);
+		const uploaded = await uploadSource(first.indexer, processorBundleSource({credit: 'from'}));
+		expect(uploaded.status, await uploaded.clone().text()).toBe(200);
+		expect(((await uploaded.json()) as {outcome?: string}).outcome).toBe('registered');
 		expect(first.indexer.container.held().length).toBe(2);
 
 		const after = await until(
 			async () => emissions(db),
 			(rows) => rows.length === HISTORY.length + AFTER_THE_RESTART.length,
-			'the reconfigured deployment to go on appending',
+			'the upgraded deployment to go on appending',
 		);
 		expect(new Set(after.map(logIdentityOf)).size).toBe(after.length);
 		expect(after.slice(0, stored.length)).toEqual(stored);

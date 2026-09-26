@@ -47,7 +47,7 @@ import {canonicalStoreIn} from './utils/reads.js';
 // ordinary "add an event" deploy. The uploads used to go to a `run`; since ADR-0094 the
 // upload route is `node`'s, and these cases moved to it, the incumbent being the node's
 // first upload. What a configured `run` still does here is recorded where it happens: it
-// restarts over a database a `node` wrote, and it re-reads a changed configured source.
+// restarts over a database a `node` wrote, and it restarts with a changed configured source.
 //
 // The chain here is the one thing that differs from the other upload suites: it FILTERS
 // by `topic0`, the way a node does, and COUNTS the `eth_getLogs` calls per filter. So
@@ -573,9 +573,10 @@ describe('a new-stream upload still CATCHING UP survives a restart, and is promo
 });
 
 // ---------------------------------------------------------------------------------------------------
-// A node started with an EXPLICIT source refuses an upload whose source differs (decision 2), so
-// the one arrival that can put a successor on a new stream there is a RE-READ after the operator
-// changed that source. MEASURED here rather than assumed: it is fetched the same way.
+// A `run` started with an EXPLICIT source receives no upload (ADR-0094), so the one way a
+// successor on a new stream reaches it is a RESTART after the operator changed that source.
+// MEASURED here rather than assumed: it is fetched the same way. (This case used to ask the
+// running process to re-read its configuration; that endpoint is deleted, ADR-0094.)
 // ---------------------------------------------------------------------------------------------------
 
 /** A `--deployments` file naming the contract with the events `abi` declares. */
@@ -586,7 +587,7 @@ async function writeDeployments(file: string, events: readonly unknown[]): Promi
 	);
 }
 
-describe('a RE-READ after the operator changed a configured source', () => {
+describe('a `run` RESTARTED after the operator changed a configured source', () => {
 	it('registers a successor on the new stream, fetches it beside the incumbent, and promotes it', async () => {
 		const dir = await mkdtemp(join(tmpdir(), 'etherfold-new-stream-'));
 		scratch.push(dir);
@@ -604,26 +605,24 @@ describe('a RE-READ after the operator changed a configured source', () => {
 		};
 
 		const db = oneDatabase();
+		const first = await aRunOver(db, aFilteringChain().serve(LOGS, TIP), {...CONFIGURED, deployments});
+		await waitFor('the incumbent folded to the tip', async () => (await positionOf(first, BUNDLE)) === TIP);
+		const incumbent = (await listingOf(first)).generations[0]!;
+		await stop();
+
+		// the operator ADDS AN EVENT to the configured source, and restarts the same `run`
+		await writeDeployments(deployments, [...abi, approvalEvent]);
 		const chain = aFilteringChain().serve(LOGS, TIP);
 		const indexer = await aRunOver(db, chain, {...CONFIGURED, deployments});
-		await waitFor('the incumbent folded to the tip', async () => (await positionOf(indexer, BUNDLE)) === TIP);
-		const incumbent = (await listingOf(indexer)).generations[0]!;
-		expect(chain.askedFor(NEW_FILTER)).toBe(0);
-
-		// the operator ADDS AN EVENT to the configured source, and asks the node to re-read
-		await writeDeployments(deployments, [...abi, approvalEvent]);
-		const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
-			method: 'POST',
-			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
-		});
-		const body = (await res.json()) as {outcome?: string; generation?: {stream: string; processor: string}};
-		expect(res.status, JSON.stringify(body)).toBe(200);
-		expect(body.outcome).toBe('registered');
-		const successor = body.generation!;
+		const listed = (await listingOf(indexer)).generations;
+		expect(listed).toHaveLength(2);
+		const successor = listed.find((entry) => entry.digest !== incumbent.digest)!;
+		// the same processor over a different source: a successor on a NEW stream
+		expect(successor.processor).toBe(incumbent.processor);
 		expect(successor.stream).not.toBe(incumbent.stream);
 
-		await waitFor('the re-read generation was promoted', async () => {
-			return (await listingOf(indexer)).slots?.canonical?.digest === generationDigestOf(successor);
+		await waitFor('the restart-registered generation was promoted', async () => {
+			return (await listingOf(indexer)).slots?.canonical?.digest === successor.digest;
 		});
 		expect(chain.askedFor(NEW_FILTER)).toBeGreaterThan(0);
 		await waitFor('the old stream stopped being fetched', async () => {

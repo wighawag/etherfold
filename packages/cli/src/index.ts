@@ -38,7 +38,7 @@ import {
 	streamConfigFor,
 } from './folding.js';
 import {StreamFetchers} from './fetchers.js';
-import {arrivalQueue, reconfigurerFor} from './reconfigure.js';
+import {arrivalQueue} from './arrivalQueue.js';
 import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
 import {uploaderFor} from './upload.js';
 import type {BuildConfig, ConfigFor, NodeConfig, Options, RunConfig} from './types.js';
@@ -60,7 +60,7 @@ export {
 	type WaitingFoldingAssembly,
 } from './folding.js';
 export {StreamFetchers} from './fetchers.js';
-export {arrivalQueue, reconfigurerFor, type ArrivalQueue, type ReconfigureContext} from './reconfigure.js';
+export {arrivalQueue, type ArrivalQueue} from './arrivalQueue.js';
 export {uploaderFor, type UploadContext} from './upload.js';
 export {
 	describeUpload,
@@ -234,27 +234,6 @@ export type PreparedIndexing<
 	 * of it -- against `:memory:` they would not even be the same database.
 	 */
 	db: RemoteSQL;
-	/**
-	 * RE-READ this deployment's own configuration and register whatever generation
-	 * it now names, beside the incumbent -- what `POST /{indexer}/admin/reconfigure`
-	 * does on this process (`reconfigure.ts`).
-	 *
-	 * It is built HERE, by the assembly, because re-reading is redoing exactly the
-	 * two resolutions above -- the processor module and the source -- and a second
-	 * place that knew how to do that would be a second answer to what this process
-	 * folds.
-	 *
-	 * PRESENT on the CONFIGURED assembly (`run`, `build`) and ABSENT on `node`, which
-	 * has no configuration of its code to re-read (ADR-0094): its route answers what a
-	 * host without the seam answers. `run` is the shape that EXPOSES it, and `build`
-	 * deliberately does not: a one-shot has no HTTP surface to pull the trigger from,
-	 * so it re-reads its configuration exactly once, at start-up. That is NOT the same
-	 * as holding one generation -- a re-run `build` over a database it already wrote
-	 * with changed processor bytes registers a successor beside the canonical
-	 * generation at that single read, folds it, and settles the pointer onto it before
-	 * exiting (`driveCycles`).
-	 */
-	reconfigure?(): Promise<ReconfigureReport>;
 	/**
 	 * RECEIVE a processor bundle's BYTES and register the generation they name, beside
 	 * the incumbent -- what `POST /{indexer}/admin/upload` does on this process
@@ -467,11 +446,6 @@ export async function prepareIndexing<
 	);
 	await fetchers.reconcile();
 
-	// ONE LINE for every arrival this process answers, so no two re-reads decide "is this
-	// identity already held" against one registry at the same time (`arrivalQueue`,
-	// `reconfigure.ts`).
-	const arrivals = arrivalQueue();
-
 	return {
 		// the switch inside `resolveCommandConfig` produced exactly the arm named by
 		// `command`, which the compiler cannot see through a generic parameter
@@ -487,24 +461,8 @@ export async function prepareIndexing<
 		store,
 		stateOf,
 		db,
-		reconfigure: reconfigurerFor<ABI, ProcessResultType>(
-			{
-				options,
-				env,
-				provider,
-				db,
-				dbUrl: resolved.destination.db,
-				indexer: resolved.indexer,
-				container,
-				...(deps.importModule ? {importModule: deps.importModule} : {}),
-				// the SAME pair, so a re-read resolves the identity this process came up with
-				// rather than a second answer that would register a spurious successor on every
-				// call (`reconfigure.ts`)
-				...(deps.processorBundle === undefined ? {} : {processorBundle: deps.processorBundle}),
-			},
-			arrivals,
-		),
-		// NO UPLOAD: a configured deployment receives no code (ADR-0094); that is `node`.
+		// NO UPLOAD: a configured deployment receives no code (ADR-0094); that is `node`. It
+		// changes what it folds by RESTARTING with a different `-p` or source.
 		// ...and it is not WAITING: it was configured with what it folds and what it fetches
 		waiting: () => undefined,
 		index: () => driveCycles(command, fetchers, container, deps),
@@ -613,9 +571,8 @@ function notYet(what: string): never {
  * container with no fold and no source of its own (`openWaitingFolding`), and NO FETCHER
  * until there is something to fetch.
  *
- * It serves the UPLOAD (`upload.ts`) and wires NO re-read: it has no configuration of
- * its code to re-read, so `POST /{indexer}/admin/reconfigure` answers what a host
- * without that seam answers.
+ * It serves the UPLOAD (`upload.ts`), which is the ONE way code reaches it while it
+ * runs: it has no configuration of its code at all.
  *
  * ## How the fetchers come to exist after start
  *
@@ -707,7 +664,6 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 		},
 		stateOf,
 		db,
-		// NO `reconfigure`: nothing here names code a re-read could read again (ADR-0094)
 		upload: async (bundle) => {
 			const report = await receive(bundle);
 			wake();
@@ -811,18 +767,17 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
  *
  * WHERE THE SUCCESSOR COMES FROM, in the two ways it can arrive. A generation is
  * registered when the container OPENS, from config, so a RESTART is one of them
- * -- and what makes a restart survivable is not the process being long-lived but
- * the registry and the state being ROWS: the new process finds the incumbent
- * already there, still canonical, still answering, and registers the successor
- * beside it. The other way needs no restart at all, and is the one "a reconfigure
- * can reach a long-running host" was always read as meaning: this process RE-READS
- * its own configuration when asked to, over HTTP
- * (`POST /{indexer}/admin/reconfigure`, `reconfigure.ts`), and registers whatever
- * generation that names beside the live fold while it goes on answering. Nothing
- * inside this process watches a file: whatever notices a rebuild stays outside and
- * pulls that trigger. What the long-running shape buys is the half described
- * above: somewhere to put the bounded rebuild that carries the successor to level
- * once it exists.
+ * (a configured `run` with a different `-p` or source) -- and what makes a restart
+ * survivable is not the process being long-lived but the registry and the state
+ * being ROWS: the new process finds the incumbent already there, still canonical,
+ * still answering, and registers the successor beside it. The other way needs no
+ * restart at all: a running `etherfold node` is SENT a bundle's bytes over HTTP
+ * (`POST /{indexer}/admin/upload`, `upload.ts`), the ONE way code reaches a running
+ * Node process (ADR-0094), and registers the generation they name beside the live
+ * fold while it goes on answering. Nothing inside this process watches a file:
+ * whatever notices a rebuild stays outside and calls `etherfold upload`. What the
+ * long-running shape buys is the half described above: somewhere to put the
+ * bounded rebuild that carries the successor to level once it exists.
  *
  * The loop sleeps only where it decided to WAIT, so a process still catching the
  * chain up flat out (`CATCH_UP_DELAY_MS=0`) advances its followers once it
@@ -1078,8 +1033,8 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
  * That is what keeps a `build` artifact indistinguishable from a `run` database on
  * the generation axis -- exactly the axis it must not be distinguishable on, since
  * the artifact's whole purpose is to become somebody else's INPUT. What it still
- * does NOT do is hold a reconfigure: nothing can register a successor into a
- * running `build`, because it has no route to ask it to, and its settle promises
+ * does NOT do is receive a successor while it runs: nothing can register one into a
+ * running `build`, because it serves no route to send one on, and its settle promises
  * ONE bounded step rather than waiting for anything to catch up.
  */
 export async function build(options: Options, deps: IndexingDependencies = {}): Promise<RunSummary> {

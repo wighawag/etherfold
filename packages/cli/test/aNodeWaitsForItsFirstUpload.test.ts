@@ -184,18 +184,17 @@ describe('a `node` waits, and says so', () => {
 	});
 });
 
-describe('a `node` wires no re-read: it has no configuration of its code to re-read (ADR-0094)', () => {
-	it('answers `501 reconfigure-not-held`, as a host without that seam does, and registers nothing', async () => {
+describe('a `node` serves no re-read route: an upload is the ONE way code reaches it (ADR-0094)', () => {
+	it('answers `POST /{indexer}/admin/reconfigure` as a route that does not exist, and registers nothing', async () => {
 		const indexer = await aWaitingNodeOver(oneDatabase(), fakeChain().serve(LOGS, TIP));
 
 		const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
 			method: 'POST',
 			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
 		});
-		const body = (await res.json()) as Record<string, any>;
 
-		expect(res.status, JSON.stringify(body)).toBe(501);
-		expect(body.error).toBe('reconfigure-not-held');
+		// NOT a `501` capability refusal: the route itself is deleted, on every host
+		expect(res.status).toBe(404);
 		expect((await listingOf(indexer)).generations).toEqual([]);
 	});
 });

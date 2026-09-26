@@ -25,8 +25,8 @@ const logger = logs('@etherfold/server');
 /**
  * THE OPERATOR'S SURFACE ON ONE NAMED INDEXER: which generation answers reads,
  * moving that pointer -- forwards to promote, BACK to revert -- the TRIGGER that
- * introduces a generation to move to in the first place, and RECLAIMING the ones
- * no slot names.
+ * introduces a generation to move to in the first place (the UPLOAD), and
+ * RECLAIMING the ones no slot names.
  *
  * The last of those is the only one here that DELETES state, and it is the
  * operator half of ADR-0084: the durable slots make "what is this generation FOR"
@@ -38,7 +38,8 @@ const logger = logs('@etherfold/server');
  * downstream of "a successor exists" was built and careful before anything could
  * introduce one to a RUNNING process: a generation was registered when a
  * container OPENED, from configuration, so a changed processor reached a
- * deployment by restarting it. `reconfigure` is the missing half, and it sits
+ * deployment by restarting it. The `upload` is the missing half (on `etherfold
+ * node`, ADR-0094: the ONE way code reaches a running Node process), and it sits
  * here rather than anywhere else because it is the same operator, the same
  * segment and the same credential as the move.
  *
@@ -254,7 +255,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				} catch (err) {
 					if (!(err instanceof GenerationInstantiationError)) throw err;
 					// THE TARGET CANNOT BE MADE TO FOLD HERE, so the move was REFUSED and nothing
-					// changed (ADR-0092). `409` for the reason `reconfigure-failed` is: nothing
+					// changed (ADR-0092). `409` for the reason `upload-failed` is: nothing
 					// about the request is wrong, the deployment's state conflicts with it, and
 					// the generation that answered reads before this call still does.
 					logger.error(`admin: ${JSON.stringify(held.name)} refused to move its pointer: ${err.message}`);
@@ -304,7 +305,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * re-litigate: a Worker is reachable only over HTTP, and an operator affordance that
 			 * exists on one deployment shape is not an affordance. (The command set has since
 			 * grown a verb, `upload`, for the one admin action that only ever starts from
-			 * an author's machine; that changes nothing here.) It takes NO BODY, for the reason `reconfigure` takes none: the
+			 * an author's machine; that changes nothing here.) It takes NO BODY: the
 			 * rule decides which generations go, so there is nothing for a caller to name and no
 			 * input that could be got wrong.
 			 *
@@ -344,7 +345,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				const reclaim = entry.reclaim;
 				if (!reclaim) {
 					// A CAPABILITY this deployment lacks and NOT a missing route, which is the same
-					// `501` an absent pointer, an absent re-read and an absent ingestion answer.
+					// `501` an absent pointer, an absent upload and an absent ingestion answer.
 					logger.error(`admin: ${JSON.stringify(name)} holds no generations to reclaim, so a reclaim was refused`);
 					return c.json(
 						{
@@ -391,157 +392,6 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				} as const);
 			})
 			/**
-			 * THE TRIGGER: make this deployment RE-READ its own configuration and register
-			 * whatever generation that now names, beside the incumbent.
-			 *
-			 * ## Why an endpoint, and why it takes NOTHING
-			 *
-			 * Whatever notices a file changed lives OUTSIDE the process. A file watcher
-			 * inside the indexer would be development tooling by construction, which is what
-			 * makes it tempting to gate behind a development flag and then need a second
-			 * mechanism for production; an endpoint is called by a dev watcher, a deploy hook
-			 * or a CI step equally. And it is RE-READ rather than RECEIVE because a processor
-			 * is CODE and cannot cross HTTP: the watcher owns WHEN, the process owns WHAT. So
-			 * there is no body. Shipping the code itself is a DIFFERENT arrival with its own
-			 * route below (`upload`), which carries a bundle's BYTES rather than a module
-			 * (ADR-0085), and this one stays a trigger.
-			 *
-			 * It sits under the SAME `/{indexer}/admin/` segment as the pointer move and
-			 * therefore under the same `ADMIN_TOKEN` guard: handing a remote caller the
-			 * ability to START a fold reuses the existing authorisation story rather than
-			 * opening a second one, and it is deliberately never the ingest credential.
-			 *
-			 * ## This route DECIDES nothing about the reload
-			 *
-			 * Exactly as the pointer move above decides nothing about the move. This package
-			 * names no runtime, so it resolves no module and reads no configuration; what a
-			 * re-read MEANS belongs to the host that assembled the fold, behind
-			 * `IndexerRegistryEntry.reconfigure`. What this adds is the transport's own two
-			 * decisions: who may call it, and which status each answer is.
-			 *
-			 * ## THE THREE ANSWERS, and why they are three
-			 *
-			 * Because "I saved the file and nothing happened" otherwise has three
-			 * indistinguishable causes. `registered` NAMES the generation (`200`);
-			 * `unchanged` is a SUCCESS that says the configuration named the generation this
-			 * deployment already holds (`200`, with the reason -- see `ReconfigureReport`);
-			 * `failed` refuses (`409`), names what went wrong, and promises the deployment is
-			 * exactly as it was. Every answer also says WHICH arrival produced it
-			 * (`arrival`, `re-read` on this route), beside the outcome rather than as a
-			 * fourth one, so a log holding this route's answers and a tab's hot update or an
-			 * upload's can still tell them apart.
-			 *
-			 * `409` and none of this surface's other refusals: nothing about the REQUEST is
-			 * wrong so it is not the `400` family, the name resolved so it is not the `404`,
-			 * and the capability is present so it is not the `501` beside it. What is true is
-			 * that the deployment's CURRENT state conflicts with performing this, and that a
-			 * caller which fixes that state and re-sends the identical request will be
-			 * served -- which is what this repo already spends `409` on, as the ONE resumable
-			 * refusal on the wire (ADR-0004). A broken processor is the normal state between
-			 * the two halves of one change, so a watcher meeting this is expected to build
-			 * again and call again seconds later.
-			 *
-			 * A host that THREW is reported as the same failure rather than as a `500`: the
-			 * caller's situation is identical (the re-read did not happen, the deployment is
-			 * untouched, try again after fixing it), and making a watcher distinguish an
-			 * exception from a refusal would be asking it to guess.
-			 */
-			.post('/:indexer/admin/reconfigure', async (c) => {
-				const resolved = resolveIndexer(options, c as never, 'admin');
-				if (!resolved.ok) return resolved.response;
-				const {entry, name} = resolved;
-
-				const reconfigure = entry.reconfigure;
-				if (!reconfigure) {
-					// A CAPABILITY this deployment lacks and NOT a route that is missing, which
-					// is the same `501` an absent pointer or an absent ingestion answers. It is
-					// deliberately independent of `generations`/`promote`: a read tier holds a
-					// database somebody else writes and no processor at all, and a host may hold
-					// a registry it can move a pointer in with nothing to re-read FROM.
-					logger.error(`admin: ${JSON.stringify(name)} cannot re-read its configuration, so a reconfigure was refused`);
-					return c.json(
-						{
-							success: false,
-							error: 'reconfigure-not-held',
-							indexer: name,
-							message:
-								`this named indexer cannot re-read its own configuration, so there is nothing here to trigger: it ` +
-								`was registered by a host that resolves no processor module of its own -- a read tier answers over a ` +
-								`database written elsewhere, and a receiving host is handed its fold rather than reading one. A ` +
-								`deployment that serves this registers a re-read alongside what it holds (\`etherfold run\`).`,
-						} as const,
-						501,
-					);
-				}
-
-				let report: ReconfigureReport;
-				try {
-					report = await reconfigure.call(entry);
-				} catch (err) {
-					// SAME ANSWER as a reported failure, because the caller's situation is the
-					// same one. A host is expected to report its own failure as data (the load
-					// that did not compile is the EXPECTED case, not an exception), and this is
-					// what keeps a host that did not still honest to the watcher.
-					// ...and it is the RE-READ that failed: the host threw instead of saying so, but
-					// this route is the re-read's, so the log still names the arrival.
-					report = {
-						arrival: 're-read',
-						outcome: 'failed',
-						message: err instanceof Error ? err.message : String(err),
-					};
-				}
-
-				if (report.outcome === 'failed') {
-					logger.error(
-						`admin: ${JSON.stringify(name)} could not re-read its configuration (${report.message}). Nothing was ` +
-							`registered and the deployment is as it was.`,
-					);
-					return c.json(
-						{
-							success: false,
-							error: 'reconfigure-failed',
-							indexer: name,
-							arrival: report.arrival,
-							outcome: 'failed',
-							message: report.message,
-						} as const,
-						409,
-					);
-				}
-
-				if (report.outcome === 'unchanged') {
-					logger.info(
-						`admin: ${JSON.stringify(name)} re-read its configuration and it named {stream: ` +
-							`${report.generation.stream}, processor: ${report.generation.processor}}, which it already holds, so ` +
-							`NOTHING was registered`,
-					);
-					return c.json({
-						success: true,
-						indexer: name,
-						arrival: report.arrival,
-						outcome: 'unchanged',
-						generation: reported(report.generation),
-						message: report.message,
-					} as const);
-				}
-
-				logger.info(
-					`admin: ${JSON.stringify(name)} re-read its configuration and REGISTERED {stream: ` +
-						`${report.generation.stream}, processor: ${report.generation.processor}} beside what answers reads`,
-				);
-				return c.json({
-					success: true,
-					indexer: name,
-					arrival: report.arrival,
-					outcome: 'registered',
-					// the generation it registered, in the two fields the pointer move takes and
-					// the opaque digest a feed response advertises it by -- so the value this
-					// answers with is the value an operator matches or promotes, with nothing to
-					// reconstruct.
-					generation: reported(report.generation),
-				} as const);
-			})
-			/**
 			 * THE UPLOAD: receive a processor bundle's BYTES and register the generation they
 			 * name beside the incumbent (ADR-0085's amendment of 2026-09-22, and its decisions
 			 * relocated from the upload spec).
@@ -553,7 +403,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 *
 			 * ## Where it lives, and on which credential
 			 *
-			 * Under `/{indexer}/admin/`, beside the re-read and the pointer move, so behind the
+			 * Under `/{indexer}/admin/`, beside the pointer move and the reclaim, so behind the
 			 * SAME `ADMIN_TOKEN` guard and its `401` (ADR-0057). A surface that registers a new
 			 * fold is at least as consequential as one that moves the pointer, and accepting
 			 * bytes makes the admin credential explicit remote-code-execution authority
@@ -582,17 +432,32 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * that is not self-contained, throws on evaluation or carries no processor, and only
 			 * then registers.
 			 *
-			 * ## THE ANSWERS, which are the re-read's, with the arrival named
+			 * ## THE THREE ANSWERS, with the arrival named, and why they are three
 			 *
-			 * The shared three-outcome report (`ReconfigureReport`) in the same shapes and on
-			 * the same status codes as `reconfigure` above, with `arrival: 'upload'`: `200`
-			 * `registered` naming the generation, `200` `unchanged` when the bytes name a
-			 * generation this deployment already folds, and `409 upload-failed` with the reason
-			 * and the deployment exactly as it was. `409` for the reason the re-read gives it
-			 * and so that a sender branches on ONE mapping from outcome to status whatever the
-			 * arrival. A host that THREW is reported as the same failure. The two transport
-			 * refusals above carry `arrival` and `outcome: 'failed'` too, since they are
-			 * refusals of this upload and a sender reads them as such.
+			 * Because "I built and uploaded and nothing happened" otherwise has three
+			 * indistinguishable causes. The shared three-outcome report (`ReconfigureReport`),
+			 * with `arrival: 'upload'`: `200` `registered` NAMES the generation; `200`
+			 * `unchanged` is a SUCCESS that says the bytes name a generation this deployment
+			 * already folds, with the reason; and `409 upload-failed` refuses, names what went
+			 * wrong, and promises the deployment is exactly as it was. The arrival sits BESIDE
+			 * the outcome rather than as a fourth one, so a log holding this route's answers and
+			 * a tab's hot update can still tell them apart.
+			 *
+			 * `409` and none of this surface's other refusals: nothing about the REQUEST is
+			 * wrong so it is not the `400` family, the name resolved so it is not the `404`,
+			 * and the capability is present so it is not the `501` above. What is true is that
+			 * the deployment's CURRENT state conflicts with performing this, and that a caller
+			 * which fixes that state and re-sends will be served -- which is what this repo
+			 * already spends `409` on, as the ONE resumable refusal on the wire (ADR-0004). A
+			 * broken processor is the normal state between the two halves of one change, so a
+			 * watcher meeting this is expected to build again and upload again seconds later.
+			 *
+			 * A host that THREW is reported as the same failure rather than as a `500`: the
+			 * caller's situation is identical (nothing was registered, the deployment is
+			 * untouched, try again after fixing it), and making a watcher distinguish an
+			 * exception from a refusal would be asking it to guess. The two transport refusals
+			 * above carry `arrival` and `outcome: 'failed'` too, since they are refusals of this
+			 * upload and a sender reads them as such.
 			 */
 			.post('/:indexer/admin/upload', async (c) => {
 				const resolved = resolveIndexer(options, c as never, 'admin');
@@ -662,9 +527,9 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				try {
 					report = await upload.call(entry, body);
 				} catch (err) {
-					// the same answer a reported failure gets, for the reason the re-read gives: the
-					// caller's situation is identical, and this route is the UPLOAD's, so the log
-					// still names the arrival
+					// SAME ANSWER as a reported failure, because the caller's situation is the same
+					// one (see THE THREE ANSWERS above); this route is the UPLOAD's, so the log still
+					// names the arrival
 					report = {arrival: 'upload', outcome: 'failed', message: err instanceof Error ? err.message : String(err)};
 				}
 

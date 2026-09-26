@@ -82,3 +82,12 @@ ADR-0094's first change has landed, and it moves this ADR's subject without chan
 The first amendment above says a configured `--processor` naming the canonical generation "changes nothing: a node restarted with the processor it was first started with keeps folding whatever was uploaded to it since". No longer. Uploads now go to `etherfold node`, and a configured start (`run`, `build`, `index`) folds toward exactly what its configuration names (ADR-0094's third consequence). So a configured start naming the canonical generation while a DIFFERENT generation is pending in `successor`, an upload to a `node` over the same database included, DISCARDS it (row, state and stored bundle), behind the same start guard as a replacement: asked at a terminal, refused elsewhere unless `--override` (ADR-0084's second amendment of 2026-09-26). To keep what was uploaded, start `node` over the database, or configure the pending successor's own processor, which still changes nothing.
 
 Story 10's exception in that amendment therefore widens: an upload still catching up does not survive a configured restart that names a DIFFERENT processor OR the canonical one, where the operator confirmed by answering yes or by passing `--override`.
+
+## Amendment, 2026-09-26 (ADR-0094, `the-re-read-endpoint-is-deleted`): there is no re-read left to compare against
+
+The re-read endpoint is DELETED (ADR-0094), so four statements above that name it are superseded here rather than edited:
+
+- **"as a re-read after a filter change already is"** (the match rule): a successor on a new stream reaches a configured `run` by a RESTART with a changed source, and reaches a `node` by an upload carrying other contracts.
+- **"The re-read and the upload replace a pending successor as they always did"**: the upload, the one deliberate act left on a running node, still does; only the START is guarded.
+- **"the only arrival that can put a successor on a new stream there is a re-read after the operator changed the configured source"**: on a `run` started with an explicit source it is a restart after the operator changed that source (`packages/cli/test/aSuccessorOnANewStreamIsFetchedByItsOwnWriter.test.ts`).
+- **"A `node` wires no re-read, so a re-read on it answers ... `501 reconfigure-not-held`"**: no host serves `POST /{indexer}/admin/reconfigure` any more, so it answers as a route that does not exist (`404`), on a `node` and a `run` alike, and `reconfigure-not-held` is gone with the route.

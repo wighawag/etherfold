@@ -137,7 +137,7 @@ export type OpenProcessorArrivalOptions = LoadProcessorModuleOptions & {
  * ## The injected collaborators, and what each governs
  *
  * `importModule` governs the MODULE arrival only: it is how a test states what
- * comes back for a specifier, and how a re-read defeats the ESM cache. It does
+ * comes back for a specifier, and how a caller would defeat the ESM cache. It does
  * NOT reach the bundle arrival, which imports a `data:` URL of the bytes it just
  * read -- where the cache is keyed on those bytes and is therefore exactly right:
  * identical bytes ARE the same module. To state what the BYTES are, a caller

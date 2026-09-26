@@ -120,8 +120,8 @@ export const DEFAULT_REBUILD_INTERVAL_SECONDS = 4;
 //     `{source, config}` or a changed processor therefore registers a generation
 //     beside the live one instead of reaching `processor.clear()` -- at RESTART,
 //     which is the only moment this command adds a fold, because `open()` is the
-//     one caller of `container.add` it wires up (the other is a re-read, and
-//     `reconfigure.ts` is a `run`-only surface). What a BATCH naming a fold this
+//     one caller of `container.add` it wires up (the other is the upload, and
+//     `upload.ts` is a `node`-only surface). What a BATCH naming a fold this
 //     process does not hold gets is a refusal, not a generation: the ingest route
 //     selects a receiver by matching `{source, config}` against the live wire
 //     contexts and answers `400 context-mismatch` listing the ones it holds

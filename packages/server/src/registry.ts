@@ -14,11 +14,11 @@ import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
 
 /**
- * WHAT ONE RE-READ DID (`POST /{indexer}/admin/reconfigure`), in the three
- * answers a caller has to be able to tell apart.
+ * WHAT ONE UPLOAD DID (`POST /{indexer}/admin/upload`), in the three answers a
+ * caller has to be able to tell apart.
  *
- * RE-EXPORTED rather than declared, because the re-read is one ARRIVAL of three
- * and they answer ONE contract rather than three that agree on the day they were
+ * RE-EXPORTED rather than declared, because the upload is one ARRIVAL of two and
+ * they answer ONE contract rather than two that agree on the day they were
  * written (ADR-0085): a browser tab's hot update hands its container a module
  * object and reports the same `registered` / `unchanged` / `failed`, from
  * `@etherfold/browser`. The type therefore lives in the only package both of
@@ -258,49 +258,25 @@ export type IndexerRegistryEntry = {
 	 */
 	folding?(): Promise<readonly GenerationFolding[]>;
 	/**
-	 * RE-READ THIS DEPLOYMENT'S OWN CONFIGURATION and register whatever generation
-	 * it now names, BESIDE the incumbent -- the trigger a watcher pulls after a
-	 * rebuild.
-	 *
-	 * RE-READ and never RECEIVE: a processor is CODE and cannot cross HTTP, so
-	 * nothing is handed in. The watcher owns WHEN and the process owns WHAT, which
-	 * is why whatever notices a file changed lives OUTSIDE the process and this is
-	 * an endpoint rather than a file watcher: a dev watcher, a deploy hook and a CI
-	 * step all call one mechanism.
-	 *
-	 * OPTIONAL, and on its own rather than paired with `generations`/`promote`: a
-	 * host holding a registry can still have nothing to re-read from. The server
-	 * package resolves no module and reads no configuration -- it names no runtime
-	 * (a test asserts it) and could not import a processor if it wanted to -- so
-	 * this is answered by the HOST that assembled the fold, which is the CLI's `run`
-	 * today. Absent is a CAPABILITY statement and the admin surface says so with a
-	 * `501`, exactly as it does for a host with no pointer to move.
-	 *
-	 * It must REGISTER BESIDE and never restart or re-open: the incumbent answering
-	 * every read throughout is the property the whole affordance exists to preserve,
-	 * and a reload that briefly stops answering is worse than the restart it
-	 * replaces. It must also leave the deployment exactly as it was when it cannot
-	 * be completed, failing BEFORE anything is registered rather than unwinding
-	 * afterwards, and say so through `ReconfigureReport` rather than by throwing.
-	 */
-	reconfigure?(): Promise<ReconfigureReport>;
-	/**
 	 * RECEIVE A PROCESSOR BUNDLE'S BYTES and register the generation they name,
 	 * BESIDE the incumbent -- the upload arrival (`POST /{indexer}/admin/upload`,
 	 * ADR-0085's amendment of 2026-09-22).
 	 *
-	 * The RECEIVE the re-read above declines, and the two do not contradict each
-	 * other: a module OBJECT cannot cross HTTP, and a self-contained bundle's BYTES
-	 * can (ADR-0085). What the route hands over is exactly the octets it read, within
-	 * its bound and under its content type; everything else is the host's.
+	 * The ONE way code reaches a running Node process (ADR-0094): a module OBJECT
+	 * cannot cross HTTP, and a self-contained bundle's BYTES can (ADR-0085). What the
+	 * route hands over is exactly the octets it read, within its bound and under its
+	 * content type; everything else is the host's.
 	 *
 	 * The HOST computes the identity from those bytes (ADR-0086) -- nothing the
 	 * sender says about identity is read, and this seam carries nothing it could say
-	 * it with. It must REFUSE BEFORE REGISTERING exactly as `reconfigure` must
-	 * (self-containment, evaluation, the contracts it carries), register through the same
-	 * path every registration of this deployment takes so the bytes are stored on the
-	 * generation's row (ADR-0092), and answer the shared three-outcome report with
-	 * `arrival: 'upload'`.
+	 * it with. It must REFUSE BEFORE REGISTERING (self-containment, evaluation, the
+	 * processor it carries), failing before anything is registered rather than
+	 * unwinding afterwards and saying so through `ReconfigureReport` rather than by
+	 * throwing; register BESIDE and never restart or re-open, since the incumbent
+	 * answering every read throughout is the property the affordance exists to
+	 * preserve; register through the same path every registration of this deployment
+	 * takes so the bytes are stored on the generation's row (ADR-0092); and answer the
+	 * shared three-outcome report with `arrival: 'upload'`.
 	 *
 	 * OPTIONAL, and on its own: this package names no runtime and cannot turn bytes
 	 * into a fold, so it is answered by a host that can (`etherfold node`, ADR-0094). Absent is a
@@ -448,7 +424,6 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 		...(holds.slots ? {slots: () => (holds.slots as () => Promise<SlottedGenerations>)()} : {}),
 		...(holds.reclaim ? {reclaim: () => (holds.reclaim as () => Promise<ReclaimReport>)()} : {}),
 		...(holds.folding ? {folding: () => (holds.folding as () => Promise<readonly GenerationFolding[]>)()} : {}),
-		...(holds.reconfigure ? {reconfigure: () => (holds.reconfigure as () => Promise<ReconfigureReport>)()} : {}),
 		...(holds.upload
 			? {upload: (bundle: Uint8Array) => (holds.upload as (bundle: Uint8Array) => Promise<ReconfigureReport>)(bundle)}
 			: {}),

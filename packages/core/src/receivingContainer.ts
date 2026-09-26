@@ -424,7 +424,7 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 * It is not called where nothing would be deleted: an empty `successor` slot, a
 	 * configured generation that IS the pending successor, or one `predecessor` names.
 	 *
-	 * ONLY THE START is asked. `add` -- a re-read, an upload -- is already a deliberate
+	 * ONLY THE START is asked. `add` -- an upload, a hot update -- is already a deliberate
 	 * act on a running deployment and replaces a pending successor as it always has.
 	 * ABSENT means a start replaces or discards without asking, which is what a host that
 	 * passes nothing (a test world, an embedder) gets. Every CLI command that starts with a
@@ -953,7 +953,7 @@ export class ReceivingIndexer<
 
 	/**
 	 * THE FOLDS THIS PROCESS INSTANTIATED FROM STORED BYTES (ADR-0092), as opposed to
-	 * the ones it was HANDED (`add`: the fold it was built with, or a reconfigure).
+	 * the ones it was HANDED (`add`: the fold it was built with, or an arrival).
 	 *
 	 * Such a fold exists only because its generation HAD TO FOLD -- it was canonical at
 	 * `open`, or a revert moved the pointer onto it, or it was the pending successor at
@@ -1678,11 +1678,11 @@ export class ReceivingIndexer<
 	 * (`FetchedStream`, ADR-0087).
 	 *
 	 * The FETCHING side of `liveIngestions`, from the same derivation, so the two cannot
-	 * disagree: a host that fetches (the CLI's `run` and `build`) holds ONE fetcher per
+	 * disagree: a host that fetches (the CLI's `run`, `node` and `build`) holds ONE fetcher per
 	 * entry and asks this before every cycle, and so the set of fetchers follows the
 	 * folds, which follow the slots:
 	 *
-	 * - a successor on a NEW stream (an upload that adds an event, a re-read after a
+	 * - a successor on a NEW stream (an upload that adds an event, a restart after a
 	 *   filter change) is held from its registration, so its stream appears here and is
 	 *   fetched BESIDE the incumbent's, which goes on being fetched and answering;
 	 * - a PROMOTION onto it stops folding the incumbent where it read another stream
@@ -2232,7 +2232,7 @@ export class ReceivingIndexer<
 	 * ## ONE condition, stated positively: arm what `successor` names
 	 *
 	 * Read off the durable slot rather than off how the fold ARRIVED (ADR-0084). The
-	 * question stops being "did this turn up at `open` or through a reconfigure",
+	 * question stops being "did this turn up at `open` or through an arrival",
 	 * which nothing durable records and which a restart answers wrongly, and becomes
 	 * "what is this generation FOR", which is a row. `add` always leaves the arriving
 	 * fold in exactly ONE slot -- the registry assigns `successor`, or leaves it in the

@@ -1,3 +1,4 @@
+import {UPLOAD_CONTENT_TYPE} from '@etherfold/server';
 import {createClient} from '@libsql/client';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -5,7 +6,7 @@ import {join} from 'node:path';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {node, run, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
@@ -144,6 +145,36 @@ async function aRunOver(db: RemoteSQL, processorPath: string) {
 	return {indexer: started, chain};
 }
 
+/** START a `node` over `db`: no processor and no source, so its code arrives by upload (ADR-0094). */
+async function aNodeOver(db: RemoteSQL) {
+	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+	const chain = fakeChain().serve(LOGS, TIP);
+	const started = await node(
+		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
+		{
+			provider: chain.provider,
+			createDB: () => db,
+			sleep: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			},
+			handleSignals: false,
+			log: () => {},
+			env: {MAX_BLOCKS_PER_FETCH: '20'},
+		},
+	);
+	running = started;
+	return {indexer: started, chain};
+}
+
+/** WHAT `etherfold upload` SENDS: a self-contained bundle's bytes, on the admin credential. */
+async function uploadSource(indexer: RunningIndexer, source: string): Promise<Response> {
+	return fetch(`${indexer.url}/${INDEXER}/admin/upload`, {
+		method: 'POST',
+		headers: {'Content-Type': UPLOAD_CONTENT_TYPE, Authorization: `Bearer ${ADMIN_TOKEN}`},
+		body: source,
+	});
+}
+
 async function stop(): Promise<void> {
 	await running?.stop().catch(() => undefined);
 	running = undefined;
@@ -264,23 +295,21 @@ describe('a deployment restarted with a changed processor', () => {
 		// holding two generations on one stream stores that stream once, and it is the
 		// DEPLOYMENT that stores it rather than whichever fold was elected.
 		const db = oneDatabase();
-		const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
-		const first = await aRunOver(db, path);
+		const first = await aNodeOver(db);
+		const incumbent = await uploadSource(first.indexer, processorBundleSource({credit: 'to'}));
+		expect(incumbent.status, await incumbent.clone().text()).toBe(200);
 		await until(
 			async () => emissionRows(db),
 			(rows) => rows >= LOGS.length,
-			'the first run to store its stream',
+			'the first upload to store its stream',
 		);
 
-		// a SECOND fold beside the live one, on the SAME stream: the same source and the
-		// same stream config, different processor bytes. The running process re-reads its
-		// own configuration and registers whatever that names beside the live fold.
-		await writeFile(path, processorBundleSource({credit: 'from'}), 'utf-8');
-		const reconfigured = await fetch(`${first.indexer.url}/${INDEXER}/admin/reconfigure`, {
-			method: 'POST',
-			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
-		});
-		expect(reconfigured.status, await reconfigured.clone().text()).toBe(200);
+		// a SECOND fold beside the live one, on the SAME stream: the same contracts and the
+		// same stream config, different processor bytes. The running `node` is SENT them
+		// and registers what they name beside the live fold (ADR-0094: the upload is the
+		// one way code reaches a running Node process).
+		const uploaded = await uploadSource(first.indexer, processorBundleSource({credit: 'from'}));
+		expect(uploaded.status, await uploaded.clone().text()).toBe(200);
 		expect(first.indexer.container.held().length).toBe(2);
 		expect(new Set(first.indexer.container.held().map((fold) => fold.streamDigest)).size).toBe(1);
 

@@ -2,7 +2,7 @@ import {generationDigestOf} from '@etherfold/core';
 import {GENERATION_TABLE} from '@etherfold/server';
 import {processorArtifactIdentity} from '@etherfold/utils';
 import {createClient} from '@libsql/client';
-import {copyFile, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -54,8 +54,7 @@ import {canonicalStoreIn} from './utils/reads.js';
 //    `--override` (ADR-0084's and ADR-0093's amendments). That holds for EVERY start
 //    with a configured processor -- `run`, a re-run `build` and an `index` receiver --
 //    because all three open the same container over the same slots;
-//  - an upload (on `node`) and a re-read (on `run`) still replace a pending successor
-//    without a question.
+//  - an upload (on `node`) still replaces a pending successor without a question.
 //
 // The bundles: `nfts.bundle.js` credits a token to its recipient, `nfts-edited.bundle.js`
 // to its sender, so which fold answered is readable from the answer. A THIRD processor
@@ -114,15 +113,6 @@ async function aThirdBundle(): Promise<string> {
 	scratch.push(dir);
 	const path = join(dir, 'third.bundle.js');
 	await writeFile(path, `${await readFile(EDITED_BUNDLE, 'utf-8')}\n// a third build\n`, 'utf-8');
-	return path;
-}
-
-/** A path a CONFIGURED node is pointed at, whose bytes a test may replace. */
-async function aProcessorPath(from: string): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), 'etherfold-upload-survives-'));
-	scratch.push(dir);
-	const path = join(dir, 'processor.bundle.js');
-	await copyFile(from, path);
 	return path;
 }
 
@@ -647,7 +637,7 @@ describe('a START may not SILENTLY replace a different pending successor that ar
 	});
 });
 
-describe('the deliberate arrivals on a RUNNING node still replace a pending successor without a question', () => {
+describe('the deliberate arrival on a RUNNING node still replaces a pending successor without a question', () => {
 	it('an upload to a `node` replaces it, and nobody is asked', async () => {
 		const db = oneDatabase();
 		const indexer = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
@@ -667,51 +657,6 @@ describe('the deliberate arrivals on a RUNNING node still replace a pending succ
 		const listing = await listingOf(indexer);
 		expect(listing.slots?.successor?.digest).toBe(thirdDigest);
 		expect(listing.generations.map((entry) => entry.digest)).not.toContain(edited);
-	});
-
-	it('a re-read on a configured `run` replaces it, and nobody is asked', async () => {
-		const db = oneDatabase();
-		const path = await aProcessorPath(BUNDLE);
-		const asked: string[] = [];
-		const indexer = await aRunOver(
-			db,
-			fakeChain().serve(LOGS, TIP),
-			{...NOTHING, processor: path, promotion: 'manual'},
-			{
-				startGuard: {
-					interactive: true,
-					confirm: async (question) => {
-						asked.push(question);
-						return false;
-					},
-				},
-			},
-		);
-		const reread = async (): Promise<Record<string, unknown>> => {
-			const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
-				method: 'POST',
-				headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
-			});
-			const body = (await res.json()) as Record<string, unknown>;
-			expect(res.status, JSON.stringify(body)).toBe(200);
-			return body;
-		};
-
-		// a RE-READ of the configured path, now holding a third bundle, takes the empty slot...
-		const third = await aThirdBundle();
-		await copyFile(third, path);
-		expect(await reread()).toMatchObject({arrival: 're-read', outcome: 'registered'});
-		const thirdDigest = (await digestOf(indexer, third)) as string;
-		expect((await listingOf(indexer)).slots?.successor?.digest).toBe(thirdDigest);
-
-		// ...and a re-read of the path, now holding the edited bundle, REPLACES that
-		await copyFile(EDITED_BUNDLE, path);
-		expect(await reread()).toMatchObject({arrival: 're-read', outcome: 'registered'});
-		const listing = await listingOf(indexer);
-		expect(listing.slots?.successor?.digest).toBe(await digestOf(indexer, EDITED_BUNDLE));
-		expect(listing.generations.map((entry) => entry.digest)).not.toContain(thirdDigest);
-
-		expect(asked).toEqual([]);
 	});
 });
 
