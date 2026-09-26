@@ -5,55 +5,77 @@ slug: run-is-configured-and-node-receives-uploads
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions, here ADR-0094) + the code.
 
+> **REVISED 2026-09-26, before tasking**, after a review that found it contradicted ADR-0048 and ADR-0084's amendment, left `--promotion` on `run` undecided, and claimed the moved suites keep their assertions when several cannot. The maintainer decided the three open points the same day (recorded in ADR-0094's revision): a configured start naming the canonical generation DISCARDS a different pending successor behind the start guard; `node` refuses the `-p` and `--deployments` FLAGS and does not read `INDEXING_SOURCE`; `run` keeps `--promotion` and `--drop-on-promotion`.
+
 ## Problem Statement
 
-`etherfold run` learns what to run from two places at once: its configuration (`-p`, `--deployments`, `INDEXING_SOURCE`) and its registry, fed by `etherfold upload`. Every interaction between the two has needed a rule: an upload must match a configured source; a start may not silently replace an uploaded successor (`--override`); and a restart with an unchanged `-p v1` after `v2` was uploaded and promoted would roll the node back, because a configured processor is an arrival. That last case has no good rule, since the same `-p v1` means "run v1" before any upload and "stale configuration" after one. The dev loop is also split across two mechanisms (the re-read endpoint and the upload).
+`etherfold run` learns what to run from two places at once: its configuration (`-p`, `--deployments`, `INDEXING_SOURCE`) and its registry, fed by `etherfold upload`. Every interaction between the two has needed a rule: an upload must match a configured source; a start may not silently replace an uploaded successor (`--override`); a restart with an unchanged `-p v1` after `v2` was uploaded and promoted would roll the node back, because a configured processor is an arrival; and a configured start naming the canonical generation leaves a pending successor to be promoted, so `run` can serve code its configuration does not name. The dev loop is also split across two mechanisms (the re-read endpoint and the upload).
 
 ## Solution
 
 ADR-0094: each command has ONE source of truth.
 
-- **`run` is CONFIGURED** and never receives code: no upload route, no re-read route. A restart with a different `-p` is a deploy, including one naming the predecessor.
+- **`run` is CONFIGURED** and never receives code: no upload route, no re-read route. What it folds toward is exactly what `-p` names.
 - **`node` RECEIVES**: the chain, store and database like `run`, and NO processor and NO source. Code arrives only by `etherfold upload`. It is the waiting mode of ADR-0093, as its own command.
 - **The re-read endpoint is deleted.** The dev loop is `node` plus a watcher calling `etherfold upload`.
 
 ## User Stories
 
 1. As an operator, I want `etherfold node` to start with only a chain, a store and a database, wait for its first upload, and say so on `/status`, so that a node is stood up once and deployments arrive.
-2. As an operator, I want `node` to REFUSE `-p`, `--deployments` and `INDEXING_SOURCE` by name, so that nothing on its command line can compete with what was uploaded.
-3. As an operator, I want every upload behaviour built for `run` (refusals before registering, catch-up beside the incumbent, promotion, survival across a restart, a new-stream upload fetched by its own writer, `/status` and the admin listing) to hold on `node` unchanged.
-4. As an operator, I want `run` to refuse an upload (the route is not served there) and to be refused when started with neither processor nor source, so that a configured deployment's code is exactly its configuration.
-5. As an operator, I want a restart of `run` with a different `-p` to be a deploy, including one naming the predecessor (a rollback by configuration), with the existing start guard protecting a pending successor.
-6. As an author, I want my dev loop to be `etherfold node` plus a watcher that calls `etherfold upload` on each build, so that development exercises the path production uses.
-7. As a maintainer, I want the re-read endpoint, the CLI reconfigurer and the `re-read` arrival value deleted, so that there is one way code reaches a running Node process.
-8. As an operator, I want one database to be openable by either command: `run` over a `node` database treats it as a configured start (configuration is the truth, the start guard protects a pending upload), and `node` over a `run` database runs what the registry names.
-9. As a reader of the docs, I want the command set, the CLI README, CONTEXT.md, the examples and the guides to describe seven commands, `node` among the deployment intents and `upload` as a client.
+2. As an operator, I want `node` to REFUSE the `-p` / `--processor` and `--deployments` flags by name, pointing at `etherfold upload`, and to not read `INDEXING_SOURCE` (ADR-0048's rule for an ambient variable a command does not own), so that nothing on its command line competes with what was uploaded and one host can still run it beside a configured command.
+3. As an operator, I want every upload behaviour built for `run` (refusals before registering, catch-up beside the incumbent, promotion, survival across a restart, a new-stream upload fetched by its own writer, `/status` and the admin listing) to hold on `node`, with `--promotion` and `--drop-on-promotion` meaning what they mean on `run`.
+4. As an operator, I want `run` to not serve the upload route, and to be refused when started with neither processor nor source (naming `etherfold node`), so that a configured deployment receives no code.
+5. As an operator, I want a start of `run` to fold toward exactly what `-p` names: a different processor registers as successor (unchanged); the canonical processor while a DIFFERENT successor is pending DISCARDS that successor behind the start guard; the pending successor itself changes nothing; the predecessor re-arms (a rollback by configuration).
+6. As an operator, I want `run` to keep `--promotion` and `--drop-on-promotion`, because a successor registered at start still catches up while it runs; the flag's rationale and help say so rather than citing the re-read.
+7. As an author, I want my dev loop to be `etherfold node` plus a watcher that calls `etherfold upload` on each build, so that development exercises the path production uses.
+8. As a maintainer, I want the re-read endpoint and everything that exists only for it deleted, so that there is one way code reaches a running Node process.
+9. As an operator, I want one database to be openable by either command: `run` over a `node` database is an ordinary configured start (story 5); `node` over a `run` database runs the canonical generation over the contracts its bundle carries, and serves it FROZEN with the reason, waiting for the next upload, where `run` had been given a source that bundle does not carry.
+10. As a reader of the docs, I want the command set, the CLI README, CONTEXT.md, the guides, the browser docs and the ADRs to describe seven commands, `node` among the deployment intents and `upload` as a client, and no re-read endpoint.
 
 ## Implementation Decisions
 
-- `node` shares `run`'s assembly (the waiting-mode wiring built for ADR-0093: `openWaitingFolding`, `prepareWaiting`, the late per-stream fetchers) and its server shape; it is a new row in the ownership table, not a flag on `run`.
-- `node` takes `--promotion` as `run` does. It takes no `--override`, since its starts replace nothing.
-- `run` loses: the upload route, the waiting mode, the re-read route, `ReconfigureArrival`'s `re-read`. It keeps: `-p`, the source flags, the start guard, successor-at-open, the per-stream fetchers, `fetchesItsOwnStreams`.
-- The upload route's configured-source branch is deleted (on `node` there is never a configured source).
-- ADR-0093's `status: superseded in part by ADR-0094` is already set. ADR-0094's `status: accepted, not yet implemented` line is REMOVED by the last task, leaving no status line.
-- The task `an-arrival-of-the-predecessor-re-arms-it-as-successor` (already in the staging folder) should land AFTER `run` stops receiving uploads, so that no build ever has a `run` on which a stale `-p` rolls back an upload.
+- **`node`'s ownership row** is `run`'s row with `processor` and `source` (`--deployments`) refused and `override` refused; `promotion`, `dropOnPromotion`, the indexer name (defaulted as on `run`, ADR-0052), the chain, store and database as on `run`. `INDEXING_SOURCE` is not read. It shares `run`'s waiting-mode assembly (`openWaitingFolding`, `prepareWaiting`, the per-stream fetchers, `fetchesItsOwnStreams`) and server shape, and never wires the re-read route (it answers what a host without the seam answers until the route is deleted).
+- **`run` loses:** the upload route, the waiting mode, the re-read route, the configured-source branch of the upload path. **`run` keeps:** `-p`, the source flags, the start guard, successor-at-open, the per-stream fetchers, `fetchesItsOwnStreams`, `--promotion`, `--drop-on-promotion`.
+- **The re-read deletion list** (all of it, one task): the server route and `reconfigure-not-held` (`packages/server/src/api/admin.ts`), the `IndexerRegistryEntry.reconfigure` seam and its forwarding (`packages/server/src/registry.ts`), `ReconfigureArrival`'s `re-read` (`packages/core/src/arrival.ts`, and its export), the CLI reconfigurer and its exports (`reconfigurerFor`, `ReconfigureContext`; KEEP `arrivalQueue`, which the upload uses, moving it if its module goes), and every doc that names the re-read: the browser README and `hotUpdate.ts` / `src/index.ts` JSDoc, `docs/guide/indexing-in-a-browser-app/index.md`, the CLI README, CONTEXT.md's generation entry. Changesets for every package whose public types change (core, server, cli, browser).
+- **Refusal and help texts** that would point a user at a mode that no longer exists are rewritten where the task that removes the mode lands: `startGuard.ts`'s "or with none, to keep it" (name `etherfold node`), the `--override` help, `OVERRIDE_IS_THE_NODES`, `UPLOAD_DOES_NOT_PROMOTE`, `UPLOAD_CARRIES_ITS_CONTRACTS`, `NEVER_PROMOTES_BUILD` / `NEVER_PROMOTES_INDEX` (which cite the reconfigure route), the `--promotion` rationale block in `config.ts`, and the CLI README's upload and restart sections.
+- **Every task amends the ADRs and glossary entries its OWN change makes false**, never leaving it to a later task. Known candidates: ADR-0048 (its two 2026-09-26 amendments), ADR-0057 (the command-set amendment), ADR-0084:101 ("Only the START is guarded. The re-read..."), ADR-0085 (its route "served by `etherfold run`" section), ADR-0087's 2026-09-26 amendment (`run` with nothing configured; a re-read after a configured-source change), ADR-0093's amendments, CONTEXT.md's command-set and generation entries. Each task still greps `docs/adr/` and `CONTEXT.md` for more.
+- **ADR-0094's `status: accepted, not yet implemented` line** is removed by the LAST task of the chain below, named: `an-arrival-of-the-predecessor-re-arms-it-as-successor`. ADR-0093's `superseded in part by ADR-0094` line stays.
 
 ## Testing Decisions
 
-- The existing upload suites (`aBundleIsUploadedToARunningNode`, `anUploadCommandSendsABuiltBundle`, `aRunNodeWithNothingConfiguredWaits`, `anUploadedProcessorSurvivesARestart`, `aSuccessorOnANewStreamIsFetchedByItsOwnWriter`) move to `node` rather than being rewritten; their assertions stay.
-- New assertions: `run` does not serve the upload route; `run` with neither input is refused; `node` refuses each code or source input by name; the cross-over in both directions (story 8).
-- The re-read suites (`anEndpointReconfiguresARunningRun`, `aReconfigureReachesARunningDeployment`) are deleted with the route, and anything else they covered that still matters is re-homed.
+Every existing suite that uses `run` as an upload target or the re-read as a way to add a successor gets an explicit fate, owned by one task. "Re-home" means: keep the PROPERTY the test asserts, reach the successor another way (an upload to `node`, or a `run` restart with a different `-p` or source), and record in the task which.
 
-## Proposed tasking (for review)
+| Suite (lines as of 2026-09-26) | Fate | Task |
+| --- | --- | --- |
+| `aBundleIsUploadedToARunningNode` | moves to `node` | 1 |
+| ...its configured-source refusal case (~:420) | deleted with the branch | 1 |
+| ...its "predecessor upload behaves exactly as a re-read" case (~:504-535) | re-read half dropped; upload half pins today's behaviour | 3 |
+| `anUploadCommandSendsABuiltBundle` | moves to `node`; its contract-mismatch case deleted | 1 |
+| `aRunNodeWithNothingConfiguredWaits` | becomes `node`'s suite; its "re-read answers `failed`" case (~:176-190) deleted | 1 |
+| `anUploadedProcessorSurvivesARestart`, nothing-configured cases | move to `node` | 1 |
+| ...its `run -p` start cases over uploaded state (~:330-475) | re-expressed as upload-to-`node`, restart as `run -p` (story 9), assertions kept; the "names the canonical processor changes nothing" case then changed to story 5's DISCARD | 1, then 2 |
+| ...its "an upload and a re-read each replace it" case (~:477-525) | re-read half dropped | 3 |
+| `aSuccessorOnANewStreamIsFetchedByItsOwnWriter`, nothing-configured shape | moves to `node` | 1 |
+| ...its CONFIGURED shape (`run -p` receiving uploads) | re-expressed on `node`, or as a `run` restart with a changed source; recorded | 1 |
+| ...its "re-read after the operator changed a configured source" case (~:542-578) | re-homed onto a `run` restart with a changed source | 3 |
+| `anEndpointReconfiguresARunningRun` (cli), `aReconfigureReachesARunningDeployment` (server) | deleted | 3 |
+| `theDeploymentSelectsItsPromotionPolicy` (~:183-271, its only successor arrival) | re-homed: upload to `node` for the in-process policy, and a `run` restart for `run`'s flag | 3 |
+| `aRestartedDeploymentGoesOnAppending` (~:465-489), `aRestartReFoldsTheStoredStream` (~:276-283), `aDeploymentRunsFromABundle` (~:287-340) | re-homed | 3 |
+| server `anUploadReachesARunningDeployment` (~:365, re-read mention) | adjusted with the seam | 3 |
+| `equivalence.test.ts` | comment edits only | 1 |
 
-1. `node-is-a-command-that-receives-uploads`: add `node` (ownership row, program, help, README), move the waiting mode and the upload route to it, move the upload suites, refuse code and source inputs on it. `run` stops serving the route in the SAME task, so no intermediate state has both.
-2. `the-re-read-endpoint-is-deleted`: delete the route, the reconfigurer, `re-read`, their suites, and every doc that describes the re-read as a dev loop; point at `node` plus `upload`.
-3. `an-arrival-of-the-predecessor-re-arms-it-as-successor` (exists): re-point its tests from `run` to `node` for the upload arm and add the `run -p` rollback-by-configuration arm; blockedBy 1.
-4. The last of these removes ADR-0094's status line and adds the dated amendments to ADR-0048, ADR-0057, ADR-0085 and ADR-0093, and updates CONTEXT.md's command-set entry.
+New assertions: `run` does not serve the upload route; `run` with neither input is refused naming `node`; `node` refuses `-p` and `--deployments` by name and ignores `INDEXING_SOURCE`; `node` honours `--promotion`; story 5's four cases on `run`, each through the start guard where it applies; story 9 in both directions, including the frozen case.
+
+## Tasking (strict chain; each task is blocked by the previous one)
+
+1. **`node-is-a-command-that-receives-uploads`**: add `node` (ownership row, program, help, README, CONTEXT.md's command set); move the waiting mode and the upload route to it and stop serving the route on `run` in the SAME task, so no state has both or neither; refuse `run` with neither input; the suite fates marked 1; story 9's cross-over tests with today's configured-start rule; the ADR amendments this makes false.
+2. **`a-configured-start-folds-toward-exactly-its-configuration`**: story 5's DISCARD rule on `run` (and on `build` / `index`, which share the start guard and the rule), with the start guard; the case marked "then 2"; ADR-0084 and ADR-0093 amendments.
+3. **`the-re-read-endpoint-is-deleted`**: the whole deletion list; the suite fates marked 3; the `--promotion` rationale and refusal texts rewritten (story 6); the ADR and doc amendments this makes false.
+4. **`an-arrival-of-the-predecessor-re-arms-it-as-successor`** (already staged; rewritten at tasking): drops its re-read criterion and seam; the upload arm on `node`, the configured-start arm on `run`; removes ADR-0094's status line.
 
 ## Out of Scope
 
 - A split form of `node` (a receiver of uploads fed by a separate `fetch`): ADR-0093's "later".
 - A `deploy` command that builds and uploads, and any file watcher inside the CLI.
 - Renaming `ReconfigureReport`.
-- The browser's hot update, which is unchanged.
+- The browser's hot update, which is unchanged apart from the `re-read` value leaving the arrival type.
