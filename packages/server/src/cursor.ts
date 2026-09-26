@@ -121,15 +121,20 @@ export type CanonicalReport = {
 /**
  * What a host's reporter hands over: the CONTENTS of the `cursor` envelope.
  *
- * TWO SLOTS, filled independently. `value` is where the generation that answers
+ * THREE SLOTS, filled independently. `value` is where the generation that answers
  * READS has got to, which is the field every existing reader already reads.
- * `generations` is the per-generation dimension beside it (ADR-0047), and a host
- * may report either, both or neither.
+ * `generations` is the per-generation dimension beside it (ADR-0047): one entry per
+ * generation this host HOLDS a fold for. `canonical` names the generation that
+ * answers reads ON ITS OWN, held here or not, with its position and whether it can
+ * fold on this deployment in the admin listing's `folding` vocabulary
+ * (`CanonicalReport`, ADR-0047's 2026-09-26 amendment): it exists because a
+ * canonical generation nothing here folds is absent from `generations`. A host may
+ * report any, all or none of them.
  *
  * It is an explicit object rather than "the report, or a richer thing that looks
  * like one", because the server must not INSPECT what it was handed to find out
  * which it got: `value` is placed in the response verbatim and a host is free to
- * put a key called `generations` inside it. Sniffing would make a legal cursor
+ * put a key called `generations` or `canonical` inside it. Sniffing would make a legal cursor
  * summary change how the envelope is built, which is precisely the parsing
  * ADR-0047 forbids.
  */
@@ -169,11 +174,11 @@ export type ReportedCanonical = Omit<CanonicalReport, 'value'> & {value?: unknow
  * rather than changing the type of a field clients already read (ADR-0047).
  *
  * `reported` keeps its exact original meaning -- IS THERE A CURSOR VALUE -- and
- * `generations` sits beside it on BOTH branches, because the two slots fail
- * independently. A first build is the case that makes that load-bearing: it
- * holds a generation and has folded nothing, so it has generations to report and
- * no cursor, and folding the two together would throw away the half that says
- * what is being built.
+ * `generations` and `canonical` sit beside it on BOTH branches, because the three
+ * slots fail independently. A first build is the case that makes that
+ * load-bearing: it holds a generation and has folded nothing, so it has
+ * generations (and a canonical generation) to report and no cursor, and folding
+ * them together would throw away the half that says what is being built.
  *
  * `value` is typed `unknown` HERE and `CursorReport` at the injection point, and
  * the asymmetry is deliberate twice over. It is what the server actually knows
