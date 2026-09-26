@@ -568,13 +568,13 @@ describe('a generation a revert needs is never replaced', () => {
 
 		expect(rolledBack.generation).toMatchObject(incumbent);
 		expect(await registeredProcessors(db)).toEqual([incumbent.processor, promoted.record.processor]);
-		// and it stays where it is: a generation some slot already names is not yanked
-		// into `successor` by the act of starting up, or a restart would re-arm exactly
-		// what an operator reverted away from
+		// ...and it is RE-ARMED (ADR-0094: a rollback by configuration): it MOVES from
+		// `predecessor` into `successor`, never named by two slots. The pointer stays where
+		// it was: promoting it back is the policy's, as for any successor.
 		expect(await slotProcessors(db)).toEqual({
 			canonical: promoted.record.processor,
-			successor: null,
-			predecessor: incumbent.processor,
+			successor: incumbent.processor,
+			predecessor: null,
 		});
 	});
 });

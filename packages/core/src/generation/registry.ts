@@ -118,7 +118,9 @@ export type GenerationRecord = GenerationId & {
  *   assigns none, because in a browser the code that generation's fold needs is
  *   absent from the build, so the slot would name something that runtime cannot
  *   instantiate. The NAME stays in the vocabulary either way -- what differs is
- *   which runtime assigns it, never what it means. See `moveCanonicalTo`.
+ *   which runtime assigns it, never what it means. See `moveCanonicalTo`. An
+ *   ARRIVAL of it (an upload, a configured start) RE-ARMS it: it MOVES into
+ *   `successor` and this slot is emptied (`create`, ADR-0094).
  *
  * There are EXACTLY three and arbitrary named slots are deliberately not built:
  * with three fixed names each word means one thing, and a generation is a
@@ -627,11 +629,14 @@ export function unslottedGenerations(
  * `reclaim` will, a registration leaves rows it never touched alone.
  *
  * Nothing is displaced at all when the registry has no canonical generation (the
- * first registration takes `canonical` and supersedes nobody) or when some slot
- * ALREADY names the arriving generation (a restart on the canonical fold, or on
- * the one a revert returned to, takes nobody's place). That second clause is also
- * what keeps a page RELOAD from collecting anything: the fold a tab arrives with
- * is the one `canonical` names.
+ * first registration takes `canonical` and supersedes nobody) or when `canonical`
+ * or `successor` ALREADY names the arriving generation (a restart on the canonical
+ * fold, or on the pending successor itself, takes nobody's place). That second
+ * clause is also what keeps a page RELOAD from collecting anything: the fold a tab
+ * arrives with is the one `canonical` names. What `predecessor` names is NOT in
+ * that clause: an arrival of it is RE-ARMED into `successor` (`create`, rule 3,
+ * ADR-0094), so it takes that slot and displaces what the slot held, exactly as
+ * any arrival does.
  *
  * NEWEST FIRST, which is what lets a whole replaced chain go in ONE pass: the
  * ordinary churn leaves a replaced WRITER with a replaced FOLLOWER on its stream,
@@ -644,7 +649,8 @@ export function displacedBySuccessor(
 	slots: GenerationSlots,
 	runtime: DisplacementRuntime,
 ): GenerationRecord[] {
-	if (!slots.canonical || slotHolding(slots, arriving)) {
+	const holding = slotHolding(slots, arriving);
+	if (!slots.canonical || holding === 'canonical' || holding === 'successor') {
 		return [];
 	}
 	return generations
@@ -956,12 +962,21 @@ export async function openGenerationRegistry(
 		 * 1. **An empty registry's first generation takes `canonical`**, whatever slot
 		 *    was asked for, because a registry holding generations and pointing at none
 		 *    of them answers nothing. That rule predates slots and is unchanged.
-		 * 2. **A generation ALREADY IN A SLOT stays where it is.** A host redeployed
-		 *    with the processor the pointer already names must not have it yanked into
-		 *    `successor`, and one redeployed with what `predecessor` names -- the
-		 *    generation an operator deliberately reverted TO or FROM -- must not be
-		 *    re-armed by the act of starting up (ADR-0084's third symptom).
-		 * 3. **Otherwise the named slot is ASSIGNED to it**, replacing whatever that
+		 * 2. **A generation `canonical` or `successor` ALREADY names stays where it is.**
+		 *    A host redeployed with the processor the pointer already names must not have
+		 *    it yanked into `successor`, and the pending successor arriving again is
+		 *    already where it was asked to go.
+		 * 3. **A generation `predecessor` names, registered into `successor`, is RE-ARMED:
+		 *    it MOVES there, and `predecessor` is emptied in the same commit** (ADR-0094,
+		 *    the maintainer's decision of 2026-09-26). An arrival of the predecessor -- its
+		 *    bytes uploaded to a `node`, or a configured start naming it -- is a ROLLBACK,
+		 *    and it goes through the same catch-up-and-promote path every deploy takes: the
+		 *    POLICY promotes it, never this call, so the pointer does not move here. It
+		 *    MOVES rather than being copied, because one generation is never named by two
+		 *    slots (`slotHolding`). A registration that names no slot leaves it alone.
+		 *    What an operator's REVERT does is untouched (ADR-0057): that is a pointer
+		 *    move, not an arrival.
+		 * 4. **Otherwise the named slot is ASSIGNED to it**, replacing whatever that
 		 *    slot held. `successor` therefore holds AT MOST ONE by construction rather
 		 *    than by a rule somebody has to remember, and the generation displaced is
 		 *    left named by no slot -- which is precisely what makes it collectable.
@@ -1008,10 +1023,17 @@ export async function openGenerationRegistry(
 					if (!current.slots.canonical) {
 						return {keepStream, slots: {canonical: identityOf(found)}};
 					}
-					// ...and a generation some slot already names stays where it is: a restart
-					// that re-registers the canonical generation, or the one a revert returned
-					// to, is not asking for it to become a pending successor.
-					if (!into || slotHolding(current.slots, found)) {
+					const holding = slotHolding(current.slots, found);
+					// ...an arrival of what `predecessor` names RE-ARMS it (rule 3): it MOVES into
+					// `successor`, and the slot it leaves is emptied in the same commit, so it is
+					// never named twice. The pointer stays where it is; the policy decides.
+					if (into === 'successor' && holding === 'predecessor') {
+						return {keepStream, slots: {successor: identityOf(found), predecessor: null}};
+					}
+					// ...and a generation `canonical` or `successor` already names stays where it
+					// is: a restart that re-registers the canonical generation is not asking for
+					// it to become a pending successor.
+					if (!into || holding) {
 						return {keepStream};
 					}
 					return {keepStream, slots: {[into]: identityOf(found)}};

@@ -144,9 +144,17 @@ export function uploaderFor<ABI extends Abi, ProcessResultType>(
 			return refused(message);
 		}
 
-		// A FOLD THIS PROCESS ALREADY HOLDS IS NOT ADDED AGAIN: `add` would build a second
-		// fold over the same state.
-		if (held.container.held().some((fold) => sameIdentity(fold.record, wanted))) {
+		// BYTES NAMING A FOLD THIS PROCESS ALREADY HOLDS, where `canonical` or `successor`
+		// already names it, change NOTHING, and say so. Every other arrival goes to `add`,
+		// which is where what it MEANS is decided: in particular a held generation that
+		// `predecessor` names (a same-stream promotion keeps the superseded fold it built)
+		// is RE-ARMED into `successor` by the registry, with no second fold (ADR-0094). This
+		// reads the slot only to answer `unchanged` truthfully; the re-arm is not decided here.
+		const slots = await held.container.slots();
+		const alreadyWhereItIs =
+			(!!slots.canonical && sameIdentity(slots.canonical, wanted)) ||
+			(!!slots.successor && sameIdentity(slots.successor, wanted));
+		if (alreadyWhereItIs && held.container.held().some((fold) => sameIdentity(fold.record, wanted))) {
 			logger.info(
 				`upload: the uploaded bytes name {stream: ${wanted.stream}, processor: ${wanted.processor}}, which this ` +
 					`deployment already folds, so NOTHING was registered`,

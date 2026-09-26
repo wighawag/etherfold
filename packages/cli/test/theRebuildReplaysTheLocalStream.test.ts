@@ -455,8 +455,10 @@ describe('resumability, through a genuinely FRESH container between every chunk'
 
 		expect(chunks).toBeGreaterThan(1);
 		expect(await stateIn(db, successorNamespace)).toEqual(SUCCESSOR_ANSWER);
-		// and a restart after the move comes back pointing where it last pointed
-		const restarted = await openIndexer(db);
+		// and a restart after the move, configured with what it promoted, comes back pointing
+		// where it last pointed. (Configured with `V1`, now the predecessor, it would RE-ARM
+		// it and roll back: ADR-0094.)
+		const restarted = await openIndexer(db, {configured: V2});
 		expect(await canonicalAnswers(db, restarted)).toEqual(SUCCESSOR_ANSWER);
 	});
 

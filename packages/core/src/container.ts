@@ -869,9 +869,11 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream);
 		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
 		// that means for this identity: the first generation of an empty registry takes
-		// `canonical` instead, and a generation some slot ALREADY names stays where it is
-		// -- so a reload on the canonical processor stays canonical, and one on the
-		// generation a revert returned to is not re-armed by the act of starting up.
+		// `canonical` instead, a generation `canonical` or `successor` ALREADY names stays
+		// where it is -- so a reload on the canonical processor stays canonical -- and one
+		// `predecessor` names is RE-ARMED into `successor` (ADR-0094), the rule the receiving
+		// twin shares. This runtime assigns no `predecessor` (ADR-0089), so here that clause
+		// only ever meets a registry another runtime wrote.
 		const record = await this.registry.create(wanted, {slot: 'successor'});
 		return {spec, source, processor, record};
 	}
