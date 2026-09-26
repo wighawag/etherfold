@@ -320,6 +320,34 @@ describe('a save that changed nothing says so, legibly', () => {
 		expect([unchanged.outcome, failed.outcome, registered.outcome]).toEqual(['unchanged', 'failed', 'registered']);
 		app.indexer.dispose();
 	});
+
+	/**
+	 * ...and every one of them says WHICH arrival produced it, on a field BESIDE the
+	 * outcome rather than as a fourth one: a tab's `unchanged` and the admin
+	 * endpoint's `unchanged` are the same outcome, and a log that reads both has to
+	 * be able to tell a hot update from a re-read (or an upload).
+	 */
+	it('names itself as the hot update on every outcome', async () => {
+		const app = await aTabAtTheTip();
+
+		const unchanged = await reconfigureFromHotUpdate(app.indexer, handingOver(processorVariant()));
+		const failed = await reconfigureFromHotUpdate(app.indexer, {
+			createState: () => memoryStore(processorVariant()),
+			createProcessor: () => {
+				throw new Error(`half-typed`);
+			},
+		});
+		const registered = await reconfigureFromHotUpdate(app.indexer, handingOver(editedProcessorVariant()));
+
+		expect(
+			[unchanged, failed, registered].map((report) => ({outcome: report.outcome, arrival: report.arrival})),
+		).toEqual([
+			{outcome: 'unchanged', arrival: 'hot-update'},
+			{outcome: 'failed', arrival: 'hot-update'},
+			{outcome: 'registered', arrival: 'hot-update'},
+		]);
+		app.indexer.dispose();
+	});
 });
 
 describe('a production build carries no dev-only machinery', () => {

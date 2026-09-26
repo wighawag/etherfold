@@ -199,7 +199,7 @@ export async function reconfigureFromHotUpdate<ABI extends Abi, ProcessResultTyp
 		// claimed, a generation cap that refused.
 		const message = err instanceof Error ? err.message : String(err);
 		logger.error(`hot update: this tab could not take the processor it was handed, and NOTHING changed`, err);
-		return {outcome: 'failed', message};
+		return {arrival: 'hot-update', outcome: 'failed', message};
 	}
 
 	const arrived: GenerationId = {stream: record.stream, processor: record.processor};
@@ -209,6 +209,7 @@ export async function reconfigureFromHotUpdate<ABI extends Abi, ProcessResultTyp
 				`which this tab is already folding, so NOTHING was registered`,
 		);
 		return {
+			arrival: 'hot-update',
 			outcome: 'unchanged',
 			generation: arrived,
 			message:
@@ -226,5 +227,5 @@ export async function reconfigureFromHotUpdate<ABI extends Abi, ProcessResultTyp
 		`hot update: registered {stream: ${arrived.stream}, processor: ${arrived.processor}} BESIDE the generation ` +
 			`answering reads, which keeps its own state and goes on answering. Nothing was discarded.`,
 	);
-	return {outcome: 'registered', generation: arrived};
+	return {arrival: 'hot-update', outcome: 'registered', generation: arrived};
 }

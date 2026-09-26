@@ -1,6 +1,28 @@
 import type {GenerationId} from './generation/registry.js';
 
 /**
+ * WHICH WAY a processor reached the running deployment, named after WHAT ARRIVED
+ * rather than after the package that received it.
+ *
+ * - **`re-read`** -- the process re-resolved its own configuration and re-loaded
+ *   its processor from disk (`POST /{indexer}/admin/reconfigure`, whose re-read is
+ *   `etherfold run`'s).
+ * - **`upload`** -- the bytes of an already-built bundle were SENT to the running
+ *   node over its admin credential (ADR-0085's amendment of 2026-09-22). Named
+ *   here before anything produces it, so the upload route answers in a vocabulary
+ *   that already exists (`a-processor-bundle-is-uploaded-to-a-running-node`).
+ * - **`hot-update`** -- a bundler replaced the module and handed the page a module
+ *   OBJECT, which a tab registers itself (`reconfigureFromHotUpdate`).
+ *
+ * Not a package name, because a package is where the receiving code happens to
+ * live and not what an operator saw happen: the re-read spans `@etherfold/cli`
+ * and `@etherfold/server`, and the upload will be received by the same server
+ * package as the re-read. What a log reader wants is "someone uploaded" versus
+ * "the node re-read its disk" versus "a tab hot-updated".
+ */
+export type ReconfigureArrival = 're-read' | 'upload' | 'hot-update';
+
+/**
  * WHAT ONE ARRIVAL DID, in the three answers a caller has to be able to tell
  * apart.
  *
@@ -42,6 +64,19 @@ import type {GenerationId} from './generation/registry.js';
  * (`the-declared-version-and-the-drift-report-are-deleted`), and the condition
  * `drift` named cannot occur.
  *
+ * ## WHICH ARRIVAL, on a field BESIDE the outcome
+ *
+ * Every arm carries `arrival` (`ReconfigureArrival`), REQUIRED, because the same
+ * outcome from two arrivals reads identically otherwise: "the endpoint said
+ * unchanged" and "HMR handed us the same module" are one line in a log. It is a
+ * field and NOT a fourth outcome, because it answers a different question: the
+ * outcome says what HAPPENED and is what a watcher branches on, once, whatever
+ * arrived; the arrival says where it CAME FROM and is what a reader of the log
+ * tells apart. Folding the two into one discriminant would make every watcher
+ * branch on three times as many values to learn the same three things. It is not
+ * optional either, since an arrival that could leave it out is the log line this
+ * exists to end.
+ *
  * `failed` is DATA rather than an exception, because the failure is EXPECTED: a
  * processor that does not compile is the normal state between the two halves of
  * one change -- a developer saves mid-edit, and a dev loop meets this more often
@@ -72,11 +107,14 @@ import type {GenerationId} from './generation/registry.js';
  */
 export type ReconfigureReport =
 	| {
+			/** Which way the processor reached this deployment; see `ReconfigureArrival`. */
+			readonly arrival: ReconfigureArrival;
 			readonly outcome: 'registered';
 			/** The generation that was registered BESIDE the incumbent, which is what the caller asked to learn. */
 			readonly generation: GenerationId;
 	  }
 	| {
+			readonly arrival: ReconfigureArrival;
 			readonly outcome: 'unchanged';
 			/** The generation the arrival named, which this deployment was already holding a fold for. */
 			readonly generation: GenerationId;
@@ -84,6 +122,7 @@ export type ReconfigureReport =
 			readonly message: string;
 	  }
 	| {
+			readonly arrival: ReconfigureArrival;
 			readonly outcome: 'failed';
 			/** What went wrong, as the caller's watcher will print it. */
 			readonly message: string;

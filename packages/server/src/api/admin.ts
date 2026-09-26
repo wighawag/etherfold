@@ -421,7 +421,10 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * `unchanged` is a SUCCESS that says the configuration named the generation this
 			 * deployment already holds (`200`, with the reason -- see `ReconfigureReport`);
 			 * `failed` refuses (`409`), names what went wrong, and promises the deployment is
-			 * exactly as it was.
+			 * exactly as it was. Every answer also says WHICH arrival produced it
+			 * (`arrival`, `re-read` on this route), beside the outcome rather than as a
+			 * fourth one, so a log holding this route's answers and a tab's hot update or an
+			 * upload's can still tell them apart.
 			 *
 			 * `409` and none of this surface's other refusals: nothing about the REQUEST is
 			 * wrong so it is not the `400` family, the name resolved so it is not the `404`,
@@ -474,7 +477,13 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 					// same one. A host is expected to report its own failure as data (the load
 					// that did not compile is the EXPECTED case, not an exception), and this is
 					// what keeps a host that did not still honest to the watcher.
-					report = {outcome: 'failed', message: err instanceof Error ? err.message : String(err)};
+					// ...and it is the RE-READ that failed: the host threw instead of saying so, but
+					// this route is the re-read's, so the log still names the arrival.
+					report = {
+						arrival: 're-read',
+						outcome: 'failed',
+						message: err instanceof Error ? err.message : String(err),
+					};
 				}
 
 				if (report.outcome === 'failed') {
@@ -487,6 +496,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 							success: false,
 							error: 'reconfigure-failed',
 							indexer: name,
+							arrival: report.arrival,
 							outcome: 'failed',
 							message: report.message,
 						} as const,
@@ -503,6 +513,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 					return c.json({
 						success: true,
 						indexer: name,
+						arrival: report.arrival,
 						outcome: 'unchanged',
 						generation: reported(report.generation),
 						message: report.message,
@@ -516,6 +527,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 				return c.json({
 					success: true,
 					indexer: name,
+					arrival: report.arrival,
 					outcome: 'registered',
 					// the generation it registered, in the two fields the pointer move takes and
 					// the opaque digest a feed response advertises it by -- so the value this

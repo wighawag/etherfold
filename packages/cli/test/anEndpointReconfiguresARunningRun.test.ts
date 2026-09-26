@@ -194,6 +194,7 @@ type Reconfigured = {
 	status: number;
 	body: {
 		success?: boolean;
+		arrival?: string;
 		outcome?: string;
 		error?: string;
 		message?: string;
@@ -236,6 +237,9 @@ describe('a watcher calls one endpoint and the running deployment picks up the e
 		const unchanged = await reconfigure(indexer);
 		expect(unchanged.status, JSON.stringify(unchanged.body)).toBe(200);
 		expect(unchanged.body.outcome).toBe('unchanged');
+		// and it says WHICH arrival answered, so a log line reading "unchanged" is
+		// this endpoint's and cannot be mistaken for a tab's hot update or an upload
+		expect(unchanged.body.arrival).toBe('re-read');
 		expect(unchanged.body.generation?.digest).toBe(incumbent);
 		expect(await generationsOf(indexer)).toHaveLength(1);
 
@@ -245,6 +249,7 @@ describe('a watcher calls one endpoint and the running deployment picks up the e
 		const registered = await reconfigure(indexer);
 		expect(registered.status, JSON.stringify(registered.body)).toBe(200);
 		expect(registered.body.outcome).toBe('registered');
+		expect(registered.body.arrival).toBe('re-read');
 		expect(registered.body.success).toBe(true);
 		expect(registered.body.indexer).toBe(INDEXER);
 		// the SECOND call registered a generation the first did not, which is the
@@ -295,6 +300,9 @@ describe('a processor that does not compile leaves the deployment exactly as it 
 		expect(refused.status, JSON.stringify(refused.body)).toBe(409);
 		expect(refused.body.success).toBe(false);
 		expect(refused.body.error).toBe('reconfigure-failed');
+		// a failure names its arrival too: the deployment is untouched, and the log
+		// still says it was the RE-READ that could not be completed
+		expect(refused.body.arrival).toBe('re-read');
 		// the author's own message reaches the watcher verbatim, because the watcher is
 		// what they are going to read
 		expect(refused.body.message).toContain('the deployments folder is not built yet');

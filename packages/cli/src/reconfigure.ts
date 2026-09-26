@@ -219,7 +219,7 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			logger.error(`reconfigure: this deployment could not re-read its configuration, and nothing changed`, err);
-			return {outcome: 'failed', message};
+			return {arrival: 're-read', outcome: 'failed', message};
 		}
 
 		// A FOLD THIS PROCESS ALREADY HOLDS IS NOT ADDED AGAIN, and this is the check
@@ -236,6 +236,7 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 					`this deployment already holds, so NOTHING was registered`,
 			);
 			return {
+				arrival: 're-read',
 				outcome: 'unchanged',
 				generation: wanted,
 				// ONE reading, because a processor is identified by what it IS (ADR-0086): the
@@ -261,14 +262,14 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 				`reconfigure: registered {stream: ${registered.stream}, processor: ${registered.processor}} BESIDE the ` +
 					`generation answering reads, which keeps its own state and goes on answering. Nothing was discarded.`,
 			);
-			return {outcome: 'registered', generation: registered};
+			return {arrival: 're-read', outcome: 'registered', generation: registered};
 		} catch (err) {
 			// A CAP is the refusal that lands here, and it names what to delete. Nothing
 			// is left registered: `add` writes the registry record last of the things that
 			// can refuse, so a refusal leaves the deployment holding what it held.
 			const message = err instanceof Error ? err.message : String(err);
 			logger.error(`reconfigure: the generation this configuration names could not be registered`, err);
-			return {outcome: 'failed', message};
+			return {arrival: 're-read', outcome: 'failed', message};
 		}
 	};
 
@@ -308,6 +309,7 @@ function refuseAMovedDeployment<ABI extends Abi, ProcessResultType>(
 ): ReconfigureReport | undefined {
 	if (resolved.indexer !== held.indexer) {
 		return {
+			arrival: 're-read',
 			outcome: 'failed',
 			message:
 				`this configuration names the indexer ${JSON.stringify(resolved.indexer)} and this process is serving ` +
@@ -317,6 +319,7 @@ function refuseAMovedDeployment<ABI extends Abi, ProcessResultType>(
 	}
 	if (resolved.destination.db !== held.dbUrl) {
 		return {
+			arrival: 're-read',
 			outcome: 'failed',
 			message:
 				`this configuration names the database ${JSON.stringify(resolved.destination.db)} and this process folds ` +
