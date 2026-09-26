@@ -27,6 +27,13 @@ import {getStateMovedAPI} from './api/stateMoved.js';
  * ingest credential; see `api/admin.ts`.
  */
 import {getAdminAPI} from './api/admin.js';
+/**
+ * THE UPLOAD ROUTE'S TWO STATED LIMITS (`POST /{indexer}/admin/upload`, ADR-0085):
+ * the largest bundle it accepts and the content type it must be declared as.
+ * Exported so a sender can check them before it sends rather than learn them from a
+ * refusal.
+ */
+export {MAX_UPLOAD_BYTES, UPLOAD_CONTENT_TYPE} from './api/admin.js';
 
 export type {Env, ServerOptions};
 export type {CursorReporter, FetcherLimitsReporter, PromotionReporter} from './types.js';

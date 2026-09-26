@@ -16,6 +16,9 @@ archive/
 packages/utils/test/fixtures/processor-artifact/processor.bundle.js
 packages/cli/test/fixtures/processor-bundle/nfts.bundle.js
 packages/cli/test/fixtures/processor-bundle/nfts-edited.bundle.js
+packages/cli/test/fixtures/processor-bundle/nfts-with-approval.bundle.js
+packages/cli/test/fixtures/processor-bundle/not-self-contained.bundle.js
+packages/cli/test/fixtures/processor-bundle/throws-on-evaluation.bundle.js
 
 *.md
 *.yaml

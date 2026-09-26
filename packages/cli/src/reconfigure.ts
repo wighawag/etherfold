@@ -121,6 +121,28 @@ export type ReconfigureContext<ABI extends Abi = Abi, ProcessResultType = unknow
 };
 
 /**
+ * ONE LINE every ARRIVAL on a process waits in: `work` runs after whatever was
+ * queued before it, whichever arrival queued it.
+ *
+ * Shared rather than one per arrival, because the hazard is not per arrival: a
+ * re-read and an upload landing together would otherwise both decide "is this
+ * identity already held" against the same registry at the same time, and both
+ * could register. The queue never carries a rejection forward: each arrival reports
+ * its own failures as outcomes, and a caller's own handler sees anything else.
+ */
+export type ArrivalQueue = <T>(work: () => Promise<T>) => Promise<T>;
+
+/** A fresh `ArrivalQueue`, for ONE process's arrivals to share. */
+export function arrivalQueue(): ArrivalQueue {
+	let queue: Promise<unknown> = Promise.resolve();
+	return <T>(work: () => Promise<T>): Promise<T> => {
+		const next = queue.then(work, work);
+		queue = next.catch(() => undefined);
+		return next;
+	};
+}
+
+/**
  * Build the RE-READ this process answers `POST /{indexer}/admin/reconfigure`
  * with.
  *
@@ -128,13 +150,14 @@ export type ReconfigureContext<ABI extends Abi = Abi, ProcessResultType = unknow
  * quick succession would otherwise have two re-reads deciding "is this identity
  * already held" against the same registry at the same time, and both could
  * register. Debouncing belongs to the watcher; not tripping over a burst belongs
- * here.
+ * here. The line is `queue`, which a process SHARES with its other arrivals (the
+ * upload, `upload.ts`) for the same reason; omitted, the re-read queues alone.
  */
 export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 	held: ReconfigureContext<ABI, ProcessResultType>,
+	queue: ArrivalQueue = arrivalQueue(),
 ): () => Promise<ReconfigureReport> {
 	let reloads = 0;
-	let queue: Promise<unknown> = Promise.resolve();
 
 	/**
 	 * Import the module as it is ON DISK NOW.
@@ -273,17 +296,11 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 		}
 	};
 
-	return () => {
-		const next = queue.then(reread, reread);
-		// the QUEUE never carries a rejection forward: `reread` reports its own
-		// failures as outcomes, and a caller's own handler is what sees anything else
-		queue = next.catch(() => undefined);
-		return next;
-	};
+	return () => queue(reread);
 }
 
 /** Whether two generation identities are the same one. */
-function sameIdentity(a: GenerationId, b: GenerationId): boolean {
+export function sameIdentity(a: GenerationId, b: GenerationId): boolean {
 	return a.stream === b.stream && a.processor === b.processor;
 }
 

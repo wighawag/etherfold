@@ -285,6 +285,29 @@ export type IndexerRegistryEntry = {
 	 */
 	reconfigure?(): Promise<ReconfigureReport>;
 	/**
+	 * RECEIVE A PROCESSOR BUNDLE'S BYTES and register the generation they name,
+	 * BESIDE the incumbent -- the upload arrival (`POST /{indexer}/admin/upload`,
+	 * ADR-0085's amendment of 2026-09-22).
+	 *
+	 * The RECEIVE the re-read above declines, and the two do not contradict each
+	 * other: a module OBJECT cannot cross HTTP, and a self-contained bundle's BYTES
+	 * can (ADR-0085). What the route hands over is exactly the octets it read, within
+	 * its bound and under its content type; everything else is the host's.
+	 *
+	 * The HOST computes the identity from those bytes (ADR-0086) -- nothing the
+	 * sender says about identity is read, and this seam carries nothing it could say
+	 * it with. It must REFUSE BEFORE REGISTERING exactly as `reconfigure` must
+	 * (self-containment, evaluation, the contract match), register through the same
+	 * path every registration of this deployment takes so the bytes are stored on the
+	 * generation's row (ADR-0092), and answer the shared three-outcome report with
+	 * `arrival: 'upload'`.
+	 *
+	 * OPTIONAL, and on its own: this package names no runtime and cannot turn bytes
+	 * into a fold, so it is answered by a host that can (`etherfold run`). Absent is a
+	 * CAPABILITY statement and the admin surface answers it with a `501`.
+	 */
+	upload?(bundle: Uint8Array): Promise<ReconfigureReport>;
+	/**
 	 * BE TOLD THE STATE MOVED, for this name: the state-moved SIGNAL the fold that
 	 * answers reads publishes as it applies each block (ADR-0083). Returns the detach.
 	 *
@@ -426,6 +449,9 @@ export function indexerEntryOn(db: RemoteSQL, holds: Omit<IndexerRegistryEntry, 
 		...(holds.reclaim ? {reclaim: () => (holds.reclaim as () => Promise<ReclaimReport>)()} : {}),
 		...(holds.folding ? {folding: () => (holds.folding as () => Promise<readonly GenerationFolding[]>)()} : {}),
 		...(holds.reconfigure ? {reconfigure: () => (holds.reconfigure as () => Promise<ReconfigureReport>)()} : {}),
+		...(holds.upload
+			? {upload: (bundle: Uint8Array) => (holds.upload as (bundle: Uint8Array) => Promise<ReconfigureReport>)(bundle)}
+			: {}),
 		...(holds.onStateMoved
 			? {
 					onStateMoved: (handler: StateMovedHandler) =>
