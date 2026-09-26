@@ -94,6 +94,16 @@ describe('each registered generation says whether it can fold HERE', () => {
 		expect(all.map((entry) => entry.generation)).toEqual(await restarted.generations());
 	});
 
+	it('answers ONE generation exactly as the listing does, which is what `/status` asks about the canonical one', async () => {
+		const {world: w, restarted} = await aRestartOnTheNewCodeAlone();
+
+		for (const entry of await restarted.folding()) {
+			expect(await restarted.foldingOf(entry.generation)).toEqual(entry);
+		}
+		// ...and asking about one instantiates nothing either
+		expect(w.instantiated).toEqual([]);
+	});
+
 	it('follows the pointer: what a revert instantiated is HELD, and what it stopped folding is INSTANTIABLE', async () => {
 		const {restarted} = await aRestartOnTheNewCodeAlone();
 

@@ -4,7 +4,9 @@ import {
 	openReceivingIndexer,
 	type Abi,
 	type EventProcessor,
+	type GenerationFolding,
 	type GenerationId,
+	type GenerationRecord,
 	type IndexingSource,
 	type PromotionConfig,
 	type ProvidedStreamConfig,
@@ -33,10 +35,13 @@ import {
 	type ProcessorArrival,
 	type ProcessorModule,
 } from '@etherfold/utils';
+import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {readStatusReport} from './cursorReport.js';
 import {reorgRecorderFor} from './reorgCounters.js';
 import type {ExplicitSource, SourceOrigin, StoreTarget} from './types.js';
+
+const logger = logs('etherfold');
 
 // ---------------------------------------------------------------------------------------------------
 // THE FOLDING ASSEMBLY EVERY COMMAND THAT OWNS A DATABASE SHARES
@@ -485,6 +490,15 @@ export type FoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = {
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/** The ONE handle every one of them folds into and a server answers over. */
 	db: RemoteSQL;
+	/**
+	 * ANY generation's state, by identity, UNCLAIMED: its own table namespace
+	 * (ADR-0053), built the one way this deployment builds it (`foldPartsFor`).
+	 *
+	 * For READING a generation's position with no engine, which is what `/status`
+	 * does for a canonical generation nothing here folds (`foldingStatusReport`).
+	 * Unclaimed so that a read never takes the claim from the fold writing it.
+	 */
+	stateOf(id: GenerationId): StateStore;
 	/** The OPENING fold's store: its own table namespace (ADR-0053), CLAIMED. */
 	store: WritableStateStore;
 	/** The OPENING fold's processor. */
@@ -674,6 +688,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 	return {
 		container,
 		db,
+		stateOf: stateFor,
 		store: container.state,
 		processor: container.processor,
 		// THE WRITER of the stream the opening fold folds, which is the DEPLOYMENT's and
@@ -684,15 +699,24 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 }
 
 /**
- * WHAT THIS PROCESS TELLS `/status`: one entry per generation it holds, and the
- * canonical one's progress as the top-level value.
+ * WHAT THIS PROCESS TELLS `/status`: one entry per generation it holds, the
+ * canonical one's progress as the top-level value, and the canonical generation
+ * named on its own -- whether it folds here and where it stands -- held or not.
  *
- * The four lines a host writes between what it HOLDS and what the reporter reads
+ * The lines a host writes between what it HOLDS and what the reporter reads
  * (ADR-0047), written once here because `run` and `index` hold the same container
  * and must not answer the same question two ways. The shape does not depend on
  * how many generations a deployment happens to hold: a process holding one
  * reports one entry, and the same process mid-upgrade reports two, which is how
  * an operator watches a rebuild advance on the page they already have open.
+ *
+ * A CANONICAL GENERATION NOTHING HERE FOLDS (its stored code could not be built at
+ * `open`, a revert across a filter change: ADR-0092) is not one of those entries,
+ * because the list is what this process holds. It is reported in the `canonical`
+ * slot instead, with the container's own `folding` answer for it (the admin
+ * listing's words) and its position read from its namespace through `stateOf`,
+ * with no engine. That costs one `foldingOf` and at most one cursor read per
+ * `/status`, and never one per registered generation.
  *
  * The `state` a fold carries is this module's own `VersionedStateStore` -- the
  * container types it as an opaque parameter precisely so `@etherfold/core` names
@@ -701,6 +725,8 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
  */
 export async function foldingStatusReport<ABI extends Abi, ProcessResultType>(
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
+	/** Any generation's state, unclaimed (`FoldingAssembly.stateOf`): where an unheld canonical position is read. */
+	stateOf: (id: GenerationId) => StateStore,
 ): Promise<StatusReport> {
 	const canonical = await container.canonical();
 	return readStatusReport({
@@ -714,6 +740,36 @@ export async function foldingStatusReport<ABI extends Abi, ProcessResultType>(
 			// no longer distinguishes is two shapes of fold, because there is one.
 			follows: true,
 		})),
-		...(canonical ? {canonical} : {}),
+		...(canonical
+			? {
+					canonical,
+					// the SAME derivation the admin listing reports, for this one generation
+					...(await foldingAnswerOf(container, canonical)),
+					// ...and its own namespace, which the reporter reads only where no held fold is it
+					canonicalState: stateOf({stream: canonical.stream, processor: canonical.processor}),
+				}
+			: {}),
 	});
+}
+
+/**
+ * The container's `folding` answer for the canonical generation, or NOTHING where the
+ * question itself failed (a registry read that threw): the report then says nothing
+ * about it rather than guessing, and the rest of `/status` still answers -- the rule
+ * the per-fold cursor reads already follow (`readStatusReport`).
+ */
+async function foldingAnswerOf<ABI extends Abi, ProcessResultType>(
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
+	canonical: GenerationRecord,
+): Promise<{canonicalFolding?: GenerationFolding}> {
+	try {
+		return {canonicalFolding: await container.foldingOf(canonical)};
+	} catch (err) {
+		logger.error(
+			`status: whether the canonical generation ${generationDigestOf(canonical)} can fold here could not be read, ` +
+				`so it is reported without a \`folding\` answer`,
+			err,
+		);
+		return {};
+	}
 }

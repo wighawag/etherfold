@@ -101,6 +101,36 @@ describe('an operator watches a rebuild on /status, inside the field ADR-0047 re
 		expect(body.cursor.generations).toEqual([{generation: building, canonical: true, follows: false}]);
 	});
 
+	it('carries the CANONICAL report beside the held list, verbatim, even when nothing here folds it', async () => {
+		// A frozen canonical generation: held nowhere in this process, so absent from the
+		// per-fold list, and still named on the page with where it stands and why.
+		const frozen = generationDigestOf(generation('v1'));
+		const folding = generationDigestOf(generation('v2'));
+		const canonical = {
+			generation: frozen,
+			folding: 'frozen',
+			frozen: {reason: 'instantiation-failed', message: 'its stored code could not be built'},
+			value: {lastToBlock: 4242},
+		} as const;
+		const {body} = await statusOf(() => ({
+			value: {lastToBlock: 4242},
+			generations: [{generation: folding, canonical: false, follows: true}],
+			canonical,
+		}));
+		expect(body.cursor).toEqual({
+			reported: true,
+			value: {lastToBlock: 4242},
+			generations: [{generation: folding, canonical: false, follows: true}],
+			canonical,
+		});
+
+		// ...and on the other branch too: the two slots fail independently, so a canonical
+		// generation that has committed nothing is still NAMED
+		const {body: nothingYet} = await statusOf(() => ({canonical: {generation: frozen, folding: 'held'}}));
+		expect(nothingYet.cursor.reported).toBe(false);
+		expect(nothingYet.cursor.canonical).toEqual({generation: frozen, folding: 'held'});
+	});
+
 	it('invents no generations key on a host whose reporter names none', async () => {
 		const {body} = await statusOf(() => ({value: {lastToBlock: 7}}));
 		expect(body.cursor).toEqual({reported: true, value: {lastToBlock: 7}});
