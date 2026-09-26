@@ -1,5 +1,368 @@
 # @etherfold/processor-sqlite
 
+## 0.2.0
+
+### Minor Changes
+
+- 9ad39f4: A reorg PUBLISHES a retraction naming the fork point it withdrew, and the coherence token rotates with it.
+
+  A reorg does not add data, it WITHDRAWS it, so a signal that can only say "there is more" leaves a reader rendering the branch the chain abandoned. `StateMoved` is now a DISCRIMINATED union of the two cases, and a retraction names a FORK POINT rather than a set of blocks — the vocabulary `revertTo(keepUpTo)`, the emission stream's `removed` markers and the canonical view's rewind already share:
+
+  ```ts
+  indexer.onStateMoved((moved) => {
+  	if (moved.coherence !== held) {
+  		held = moved.coherence;
+  		return queryClient.invalidateQueries();
+  	}
+  	if (moved.kind === 'applied')
+  		for (const entity of moved.entities) queryClient.invalidateQueries({queryKey: [entity]});
+  });
+  ```
+
+  **The token is the load-bearing half.** "A missed notification is repaired by the next one" is true of an APPEND and FALSE of a retraction: after a reorg the stale entities are the ones the ABANDONED branch touched, and those are generally not in the changed-set of whatever block arrives next, so a reader that missed the retraction and invalidated narrowly would keep dead-branch rows on screen indefinitely. A retraction therefore ROTATES the token as part of publishing it (`StateMovedPublisher.publishRetraction`, one call, so a retraction that forgot to rotate is unexpressible), and the reader above converges at the very next notification without ever having seen it. That property is asserted by DROPPING the retraction over a real reorg, not by inspecting a message shape.
+  - **`@etherfold/core`** exports `StateApplied`, `StateRetracted` and `StateMoved` (their union). A retraction carries `{kind: 'retracted', forkPoint, coherence, generation}` — no block and no entity set, because a rotated token already means invalidate everything and a narrower answer would have to come back out of `revertTo`, which answers `void` on every backend. Only the CANONICAL fold publishes, and the same filter covers the rotation: a follower replaying a stored stream's reorg rotates nothing.
+  - **The processor seam's channel is RENAMED**, because it no longer carries only applied blocks: `EventProcessor.setAppliedBlockReporter` is now `setFoldReporter`, and `AppliedBlockReporter` is now `FoldReporter`, carrying `FoldReport = AppliedBlock | Retraction`. `AppliedBlock` gains `kind: 'applied'`. `process` is still NOT widened, and no other signature changed.
+  - **`@etherfold/processor-entities`** derives the fork point where it already did — the line that reads the `removed` markers and calls `revertTo` — and reports it AFTER the revert returned and BEFORE the replacement blocks are applied, which is the order they happened in.
+  - **`@etherfold/processor-sqlite`** forwards the renamed channel, retractions included, pinned by its own test.
+
+  `StateStore`, `WritableStateStore` and `revertTo` are untouched: no backend and no conformance case changed. ADR-0083 records the reasoning; a PROMOTION rotating the same token is still its own change.
+
+- 9d1d3cd: **A processor no longer DECLARES what it is. The `version` field, `getVersionHash()`, `assertProcessorVersion` and the `PROCESSOR DRIFT` report are DELETED** (ADR-0086).
+
+  An identity is now derived from what a processor IS and is handed to the engine by the ARRIVAL that produced it: the SHA-256 of a bundle's octets wherever a deployment has bytes, and a digest of the handler SOURCES for the one arrival that has none — a module a dev server hands a browser tab. An author cannot state it, so an author cannot forget to bump it, and state computed by logic that has since been replaced can no longer be served as if it were current. This is the CONTRACT step of a six-batch refactor; every caller moved first, so nothing here is a change of behaviour that was not already available.
+
+  **This RETIRES a feature that shipped days ago, and that is its correct end rather than a reversal.** `a-reload-that-changed-nothing-reports-processor-drift` landed the `PROCESSOR DRIFT` report on 2026-09-16. It was the right fix for an author-DECLARED identity: the identity could LIE — a handler edited under a static `version` named the generation already held — so the core said so, loudly, in one phrase an operator could grep for. ADR-0086 deletes the lie instead of reporting it. There is no declared identity left for the code to disagree with, so drift stops being unreported and becomes UNREPRESENTABLE, and the machinery that compensated for it goes with the thing it was compensating for. The unconsumed changeset that announced it has been deleted too: nothing has been released, so amending it would ship a release note for a report that never existed outside this repository, and the history belongs in the work record and the ADR rather than in notes to users.
+
+  What is deleted, by package:
+  - **`@etherfold/core`**: `EventProcessor.getVersionHash()`, `assertProcessorVersion`, `ContextIdentifier.processorFingerprint`, `ProcessorDriftReport`, `ProcessorDriftComparison`, `processorDriftReport`, `ProvidedIndexerConfig.strictProcessorDrift`, `Indexer.onProcessorDrift` and `ReceivingIndexer.onProcessorDrift`. `processorIdentity` is now REQUIRED on `IndexerGenerationOptions`, `StreamBuilderOptions` and `GenerationRebuildOptions`, and `updateProcessor` takes one; a `GenerationSpec` that supplies none is REFUSED (a fold with no name cannot be registered), which is typed as optional only because the read order is state → processor → identity, the order that makes a module arrival expressible.
+  - **`@etherfold/processor-entities` / `@etherfold/processor-sqlite`**: `EntityProcessor.version` and `entityProcessorVersionHash` are gone, and so is the `identity` option each took — it existed only to answer `getVersionHash()`, and a fold that computes no identity of its own has nothing for a caller to override. A host names its generation, its table namespace (ADR-0053) and its engine from ONE value it was handed.
+  - **`@etherfold/server`**: `ReconfigureReport`'s `unchanged` arm no longer carries `drift`, and the admin route no longer returns it. The three outcomes are still three.
+  - **`etherfold`**: the reconfigure endpoint's `unchanged` has ONE reading — these are the same bytes, so either the edit is not in them yet or the build has not run — instead of two plus a report to tell them apart.
+
+  **`EventProcessor.getCodeFingerprint()` and `processorCodeFingerprint` SURVIVE, in a different role, and this deviates from ADR-0086's own consequence list.** That list says the fingerprint goes with everything else; it is wrong in two places, and both were settled after it was written. A browser tab is handed an already-built processor with no bytes to hash, so `@etherfold/browser` names that fold by `processor.getCodeFingerprint()` (`moduleProcessorIdentity`) — the SEAM method rather than the standalone function, because the seam is what delegates through a wrapper (`VersionedStateEventProcessor` over `EntityEventProcessor`) to the author's own handlers, while the standalone function applied to a wrapper would fingerprint the wrapper's methods and produce a constant no edit could move. So the derivation stays, as the IDENTITY of the one arrival with no bytes, and what dies is its old role: a second opinion sitting beside a declared identity.
+
+  **A module that cannot be named that way is now REFUSED.** A processor whose handlers are all `bind`-ed or behind a proxy has no readable source, `getCodeFingerprint()` answers `undefined`, and the declared hash it used to fall back on is gone. The alternatives were all lies — a constant no edit can move, a name taken from the application (the author-declared identity through the one door left open), or a generation called `undefined` — so `@etherfold/browser` throws, before anything is registered, naming the two ways out.
+
+  **A `--processor` path that names an UNBUNDLED entry point is refused too, for the same reason**: no bytes describe it and nothing is left to name its fold. That refusal lands where the arrival is resolved, before a database is opened; `a-path-naming-an-unbundled-entry-point-is-refused` is what moves it to configuration resolution and gives it the build command an author needs.
+
+  Determinism moves from a cost concern to a correctness-of-reuse concern: a non-deterministic bundler now gives every deploy a new identity and re-folds for ever, so pinning the bundler version in the lockfile stops being advice.
+
+- d5f1039: The fold PUBLISHES what it just changed: a reader can be told the state moved.
+
+  A client could read the state and had no way to know when to read it again. `Indexer` now publishes one **`StateMoved`** per block the CANONICAL fold applies — `{block, coherence, entities, generation}` — and a reader's whole rule is two lines: token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything. ADR-0083 decides the shape; this is the producer's chain-facing half of it.
+
+  ```ts
+  const detach = indexer.onStateMoved(({block, entities, coherence}) => {
+  	if (coherence !== held) {
+  		held = coherence;
+  		return queryClient.invalidateQueries();
+  	}
+  	for (const entity of entities) queryClient.invalidateQueries({queryKey: [entity]});
+  });
+  ```
+
+  It is a SIGNAL and not a delivery of data: no rows, no mutations, no state handle, because a reader handed the delta applies it by hand and is wrong at the next reorg. It says what moved so a reader re-reads through the surface it already has.
+  - **`@etherfold/core`** exports `StateMoved`, `StateMovedHandler`, `StateMovedDetach`, `StateMovedPublisher` and `coherenceToken`, and `Indexer.onStateMoved(handler)` returns the detach. The publisher holds NOTHING per subscriber (no buffer, no retry, no cursor), which is what stops a SharedWorker's memory growing with the number of open tabs; a handler that throws is caught and logged, exactly as `onStateUpdated` already contains one.
+  - **The entity set comes from below and core RELAYS it.** `EventProcessor` gains ONE optional member, `setAppliedBlockReporter(reporter)`, carrying `AppliedBlock` (`{block, entities}`) upward. `process` is NOT widened and no existing signature changed: a processor that implements nothing here is unaffected and publishes no signal, which is the honest answer since core has no mutation vocabulary at all and could not name what such a fold applied.
+  - **`@etherfold/processor-entities`** produces the set where the mutations already are: `applyEventStream` takes an optional reporter and reports each block AFTER `applyBlock` returned, with the entity NAMES its mutations carried, deduplicated and sorted. Names and never ids in this version, so the payload is O(schema) rather than O(mutations). `EntityEventProcessor.setAppliedBlockReporter` is the slot the container sets.
+  - **`@etherfold/processor-sqlite`** forwards it to the fold it wraps, including a reporter attached before that fold is built.
+
+  Three rules worth knowing before relying on it: only the CANONICAL fold publishes (a follower re-folding a stored stream would otherwise fire one notification per past block while nothing a reader can see has moved); a block whose handlers changed nothing is still published, with an empty set, because "one notification per APPLIED BLOCK" is one rule; and the coherence token is OPAQUE — compare it, never parse it. Nothing rotates it yet, so it is stable for the life of a container; a retraction and a promotion will, each in its own change.
+
+  Delivery is best-effort, at most once: a missed notification is repaired by the next one plus the token.
+
+- 2c049bf: **`VersionedStateEventProcessor` takes its fold's identity from the ARRIVAL that produced it, through a new `identity` option** (ADR-0086).
+
+  A processor's identity has always been author-declared: `getVersionHash()` is the `version` field plus the entity and config declarations, and the core discards persisted state when it changes. An author who edited a handler and forgot to bump `version` got state computed by the previous logic, served for ever and silently. ADR-0086's invariant removes the possibility rather than reporting it: an author cannot STATE their processor's identity, so a fold is HANDED one, derived from what the processor IS -- the SHA-256 of a self-contained bundle's octets where a deployment read one off disk -- and never asks where it came from.
+
+  `EntityEventProcessorOptions.identity` already carried that value into the neutral fold. This adds the same option, spelled and meaning the same, to the SQLite convenience class:
+  - `VersionedStateProcessorOptions.identity` is what `getVersionHash()` answers with when a host supplied one, so a deployment folding a bundle names its generation by those bytes and a later `configure()` cannot move it (the config a bundle was built with is in the bundle);
+  - it is FORWARDED to the `EntityEventProcessor` this class builds on first use, so the wrapper and the fold underneath give ONE answer to "which fold is this" rather than two.
+
+  That type is therefore no longer purely a pass-through to the store it builds: the store never sees an identity.
+
+  **Nothing is removed and no caller has to move yet.** The option is OPTIONAL, and absent means the identity falls back to the author's `entityProcessorVersionHash` exactly as it always did -- so `version`, `getVersionHash()`, `getCodeFingerprint()` and the `PROCESSOR DRIFT` report all still exist and still work. This is one MIGRATE batch of an expand -> migrate -> contract sequence (`work/protocol/TASKING-PROTOCOL.md` 3a); the later contract step is what deletes the declared path, once every package has moved.
+
+  Also documentation, in `@etherfold/processor-entities`, where a docstring told a caller to reach for the declared hash: `BootstrapOptions.processor` and `createSnapshot`'s `processor` now describe WHICH FOLD computed the rows (a value compared for equality and never parsed) rather than "the version hash", and `bootstrapFromSnapshot`'s example passes the identity the deployment's arrival handed its fold instead of calling `getVersionHash()`. The candidate rule itself is untouched. `EntityProcessor.version` now says plainly that it is superseded and is not for new code.
+
+- eee7e00: **The storage seam NARROWS: `StateStore` is the reads, and a mutation nobody claimed for is no longer expressible** (ADR-0077 contracted, ADR-0079).
+
+  ADR-0075 put a writer token on every mutating path and ADR-0077 split the seam additively so consumers could migrate one at a time. This is the contract step, and it is one atomic change because narrowing a SHARED TYPE is atomic by construction: the moment `EntityEventProcessor`'s constructor takes the writable shape, every package that constructs it with a seam-typed value stops typechecking.
+
+  **Three names, one hierarchy.** `StateStore` is what a CONSUMER holds and is the reads only (`migrate`, the four reads, `readCursor`, `readRetentionEnforcement`, `capabilities`, `declarations`) -- calling `applyBlock` on one is now a compile error. `StateStoreBackend` is that plus the five mutating verbs: what a backend class declares, what a factory hands over. `WritableStateStore` is a backend plus the `token` a claim minted, and `openForWriting` is the only way to obtain one. The two scaffolding names from the expand phase, `ReadableStateStore` and `StateStoreMutations`, are DELETED.
+
+  **If you hold a store:** decide whether you READ or WRITE, and say so. A reader needs no change and gets a compile error if it tries to mutate. A writer claims: `const store = await openForWriting(await createBrowserStateStore(processor.entities))`. `openForWriting` migrates, so it replaces the `migrate()` you were calling, and it is idempotent per store instance, so the shipped `createState: () => store` pattern takes ONE claim and every generation writes through it. It takes a BACKEND and never a store already narrowed to its reads, so the narrowing is one-way; a demoted writer builds a new store and opens that (ADR-0078).
+
+  **If you implement a backend:** declare `implements StateStoreBackend` instead of `implements StateStore`. The classes themselves are UNCHANGED and keep their full surface, including the SQL tier's `queryCurrent` / `queryAsOf` / `applyBlocks` / `drop`; `createD1Store` still returns the concrete class.
+
+  **If you wire a browser app:** `createBrowserStateStore` still hands back a store and deliberately does NOT claim -- a tab that only renders opens the same database, and claiming there would have every reading tab take the store from the tab that is indexing. `createState` now returns a `WritableStateStore`, so wrap the factory in `openForWriting`. `openForWriting` / `openForReading` are re-exported from `@etherfold/processor-entities` beside the bootstrap primitives, because they are on the same boot path.
+
+  **If you run the conformance suite:** your factory and options are unchanged, and every chapter is asked ONCE again -- the two-shape parameterisation that existed while consumers migrated is gone.
+
+  Two consequences worth knowing before they surprise someone (both ADR-0079). Claiming MIGRATES, and a receiving container builds a generation's state before the generation cap can refuse it (the cap is keyed on the processor's version hash, which needs the processor, which needs the state), so a cap-refused generation now leaves an empty namespace behind; what a refusal still guarantees is no registry record and no state. And `VersionedStateEventProcessor` claims on FIRST USE rather than in its constructor, because claiming is asynchronous and that constructor is not -- still an explicit claim, and safe here because the store is one it built and nothing else holds.
+
+- 0a53b98: Close the residue the generation work left behind: writer succession is real in a running process, a reaped stream takes its coverage claim with it, and a container no longer answers reads from a generation the pointer does not name.
+
+  **WRITER SUCCESSION now moves the ENGINE, not only the records** (`@etherfold/core`, ADR-0044's second 2026-09-06 amendment). ADR-0044 says the writer of a stream is the oldest SURVIVING generation on it, and that succession is atomic with a delete because it is stored nowhere — but only the durable half was built. In a running process, deleting a writer removed the only RECEIVER its stream had: an incoming batch resolved to nothing, nothing appended, and `/status` went on looking healthy while the cursor stopped. `ReceivingIndexer` now re-derives which held fold writes each stream from the records it is already reading, and hands the survivor the engine — the fold stops following, its bounded rebuild is retired, and it gets a receiver carrying the emission appender. It is a reconciliation rather than an event handler, because a generation can be deleted by another process, and it costs nothing when nothing moved.
+
+  **A survivor that has not caught up does NOT take the wire.** A receiver asks `expectedFromBlock` from its own fold position and ADR-0052 appends a re-sent batch again, so handing the wire to a follower mid-rebuild would store a second copy of everything back to its cursor — indistinguishable afterwards from real emissions. It keeps following until its rebuild reports level, then takes over. An unfed stream is visible and recoverable; a duplicated range is neither.
+
+  **`ReceivingIndexer.canonicalGeneration()` now returns `GenerationId | undefined`** rather than falling back to the fold it opened with. `openGenerationRegistry.canonical()` resolves the pointer against the RECORDS, so it answers nothing when the pointer names a generation whose record has gone. The fallback served reads from a generation nobody asked for, silently, where a read tier over the same rows refuses (`503 no-canonical-generation`, ADR-0058) — one database with two answers depending on who was asking. The registry's answer is now passed through, so every host agrees. `IndexerRegistryEntry.canonicalGeneration` already had this shape and the feed already refused on it, so no call site changes.
+
+  **`dropStreamSubtree` deletes the stream's COVERAGE CLAIM with its rows** (`@etherfold/server`). A stream lives in two tables — its emissions, and the `_stream_coverage` row saying how far they reach — and they are written in one batch. They are now deleted in one batch too. PRESENCE is the claim and never the rows, so a reap that took the rows and left the claim left a stream reading as PRESENT AND COMPLETE with nothing in it: a generation folding it would be told it had re-folded the whole history and could resume at the old tip, with empty state, durably, with no error anywhere. That is the whole-history form of the hazard `startBlock` exists to prevent, and it was reachable through the ordinary unregistered-subtree sweep.
+
+  **`VersionedStateProcessorOptions` accepts `tableNamespace`** (`@etherfold/processor-sqlite`). A generation's state is a table-name namespace (ADR-0053), so without it two generations built through this convenience class over one handle landed on the same tables and shared rows silently. The entity-path assembly the CLI folds through always took the option; the narrow `Pick` predated the namespace.
+
+### Patch Changes
+
+- 053a963: **`applyBlock` now refuses a height that is not ABOVE the recorded tip, on every backend, and no longer only a height that is already recorded.**
+
+  The old check was narrower than the invariant a single writer maintains. A caller reverts to the fork BEFORE it applies the branch that replaces it (`applyEventStream`, `@etherfold/processor-entities`), so every apply lands above what the store holds; a block offered at or below the tip is therefore a writer working from a position the store has passed -- a backgrounded tab resuming on a stale cursor, a second instance of one indexer -- and taking it would open a version underneath the live one rather than after it. That was reachable at any height nothing happened to be recorded at, which on a SPARSE block table (only blocks carrying our logs get a row) is most of them.
+
+  This is the tightening of a refusal and not a new capability, so a correct caller sees no change. It is the height half of `a-second-writer-writes-nothing`; the writer token is the other half, and the two answer different questions (WHO is writing, and WHETHER the height is above the tip).
+  - **An EMPTY store admits any height**, because there is no tip to be above: a fresh index at a contract's start block, a rebuild resuming mid-chain and a bootstrap installing a snapshot taken far above zero all still work unchanged.
+  - **The tip is read inside the same atomic unit as the write**, so a revert lowering it and an apply above it cannot interleave with another writer. On IndexedDB that is one more read in the `readwrite` transaction that was already open. On SQLite it is ADR-0054's shape, because `remote-sql` has no read inside a transaction: every statement of the block carries `NOT EXISTS (SELECT 1 FROM _blocks WHERE number > ?)`, so a refused block applies to NOTHING (versions and cursor included), and the tip read that opens the same batch is the evidence the message is assembled from.
+  - **The existing refusals are unchanged.** A duplicate height still raises where it always did, with the message it always had (on SQLite, still the `_blocks` primary-key violation), and so does a duplicate hash.
+  - **The message names both heights** on every backend, from one place at the seam: the new `blockNotAboveTip(number, tip)` in `@etherfold/state-store`. Like the duplicate-height refusal beside it, it is a plain `Error` and says the CALLER is wrong; `StoreWriterChangedError` remains the one on this path that means the opposite.
+
+  **If you run the conformance suite:** three cases join `a block is one atomic unit` -- a height at or below the tip is refused even where that height is free, an empty store admits any height, and a height becomes applicable again once a revert has taken the tip back under it.
+
+  **If you use `applyBlocks` (the SQL backend's packed backfill):** the blocks handed to it must now ASCEND, refused before anything is sent, because each is judged against the tip the one before it left. The lowest block is sent in a batch of its own, carrying the tip read that decides the whole sequence, so a refusal leaves NOTHING applied and costs one extra round trip per call rather than per block.
+
+  No runtime code changed in `@etherfold/processor-sqlite`, and nothing it does changed: one test there reads the statements of a block's batch, and the tip read now leads them.
+
+- 850a3af: Dropped `named-logs` from the runtime dependencies: nothing in the package imports it, so it was an install a consumer paid for and never used.
+- 1d9be43: Every caller, example and doc now names the GENERATION container: `IndexerGeneration` for one stream plus one fold, and the two FACTORIES for the browser hook.
+
+  This is the MIGRATE batch of the expand → migrate → contract rename the generation container needs. Nothing is removed: `EthereumIndexer` is still exported from `@etherfold/core` as an alias to `IndexerGeneration`, and `createIndexerState` still accepts a processor built over a store. What changed is that nothing in this repository reaches for either any more, so `the-old-indexer-shape-is-deleted` can delete both without a compile error anywhere.
+
+  **`@etherfold/browser` re-exports the class as `IndexerGeneration`, not `EthereumIndexer`.** A caller that imported the type from this package renames the import; the class itself is unchanged, and `@etherfold/core` still exports the old name for now.
+
+  **The browser hook is written against `{createState, createProcessor}` everywhere.** The README, both example apps, the `IndexerState` and `BrowserStateStore` JSDoc examples and every test now hand over the two factories rather than a processor already built over a store:
+
+  ```ts
+  const indexer = createIndexerState({
+  	createState: () => createBrowserStateStore(myProcessor.entities, {databaseName: 'my-app'}),
+  	createProcessor: (store) => fromEntityProcessor(myProcessor)(store),
+  });
+  ```
+
+  An indexer holds any number of generations and each folds into its OWN state, so the store cannot be a value handed over once — the hook is what calls these, once per generation. An app that needs the store it built (to rebuild a processor over it on a hot reload, or to read its capability report) captures it in the factory's own closure, which is what both examples now do.
+
+  **The CLI's source-text guard is asserted to still bite.** `packages/cli/test/engine.test.ts` enforces that the CLI constructs and imports no browser engine by matching the identifier with regexes. A rename that left those on a name nothing uses any more would keep them green and VACUOUS — enforcing nothing, with nothing going red to say so — so the patterns are now named functions and are asserted against deliberate violations under BOTH spellings, plus the prose and the generation CONTAINER they must not fire on.
+
+- 0bf9dc7: Package READMEs now link to sibling packages by absolute URL instead of by relative path.
+
+  A README is read in three places and a relative `../state-store` link is only correct in one of them. On npmjs.com it resolves against the registry page and 404s, so every cross-reference in every published README was broken for the audience most likely to follow one. In the generated API documentation the same links became `_media/<package>` references to files that do not exist, which is what turned the docs site's build red.
+
+  No prose changed; only the link targets.
+
+- bb86a77: The free-form JS-object processor path is DELETED. There is one way to author a processor: entity declarations plus handlers over a `MutationContext` (ADR-0037).
+
+  `@etherfold/js-processor` is gone, with `fromJSProcessor`, `JSProcessor`, `JSObjectEventProcessor` and its immer `History`. What it uniquely offered was an authoring STYLE, not a capability: no as-of queries, no retention or pruning, no bounded listing, and no schema for the query layer, which is generated from entity declarations. Its state was also a whole blob rewritten per save, which is the shape this repo has spent a design pass removing from the stream. What is NOT lost is its STORAGE characteristic: a plain object with history as immer reverse patches survives behind the proper seam as `@etherfold/state-store-patch` (the light store), with the capability reporting and conformance coverage the seam provides.
+
+  **`@etherfold/browser`: one kind, one call shape.** `createIndexerState(processor)` takes the processor itself. The `ProcessorKind` / `TaggedProcessor` union, the bare `EventProcessorWithInitialState` form it also accepted, and the `keepState` option are removed, along with `keepStateOnIndexedDB` and `keepStateOnLocalStorage`. `updateProcessor` takes the same bare shape.
+
+  ```ts
+  // before
+  const indexer = createIndexerState({kind: 'entities', processor: fromEntityProcessor(p)(store)});
+  // after
+  const indexer = createIndexerState(fromEntityProcessor(p)(store));
+  ```
+
+  **`@etherfold/core`: the `KeepState` family is deleted, snapshot half included.** `KeepState`, `ExistingStateFetcher`, `StateSaver`, `AllData`, `ProcessorContext` and `EventProcessorWithInitialState` go, and so does the BLOB snapshot envelope beside them (`BLOB_SNAPSHOT_FORMAT`, `BlobSnapshotEnvelope`, `isReadableBlobSnapshot`). The seam had exactly one caller, `JSObjectEventProcessor.keepState`, and its two masters turned out to be one: the entity path's bootstrap never used it. Installing state somebody else computed is `openSnapshotAware` / `bootstrapFromSnapshot` at the STORAGE seam, where a store's own transaction is, and `ENTITY_SNAPSHOT_FORMAT` is now the only envelope number. ADR-0040's rule (a format a reader cannot read is refused, never translated) is unaffected and is what the surviving reader still does.
+
+  **`etherfold`: `--store` loses its `file` value and `--folder` goes with it.** `--store sqlite --db <libsql url>` is the whole of it, and `--store` stays required: it is the axis a second backend arrives on. `packages/cli/src/keepState.ts` (`createFileKeepState`, the blob snapshot writer) is deleted, and so is the kind/store mismatch refusal, which had nothing left to be a mismatch between.
+
+  **`@etherfold/utils`: a module hands over the PROCESSOR, not a kind tag** (superseding ADR-0039). `createProcessor` returns the authoring object itself; `instantiateProcessorWithKind`, `ResolvedProcessor` and `ProcessorKind` are removed, and `instantiateProcessor` returns what the factory made, typed by the caller. A module still returning `{kind, processor}` is REFUSED naming ADR-0037, rather than unwrapped, so the retired shape cannot reach a store that would ask it for `entities` and get `undefined`. The `@etherfold/utils/indexer` subpath goes too: it existed for `contextFilenames`, the blob snapshot's file naming, and `@etherfold/browser` no longer depends on this package at all.
+
+  **The stratagems conformance workload keeps its question and loses its regeneration.** The committed golden state is still what the ported entity processor is compared against on every backend, and the vendored original is still committed (typechecked, with its `JSProcessor` type vendored beside it). What is gone is `src/oracle.ts` and the `regenerate-golden-state` script, because driving that original needed `fromJSProcessor`: the golden is now a FROZEN expectation rather than a recomputable one. `CONTEXT.md` already treated a diff on it as a FINDING and not a fixture update, so regeneration was never the normal path.
+
+  **Six example apps used the deleted path.** `event-processor-nfts` keeps only its entity processor (which the browser demo and `etherfold index` already ran) and is the end-to-end demonstration, beside `browser-reference`. `basic`, `event-processor-bleeps`, `event-processor-conquest-eth`, `event-processor-conquest-fplay` and `mud` are DELETED rather than left broken, and `web-demo` goes with them: it consumed three of them and rendered a state blob as a JSON tree, which is the shape the entity path does not have.
+
+- c0d694f: The acceptance gate no longer assumes an idle machine: every package that runs vitest sets `testTimeout` and `hookTimeout` to 60s instead of inheriting the 5s default.
+
+  No runtime code changes in any of these packages. The bump is only because each gained (or had amended) a `vitest.config.ts`.
+
+  Vitest's 5s default is fine on an idle box and wrong on a machine someone is working on. The gate runs `pnpm test` across the whole workspace, so suites compete with each other and with everything else running. Three unrelated packages timed out at 5s in a single session -- `core`'s base36 digest sweep, four cases in `state-store-sqlite`'s conformance suite, and `server`'s `sql2ts` round-trip -- each passing in seconds when run alone, and each blocking a task that had nothing to do with the code that failed.
+
+  That makes a red gate ambiguous, which defeats the point of having one: red should mean broken, not "someone opened a browser". A generous timeout costs nothing when tests pass, since it is only reached on failure.
+
+  The base36 digest sweep in `@etherfold/core`, skipped earlier the same day, is un-skipped: raising the timeout is the fix that skip was standing in for.
+
+  See ADR-0032 for the rejected alternatives, including why a shared config file is not possible here (per-package `rootDir` puts `vitest.config.ts` under the typechecker, so importing a root-level file fails `TS6059`).
+
+- ff8a6d2: **The last four packages stop resting on the DECLARED identity fallback, and every witness left behind is labelled for the contract step** (ADR-0086).
+
+  The sixth and last migrate batch. Every place that SOURCES an identity moved in the first five; what none of them could see is every place that silently RESTS on the fallback -- a deployment that supplies no identity falls through `processorIdentityOf` to `processor.getVersionHash()`, so the fold is named by the author's declared `version` without ever mentioning it. A grep finds nothing there, so each batch honestly reported itself clean, and only running the code says otherwise. Every one of those sites is correct today and becomes a fold with NO NAME AT ALL the moment `the-declared-version-and-the-drift-report-are-deleted` removes the declared half.
+
+  This is TEST-ONLY: no published surface changes, nothing is deleted and nothing is refused. `version`, `getVersionHash()`, `getCodeFingerprint()` and the `PROCESSOR DRIFT` report all still exist and still work, and no configuration that resolves today stops resolving.
+  - **`@etherfold/processor-sqlite`**: the two-deployment-shapes suite hands its `IndexerGeneration`s the same identity its fold was built with, so the engine is TOLD which fold it drives instead of asking the processor to state one. Its remaining declared-path cases are WITNESSES and are untouched.
+  - **`@etherfold/browser`**: the snapshot-only mode and the stream-seeding refusal label their published snapshot with an arrival-derived identity rather than with `entityProcessorVersionHash(definition)`; the live-reload suites name their fake fold by the handler sources a MODULE arrival is named by (`moduleProcessorIdentity`, which is `getCodeFingerprint()`), which is also what a real dev-server module reports. One harness bug the probe exposed is fixed with them: the recording wrapper around `updateProcessor` dropped its options, so the identity the hook derived never reached the core.
+  - **`@etherfold/platform-nodejs-fetcher`**: the real-socket receiver hands its identity to BOTH halves -- the fold and the `StreamBuilder` the core asks -- so there is one answer to "which fold is this" and never two.
+  - **`@etherfold/conformance-workload-stratagems`** (private, so not named above): the publication, retraction and receiving-container suites supply a `processorIdentity` on their generation spec. None of them is about identity.
+
+  **Five WITNESSES survive, all of them labelled in place with ADR-0086, what they prove and the task that retires them**, because migrating a witness does not move coverage, it deletes it while leaving the code standing. In `@etherfold/processor-sqlite`: the whole of `version.test.ts` (11 cases) and the two `describe`s in `lifecycle.test.ts` that consult the declared hash (5 cases). In `@etherfold/browser`: `aModuleIsIdentifiedByItsHandlerSources.test.ts`'s declared-hash contrast, and a new case pinning the one place the fallback is still reachable from PRODUCTION code in that package -- `moduleProcessorIdentity` answers `undefined` for a module whose handlers have no readable source, which is a decision `the-declared-version-and-the-drift-report-are-deleted` has to make rather than discover.
+
+  Demonstrated rather than asserted, because a grep cannot see a fallback: with both halves of the declared fallback made to throw locally, these four packages fail ONLY those labelled witnesses, and the tree is green without the probe.
+
+- 7b64e35: **`stream.alwaysFetchTimestamps` and the whole enrichment path under it are DELETED.** Unlike the transaction half of the same decision this is a SWAP rather than a removal: the time axis survives, unconditionally and for free. `blockTimestamp` is on the log itself, standardised in `ethereum/execution-apis#639`, so `event.blockTimestamp` is populated exactly as before at zero extra requests. What goes is the machinery that compensated for its absence at a cost the operator did not choose: `enrichEvents`, `blockFetcherFor`, the reorg-window-bounded block-timestamp cache, and the `eth_getBlockByHash` calls under them, issued one hash at a time in a `for` loop unless the provider advertised `eth_batch`. Neither deployment shape of ADR-0003 can be configured into a per-block request any more: not the single-process `IndexerGeneration`, not the split `LogFetcher`. `ProvidedStreamConfig` is now `{finality, parse}`.
+
+  **THE MINIMUM NODE REQUIREMENT.** The engine reads `blockTimestamp` off the log and has no fallback to fetch it with, so a node that does not serve the field is now REFUSED at the fetch boundary rather than silently compensated for. That requires geth >= 1.16.0, reth, besu, erigon, anvil, ethereumjs, or **`@nomicfoundation/edr >= 0.20.0`** (`NomicFoundation/edr#1644`, released 2026-09-02). The requirement is on the resolved EDR version and never on the Hardhat version: no released Hardhat bundles it yet (3.16.0 ships edr 0.19.0), and EDR is an ordinary npm dependency, so a Hardhat project satisfies this TODAY with a package-manager override (`pnpm.overrides`, npm `overrides`, yarn `resolutions`) pinning `@nomicfoundation/edr` to `>=0.20.0`, rather than waiting for a Hardhat release. An override does force a combination Hardhat did not test, so verify it rather than assuming it just works; the published 0.19-to-0.20 delta is narrow.
+
+  **The refusal is PERMANENT machinery and it fires in two places.** It is not a transitional guard: a timestampless log stays reachable at any version, because a node being FORKED may predate the spec change (EDR types the field `Option<u64>` precisely so a missing timestamp stays distinguishable from a real one) and EDR's on-disk RPC response cache replays such an absence once it has recorded one, until `rpc_cache` is dropped. (Not because pre-change cache entries keep answering: `@nomicfoundation/edr@0.20.0` moved the cache to `rpc_cache/v2` and ignores the rest.) At the FETCH BOUNDARY the refusal names the NODE and the four things that cause it, one round trip in; at the FOLD, `blockPointer` names the BLOCK, because a stream can reach a fold without passing a fetcher at all (a seed install, a fixture replay). `blockPointer`'s message no longer recommends `stream: {alwaysFetchTimestamps: true}`, which would now be advice to set a flag that does not exist. Neither guess: a zero or interpolated timestamp does not fail, it answers confidently about the wrong block for as long as the store lives, and `getAsOf({timestamp})` has no way to tell a caller it was lied to.
+
+  **What is deliberately NOT deleted.** `blockTimestamp?: number` stays OPTIONAL on the processor-facing event type, because the wire genuinely does not guarantee it and the type says what the wire does. `parseLogBlockTimestamp` and its hex/decimal quantity tolerance stay too: READING the field off the log is the surviving path, and an absent or unreadable value still yields `undefined` rather than a number.
+
+  `@etherfold/fetcher-host` no longer reads `STREAM_ALWAYS_FETCH_TIMESTAMPS`, and `platforms/nodejs-fetcher` no longer documents it: the variable set the flag that no longer exists, so it now names nothing and is ignored like any other unrecognised variable. `STREAM_FINALITY` is the whole of the stream configuration the environment owns.
+
+  **On the stream identity.** The stream config is hashed into the stream digest, so dropping a field from it is an addressing change and not merely an API change. It costs nothing here: `resolveStreamConfig` omits keys whose value is `undefined`, so a deployment that never set the flag contributed no key to the digest preimage and its digest does not move (pinned as recorded bytes in `aDeletedStreamFlagDoesNotMoveTheDigest.test.ts`). A deployment that DID set it re-indexes from block 0, which is the correct outcome. Backward compatibility with what has already been released is not an obligation of this project at its current stage, so there is no deprecation window and no migration path; this entry is a factual record of what changed.
+
+  With this and the transaction half, the engine's entire chain-facing surface is `eth_getLogs` for data, `eth_blockNumber` for the tip and `eth_chainId` for the identity guard, and no configuration can make it call anything else. ADR-0073 records the reasoning; ADR-0002's block-timestamp consequence is updated to match.
+
+- Updated dependencies [1ad2d4a]
+- Updated dependencies [ebfa4f0]
+- Updated dependencies [0ba3c60]
+- Updated dependencies [9fa7f35]
+- Updated dependencies [3e36261]
+- Updated dependencies [852da39]
+- Updated dependencies [2b4f3fc]
+- Updated dependencies [8a8fe33]
+- Updated dependencies [f77f8ea]
+- Updated dependencies [61a5462]
+- Updated dependencies [3e36261]
+- Updated dependencies [a1fccd0]
+- Updated dependencies [e8cc627]
+- Updated dependencies [254a8d7]
+- Updated dependencies [0e53f34]
+- Updated dependencies [882ba22]
+- Updated dependencies [5427806]
+- Updated dependencies [450494a]
+- Updated dependencies [93eef2e]
+- Updated dependencies [391dbf8]
+- Updated dependencies [c6b5215]
+- Updated dependencies [9a10668]
+- Updated dependencies [0f33468]
+- Updated dependencies [a64a843]
+- Updated dependencies [57697f6]
+- Updated dependencies [2021f99]
+- Updated dependencies [1bec395]
+- Updated dependencies [d92021c]
+- Updated dependencies [23c1eae]
+- Updated dependencies [bc63e6b]
+- Updated dependencies [5729da5]
+- Updated dependencies [ebfa4f0]
+- Updated dependencies [2e10f5e]
+- Updated dependencies [ce43a7b]
+- Updated dependencies [1524a04]
+- Updated dependencies [011aa87]
+- Updated dependencies [fc95435]
+- Updated dependencies [d8ce920]
+- Updated dependencies [a4d106e]
+- Updated dependencies [ee8e78d]
+- Updated dependencies [1af43de]
+- Updated dependencies [9ad39f4]
+- Updated dependencies [af6a85a]
+- Updated dependencies [72297c8]
+- Updated dependencies [339d212]
+- Updated dependencies [382421f]
+- Updated dependencies [4f5588b]
+- Updated dependencies [9c15bb8]
+- Updated dependencies [351c585]
+- Updated dependencies [b647fb8]
+- Updated dependencies [02f46ca]
+- Updated dependencies [a448b1b]
+- Updated dependencies [a2fc7d7]
+- Updated dependencies [839e781]
+- Updated dependencies [6b5395e]
+- Updated dependencies [f0515f8]
+- Updated dependencies [1769d1a]
+- Updated dependencies [e72cbec]
+- Updated dependencies [4e5067e]
+- Updated dependencies [dc08d24]
+- Updated dependencies [bdbcf26]
+- Updated dependencies [29895dc]
+- Updated dependencies [e7d06c9]
+- Updated dependencies [aa17a93]
+- Updated dependencies [da289e2]
+- Updated dependencies [1c1bf33]
+- Updated dependencies [c30070a]
+- Updated dependencies [053a963]
+- Updated dependencies [e652cde]
+- Updated dependencies [49e73ae]
+- Updated dependencies [70f98d6]
+- Updated dependencies [3e9e9d0]
+- Updated dependencies [b2d559a]
+- Updated dependencies [9f693f3]
+- Updated dependencies [1d9be43]
+- Updated dependencies [ab779b0]
+- Updated dependencies [793f3d6]
+- Updated dependencies [d26ada8]
+- Updated dependencies [1a6f68b]
+- Updated dependencies [56acbef]
+- Updated dependencies [1d619c9]
+- Updated dependencies [d50583b]
+- Updated dependencies [37146b2]
+- Updated dependencies [f3dc9a5]
+- Updated dependencies [74f74f5]
+- Updated dependencies [9a41ba3]
+- Updated dependencies [74b2889]
+- Updated dependencies [f5fb4d2]
+- Updated dependencies [114879f]
+- Updated dependencies [0bf9dc7]
+- Updated dependencies [11481a0]
+- Updated dependencies [b0e9a0d]
+- Updated dependencies [bb86a77]
+- Updated dependencies [0403310]
+- Updated dependencies [1fa09f5]
+- Updated dependencies [1ed2b80]
+- Updated dependencies [8d1c6c5]
+- Updated dependencies [8baecea]
+- Updated dependencies [114879f]
+- Updated dependencies [5adafa9]
+- Updated dependencies [a6963b4]
+- Updated dependencies [49151c3]
+- Updated dependencies [cf1d4d5]
+- Updated dependencies [cb28315]
+- Updated dependencies [9d1d3cd]
+- Updated dependencies [ad8d8b1]
+- Updated dependencies [50748cf]
+- Updated dependencies [290e827]
+- Updated dependencies [d5f1039]
+- Updated dependencies [c0d694f]
+- Updated dependencies [d10b64e]
+- Updated dependencies [01ed0ef]
+- Updated dependencies [629dff0]
+- Updated dependencies [9e2c66d]
+- Updated dependencies [ed8e7ff]
+- Updated dependencies [b824312]
+- Updated dependencies [2c049bf]
+- Updated dependencies [35fc4c2]
+- Updated dependencies [4f206c3]
+- Updated dependencies [9e5dc0d]
+- Updated dependencies [449f6fb]
+- Updated dependencies [3fa4afc]
+- Updated dependencies [31579cc]
+- Updated dependencies [7af8558]
+- Updated dependencies [85f1982]
+- Updated dependencies [eee7e00]
+- Updated dependencies [241e684]
+- Updated dependencies [4da7b27]
+- Updated dependencies [9229c30]
+- Updated dependencies [8c8341a]
+- Updated dependencies [40819d3]
+- Updated dependencies [628df9d]
+- Updated dependencies [9bfc424]
+- Updated dependencies [7b64e35]
+- Updated dependencies [ba5b4ba]
+- Updated dependencies [2c6ef82]
+- Updated dependencies [5deb214]
+- Updated dependencies [6d3df30]
+- Updated dependencies [0a53b98]
+  - @etherfold/core@0.8.0
+  - @etherfold/processor-entities@0.2.0
+  - @etherfold/state-store-sqlite@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes
