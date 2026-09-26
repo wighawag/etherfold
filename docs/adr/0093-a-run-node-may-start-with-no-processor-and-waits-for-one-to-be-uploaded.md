@@ -1,4 +1,10 @@
+---
+status: superseded in part by ADR-0094
+---
+
 # A `run` node may start with NO processor, and waits for one to be uploaded
+
+> **SUPERSEDED IN PART 2026-09-26 by ADR-0094:** the waiting mode moves from `run` to a command of its own, `node`, and `run` no longer receives uploads. What a node with nothing configured DOES is unchanged; WHICH command it is changes. The amendments below describe the code as it stands until ADR-0094 lands.
 
 > **AMENDED 2026-09-26 (`an-uploaded-processor-survives-a-restart`):** how a CONFIGURED processor relates to what was uploaded is now decided; see the amendment at the end.
 
