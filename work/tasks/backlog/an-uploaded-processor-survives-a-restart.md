@@ -6,6 +6,14 @@ blockedBy: [a-run-node-with-nothing-configured-waits-for-its-first-upload]
 covers: [10]
 ---
 
+> **DRIFT CORRECTION, 2026-09-26 (conductor, Gate 3 on PR #201).** The first build is good and is KEPT; this re-drive continues from its branch. Everything else in it passed Gate 3 (successor at open after the configured fold and the canonical one, predecessor cold, re-read and upload unguarded, the ADR amendments, ADR-0085's status line). It was blocked for ONE reason: the start guard was put on `run` ALONE, and `build` and `index` were left to "replace at start-up as before" and to refuse `--override`. The maintainer's decision of 2026-09-26 is that ANY START with a configured `--processor` that would replace a DIFFERENT pending successor, HOWEVER that successor arrived, asks on a TTY and is refused non-interactively unless `--override`. `build` and `index` open the same container through `openFolding` over the same registry and slots, so an `index -p X` or a `build -p X` against a database holding an uploaded pending successor deletes it silently today. That is the case the decision exists to stop, and "the task named the `run` wiring" is not a measured reason to narrow it. Fix exactly this:
+>
+> 1. Wire `confirmReplacingSuccessorAtStart` (`startGuardFor`) for `build` and `index` as for `run`, and let both accept `--override` (drop the `ONLY_RUN_GUARDS_ITS_START` refusal). `fetch` and `serve` hold no processor and still refuse it.
+> 2. Tests: for each of `build` and `index`, a non-interactive start that would replace a different pending successor is refused by name with the registry, slots and stored bytes unchanged, and succeeds with `--override`.
+> 3. Update what now says `run` alone: ADR-0084's amendment ("Where it lives"), ADR-0093's amendment if it says so, CONTEXT.md's slot entry ("`etherfold run` asks on a terminal ..."), the CLI README and the configuration table.
+>
+> Before finishing, grep `docs/adr/`, `CONTEXT.md` and every `packages/*/README.md` for any other sentence that says only `run` guards its start.
+
 ## What to build
 
 For a node whose processors arrive by upload, the stored bytes are the only copy of the code it runs (ADR-0085's amendment). An upload must therefore be a deployment and not a session: after a restart the node goes on folding what was uploaded, whether or not a processor is configured.
