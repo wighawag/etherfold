@@ -16,7 +16,7 @@ import {
 import type {CommandName, Options} from '../src/types.js';
 
 // ---------------------------------------------------------------------------------------------------
-// ONE CONFIGURATION PATH, FIVE COMMANDS
+// ONE CONFIGURATION PATH, SEVEN COMMANDS
 // ---------------------------------------------------------------------------------------------------
 // Moving between the commands is a DEPLOYMENT change and never a rewrite, and
 // that is a claim about `src/config.ts`: every command reads the same inputs,
@@ -99,7 +99,7 @@ describe('a required input that is missing is refused, naming the flag and the v
 		expect(() => resolveCommandConfig('build', noProcessor, {})).toThrow(/no environment fallback/);
 	});
 
-	it('still refuses a missing processor on every command that required one, `run` aside (ADR-0093)', () => {
+	it('still refuses a missing processor on every command that requires one', () => {
 		const {processor, ...noProcessor} = FOLDING;
 		const {deployments, ...nothingAtAll} = noProcessor;
 		expect(() => resolveCommandConfig('build', nothingAtAll, {})).toThrow(
@@ -600,8 +600,8 @@ describe('`upload` takes a bundle, a node, a name and a credential, and nothing 
 		expect(refusal({ingestToken: 't'})).toMatch(/ADMIN credential/);
 	});
 
-	it('refuses --to and --admin-token on the five commands that send no bundle', () => {
-		for (const command of ['run', 'build', 'fetch', 'index', 'serve'] as const) {
+	it('refuses --to and --admin-token on the six commands that send no bundle', () => {
+		for (const command of ['run', 'node', 'build', 'fetch', 'index', 'serve'] as const) {
 			expect(OWNERSHIP[command].to, command).toBe('refused');
 			expect(OWNERSHIP[command].adminToken, command).toBe('refused');
 		}
@@ -703,8 +703,11 @@ describe('an operator selects WHEN a successor takes over', () => {
 		).toThrow(/is not available on this runtime/);
 	});
 
-	it('is owned by the ONE command that can apply it, and refused by every other', () => {
-		expect(OWNERSHIP.run.promotion).toBe('optional');
+	it('is owned by `run` and `node`, the commands that hold a successor while they run, and refused by every other', () => {
+		for (const command of ['run', 'node'] as const) {
+			expect(OWNERSHIP[command].promotion).toBe('optional');
+			expect(OWNERSHIP[command].dropOnPromotion).toBe('optional');
+		}
 		for (const command of ['build', 'fetch', 'index', 'serve', 'upload'] as const) {
 			expect(OWNERSHIP[command].promotion).toBe('refused');
 			expect(OWNERSHIP[command].dropOnPromotion).toBe('refused');
@@ -747,26 +750,95 @@ describe('an operator selects WHEN a successor takes over', () => {
 // ---------------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------------
-// `run` MAY BE STARTED WITH NOTHING CONFIGURED, AND ONLY THE PAIR MAY BE ABSENT (ADR-0093)
+// `node` TAKES NO PROCESSOR AND NO SOURCE, AND `run` REQUIRES ITS PROCESSOR (ADR-0094)
+// ---------------------------------------------------------------------------------------------------
+// This block pinned ADR-0093's exception on `run` (no processor and no source,
+// together). ADR-0094 moved the exception to a command of its own: `node` RECEIVES its
+// code and is configured with none of it, and `run` is CONFIGURED and receives none.
 // ---------------------------------------------------------------------------------------------------
 
-describe('`run` may be started with no processor and no source, together, and nothing else is defaulted', () => {
+describe('`node` takes the chain, the store and the database, and no processor and no source', () => {
 	const {processor, deployments, ...NOTHING} = FOLDING;
 
-	it('resolves NO processor and the processor-module origin, rather than inventing either', () => {
-		const config = resolveCommandConfig('run', NOTHING, {});
-		expect(config.processor).toBeUndefined();
-		// the contracts a waiting node indexes are the ones the processor that ARRIVES carries
-		expect(config.source).toEqual({from: 'processor-module'});
-		expect(OWNERSHIP.run.processor).toBe('optional');
+	it('resolves its row, with nothing standing in for a processor or a source', () => {
+		const config = resolveCommandConfig('node', NOTHING, {});
+		expect(config).toEqual({
+			command: 'node',
+			nodeUrl: 'http://localhost:8545',
+			destination: {kind: 'store', store: 'sqlite', db: 'file:./etherfold.db', retention: 'unbounded'},
+			serving: {port: 2000, autoSetup: true},
+			indexer: DEFAULT_INDEXER_NAME,
+		});
+		expect(config).not.toHaveProperty('processor');
+		expect(config).not.toHaveProperty('source');
+		expect(OWNERSHIP.node.processor).toBe('refused');
+		expect(OWNERSHIP.node.source).toBe('refused');
 	});
 
-	it('still refuses a SOURCE with no processor, by either spelling, naming both ways out', () => {
+	it('REFUSES -p and --deployments by name, pointing at `etherfold upload`', () => {
+		expect(() => resolveCommandConfig('node', {...NOTHING, processor: './p.js'}, {})).toThrow(
+			/--processor is not accepted by `etherfold node`.*`etherfold upload`/s,
+		);
+		expect(() => resolveCommandConfig('node', {...NOTHING, deployments: './deployments'}, {})).toThrow(
+			/--deployments \(INDEXING_SOURCE\) is not accepted by `etherfold node`.*CARRIES ITS OWN CONTRACTS.*`etherfold upload`/s,
+		);
+	});
+
+	it('does NOT read INDEXING_SOURCE, an ambient variable it does not own: not refused, and not used', () => {
+		// one host may run `node` beside a configured command that owns it (ADR-0048), so it
+		// is neither refused nor parsed: even one that is not a source at all passes
+		for (const value of [SOURCE_JSON, 'not json at all']) {
+			const config = resolveCommandConfig('node', NOTHING, {INDEXING_SOURCE: value});
+			expect(config).not.toHaveProperty('source');
+		}
+	});
+
+	it('refuses --override, since its starts replace nothing, naming the commands that take it', () => {
+		expect(OWNERSHIP.node.override).toBe('refused');
+		expect(() => resolveCommandConfig('node', {...NOTHING, override: true}, {})).toThrow(
+			/--override is not accepted by `etherfold node`.*replaces nothing.*`run`, `build` and `index`/s,
+		);
+	});
+
+	it('takes --promotion and --drop-on-promotion as `run` does', () => {
+		expect(resolveCommandConfig('node', {...NOTHING, promotion: 'manual'}, {}).promotion).toEqual({policy: 'manual'});
+		expect(resolveCommandConfig('node', NOTHING, {PROMOTION_POLICY: 'immediate'}).promotion).toEqual({
+			policy: 'immediate',
+		});
+		expect(resolveCommandConfig('node', {...NOTHING, dropOnPromotion: true}, {}).promotion).toEqual({
+			dropOnPromotion: true,
+		});
+		expect(resolveCommandConfig('node', NOTHING, {}).promotion).toBeUndefined();
+	});
+
+	it('defaults the indexer name as `run` does, and requires the chain, the store and the database', () => {
+		expect(resolveCommandConfig('node', {...NOTHING, indexer: 'nfts'}, {}).indexer).toBe('nfts');
+		expect(resolveCommandConfig('node', NOTHING, {}).indexer).toBe(resolveCommandConfig('run', FOLDING, {}).indexer);
+		const {nodeUrl, ...noNode} = NOTHING;
+		expect(() => resolveCommandConfig('node', noNode, {})).toThrow(/--node-url \(ETH_NODE_URI\)/);
+		const {db, ...noDb} = NOTHING;
+		expect(() => resolveCommandConfig('node', noDb, {})).toThrow(/--db \(DB\)/);
+		const {store, ...noStore} = NOTHING;
+		expect(() => resolveCommandConfig('node', noStore, {})).toThrow(/--store/);
+	});
+});
+
+describe('`run` REQUIRES its processor, and names `etherfold node` for the start with none', () => {
+	const {processor, deployments, ...NOTHING} = FOLDING;
+
+	it('refuses NEITHER processor nor source, naming `etherfold node`', () => {
+		expect(OWNERSHIP.run.processor).toBe('required');
+		expect(() => resolveCommandConfig('run', NOTHING, {})).toThrow(
+			/--processor is required by `etherfold run`.*that is `etherfold node`/s,
+		);
+	});
+
+	it('refuses a SOURCE with no processor the same way, by either spelling', () => {
 		expect(() => resolveCommandConfig('run', {...NOTHING, deployments: './deployments'}, {})).toThrow(
-			/--processor is required by `etherfold run` when a source is given.*--deployments \.\/deployments.*give NEITHER/s,
+			/--processor is required by `etherfold run`.*`etherfold node`/s,
 		);
 		expect(() => resolveCommandConfig('run', NOTHING, {INDEXING_SOURCE: SOURCE_JSON})).toThrow(
-			/given INDEXING_SOURCE with no processor.*configuration error rather than an intent to wait/s,
+			/--processor is required by `etherfold run`.*`etherfold node`/s,
 		);
 	});
 
@@ -776,14 +848,7 @@ describe('`run` may be started with no processor and no source, together, and no
 		expect(config.source).toEqual({from: 'processor-module'});
 	});
 
-	it('still requires everything else `run` required: the chain, the store and the database', () => {
-		const {nodeUrl, ...noNode} = NOTHING;
-		expect(() => resolveCommandConfig('run', noNode, {})).toThrow(/--node-url \(ETH_NODE_URI\)/);
-		const {db, ...noDb} = NOTHING;
-		expect(() => resolveCommandConfig('run', noDb, {})).toThrow(/--db \(DB\)/);
-	});
-
-	it('is a mode of `run` alone: `build`, `fetch` and `index` still require what they required', () => {
+	it('leaves `build`, `fetch` and `index` requiring what they required', () => {
 		expect(() => resolveCommandConfig('build', NOTHING, {})).toThrow(/--processor is required by `etherfold build`/);
 		expect(() =>
 			resolveCommandConfig(
@@ -995,12 +1060,13 @@ describe('--rps is a rate, and REQUESTS_PER_SECOND stands behind it', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------
-// SIX ROWS, ONE PATH
+// SEVEN ROWS, ONE PATH
 // ---------------------------------------------------------------------------------------------------
 
-describe('all six rows of the table resolve', () => {
+describe('all seven rows of the table resolve', () => {
 	const cases: {command: CommandName; options: Options; env: Record<string, string>}[] = [
 		{command: 'run', options: FOLDING, env: {}},
+		{command: 'node', options: {nodeUrl: 'http://n', store: 'sqlite', db: ':memory:'}, env: {}},
 		{command: 'build', options: FOLDING, env: {}},
 		{
 			command: 'fetch',
@@ -1044,8 +1110,11 @@ describe('all six rows of the table resolve', () => {
 		expect(receiver.wire).toEqual({kind: 'receiving', indexer: 'alpha', token: 'shared'});
 	});
 
-	it('gives the three serving commands an address and the two others none', () => {
+	it('gives the serving commands an address and the others none', () => {
 		expect(resolveCommandConfig('run', FOLDING, {}).serving.port).toBe(2000);
+		expect(resolveCommandConfig('node', {nodeUrl: 'http://n', store: 'sqlite', db: ':memory:'}, {}).serving.port).toBe(
+			2000,
+		);
 		expect(resolveCommandConfig('serve', {db: ':memory:'}, {}).serving.port).toBe(2000);
 		expect(resolveCommandConfig('build', FOLDING, {})).not.toHaveProperty('serving');
 	});
@@ -1093,7 +1162,7 @@ describe('an operator lets a START replace a pending successor', () => {
 		for (const command of ['run', 'build', 'index'] as const) {
 			expect(OWNERSHIP[command].override).toBe('optional');
 		}
-		for (const command of ['fetch', 'serve', 'upload'] as const) {
+		for (const command of ['node', 'fetch', 'serve', 'upload'] as const) {
 			expect(OWNERSHIP[command].override).toBe('refused');
 		}
 		expect(() => resolveCommandConfig('serve', {db: ':memory:', override: true}, {})).toThrow(

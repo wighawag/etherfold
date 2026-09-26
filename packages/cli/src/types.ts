@@ -2,18 +2,22 @@ import type {Abi, IndexingSource, PromotionConfig} from '@etherfold/core';
 import type {RetentionSetting} from '@etherfold/processor-entities';
 
 /**
- * The six commands: the five deployment INTENTS, named for what a process DOES
+ * The seven commands: the six deployment INTENTS, named for what a process DOES
  * rather than for the component split behind it (`CONTEXT.md`, "The COMMAND SET
  * names deployment intents, not components"), plus `upload`, which is not a way to
  * RUN a deployment at all but a CLIENT action against one that is running: it
- * sends an already-built bundle to a node's `POST /{indexer}/admin/upload` and
+ * sends an already-built bundle to a `node`'s `POST /{indexer}/admin/upload` and
  * exits (ADR-0085). It is in this union because it takes its inputs the way every
  * other command does, through the one table (ADR-0048's 2026-09-26 amendment).
+ *
+ * `node` is the sixth intent (ADR-0094): `run`'s chain, store and database, with NO
+ * processor and NO source, receiving its code only by `etherfold upload`. `run` is
+ * CONFIGURED and receives none.
  */
-export type CommandName = 'run' | 'build' | 'fetch' | 'index' | 'serve' | 'upload';
+export type CommandName = 'run' | 'node' | 'build' | 'fetch' | 'index' | 'serve' | 'upload';
 
 /**
- * The flags ANY of the six takes, exactly as commander hands them over.
+ * The flags ANY of the seven takes, exactly as commander hands them over.
  *
  * Everything is a string and everything is OPTIONAL, deliberately: requiredness
  * lives in the resolver (`resolveCommandConfig`) and not in the parser, so every
@@ -166,15 +170,11 @@ export type Wire = SendingWire | ReceivingWire;
 export type RunConfig<ABI extends Abi = Abi> = {
 	readonly command: 'run';
 	/**
-	 * The bundle this process folds, or `undefined` for a node started with NOTHING
-	 * configured (ADR-0093): no processor AND no source, together, which is a MODE and
-	 * not a default. Such a node folds whatever its registry's canonical generation names,
-	 * or WAITS for its first upload. The resolver guarantees the pair: where this is
-	 * `undefined`, `source` is the processor-module arm, because the contracts a waiting
-	 * node indexes are the ones the processor that ARRIVES carries (a source with no
-	 * processor is refused, `resolveRunProcessor`).
+	 * The bundle this process folds. REQUIRED (ADR-0094): `run` is CONFIGURED, and a
+	 * deployment that starts with no processor and receives its code by upload is
+	 * `node` (`NodeConfig`).
 	 */
-	readonly processor: string | undefined;
+	readonly processor: string;
 	readonly source: SourceOrigin<ABI>;
 	readonly nodeUrl: string;
 	readonly rps?: number;
@@ -188,9 +188,9 @@ export type RunConfig<ABI extends Abi = Abi> = {
 	 * ABSENT where the operator said nothing, which is not the same as `on-catch-up`
 	 * spelled out: the default is written in ONE place (`resolvePromotionConfig`,
 	 * `@etherfold/core`) precisely so that a second runtime cannot fork it, so a
-	 * deployment that configured nothing passes nothing. `run` is the only command
-	 * that carries this, because it is the only one that can register a successor
-	 * beside a live fold -- see `resolvePromotion` and the ownership table.
+	 * deployment that configured nothing passes nothing. `run` and `node` are the
+	 * commands that carry this, because they are the ones that hold a successor while
+	 * they run -- see `resolvePromotion` and the ownership table.
 	 */
 	readonly promotion?: PromotionConfig;
 	/**
@@ -204,6 +204,25 @@ export type RunConfig<ABI extends Abi = Abi> = {
 	 * there is nothing for it to permit.
 	 */
 	readonly override: boolean;
+};
+
+/**
+ * `node`: `run`'s chain, store, database, serving and indexer name, and NO processor
+ * and NO source (ADR-0094). What it folds is what its REGISTRY says, and code reaches
+ * it only by `etherfold upload`: it folds whatever its canonical generation names, or
+ * WAITS for its first upload and says so on `/status` (ADR-0093's waiting mode, as a
+ * command of its own). It takes no `override`, because its starts replace nothing.
+ */
+export type NodeConfig = {
+	readonly command: 'node';
+	readonly nodeUrl: string;
+	readonly rps?: number;
+	readonly destination: StoreTarget;
+	readonly serving: Serving;
+	/** The name its stored emissions answer under, defaulted as `run`'s is (ADR-0052). See `RunConfig.indexer`. */
+	readonly indexer: string;
+	/** WHEN an uploaded successor takes over. See `RunConfig.promotion`. */
+	readonly promotion?: PromotionConfig;
 };
 
 /** `build`: the same, without the serving, stopping at the tip. */
@@ -270,7 +289,7 @@ export type UploadConfig = {
 	readonly bundle: string;
 	/** The node's base URL: `/{indexer}/admin/upload` hangs off it. */
 	readonly to: string;
-	/** The named indexer on that node. REQUIRED and never defaulted, unlike on `run`. */
+	/** The named indexer on that node. REQUIRED and never defaulted, unlike on `node` itself. */
 	readonly indexer: string;
 	/** The credential the node's admin guard checks (`ADMIN_TOKEN`). */
 	readonly adminToken: string;
@@ -279,6 +298,7 @@ export type UploadConfig = {
 /** One row of the command table, resolved. */
 export type ResolvedConfig<ABI extends Abi = Abi> =
 	| RunConfig<ABI>
+	| NodeConfig
 	| BuildConfig<ABI>
 	| FetchConfig<ABI>
 	| IndexConfig<ABI>

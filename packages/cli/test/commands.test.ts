@@ -6,15 +6,16 @@ import type {Options} from '../src/types.js';
 // ---------------------------------------------------------------------------------------------------
 // THE COMMAND SURFACE: A WORD RESOLVES OR IT DOES NOT, AND NOTHING IS IMPLICIT
 // ---------------------------------------------------------------------------------------------------
-// The five names of `one-command-runs-the-whole-pipeline` are chosen so a reader
+// The names of `one-command-runs-the-whole-pipeline` are chosen so a reader
 // can tell what a process will DO, which only holds if every word means one
-// thing. So all five are asserted at the surface a user types at: `run` follows
-// the chain, folds AND answers queries without terminating, `build` is the
+// thing. So every one is asserted at the surface a user types at: `run` follows
+// the chain, folds AND answers queries without terminating, `node` is the same
+// process configured with no code, receiving it by upload (ADR-0094), `build` is the
 // one-shot (`CONTEXT.md`: follows the chain, folds, EXITS at the tip), `fetch`
 // is the chain-facing half that folds nothing, `index` is the other half of that
 // pair -- receiving pushes, owning the database, taking no node URL -- and no
 // command is commander's default: a bare invocation prints help rather than
-// silently meaning one of the five.
+// silently meaning one of them.
 //
 // What this file does NOT assert is requiredness. That lives in the resolver
 // (`configuration.test.ts`), never in the parser, so nothing here is a
@@ -36,6 +37,7 @@ function programUnderTest(deps: ProgramDependencies = {}) {
 	const built: Options[] = [];
 	const served: Options[] = [];
 	const followed: Options[] = [];
+	const noded: Options[] = [];
 	const fetched: Options[] = [];
 	const received: Options[] = [];
 	const uploaded: Options[] = [];
@@ -50,6 +52,9 @@ function programUnderTest(deps: ProgramDependencies = {}) {
 		},
 		run: async (options) => {
 			followed.push(options);
+		},
+		node: async (options) => {
+			noded.push(options);
 		},
 		// substituted like the others, which also keeps the console log sink the real
 		// handler installs out of a test run: hooking it is a process entry point's
@@ -70,6 +75,7 @@ function programUnderTest(deps: ProgramDependencies = {}) {
 		built,
 		served,
 		followed,
+		noded,
 		fetched,
 		received,
 		uploaded,
@@ -136,6 +142,71 @@ describe('`run` is the follower, and the default thing to reach for', () => {
 		for (const notOwned of ['--ingest-endpoint', '--ingest-token']) {
 			expect(help).not.toMatch(notOwned);
 		}
+	});
+});
+
+describe('`node` is its own command, which RECEIVES its code rather than being configured with it', () => {
+	it('resolves, and hands its handler the chain, the store, the database, the address and the policy', async () => {
+		const cli = programUnderTest();
+
+		await cli.run([
+			'node',
+			'--store',
+			'sqlite',
+			'--db',
+			'file:./etherfold.db',
+			'-n',
+			'http://localhost:8545',
+			'--port',
+			'3000',
+			'--indexer',
+			'nfts',
+			'--promotion',
+			'manual',
+		]);
+
+		expect(cli.noded).toHaveLength(1);
+		expect(cli.noded[0]).toMatchObject({
+			store: 'sqlite',
+			db: 'file:./etherfold.db',
+			nodeUrl: 'http://localhost:8545',
+			port: '3000',
+			indexer: 'nfts',
+			promotion: 'manual',
+		});
+		// a command of its own, and not a mode or a flag of `run` (ADR-0094)
+		expect(cli.followed).toEqual([]);
+		expect(cli.built).toEqual([]);
+	});
+
+	it('parses -p and --deployments rather than calling them unknown, so the resolver can point at `upload`', async () => {
+		const cli = programUnderTest();
+
+		await cli.run(['node', '-p', './p.js', '-d', './deployments']);
+		expect(cli.noded[0]).toMatchObject({processor: './p.js', deployments: './deployments'});
+	});
+
+	it('shows the chain, the store, the serving flags and the promotion policy, and no processor, source or override', async () => {
+		const cli = programUnderTest();
+
+		await expect(cli.run(['node', '--help'])).rejects.toMatchObject({code: 'commander.helpDisplayed'});
+		const help = cli.output.join('');
+		for (const owned of [
+			'--store',
+			'--db',
+			'--node-url',
+			'--port',
+			'--host',
+			'--indexer',
+			'--promotion',
+			'--drop-on-promotion',
+		]) {
+			expect(help).toMatch(owned);
+		}
+		for (const notOwned of ['--processor', '--deployments', '--override', '--ingest-endpoint', '--ingest-token']) {
+			expect(help).not.toMatch(notOwned);
+		}
+		expect(help).toMatch(/etherfold upload/);
 	});
 });
 
@@ -308,8 +379,9 @@ describe('no command is implicit', () => {
 		expect(cli.fetched).toEqual([]);
 		expect(cli.received).toEqual([]);
 		expect(cli.uploaded).toEqual([]);
+		expect(cli.noded).toEqual([]);
 		expect(cli.output.join('')).toMatch(
-			/Commands:[\s\S]*run[\s\S]*build[\s\S]*fetch[\s\S]*index[\s\S]*serve[\s\S]*upload/,
+			/Commands:[\s\S]*run[\s\S]*node[\s\S]*build[\s\S]*fetch[\s\S]*index[\s\S]*serve[\s\S]*upload/,
 		);
 	});
 

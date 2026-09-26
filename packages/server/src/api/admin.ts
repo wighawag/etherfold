@@ -49,8 +49,9 @@ const logger = logs('@etherfold/server');
  * a command could not serve a serverless deployment, and a library call with no
  * operator surface does not deliver the story at all. Hanging `--revert` on `run`
  * would conflate a long-running fold with a one-shot control action. The command
- * set is no longer pinned at five verbs: it grew a sixth, `etherfold upload`, which
- * SENDS a bundle to the upload route below (ADR-0057's 2026-09-26 amendment). That
+ * set is no longer pinned at five verbs: it grew `etherfold upload`, which SENDS a
+ * bundle to the upload route below (ADR-0057's 2026-09-26 amendment), and
+ * `etherfold node`, the deployment that serves that route (ADR-0094). That
  * does not re-open this: an upload is something an author does FROM a machine
  * with a CLI, while a revert has to reach a Worker too, which only HTTP does.
  *
@@ -302,7 +303,7 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * The same argument that put the pointer move here (ADR-0057), which this does not
 			 * re-litigate: a Worker is reachable only over HTTP, and an operator affordance that
 			 * exists on one deployment shape is not an affordance. (The command set has since
-			 * grown a sixth verb, `upload`, for the one admin action that only ever starts from
+			 * grown a verb, `upload`, for the one admin action that only ever starts from
 			 * an author's machine; that changes nothing here.) It takes NO BODY, for the reason `reconfigure` takes none: the
 			 * rule decides which generations go, so there is nothing for a caller to name and no
 			 * input that could be got wrong.
@@ -563,8 +564,9 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * The TRANSPORT's own refusals, all made BEFORE the host is reached so that none
 			 * of them can have registered anything:
 			 *
-			 * - `501 upload-not-held` where the host cannot turn bytes into a fold (a read tier,
-			 *   a receiving `index`, a host with no registry), decided before the body is read;
+			 * - `501 upload-not-held` where the host does not receive code (a read tier, a
+			 *   receiving `index`, a CONFIGURED `etherfold run`, a host with no registry: ADR-0094
+			 *   serves it on `etherfold node` alone), decided before the body is read;
 			 * - `415 upload-wrong-content-type` unless the body is declared `text/javascript`
 			 *   (`UPLOAD_CONTENT_TYPE`), because a bundle is one ES module and that is its
 			 *   registered type (RFC 9239); parameters such as `charset` are ignored, since the
@@ -577,8 +579,8 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * Everything else is the host's (`IndexerRegistryEntry.upload`): this package names
 			 * no runtime and cannot evaluate a module. The host hashes the bytes for the
 			 * identity (ADR-0086) -- nothing in the request can name one -- refuses a bundle
-			 * that is not self-contained, throws on evaluation, carries no processor or does
-			 * not match a source the operator configured, and only then registers.
+			 * that is not self-contained, throws on evaluation or carries no processor, and only
+			 * then registers.
 			 *
 			 * ## THE ANSWERS, which are the re-read's, with the arrival named
 			 *
@@ -606,10 +608,10 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 							error: 'upload-not-held',
 							indexer: name,
 							message:
-								`this named indexer cannot receive a processor bundle: it was registered by a host that cannot turn ` +
-								`bytes into a fold -- a read tier answers over a database written elsewhere, and a receiving host ` +
-								`is handed its fold rather than building one. A deployment that serves this registers an upload ` +
-								`alongside what it holds (\`etherfold run\`).`,
+								`this named indexer cannot receive a processor bundle: it was registered by a host that does not ` +
+								`receive code -- a read tier answers over a database written elsewhere, a receiving host is handed ` +
+								`its fold rather than building one, and a configured \`etherfold run\` folds exactly the processor ` +
+								`its configuration names (ADR-0094). The deployment that receives uploads is \`etherfold node\`.`,
 						} as const,
 						501,
 					);

@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {node, run, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {uploadMain} from '../src/uploadCommand.js';
 import {
@@ -41,10 +41,13 @@ import {canonicalStoreIn} from './utils/reads.js';
 // through the container's ONE `StreamWriter` for it (ADR-0087), and the incumbent keeps
 // being fetched and answering throughout.
 //
-// Asserted END TO END against a real `run` and the real `etherfold upload`, over the
-// committed REAL bundles: `nfts.bundle.js` indexes `Transfer`, and
+// Asserted END TO END against a real `etherfold node` and the real `etherfold upload`,
+// over the committed REAL bundles: `nfts.bundle.js` indexes `Transfer`, and
 // `nfts-with-approval.bundle.js` adds `Approval` and a handler that needs it -- the
-// ordinary "add an event" deploy.
+// ordinary "add an event" deploy. The uploads used to go to a `run`; since ADR-0094 the
+// upload route is `node`'s, and these cases moved to it, the incumbent being the node's
+// first upload. What a configured `run` still does here is recorded where it happens: it
+// restarts over a database a `node` wrote, and it re-reads a changed configured source.
 //
 // The chain here is the one thing that differs from the other upload suites: it FILTERS
 // by `topic0`, the way a node does, and COUNTS the `eth_getLogs` calls per filter. So
@@ -165,9 +168,9 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-/** NOTHING CONFIGURED: no processor and no source (ADR-0093). */
+/** A `node`: no processor and no source (ADR-0094). */
 const NOTHING: Options = {nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER};
-/** A node started with `nfts.bundle.js`, whose source comes from that processor module. */
+/** A `run` started with `nfts.bundle.js`, whose source comes from that processor module. */
 const CONFIGURED: Options = {...NOTHING, processor: BUNDLE};
 
 /**
@@ -198,15 +201,47 @@ function aParkableWait() {
 	};
 }
 
-/** START a `run` over `db`, which may already hold generations: a restart, when it does. */
+/** START a configured `run` over `db`, which may already hold generations: a restart, when it does. */
 async function aRunOver(
 	db: RemoteSQL,
 	chain: Chain,
 	options: Options,
 	sleep?: ReturnType<typeof aParkableWait>['sleep'],
 ): Promise<RunningIndexer> {
+	return aStartOf(run, db, chain, options, sleep);
+}
+
+/** START a `node` over `db`, which may already hold generations: a restart, when it does. */
+async function aNodeOver(
+	db: RemoteSQL,
+	chain: Chain,
+	options: Options = NOTHING,
+	sleep?: ReturnType<typeof aParkableWait>['sleep'],
+): Promise<RunningIndexer> {
+	return aStartOf(node, db, chain, options, sleep);
+}
+
+/** A `node` whose first upload, `nfts.bundle.js`, is its incumbent. */
+async function aNodeServingTheIncumbent(
+	db: RemoteSQL,
+	chain: Chain,
+	options: Options = NOTHING,
+	sleep?: ReturnType<typeof aParkableWait>['sleep'],
+): Promise<RunningIndexer> {
+	const indexer = await aNodeOver(db, chain, options, sleep);
+	await uploadWith(indexer, BUNDLE);
+	return indexer;
+}
+
+async function aStartOf(
+	start: typeof run,
+	db: RemoteSQL,
+	chain: Chain,
+	options: Options,
+	sleep?: ReturnType<typeof aParkableWait>['sleep'],
+): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-	running = await run(options, {
+	running = await start(options, {
 		provider: chain.provider,
 		createDB: () => db,
 		sleep:
@@ -341,7 +376,7 @@ describe('an upload that ADDS AN EVENT is fetched on its new stream, beside the 
 		const db = oneDatabase();
 		const chain = aFilteringChain().serve(LOGS, TIP);
 		// `manual`, so the two sit side by side for as long as the case reads them
-		const indexer = await aRunOver(db, chain, {...CONFIGURED, promotion: 'manual'});
+		const indexer = await aNodeServingTheIncumbent(db, chain, {...NOTHING, promotion: 'manual'});
 		await waitFor('the incumbent folded to the tip', async () => (await positionOf(indexer, BUNDLE)) === TIP);
 		const incumbent = await entryOf(indexer, BUNDLE);
 		expect(chain.askedFor(NEW_FILTER)).toBe(0);
@@ -383,7 +418,7 @@ describe('an upload that ADDS AN EVENT is fetched on its new stream, beside the 
 	it('under `on-catch-up` promotes it, answers from it (the new event included), and stops the old stream’s fetcher', async () => {
 		const db = oneDatabase();
 		const chain = aFilteringChain().serve(LOGS, TIP);
-		const indexer = await aRunOver(db, chain, CONFIGURED);
+		const indexer = await aNodeServingTheIncumbent(db, chain);
 		await waitFor('the incumbent folded to the tip', async () => (await positionOf(indexer, BUNDLE)) === TIP);
 		const incumbent = await entryOf(indexer, BUNDLE);
 
@@ -422,7 +457,7 @@ describe('an upload that ADDS AN EVENT is fetched on its new stream, beside the 
 	it('stops the fetcher of a new-stream successor that a newer upload REPLACES', async () => {
 		const db = oneDatabase();
 		const chain = aFilteringChain().serve(LOGS, TIP);
-		const indexer = await aRunOver(db, chain, {...CONFIGURED, promotion: 'manual'});
+		const indexer = await aNodeServingTheIncumbent(db, chain, {...NOTHING, promotion: 'manual'});
 		await waitFor('the incumbent folded to the tip', async () => (await positionOf(indexer, BUNDLE)) === TIP);
 		const incumbent = await entryOf(indexer, BUNDLE);
 
@@ -444,12 +479,11 @@ describe('an upload that ADDS AN EVENT is fetched on its new stream, beside the 
 	});
 });
 
-describe('the same, on a node started with NOTHING configured (ADR-0093)', () => {
+describe('the same, across a restart of the `node`', () => {
 	it('promotes the new-stream upload, and a restart fetches the NEW stream, whose cursor advances', async () => {
 		const db = oneDatabase();
 		const chain = aFilteringChain().serve(LOGS, TIP);
-		const indexer = await aRunOver(db, chain, NOTHING);
-		await uploadWith(indexer, BUNDLE);
+		const indexer = await aNodeServingTheIncumbent(db, chain);
 		await waitFor('the first upload folded to the tip', async () => (await positionOf(indexer, BUNDLE)) === TIP);
 		const incumbent = await entryOf(indexer, BUNDLE);
 
@@ -466,9 +500,9 @@ describe('the same, on a node started with NOTHING configured (ADR-0093)', () =>
 		await expectOneWriterPerStream(indexer, db);
 		await stop();
 
-		// A RESTART WITH NOTHING CONFIGURED fetches the stream the canonical generation is on
+		// A RESTART OF THE `node` fetches the stream the canonical generation is on
 		const later = aFilteringChain().serve(LATER, LATER_TIP);
-		const restarted = await aRunOver(db, later, NOTHING);
+		const restarted = await aNodeOver(db, later);
 		expect((await listingOf(restarted)).slots?.canonical?.digest).toBe(successor.digest);
 		expect(restarted.container.held().map((fold) => generationDigestOf(fold.record))).toEqual([successor.digest]);
 		expect([...restarted.fetchers.streams()]).toEqual([successor.stream]);
@@ -482,16 +516,29 @@ describe('the same, on a node started with NOTHING configured (ADR-0093)', () =>
 	});
 });
 
+// The CONFIGURED shape of this case used to be a `run -p nfts.bundle.js` receiving the
+// upload and restarting with the same processor. A configured `run` receives no upload
+// since ADR-0094, so it is re-expressed as `run` over the database the `node` wrote,
+// configured with the pending upload's own bundle: a start naming the pending successor,
+// which changes nothing (the rule both before and after ADR-0094's discard rule), so what
+// is asserted is what the configured restart FETCHES and promotes.
 describe('a new-stream upload still CATCHING UP survives a restart, and is promoted', () => {
-	for (const [shape, options] of [
-		['with nothing configured', NOTHING],
-		['with the processor it was started with', CONFIGURED],
+	for (const [shape, restart] of [
+		[
+			'as the `node` it was',
+			(db: RemoteSQL, chain: Chain, sleep: ReturnType<typeof aParkableWait>['sleep']) =>
+				aNodeOver(db, chain, NOTHING, sleep),
+		],
+		[
+			'as a `run` configured with the pending upload',
+			(db: RemoteSQL, chain: Chain, sleep: ReturnType<typeof aParkableWait>['sleep']) =>
+				aRunOver(db, chain, {...NOTHING, processor: APPROVAL_BUNDLE}, sleep),
+		],
 	] as const) {
 		it(`is fetched after a restart ${shape}, reported \`held\`, and promoted`, async () => {
 			const db = oneDatabase();
 			const wait = aParkableWait();
-			const first = await aRunOver(db, aFilteringChain().serve(LOGS, TIP), options, wait.sleep);
-			if (!options.processor) await uploadWith(first, BUNDLE);
+			const first = await aNodeServingTheIncumbent(db, aFilteringChain().serve(LOGS, TIP), NOTHING, wait.sleep);
 			await waitFor('the incumbent folded to the tip', async () => (await positionOf(first, BUNDLE)) === TIP);
 			const incumbent = await entryOf(first, BUNDLE);
 
@@ -509,7 +556,7 @@ describe('a new-stream upload still CATCHING UP survives a restart, and is promo
 			const chain = aFilteringChain().serve(LATER, LATER_TIP);
 			const again = aParkableWait();
 			again.state.parked = true;
-			const restarted = await aRunOver(db, chain, options, again.sleep);
+			const restarted = await restart(db, chain, again.sleep);
 			expect((await entryOf(restarted, APPROVAL_BUNDLE)).folding).toBe('held');
 			expect([...restarted.fetchers.streams()].sort()).toEqual([incumbent.stream, successor.stream].sort());
 			again.release();

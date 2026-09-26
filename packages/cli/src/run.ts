@@ -61,7 +61,20 @@ const logger = logs('etherfold');
 // does: the successor folds into its own table namespace and the pointer moves
 // once, at the end.
 //
-// ## ...and it is the shape a RECONFIGURE can reach
+// ## `etherfold node` is the SAME assembly, receiving its code instead (ADR-0094)
+//
+// `run` is CONFIGURED: what it folds toward is what `-p` names, and it serves NO
+// upload route. `node` takes the chain, the store and the database like `run`, and
+// NO processor and NO source: what it folds is what its registry holds, and code
+// reaches it only by `etherfold upload` (`POST /{indexer}/admin/upload`, `upload.ts`).
+// It WAITS for its first upload and says so on `/status` (ADR-0093's waiting mode, a
+// command of its own now). The two share everything below -- the server, the
+// read-only registration, the drive loop -- and differ in exactly which ARRIVAL each
+// wires: `run` the re-read, `node` the upload, never both on one process, so each has
+// ONE source of truth. That is why this file holds both: the difference is one field
+// of the registration, and two copies of the rest would drift.
+//
+// ## ...and `run` is the shape a RECONFIGURE can reach
 //
 // A successor used to arrive exactly one way -- by restarting this process, so
 // that the container registered a new generation as it OPENED -- because nothing
@@ -90,7 +103,7 @@ export type RunDependencies = IndexingDependencies & {
 	log?: (...args: unknown[]) => void;
 };
 
-/** A `run` process, from the outside: what it answers on, what it folds into, and how to stop it. */
+/** A `run` or `node` process, from the outside: what it answers on, what it folds into, and how to stop it. */
 export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> = {
 	/** Where the HTTP surface is answering, with the port the OS actually gave it. */
 	url: string;
@@ -123,16 +136,15 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 * (`fetchers`). Read per ask, so after a promotion onto another stream it is that
 	 * stream's.
 	 *
-	 * REFUSED, rather than answered with a placeholder, on a node started with NOTHING
-	 * configured until it has been told what to fetch (ADR-0093): that node has no
-	 * fetcher until then. So are `store`, `processor` and `streamWriter` until it folds
-	 * anything.
+	 * REFUSED, rather than answered with a placeholder, on a `node` until it has been told
+	 * what to fetch (ADR-0093, ADR-0094): it has no fetcher until then. So are `store`,
+	 * `processor` and `streamWriter` until it folds anything.
 	 */
 	host: FetcherHost<ABI>;
 	/**
 	 * EVERY FETCHER THIS PROCESS RUNS, one per stream it fetches (`StreamFetchers`): the
 	 * canonical generation's, and beside it a successor's on a new stream while it catches
-	 * up. EMPTY on a node still waiting for a processor.
+	 * up. EMPTY on a `node` still waiting for a processor.
 	 */
 	fetchers: StreamFetchers<ABI>;
 	/**
@@ -166,6 +178,31 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 	options: Options,
 	deps: RunDependencies = {},
 ): Promise<RunningIndexer<ABI, ProcessResultType>> {
+	return startServing<ABI, ProcessResultType>('run', options, deps);
+}
+
+/**
+ * Assemble a `node` (ADR-0094), start the server on the handle it folds into, and
+ * start WAITING for its first upload -- or folding what its registry's canonical
+ * generation names, where it can.
+ *
+ * The same shape `run` returns, over the same assembly: what differs is that it is
+ * configured with no processor and no source, and serves the UPLOAD route rather than
+ * the re-read. Its code arrives by `etherfold upload`.
+ */
+export async function node<ABI extends Abi = Abi, ProcessResultType = unknown>(
+	options: Options,
+	deps: RunDependencies = {},
+): Promise<RunningIndexer<ABI, ProcessResultType>> {
+	return startServing<ABI, ProcessResultType>('node', options, deps);
+}
+
+/** `run` and `node`, which differ only in which arrival their one registration wires. */
+async function startServing<ABI extends Abi, ProcessResultType>(
+	command: 'run' | 'node',
+	options: Options,
+	deps: RunDependencies,
+): Promise<RunningIndexer<ABI, ProcessResultType>> {
 	const log = deps.log ?? console.log;
 
 	// Stopping a follower is a signal, so ONE controller carries every way of
@@ -183,11 +220,13 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 	// either. `releaseSignals` stays a no-op until there is something to stop.
 	let releaseSignals = () => {};
 	try {
-		const prepared = await prepareIndexing<ABI, ProcessResultType, 'run'>('run', options, {
+		const prepared = await prepareIndexing<ABI, ProcessResultType, 'run' | 'node'>(command, options, {
 			...deps,
 			signal: controller.signal,
 		});
 		const {serving, destination, indexer} = prepared.config;
+		// the ONE arrival this command wires: the re-read on `run`, the upload on `node`
+		const {reconfigure, upload} = prepared;
 
 		// The Node fetcher adapter's own handler, reused rather than written again:
 		// which signals a container sends, and what happens to the cycle in flight, is
@@ -251,19 +290,18 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// ...and WHETHER EACH GENERATION CAN FOLD HERE (ADR-0092): held, instantiable from
 							// its stored bundle, or frozen and why -- what an operator reads before a revert.
 							folding: () => prepared.container.folding(),
-							// ...and the TRIGGER that gives an operator something to point AT: this
+							// ...and the ARRIVAL this command takes, and only that one (ADR-0094). On
+							// `run`, the TRIGGER that gives an operator something to point AT: this
 							// process RE-READS its own configuration and registers whatever generation
-							// that now names, beside the live fold (`reconfigure.ts`). `run` is the shape
-							// that can answer it -- it holds the module path, the source and the container
-							// at once -- so a changed processor reaches a RUNNING deployment instead of
-							// waiting for a restart, and nothing stops answering while it does.
-							reconfigure: () => prepared.reconfigure(),
-							// ...and the UPLOAD, which RECEIVES a bundle's bytes rather than re-reading the
-							// disk, and registers what they name beside the live fold in the same way
-							// (`upload.ts`, ADR-0085). Served where the re-read is, for the reason the
-							// re-read is: this shape holds the container, the database and the fetcher at
-							// once. A split deployment's `index` does not serve it (ADR-0093).
-							upload: (bundle) => prepared.upload(bundle),
+							// that now names, beside the live fold (`reconfigure.ts`) -- it holds the
+							// module path, the source and the container at once. On `node`, the UPLOAD,
+							// which RECEIVES a bundle's bytes and registers what they name beside the live
+							// fold (`upload.ts`, ADR-0085). Each ABSENT where it is not this command's, so
+							// its route answers what a host without the seam answers: `run` receives no
+							// code, and `node` has no configuration of its code to re-read. A split
+							// deployment's `index` serves neither.
+							...(reconfigure === undefined ? {} : {reconfigure: () => reconfigure.call(prepared)}),
+							...(upload === undefined ? {} : {upload: (bundle: Uint8Array) => upload.call(prepared, bundle)}),
 							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
 							// with the token it is publishing under. A combined process APPLIES the
 							// blocks, so it is a shape that can tell a reader the state moved; the two
@@ -278,9 +316,9 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// successor and two while it catches up: the shape of `/status` does not
 			// depend on how many a deployment happens to hold.
 			//
-			// ...and WAITING, on a node started with nothing configured that has not been told
-			// what to fetch yet (ADR-0093): the page says so rather than reading like a stalled
-			// node or a quiet chain.
+			// ...and WAITING, on a `node` that has not been told what to fetch yet (ADR-0093,
+			// ADR-0094): the page says so rather than reading like a stalled node or a quiet
+			// chain.
 			getCursorReport: () => foldingStatusReport(prepared.container, prepared.stateOf, prepared.waiting()),
 			// The other half of the pipeline, on the same page: what the CHAIN-FACING half
 			// has learned about the node it reads (ADR-0074). `run` is the shape that can
@@ -291,12 +329,12 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// start. Nothing here persists it: the fetcher holds no state worth losing, and
 			// this is what moves the memory to whoever is already durable.
 			//
-			// NOTHING while this process is WAITING for a processor (ADR-0093): it has no
-			// fetcher yet, and the field says the reporter had nothing to report.
+			// NOTHING while a `node` is WAITING for a processor (ADR-0093): it has no fetcher
+			// yet, and the field says the reporter had nothing to report.
 			getFetcherLimits: () => (prepared.waiting() ? undefined : prepared.host.fetcher.limits),
 			// WHEN THIS PROCESS TAKES A SUCCESSOR OVER, on the page an operator already
-			// watches. `run` is the shape that decides it at all -- it is the one command
-			// that registers a successor beside a live fold -- and this is the CONTAINER's
+			// watches. `run` and `node` are the shapes that decide it at all -- they hold a
+			// successor beside a live fold while they run -- and this is the CONTAINER's
 			// resolved answer rather than the CLI's parsed flag, so what is read back is
 			// what the thing that moves the pointer will actually do, default included.
 			getPromotionPolicy: () => prepared.container.promotion,
@@ -316,14 +354,15 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		stopped.catch(() => undefined);
 
 		if (prepared.waiting()) {
-			// NOTHING CONFIGURED, and nothing in the registry it could fold: said on the line an
-			// operator reads first, with the one thing that ends the wait (ADR-0093).
+			// A `node` with nothing in the registry it could fold: said on the line an operator
+			// reads first, with the one thing that ends the wait (ADR-0093, ADR-0094).
 			log(
-				`etherfold run: started with no processor and no source, WAITING for a processor to be uploaded to ` +
+				`etherfold ${command}: started with no processor and no source, WAITING for a processor to be uploaded to ` +
 					`${server.url}/${indexer}/admin/upload (\`etherfold upload\`), folding into ${destination.db}`,
 			);
 		} else {
-			log(`etherfold run: following the chain into ${destination.db}, answering on ${server.url}`);
+			log(`etherfold ${command}: following the chain into ${destination.db}, answering on ${server.url}`);
+			if (command === 'node') log(`  upload: ${server.url}/${indexer}/admin/upload`);
 		}
 		log(`  status: ${server.url}/status`);
 		// WHERE THE READS ARE, named because the route segment is the one thing an app
@@ -332,15 +371,15 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// reason -- the surface a deployment exists to be reached on belongs on the line
 		// an operator already reads.
 		log(`  feed:   ${server.url}/${indexer}/feed`);
-		logger.info(`run: listening on ${server.url}, folding into ${destination.db}`);
+		logger.info(`${command}: listening on ${server.url}, folding into ${destination.db}`);
 
 		return {
 			url: server.url,
 			port: server.port,
 			db: prepared.db,
-			// READ PER ASK rather than captured: on a node started with nothing configured
-			// these exist only once a processor has arrived, and are refused until then
-			// (ADR-0093). On every other `run` they are the values `open` came up with.
+			// READ PER ASK rather than captured: on a `node` these exist only once a processor
+			// has arrived, and are refused until then (ADR-0093). On a `run` they are the
+			// values `open` came up with.
 			get store() {
 				return prepared.store;
 			},
@@ -389,19 +428,31 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
  *
  * Reaching the tip is NOT one of the ways this ends. That is `build`.
  */
-export async function runMain(
+export async function runMain(options: Options, deps: MainDependencies = {}): Promise<void> {
+	return serveUntilStopped(run, options, deps);
+}
+
+/** `etherfold node` as a PROCESS: the same exit codes as `runMain`, for the same reasons. */
+export async function nodeMain(options: Options, deps: MainDependencies = {}): Promise<void> {
+	return serveUntilStopped(node, options, deps);
+}
+
+type MainDependencies = RunDependencies & {
+	exit?: (code: number) => void;
+	error?: (...args: unknown[]) => void;
+};
+
+async function serveUntilStopped(
+	start: (options: Options, deps: RunDependencies) => Promise<RunningIndexer>,
 	options: Options,
-	deps: RunDependencies & {
-		exit?: (code: number) => void;
-		error?: (...args: unknown[]) => void;
-	} = {},
+	deps: MainDependencies,
 ): Promise<void> {
 	const exit = deps.exit ?? ((code: number) => process.exit(code));
 	const error = deps.error ?? console.error;
 
 	let running: RunningIndexer | undefined;
 	try {
-		running = await run(options, deps);
+		running = await start(options, deps);
 		await running.stopped;
 		await running.close();
 		exit(0);

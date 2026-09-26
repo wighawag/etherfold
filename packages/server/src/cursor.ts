@@ -122,8 +122,8 @@ export type CanonicalReport = {
  * A NODE THAT FETCHES NOTHING BECAUSE NOTHING HAS TOLD IT WHAT TO FETCH YET, as an
  * operator reads it off `/status` (ADR-0093).
  *
- * A `run` may be started with no processor and no source, and then it WAITS for its
- * first upload. That is a MODE rather than a default precisely because it says so, and
+ * An `etherfold node` takes no processor and no source, and WAITS for its first upload
+ * (ADR-0094; ADR-0093 made it a mode of `run` first). That is not a default precisely because it says so, and
  * this is where it says so: without it such a node's page would read exactly like one
  * that is stalled, or one watching a quiet chain.
  *
@@ -169,8 +169,8 @@ export type StatusReport = {
 	readonly canonical?: CanonicalReport;
 	/**
 	 * Present exactly while the host is WAITING for a processor (`WaitingReport`,
-	 * ADR-0093): started with nothing configured, it fetches nothing until an upload tells
-	 * it what to index. Omit it on every host that is not waiting.
+	 * ADR-0093): an `etherfold node` fetches nothing until an upload tells it what to
+	 * index (ADR-0094). Omit it on every host that is not waiting.
 	 */
 	readonly waiting?: WaitingReport;
 };

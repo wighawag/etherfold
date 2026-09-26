@@ -613,10 +613,11 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 * WHERE A STORED GENERATION'S SOURCE COMES FROM when it is instantiated from its
 		 * bundle: PRESENT on a deployment whose source came from its PROCESSOR MODULE, so a
 		 * stored bundle is folded over the contracts IT carries, resolved through this chain,
-		 * exactly as a node started with nothing configured resolves them
-		 * (`openWaitingFolding`). That is what lets such a node fold, after a restart, a
-		 * generation an upload registered on a NEW stream (an added event): the successor
-		 * still catching up, or the canonical generation it was promoted to.
+		 * exactly as a `node` resolves them (`openWaitingFolding`, ADR-0094). That is what
+		 * lets such a deployment fold, after a restart, a generation registered on a NEW
+		 * stream (an added event) -- by an earlier start, or by an upload to a `node` that
+		 * wrote the same database: the successor still catching up, or the canonical
+		 * generation it was promoted to.
 		 *
 		 * ABSENT where the operator CONFIGURED the source (`--deployments`,
 		 * `INDEXING_SOURCE`), which overrides a module's own contract data on every path
@@ -715,8 +716,7 @@ async function loadStoredBundle<ABI extends Abi, ProcessResultType>(bundle: Uint
 }
 
 /**
- * What a folding deployment started with NOTHING configured holds over its one
- * database (ADR-0093): the container, the handle, and how any generation's state is
+ * What a `node` holds over its one database (ADR-0093, ADR-0094): the container, the handle, and how any generation's state is
  * read -- and no opening fold, no store and no writer, because it has none until a
  * processor arrives.
  */
@@ -739,7 +739,7 @@ export type WaitingFoldingAssembly<ABI extends Abi, ProcessResultType = unknown>
 };
 
 /**
- * Open the GENERATION CONTAINER of a `run` started with NOTHING configured (ADR-0093):
+ * Open the GENERATION CONTAINER of a `node` (ADR-0094; ADR-0093's waiting mode):
  * the same registry, caps, ports and stream ends `openFolding` wires, over the same
  * database -- and no fold and no source of its own.
  *
@@ -812,7 +812,7 @@ export async function openWaitingFolding<ABI extends Abi, ProcessResultType>(
 			});
 			return {...resumed.generation, source};
 		},
-		// ...and it is only ever a `run`, which fetches every stream it folds itself
+		// ...and it is only ever a `node`, which fetches every stream it folds itself
 		fetchesItsOwnStreams: true,
 	});
 
@@ -826,8 +826,8 @@ export async function openWaitingFolding<ABI extends Abi, ProcessResultType>(
  * become a fold.
  *
  * Written once for the two ways a folding deployment opens -- CONFIGURED, with a fold
- * and a source of its own (`openFolding`), and with NOTHING configured, holding neither
- * (`openWaitingFolding`, ADR-0093) -- so the two cannot differ in anything but that.
+ * and a source of its own (`openFolding`), and as a `node`, holding neither
+ * (`openWaitingFolding`, ADR-0093, ADR-0094) -- so the two cannot differ in anything but that.
  */
 async function openContainerOver<ABI extends Abi, ProcessResultType>(
 	server: typeof import('@etherfold/server'),
@@ -904,8 +904,7 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		// deployment opens differ in where a stored bundle's SOURCE comes from.
 		instantiateGeneration: seams.instantiateGeneration,
 		// WHAT THIS HOST OPENS WITH, where it was configured with anything at all: its own
-		// fold and its source. Both ABSENT on a node started with nothing configured
-		// (ADR-0093), which opens holding only what its registry's canonical generation
+		// fold and its source. Both ABSENT on a `node` (ADR-0093, ADR-0094), which opens holding only what its registry's canonical generation
 		// names and fetches whatever its first fold carries.
 		...(seams.generation === undefined ? {} : {generation: seams.generation}),
 		...(seams.source === undefined ? {} : {source: seams.source}),
@@ -951,8 +950,8 @@ export async function foldingStatusReport<ABI extends Abi, ProcessResultType>(
 	/** Any generation's state, unclaimed (`FoldingAssembly.stateOf`): where an unheld canonical position is read. */
 	stateOf: (id: GenerationId) => StateStore,
 	/**
-	 * Present exactly while this process is WAITING for a processor (ADR-0093): started
-	 * with nothing configured, it fetches nothing until an upload names what to index.
+	 * Present exactly while this process is WAITING for a processor (ADR-0093): a `node`
+	 * fetches nothing until an upload names what to index (ADR-0094).
 	 * Carried onto the page verbatim, beside whatever else it holds.
 	 */
 	waiting?: WaitingReport,
