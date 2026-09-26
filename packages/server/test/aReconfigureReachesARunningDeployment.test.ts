@@ -102,6 +102,7 @@ async function aRunningDeployment(): Promise<Deployment> {
 
 	let rereads = 0;
 	let next: () => Promise<ReconfigureReport> = async () => ({
+		arrival: 're-read',
 		outcome: 'unchanged',
 		generation: indexer.generation,
 		message: 'nothing moved',
@@ -181,7 +182,7 @@ beforeEach(async () => {
 describe('the endpoint answers WHAT it did, in three distinguishable shapes', () => {
 	it('NAMES the generation it registered', async () => {
 		const successor: GenerationId = {stream: deployment.incumbent.stream, processor: 'v2-something'};
-		deployment.answer(async () => ({outcome: 'registered', generation: successor}));
+		deployment.answer(async () => ({arrival: 're-read', outcome: 'registered', generation: successor}));
 
 		const answer = await reconfigure(deployment);
 
@@ -189,6 +190,7 @@ describe('the endpoint answers WHAT it did, in three distinguishable shapes', ()
 		expect(answer.body).toMatchObject({
 			success: true,
 			indexer: NAME,
+			arrival: 're-read',
 			outcome: 'registered',
 			generation: {
 				stream: successor.stream,
@@ -201,6 +203,7 @@ describe('the endpoint answers WHAT it did, in three distinguishable shapes', ()
 
 	it('says it changed NOTHING, as a success that is not the same shape as one that registered', async () => {
 		deployment.answer(async () => ({
+			arrival: 're-read',
 			outcome: 'unchanged',
 			generation: deployment.incumbent,
 			message: 'this configuration names the generation this deployment already holds',
@@ -212,6 +215,7 @@ describe('the endpoint answers WHAT it did, in three distinguishable shapes', ()
 		expect(answer.body).toMatchObject({
 			success: true,
 			indexer: NAME,
+			arrival: 're-read',
 			outcome: 'unchanged',
 			generation: {digest: generationDigestOf(deployment.incumbent)},
 		});
@@ -224,6 +228,7 @@ describe('the endpoint answers WHAT it did, in three distinguishable shapes', ()
 
 	it('REFUSES when the re-read could not be completed, and says why', async () => {
 		deployment.answer(async () => ({
+			arrival: 're-read',
 			outcome: 'failed',
 			message: 'SyntaxError: Unexpected end of input (./processor.js)',
 		}));
@@ -235,7 +240,13 @@ describe('the endpoint answers WHAT it did, in three distinguishable shapes', ()
 		// the deployment's CURRENT state that conflicts, and the next build resolves
 		// it -- which is what a resumable `409` says on this repo's other surfaces.
 		expect(answer.status).toBe(409);
-		expect(answer.body).toMatchObject({success: false, error: 'reconfigure-failed', indexer: NAME});
+		expect(answer.body).toMatchObject({
+			success: false,
+			error: 'reconfigure-failed',
+			indexer: NAME,
+			arrival: 're-read',
+			outcome: 'failed',
+		});
 		expect(answer.body.message).toContain('SyntaxError');
 		// nothing is NAMED as registered on the failing arm
 		expect(answer.body.generation).toBeUndefined();
@@ -249,7 +260,9 @@ describe('the endpoint answers WHAT it did, in three distinguishable shapes', ()
 		const answer = await reconfigure(deployment);
 
 		expect(answer.status).toBe(409);
-		expect(answer.body).toMatchObject({success: false, error: 'reconfigure-failed'});
+		// ...and it is still the RE-READ's failure: the host said nothing, but the route
+		// it threw behind is the re-read, so the log still names which arrival failed
+		expect(answer.body).toMatchObject({success: false, error: 'reconfigure-failed', arrival: 're-read'});
 		expect(answer.body.message).toContain('the module directory vanished');
 	});
 });
@@ -262,11 +275,12 @@ describe('a re-read never interrupts the deployment it reaches', () => {
 
 		for (const outcome of [
 			async (): Promise<ReconfigureReport> => ({
+				arrival: 're-read',
 				outcome: 'unchanged',
 				generation: deployment.incumbent,
 				message: 'nothing moved',
 			}),
-			async (): Promise<ReconfigureReport> => ({outcome: 'failed', message: 'it does not compile'}),
+			async (): Promise<ReconfigureReport> => ({arrival: 're-read', outcome: 'failed', message: 'it does not compile'}),
 		]) {
 			deployment.answer(outcome);
 			await reconfigure(deployment);
@@ -280,7 +294,7 @@ describe('a re-read never interrupts the deployment it reaches', () => {
 
 describe('the trigger is guarded by the credential the pointer move already uses', () => {
 	it('refuses a caller with no token, and one presenting the INGEST token', async () => {
-		deployment.answer(async () => ({outcome: 'registered', generation: deployment.incumbent}));
+		deployment.answer(async () => ({arrival: 're-read', outcome: 'registered', generation: deployment.incumbent}));
 
 		const anonymous = await reconfigure(deployment, {token: undefined});
 		expect(anonymous.status).toBe(401);

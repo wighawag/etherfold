@@ -40,3 +40,11 @@ Done means: every outcome says which arrival produced it, and the upload's name 
 FIRST, check this task against current reality. If the report type has moved or split, route to needs-attention with the discrepancy.
 
 RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT, in particular the field name and its values. Do not write the done record, the commit message or the PR body yourself.
+
+## Decisions
+
+- **Field name `arrival`, type name `ReconfigureArrival`.** "Arrival" is the word the existing JSDoc, `CONTEXT.md` and ADR-0085 already use for "a way a processor reaches a running deployment". I named the type `ReconfigureArrival` rather than `Arrival` to pair it with `ReconfigureReport`. It also stays clear of `@etherfold/utils`' `ProcessorArrival`, which means something different: a processor resolved from a path. I considered `source`, but that already means an indexing source, and `via` or `route`, which are vaguer. This touches the upload task (`a-processor-bundle-is-uploaded-to-a-running-node`), which must use `arrival: 'upload'`.
+- **Values `'re-read' | 'upload' | 'hot-update'`.** They name what arrived, not a package. The alternatives were `'cli'`/`'server'`/`'browser'`. The re-read already spans two packages (cli and server), and the upload will be received by the same server package as the re-read, so package names would not tell them apart. The hyphen in `re-read` follows the prose spelling used across the docs.
+- **The field is required and repeated on each arm.** It is not optional and not a fourth outcome. I wrote it out on each arm rather than as an intersection type so the union stays easy to read. A missing arrival is a type error on every arm.
+- **The admin route passes the host's `report.arrival` through rather than hard-coding `'re-read'`.** It only supplies `'re-read'` itself when the host threw and returned no report. The alternative was to always stamp `'re-read'`, since this route is the re-read. Passing it through keeps the host's report as the single source of truth. It touches `IndexerRegistryEntry.reconfigure` hosts, which must now say their arrival; the one real host, the CLI reconfigurer, does.
+- **The `501 reconfigure-not-held` refusal carries no `arrival`.** It is not a report: no arrival was attempted, so nothing produced an outcome.
