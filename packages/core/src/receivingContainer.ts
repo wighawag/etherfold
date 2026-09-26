@@ -962,7 +962,9 @@ export class ReceivingIndexer<
 	 * is held for as long as the pointer does and no longer. A revert already stops folding what it leaves;
 	 * this is what lets a PROMOTION do the same for these folds, so an upgrading restart
 	 * does not end with an engine for the incumbent nobody reads any more. A fold that
-	 * was handed to this container keeps the retention it always had.
+	 * was handed to this container stops too on a promotion, where the host could build
+	 * it again (`canBeInstantiatedAgain`, ADR-0092's third amendment); this set is what
+	 * stops one instantiated here on EVERY promotion, since it could be built once.
 	 *
 	 * In memory, rightly: which OBJECT this process built from bytes is a fact about
 	 * this process, like `canonicalFold`, and nothing durable is inferred from it.
@@ -2606,9 +2608,10 @@ export class ReceivingIndexer<
 			// stops being folded here, however it arrived, so its stream stops being fetched once
 			// no other fold here reads it (`fetchedStreams`). Folding it on would keep a whole
 			// fetcher -- chain calls for a stream nobody reads -- running for the life of the
-			// process, which a fold on the SAME stream never costs, so that case keeps the
-			// retention it always had. It is RETAINED -- registered, with its state and its
-			// bundle, and named by `predecessor` -- and a revert onto it is the freeze a revert
+			// process. (A promotion on the SAME stream costs no fetch, and is the last branch
+			// below: it stops the fold where a revert could build it again.) It is RETAINED --
+			// registered, with its state and its bundle, and named by `predecessor` -- and a
+			// revert onto it is the freeze a revert
 			// across a filter change always was (ADR-0057). A PUSH-FED host (the split `index`,
 			// the server's receiving hosts) never gets here: its streams are fetched by another
 			// process that costs this one nothing, so the incumbent keeps folding and its stream
@@ -2633,8 +2636,58 @@ export class ReceivingIndexer<
 					`folds it now that the pointer has left it. It is kept, with its state and its bundle, and a move back ` +
 					`onto it instantiates it again.`,
 			);
+		} else if (
+			superseded &&
+			this.canonicalFold &&
+			wasPromotion &&
+			superseded.streamDigest === record.stream &&
+			(await this.canBeInstantiatedAgain(supersededRecord))
+		) {
+			// A PREDECESSOR NEEDS NO ENGINE, HOWEVER IT ARRIVED (ADR-0092's third amendment):
+			// nobody reads it and it is not catching up. So a fold `add` built in this process
+			// (an upload to a running `node`, the configured fold of a `run`) stops being
+			// folded when a promotion on its own stream supersedes it, exactly as one
+			// instantiated from stored bytes does. It is RETAINED -- registered, with its state
+			// and its bundle, and named by `predecessor` -- and a revert instantiates it again.
+			//
+			// ONLY WHERE A REVERT CAN REBUILD IT: a host with no `instantiateGeneration` (the
+			// server package's hosts, a test world), or a generation with no stored bytes,
+			// keeps the retention it always had, since stopping the fold there would turn
+			// every revert into a freeze. ONLY ON THE SAME STREAM on a push-fed host: the new
+			// canonical fold still reads that stream, so its writer stays live and pushes are
+			// still accepted. A promotion onto ANOTHER stream is the branch above on a host
+			// that fetches its own streams, and on a push-fed one the incumbent keeps folding,
+			// so its stream keeps accepting the pushes another process is still sending.
+			this.stopDriving(supersededRecord);
+			namedLogger.info(
+				`the generation {stream: ${supersededRecord.stream}, processor: ${supersededRecord.processor}} was ` +
+					`superseded by a promotion, so this process no longer folds it: nobody reads it and it is not catching ` +
+					`up. It is kept, with its state and its stored bundle, and a move back onto it instantiates it again.`,
+			);
 		}
 		return record;
+	}
+
+	/**
+	 * WHETHER A REVERT ONTO THIS GENERATION COULD BUILD IT AGAIN in this process: the
+	 * host injected `instantiateGeneration` and bytes are stored for it. What a promotion
+	 * asks before it stops folding a predecessor it built, so that stopping it never
+	 * turns the way back into a freeze. It claims what `folding` calls `instantiable`
+	 * without running the code, for the same reason.
+	 */
+	private async canBeInstantiatedAgain(record: GenerationId): Promise<boolean> {
+		if (!this.options.instantiateGeneration) return false;
+		try {
+			const bundle = await this.registry.bundleOf(record);
+			return !!bundle && bundle.length > 0;
+		} catch (err) {
+			namedLogger.error(
+				`the stored bundle of {stream: ${record.stream}, processor: ${record.processor}} could not be read, so ` +
+					`this process keeps folding it rather than leave a revert onto it with nothing to build`,
+				err,
+			);
+			return false;
+		}
 	}
 
 	/**

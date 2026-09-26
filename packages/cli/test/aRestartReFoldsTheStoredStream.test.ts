@@ -146,11 +146,11 @@ async function aRunOver(db: RemoteSQL, processorPath: string) {
 }
 
 /** START a `node` over `db`: no processor and no source, so its code arrives by upload (ADR-0094). */
-async function aNodeOver(db: RemoteSQL) {
+async function aNodeOver(db: RemoteSQL, options: Partial<Options> = {}) {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	const chain = fakeChain().serve(LOGS, TIP);
 	const started = await node(
-		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
+		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER, ...options},
 		{
 			provider: chain.provider,
 			createDB: () => db,
@@ -295,7 +295,9 @@ describe('a deployment restarted with a changed processor', () => {
 		// holding two generations on one stream stores that stream once, and it is the
 		// DEPLOYMENT that stores it rather than whichever fold was elected.
 		const db = oneDatabase();
-		const first = await aNodeOver(db);
+		// `manual`, so the second upload STAYS beside the first: a promotion would stop folding
+		// the one it superseded (ADR-0092's third amendment), and two folds are the subject
+		const first = await aNodeOver(db, {promotion: 'manual'});
 		const incumbent = await uploadSource(first.indexer, processorBundleSource({credit: 'to'}));
 		expect(incumbent.status, await incumbent.clone().text()).toBe(200);
 		await until(

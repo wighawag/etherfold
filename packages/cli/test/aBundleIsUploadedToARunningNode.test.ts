@@ -504,6 +504,85 @@ async function aNodeWithAnUnheldPredecessor(
 	return {indexer, predecessor};
 }
 
+/**
+ * A `node` that took two uploads IN ONE SESSION: `nfts.bundle.js` folded to the tip, then
+ * the edited bundle, caught up and promoted over it by `on-catch-up`, so the first is
+ * what `predecessor` names. No restart: every fold here was BUILT by this process from an
+ * upload, and none was instantiated from stored bytes.
+ */
+async function aNodePromotedInOneSession(
+	chain: ReturnType<typeof fakeChain> = fakeChain().serve(LOGS, TIP),
+): Promise<{indexer: RunningIndexer; db: RemoteSQL; predecessor: string}> {
+	const db = oneDatabase();
+	const indexer = await aNodeOver(db, chain);
+	expect((await upload(indexer, await bytesOf(BUNDLE))).status).toBe(200);
+	await feedOf(indexer, LOGS.length);
+	const predecessor = generationDigestOf(indexer.container.generation);
+	await waitFor('the first upload folded to the tip', async () => {
+		return (await indexer.container.registry.readStateCursor(indexer.container.generation)) === TIP;
+	});
+	expect((await upload(indexer, await bytesOf(EDITED_BUNDLE))).status).toBe(200);
+	await waitFor(
+		'the edited successor was promoted',
+		async () => (await canonicalOf(indexer)) !== undefined && (await canonicalOf(indexer)) !== predecessor,
+	);
+	expect((await listingOf(indexer)).slots?.predecessor?.digest).toBe(predecessor);
+	return {indexer, db, predecessor};
+}
+
+// ---------------------------------------------------------------------------------------------------
+// A PROMOTION LEAVES NO ENGINE FOR THE PREDECESSOR (ADR-0092's third amendment)
+// ---------------------------------------------------------------------------------------------------
+// Nobody reads what `predecessor` names and it is not catching up, so it needs no engine,
+// and a revert instantiates it again from its stored bundle. That used to hold only for a
+// fold instantiated from stored bytes: the fold an upload built went on being folded after
+// a same-stream promotion, for the rest of the session. Now it stops, however it arrived.
+// ---------------------------------------------------------------------------------------------------
+
+describe('a promotion in one session leaves NO engine for the generation it superseded', () => {
+	it('holds no fold for the predecessor, which keeps its state and its bytes and reports `instantiable`', async () => {
+		const {indexer, db, predecessor} = await aNodePromotedInOneSession();
+		const promoted = (await canonicalOf(indexer)) as string;
+		const after = await settled(indexer);
+
+		expect(after.held).toEqual([promoted]);
+		expect(after.generations.find((entry) => entry.digest === predecessor)).toMatchObject({
+			canonical: false,
+			slot: 'predecessor',
+			folding: 'instantiable',
+		});
+		expect(after.generations.find((entry) => entry.digest === promoted)).toMatchObject({folding: 'held'});
+		// RETAINED: its state stands where it stood, and its row keeps the uploaded bytes
+		const record = (await listingOf(indexer)).generations.find((entry) => entry.digest === predecessor)!;
+		expect(await indexer.container.registry.readStateCursor(record)).toBe(TIP);
+		expect([...((await storedBundleOf(db, record.processor)) ?? [])]).toEqual([...(await bytesOf(BUNDLE))]);
+	});
+
+	it('brings the engine back at a REVERT: instantiated from its stored bundle, and it FOLDS again', async () => {
+		const chain = fakeChain().serve(LOGS, TIP);
+		const {indexer, predecessor} = await aNodePromotedInOneSession(chain);
+		const record = (await listingOf(indexer)).generations.find((entry) => entry.digest === predecessor)!;
+
+		const moved = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
+			method: 'POST',
+			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json'},
+			body: JSON.stringify({stream: record.stream, processor: record.processor}),
+		});
+		expect(moved.status).toBe(200);
+		expect(await canonicalOf(indexer)).toBe(predecessor);
+		expect(indexer.container.held().map((fold) => generationDigestOf(fold.record))).toEqual([predecessor]);
+
+		// ...and the chain moves on: the reverted-to generation advances past where it stood
+		const LATER_TIP = TIP + 50;
+		chain.serve([...LOGS, transfer(TIP + 20, '0xa70', BOB, ALICE, 1n)], LATER_TIP);
+		await waitFor('the reverted-to generation advanced past where it stood', async () => {
+			const now = await indexer.container.registry.readStateCursor(record);
+			return now !== undefined && now > TIP;
+		});
+		await feedOf(indexer, LOGS.length + 1);
+	});
+});
+
 describe('uploading the bytes of the `predecessor`', () => {
 	it('RE-ARMS it as successor, and the ordinary promotion rolls the node back onto it', async () => {
 		const original = await bytesOf(BUNDLE);
@@ -535,32 +614,22 @@ describe('uploading the bytes of the `predecessor`', () => {
 		});
 	});
 
-	it('re-arms it where this process still FOLDS it, building no second fold', async () => {
-		// the same process that promoted over it: a same-stream promotion keeps the
-		// superseded fold it built, so the predecessor is still HELD here
-		const {indexer} = await aNodeServing();
-		const predecessor = generationDigestOf(indexer.container.generation);
-		await waitFor('the first upload folded to the tip', async () => {
-			return (await indexer.container.registry.readStateCursor(indexer.container.generation)) === TIP;
-		});
-		expect((await upload(indexer, await bytesOf(EDITED_BUNDLE))).status).toBe(200);
-		await waitFor(
-			'the edited successor was promoted',
-			async () => (await canonicalOf(indexer)) !== undefined && (await canonicalOf(indexer)) !== predecessor,
-		);
+	it('re-arms it within the SAME session, where the promotion left no engine for it, and builds it once', async () => {
+		// the same process that promoted over it: the promotion STOPPED folding the fold it
+		// built from the first upload (ADR-0092's third amendment), so it is unheld here too
+		const {indexer, predecessor} = await aNodePromotedInOneSession();
 		const edited = (await canonicalOf(indexer)) as string;
-		expect((await listingOf(indexer)).slots?.predecessor?.digest).toBe(predecessor);
 
 		const uploaded = await upload(indexer, await bytesOf(BUNDLE));
 		const after = await settled(indexer);
 
-		// `registered`, and NOT `unchanged`: being folded here is not being where it was asked to go
+		// `registered`, and NOT `unchanged`: it was not where it was asked to go
 		expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(200);
 		expect(uploaded.body).toMatchObject({outcome: 'registered', generation: {digest: predecessor}});
 		expect(after.slots?.canonical?.digest).toBe(predecessor);
 		expect(after.slots?.predecessor?.digest).toBe(edited);
-		// ONE fold for it, never two over the same state
-		expect(after.held.filter((digest) => digest === predecessor)).toHaveLength(1);
+		// ONE fold for it, never two over the same state, and none for the one it replaced
+		expect(after.held).toEqual([predecessor]);
 	});
 
 	it('waits in `successor` under `manual`, folded, and is promoted only when asked', async () => {

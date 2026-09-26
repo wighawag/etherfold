@@ -178,11 +178,11 @@ async function aRunOver(
 }
 
 /** START a `node` over `db`: no processor and no source, so its code arrives by upload (ADR-0094). */
-async function aNodeOver(db: RemoteSQL, logs = HISTORY, tip = FIRST_TIP) {
+async function aNodeOver(db: RemoteSQL, logs = HISTORY, tip = FIRST_TIP, options: Partial<Options> = {}) {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	const chain = fakeChain().serve(logs, tip);
 	const started = await node(
-		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
+		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER, ...options},
 		{
 			provider: chain.provider,
 			createDB: () => db,
@@ -499,7 +499,9 @@ describe('the UPLOAD path to a running `node`', () => {
 		// here, so it kept the pen -- which is exactly why it is asserted: the fix must not
 		// pay for the restart case with this one.
 		const db = oneDatabase();
-		const first = await aNodeOver(db, [...HISTORY, ...AFTER_THE_RESTART], SECOND_TIP);
+		// `manual`, so the successor stays BESIDE the live fold: a promotion would stop folding
+		// the one it superseded (ADR-0092's third amendment), and "beside" is the subject
+		const first = await aNodeOver(db, [...HISTORY, ...AFTER_THE_RESTART], SECOND_TIP, {promotion: 'manual'});
 		expect((await uploadSource(first.indexer, processorBundleSource({credit: 'to'}))).status).toBe(200);
 		const stored = await until(
 			async () => emissions(db),
