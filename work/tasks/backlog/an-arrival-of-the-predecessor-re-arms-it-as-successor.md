@@ -1,50 +1,56 @@
 ---
-title: 'An arrival naming the PREDECESSOR re-arms it as successor, so a rollback by upload actually rolls back'
+title: 'An arrival naming the PREDECESSOR re-arms it as successor, so a rollback by upload or by configuration actually rolls back'
 slug: an-arrival-of-the-predecessor-re-arms-it-as-successor
-blockedBy:
-  - a-successor-on-a-new-stream-is-fetched-by-its-own-writer
-covers: []
+spec: run-is-configured-and-node-receives-uploads
+blockedBy: [the-re-read-endpoint-is-deleted]
+covers: [5]
 ---
+
+> Rewritten 2026-09-26 when the spec `run-is-configured-and-node-receives-uploads` was tasked: the re-read arm is gone (the endpoint is deleted by the task before this one), the upload arm is on `node`, and a configured start naming the predecessor re-arms it too.
 
 ## What to build
 
-Today, when an arrival (the re-read, an upload) names the generation the `predecessor` slot holds, the registry resolves the identity to the record it already has, the record STAYS in `predecessor` (a slot already naming it is not re-armed), the answer is `registered`, and this process starts FOLDING it (`folding: held`). So a "rollback by upload" does not roll back (nothing puts it in `successor` or moves the pointer), and it leaves an engine running for a generation nobody reads, which ADR-0092 says a predecessor should not have. This is the observation `an-upload-of-the-predecessor-folds-it-without-promoting-it`, and the behaviour is pinned today by `packages/cli/test/aBundleIsUploadedToARunningNode.test.ts` ("uploading the bytes of the `predecessor` behaves exactly as a re-read of that identity").
+Today, when an arrival names the generation the `predecessor` slot holds, the registry resolves the identity to the record it already has, the record STAYS in `predecessor` (a slot already naming it is not re-armed), the answer is `registered`, and this process starts FOLDING it (`folding: held`). So a rollback by upload does not roll back (nothing puts it in `successor` or moves the pointer), and an engine runs for a generation nobody reads, which ADR-0092 says a predecessor should not have. This is the observation `an-upload-of-the-predecessor-folds-it-without-promoting-it`; the behaviour is pinned today in `aBundleIsUploadedToARunningNode` (the predecessor case, on `node` since `node-is-a-command-that-receives-uploads`).
 
-**Decided by the maintainer on 2026-09-26: RE-ARM it.** An arrival naming the generation `predecessor` holds MOVES it into `successor`: the `predecessor` slot is emptied, and the slot's usual rules apply from there. Registering into an occupied `successor` replaces its occupant as it always does (ADR-0084), and a START doing that to a DIFFERENT pending successor is guarded exactly as any start is (ADR-0084's 2026-09-26 amendment: asks on a TTY, refused non-interactively unless `--override`); the re-read and an upload replace without asking. The promotion policy then decides as for any successor: under `on-catch-up` it catches up (from where its own state stood, so usually quickly) and is promoted, and the generation it replaces as canonical becomes `predecessor` as on any promotion. The answer stays `registered`, since a generation now sits in `successor` that did not.
+**Decided by the maintainer on 2026-09-26 (ADR-0094): RE-ARM it.** An arrival naming the generation `predecessor` holds MOVES it into `successor`: the `predecessor` slot is emptied, and the slot's usual rules apply from there. The arrivals are:
 
-- The rule belongs to the registry / container and is the same for every arrival and both containers where the slot rule is shared (`displacedBySuccessor` and its twin); do not special-case the upload route.
-- An arrival naming the CANONICAL generation, or the pending successor itself, is unchanged (`unchanged` / nothing moves).
-- A START with a configured `--processor` naming the predecessor re-arms it too (it is an arrival like any other).
-- Where the predecessor sits on a stream this deployment does not fetch, it is fetched as any new-stream successor now is (`a-successor-on-a-new-stream-is-fetched-by-its-own-writer`).
+- **an upload on `node`**: replaces a different pending successor without asking, as any upload does;
+- **a configured start on `run`, `build` or `index` whose `-p` names it**: a rollback by configuration (ADR-0094: configuration is the truth). Replacing a DIFFERENT pending successor is guarded by the start guard as any start is; with nothing pending there is nothing to ask.
+
+The promotion policy then decides as for any successor: under `on-catch-up` it catches up (from where its own state stood) and is promoted, and the generation it replaces as canonical becomes `predecessor`. The answer stays `registered`.
+
+- The rule belongs to the registry / container, the same for every arrival and for both containers where the slot rule is shared (`displacedBySuccessor` and its twin); do not special-case the upload route.
+- An arrival naming the CANONICAL generation, or the pending successor itself, is unchanged (`a-configured-start-folds-toward-exactly-its-configuration` owns what a start naming the canonical generation does).
+- Where the predecessor sits on a stream this deployment does not fetch, it is fetched as any new-stream successor is (ADR-0087's 2026-09-26 amendment).
 
 ## Acceptance criteria
 
-- [ ] Upload the predecessor's bytes to a running node: it moves to `successor`, `predecessor` is empty, it catches up, and under `on-catch-up` it is promoted; the generation it replaced becomes `predecessor`. Asserted end to end with `etherfold upload`.
-- [ ] The same through the re-read, asserted: the two arrivals still behave identically.
+- [ ] Upload the predecessor's bytes to a running `node`: it moves to `successor`, `predecessor` is empty, it catches up and under `on-catch-up` is promoted; the generation it replaced becomes `predecessor`. End to end with `etherfold upload`.
+- [ ] `run -p v1` after `v2` was promoted over `v1` (by a `run -p v2` restart, and by an upload to a `node` over the same database): `v1` is re-armed and promoted back; with a DIFFERENT generation pending, the start guard applies.
 - [ ] Under `manual` it waits in `successor`, folded, and is promoted only when asked.
-- [ ] Re-arming over a DIFFERENT pending successor replaces it (row, state, bytes) without a question for the re-read and the upload, and is guarded for a START.
 - [ ] No engine is left running for a generation `predecessor` names, asserted.
-- [ ] The existing test that pins today's behaviour is changed to the new behaviour, not deleted.
+- [ ] The test pinning today's behaviour is changed to the new behaviour, not deleted.
 - [ ] ADR-0084 and ADR-0092 carry dated amendments; CONTEXT.md's slot entry says what is now true. Grep `docs/adr/` and `CONTEXT.md` for claims this makes false (for instance "a slot already naming it is not re-armed").
 - [ ] The observation `an-upload-of-the-predecessor-folds-it-without-promoting-it` is DELETED.
+- [ ] **ADR-0094's `status: accepted, not yet implemented` line is REMOVED, leaving NO status line** (`work/protocol/ADR-FORMAT.md`: absent means accepted and current; `accepted, implemented` is not a valid value). This task is the last of the chain and owns the removal. Check first that every consequence of ADR-0094 is built; if one is not, route to needs-attention rather than removing the line.
 - [ ] Tests cover the new behaviour, mirroring the repo's existing test style.
 - [ ] A changeset accompanies the change (`pnpm changeset`).
 
 ## Blocked by
 
-- `a-successor-on-a-new-stream-is-fetched-by-its-own-writer` -- both change the container's slot and fetch logic, so they are serialised, and a predecessor on another stream relies on it.
+- `the-re-read-endpoint-is-deleted` -- the last task before this in the chain; this one removes ADR-0094's status line.
 
 ## Prompt
 
-The goal is that sending the previous version's bundle to a node is a rollback: it becomes the live version again, through the same catch-up-and-promote path every deploy takes.
+The goal is that sending the previous version to a node, or configuring it again, is a rollback through the same catch-up-and-promote path every deploy takes.
 
-Read ADR-0084 and all its amendments (slots; what replacing a successor deletes; the start guard), ADR-0092 and its amendments (no engine for a predecessor; the successor at open), ADR-0057 (the revert, which is the OTHER way back and stays as it is), and ADR-0085's relocated decisions.
+Read ADR-0094, ADR-0084 and all its amendments, ADR-0092 and its amendments, ADR-0057 (the revert, the OTHER way back, unchanged).
 
-The seams: the generation registry in `@etherfold/core` (how `add` resolves an identity it already holds, and the slot assignment), `ReceivingIndexer.add` and its chain-facing twin, and the CLI suites `aBundleIsUploadedToARunningNode` and `anUploadedProcessorSurvivesARestart`.
+The seams: the generation registry in `@etherfold/core` (how `add` resolves an identity it already holds, and the slot assignment), `ReceivingIndexer.add` / `open` and its chain-facing twin, the upload suites and `anUploadedProcessorSurvivesARestart`.
 
-The decisions most likely to be got wrong: copying the predecessor into `successor` while leaving it in `predecessor` (one generation in two slots, which the registry forbids); moving the pointer directly instead of going through `successor` and the promotion policy; and putting the rule in the upload route rather than the registry.
+The decisions most likely to be got wrong: copying the predecessor into `successor` while leaving it in `predecessor` (one generation in two slots, which the registry forbids); moving the pointer directly instead of going through `successor` and the policy; and putting the rule in the upload route rather than the registry.
 
-Done means: upload the old bundle, and the node goes back to it through a normal promotion, with nothing left running for a generation nobody reads.
+Done means: upload the old bundle, or restart `run` with the old `-p`, and the node goes back to it through a normal promotion, with nothing running for a generation nobody reads, and ADR-0094 no longer says it is unimplemented.
 
 FIRST, check this task against current reality. If the registry already re-arms somewhere, route to needs-attention with the measurement.
 
