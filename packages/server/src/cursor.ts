@@ -1,3 +1,4 @@
+import type {FrozenReason, GenerationFolding} from '@etherfold/core';
 import {logs} from 'named-logs';
 
 const logger = logs('@etherfold/server');
@@ -82,6 +83,42 @@ export type GenerationReport = {
 };
 
 /**
+ * THE GENERATION THAT ANSWERS READS, as an operator reads it off `/status`:
+ * which one it is, whether it folds HERE, and where it stands -- whether or not
+ * this host holds a fold for it.
+ *
+ * It exists because `generations` is what a host HOLDS (ADR-0047), and a canonical
+ * generation nothing here folds is not held: its stored code could not be built at
+ * `open`, a revert crossed a filter change, or the host injects no way to run stored
+ * code (ADR-0092). Without this report such a deployment's page named no canonical
+ * generation, carried no `value`, and could not be told apart from a stalled one or a
+ * quiet chain. It is ONE entry and never a list: widening `generations` to every
+ * REGISTERED generation would re-mean that field and cost a read per generation on
+ * every refresh.
+ *
+ * `folding` and `frozen` are the admin listing's words for the same fact
+ * (`GenerationFolding`, `@etherfold/core`) and are typed FROM it, so the two surfaces
+ * share one vocabulary rather than two that could drift.
+ */
+export type CanonicalReport = {
+	/** WHICH generation, as the opaque digest every other surface advertises (`generationDigestOf`). */
+	readonly generation: string;
+	/**
+	 * Whether it can fold on this deployment: `held`, `instantiable` or `frozen`.
+	 * ABSENT where the host cannot say, never a guess rendered as one of the three.
+	 */
+	readonly folding?: GenerationFolding['folding'];
+	/** Why it is frozen, in words an operator can act on. Present exactly when `folding` is `frozen`. */
+	readonly frozen?: {readonly reason: FrozenReason; readonly message: string};
+	/**
+	 * Where it stands, in the same small summary the top-level `value` carries -- read
+	 * from its own state even where nothing here folds it. ABSENT rather than zeroed
+	 * when it has committed nothing.
+	 */
+	readonly value?: CursorReport;
+};
+
+/**
  * What a host's reporter hands over: the CONTENTS of the `cursor` envelope.
  *
  * TWO SLOTS, filled independently. `value` is where the generation that answers
@@ -101,6 +138,11 @@ export type StatusReport = {
 	readonly value?: CursorReport;
 	/** One entry per generation this host holds, oldest first. Omit it entirely to claim nothing. */
 	readonly generations?: readonly GenerationReport[];
+	/**
+	 * The generation that answers reads, held here or not (`CanonicalReport`). Omit it
+	 * where the host names none.
+	 */
+	readonly canonical?: CanonicalReport;
 };
 
 /**
@@ -111,6 +153,9 @@ export type StatusReport = {
  * RPC client type makes the compiler give up with `TS2589`.
  */
 export type ReportedGeneration = {generation: string; canonical: boolean; follows: boolean; value?: unknown};
+
+/** A `CanonicalReport` as the RESPONSE carries it, with `value` opaque for the reasons `ReportedGeneration` gives. */
+export type ReportedCanonical = Omit<CanonicalReport, 'value'> & {value?: unknown};
 
 /**
  * The `cursor` field on `/status`: an ENVELOPE the server owns, around values it
@@ -138,8 +183,8 @@ export type ReportedGeneration = {generation: string; canonical: boolean; follow
  * HOST writes its reporter, which is the only place that can honour it anyway.
  */
 export type StatusCursor =
-	| {reported: true; value: unknown; generations?: readonly ReportedGeneration[]}
-	| {reported: false; reason: string; generations?: readonly ReportedGeneration[]};
+	| {reported: true; value: unknown; generations?: readonly ReportedGeneration[]; canonical?: ReportedCanonical}
+	| {reported: false; reason: string; generations?: readonly ReportedGeneration[]; canonical?: ReportedCanonical};
 
 /**
  * Ask the host's reporter, and never let the answer fail the request.
@@ -187,14 +232,19 @@ export async function reportCursor(
 	// field itself follows on a host that injects no reporter.
 	const generations =
 		reported.generations === undefined ? {} : {generations: reported.generations as readonly ReportedGeneration[]};
+	// ...and the canonical report the same way: absent is "this host names none", and it
+	// rides on BOTH branches, because a canonical generation that has committed nothing is
+	// still the one answering reads.
+	const canonical = reported.canonical === undefined ? {} : {canonical: reported.canonical as ReportedCanonical};
 
 	if (reported.value === undefined) {
 		return {
 			reported: false,
 			reason: `the cursor reporter named no cursor for the generation that answers reads`,
 			...generations,
+			...canonical,
 		};
 	}
 
-	return {reported: true, value: reported.value, ...generations};
+	return {reported: true, value: reported.value, ...generations, ...canonical};
 }

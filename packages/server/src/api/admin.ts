@@ -75,11 +75,18 @@ const logger = logs('@etherfold/server');
  *
  * Every rule belongs to the generation registry and the container over it
  * (`@etherfold/core`): that a generation nothing registered is REFUSED, that the
- * pointer is never unset, that a BACKWARDS move drops nothing, and that a target
- * this host holds no FOLD for is answered anyway (reads resolve the pointer to a
- * table NAMESPACE, ADR-0053, so the reverted-to generation answers with no engine
- * at all -- which is the ordinary case on a host redeployed with the new
- * processor alone). What this route adds is the transport's own two decisions:
+ * pointer is never unset, that a BACKWARDS move drops nothing, and what happens to
+ * a target this host holds no FOLD for (ADR-0092, and ADR-0057's 2026-09-25
+ * amendment). On a host that injects `instantiateGeneration` (the CLI does), a
+ * target on the stream this deployment fetches is INSTANTIATED from the bundle
+ * stored on its row before the pointer is written, and it folds from where its state
+ * stood -- the ordinary revert on a host redeployed with the new processor alone. A
+ * target whose stored code cannot be built is REFUSED (`409 generation-cannot-fold`)
+ * and nothing changes. A target on a stream this deployment does not fetch (a revert
+ * across a filter change), or any target on a host that injects no such seam, still
+ * MOVES and is FROZEN: reads resolve the pointer to its table NAMESPACE (ADR-0053),
+ * so it answers from where it stood with no engine, and the listing below and
+ * `/status` both say so. What this route adds is the transport's own two decisions:
  * WHO may call it, and WHICH status code each refusal is.
  */
 export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<CustomEnv>) {

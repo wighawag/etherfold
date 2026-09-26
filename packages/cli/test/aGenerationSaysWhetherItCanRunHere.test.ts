@@ -171,6 +171,25 @@ async function aRestartWithAChangedProcessor(
 	return {db, indexer, incumbent: incumbent.digest, successor: successor as string};
 }
 
+type StatusCursor = {
+	reported: boolean;
+	value?: {lastToBlock: number};
+	generations?: {generation: string; canonical: boolean; follows: boolean; value?: {lastToBlock: number}}[];
+	canonical?: {
+		generation: string;
+		folding?: string;
+		frozen?: {reason: string; message: string};
+		value?: {lastToBlock: number};
+	};
+};
+
+/** The PUBLIC `/status`, which needs no credential: the page an operator already watches. */
+async function statusOf(indexer: RunningIndexer): Promise<{cursor: StatusCursor}> {
+	const res = await fetch(`${indexer.url}/status`);
+	expect(res.status).toBe(200);
+	return (await res.json()) as {cursor: StatusCursor};
+}
+
 /** POINT AT a generation through the authenticated admin route (ADR-0057). */
 async function pointAt(indexer: RunningIndexer, digest: string): Promise<number> {
 	const {stream, processor} = await entryFor(indexer, digest);
@@ -225,6 +244,43 @@ describe('a canonical generation whose code cannot run here is REPORTED, not mer
 		expect(stalled).toMatchObject({canonical: true, folding: 'frozen', frozen: {reason: 'instantiation-failed'}});
 		expect(stalled.frozen?.message).toMatch(/could not turn the stored bytes into a fold/);
 		expect(await entryFor(indexer, successor)).toMatchObject({folding: 'held'});
+	});
+
+	it('says so on `/status` too: the page an operator watches names it, where it stands, and why it is frozen', async () => {
+		// `status-says-when-the-canonical-generation-is-frozen`: the admin listing is not
+		// the page an operator refreshes, `/status` is. Nothing here folds the canonical
+		// generation, so the per-fold list does not carry it (it is what this host HOLDS,
+		// ADR-0047) -- and the canonical report beside it does, read from its own
+		// namespace with no engine.
+		const {indexer, incumbent, successor} = await aRestartWithAChangedProcessor({
+			beforeRestart: async (db, stored) => {
+				await db
+					.prepare(`UPDATE _generations SET bundle = ?1 WHERE processor = ?2`)
+					.bind(new TextEncoder().encode('export const nothing = 1;\n'), stored.processor)
+					.all();
+			},
+			extra: {promotion: 'manual'},
+		});
+		expect(await canonicalOf(indexer)).toBe(incumbent);
+
+		const {cursor} = await statusOf(indexer);
+		expect(cursor.canonical).toMatchObject({
+			generation: incumbent,
+			folding: 'frozen',
+			frozen: {reason: 'instantiation-failed', message: expect.stringMatching(/could not turn the stored bytes/)},
+			// where it stood when the first deployment stopped, and where it stays
+			value: {lastToBlock: TIP},
+		});
+		// ONE vocabulary on two surfaces: `/status` says what the admin listing says
+		const listed = await entryFor(indexer, incumbent);
+		expect(cursor.canonical?.folding).toBe(listed.folding);
+		expect(cursor.canonical?.frozen).toEqual(listed.frozen);
+		// the top-level value is the canonical generation's, which is what it always meant
+		expect(cursor.reported).toBe(true);
+		expect(cursor.value).toEqual(cursor.canonical?.value);
+		// ...and the held list is still what this process HOLDS: the successor alone
+		expect(cursor.generations?.map((entry) => entry.generation)).toEqual([successor]);
+		expect(cursor.generations?.[0]).toMatchObject({canonical: false, follows: true});
 	});
 
 	it('says its code is GONE where no bundle is stored on its row at all', async () => {
