@@ -92,6 +92,7 @@ export {node, nodeMain, run, runMain, type RunDependencies, type RunningIndexer}
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
 import {newlyStalledFollowers, rebuildUntilLevel} from './followers.js';
 import {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete} from './pruning.js';
+import {printMessage} from './printMessage.js';
 
 const logger = logs('etherfold');
 
@@ -1061,13 +1062,14 @@ export async function main(
 	const buildFn = deps?.build ?? ((opts: Options) => build(opts, env ? {env} : {}));
 	const exit = deps?.exit ?? ((code: number) => process.exit(code));
 	const log = deps?.log ?? console.log;
-	const error = deps?.error ?? console.error;
+	const error = deps?.error ?? printMessage;
 	try {
 		await buildFn(options);
 		log('DONE');
 		exit(0);
 	} catch (err) {
 		error(err);
+		logger.error('the command stopped', err);
 		exit(1);
 	}
 }

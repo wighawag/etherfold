@@ -162,7 +162,10 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 				'and answer queries over it. It takes no processor and no source: it WAITS for its first upload, and ' +
 				'each upload carries its own contracts (ADR-0094)',
 		)
-		.usage('--store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545 --indexer <name>]');
+		.usage(
+			'--store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545 --indexer <name>]   ' +
+				'(ADMIN_TOKEN in the environment: without it every upload is refused)',
+		);
 	registerInputs(nodeCommand, 'node');
 	nodeCommand.action(async (options: Options) => {
 		await runNode(options);
@@ -258,6 +261,15 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 		.argument('[bundle]', 'the already-built, self-contained bundle to send (or -p)')
 		.usage('<bundle> --to http://localhost:2000 --indexer <name>   (ADMIN_TOKEN in the environment)');
 	registerInputs(uploadCommand, 'upload');
+	// `-p` is the same INPUT as on the folding commands, but here it names what is SENT,
+	// so it says that rather than how a deployment folds it.
+	const sent = uploadCommand.options.find((option) => option.long === '--processor');
+	if (sent) {
+		sent.description =
+			'the bundle to send, the same as the <bundle> argument (give one or the other): an already-built, ' +
+			'self-contained file exporting "createProcessor". It is checked for self-containment here, before ' +
+			'anything is sent, and the node names it by the sha256 of its bytes (ADR-0086)';
+	}
 	uploadCommand.action(async (bundle: string | undefined, options: Options) => {
 		await runUpload(bundle === undefined ? options : {...options, bundle});
 	});

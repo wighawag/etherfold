@@ -1,4 +1,4 @@
-import type {Abi, EventProcessor, ReceivingIndexer, StreamWriter} from '@etherfold/core';
+import {generationDigestOf, type Abi, type EventProcessor, type ReceivingIndexer, type StreamWriter} from '@etherfold/core';
 import type {FetcherHost, RunSummary} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
@@ -9,6 +9,7 @@ import type {StreamFetchers} from './fetchers.js';
 import {foldingStatusReport} from './folding.js';
 import {prepareIndexing, type IndexingDependencies} from './index.js';
 import type {Options} from './types.js';
+import {printMessage} from './printMessage.js';
 
 const logger = logs('etherfold');
 
@@ -355,6 +356,20 @@ async function startServing<ABI extends Abi, ProcessResultType>(
 		} else {
 			log(`etherfold ${command}: following the chain into ${destination.db}, answering on ${server.url}`);
 			if (command === 'node') log(`  upload: ${server.url}/${indexer}/admin/upload`);
+			// WHICH GENERATION this process came up answering reads with: on a restart that is
+			// the one it resumed from the registry, which nothing on the command line names.
+			const canonical = await prepared.container.canonical().catch(() => undefined);
+			if (canonical) log(`  serving generation ${generationDigestOf(canonical)} (processor ${canonical.processor})`);
+		}
+		// A `node` receives code ONLY over its admin credential, and the guard refuses
+		// everyone when `ADMIN_TOKEN` is unset (ADR-0057). Such a node can never be deployed
+		// to, so it is said on the first lines an operator reads, rather than at the first
+		// upload's 401. Read from the environment the Node adapter reads it from.
+		if (command === 'node' && !process.env.ADMIN_TOKEN) {
+			log(
+				`  WARNING: ADMIN_TOKEN is not set, so this node refuses every upload (401) and can never receive a ` +
+					`processor. Set ADMIN_TOKEN in its environment, and give the same value to \`etherfold upload\`.`,
+			);
 		}
 		log(`  status: ${server.url}/status`);
 		// WHERE THE READS ARE, named because the route segment is the one thing an app
@@ -440,7 +455,7 @@ async function serveUntilStopped(
 	deps: MainDependencies,
 ): Promise<void> {
 	const exit = deps.exit ?? ((code: number) => process.exit(code));
-	const error = deps.error ?? console.error;
+	const error = deps.error ?? printMessage;
 
 	let running: RunningIndexer | undefined;
 	try {
@@ -450,6 +465,7 @@ async function serveUntilStopped(
 		exit(0);
 	} catch (err) {
 		error(err);
+		logger.error('the command stopped', err);
 		// the loop may have ended on its own (a fatal), so the server is still
 		// listening and this is what stops it
 		await running?.close().catch(() => undefined);

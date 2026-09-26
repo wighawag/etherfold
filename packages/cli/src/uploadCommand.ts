@@ -211,8 +211,9 @@ export function describeUpload(answer: UploadAnswer): string[] {
 	if (answer.deployed) {
 		const headline =
 			answer.outcome === 'registered'
-				? `etherfold upload: REGISTERED. The node indexes this generation beside the one answering reads, and ` +
-					`its own promotion policy moves the pointer once it has caught up.`
+				? `etherfold upload: REGISTERED. The node indexes this generation: if another answers its reads it ` +
+					`catches up beside it and the node's promotion policy moves the pointer once it has, and if none ` +
+					`does yet (a first upload) it answers them as soon as it has folded.`
 				: `etherfold upload: UNCHANGED. The node already folds these bytes, so nothing was registered.`;
 		return [
 			headline,

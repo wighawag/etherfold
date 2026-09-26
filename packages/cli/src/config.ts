@@ -157,8 +157,7 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'the event processor, as a path to a SELF-CONTAINED BUNDLE exporting "createProcessor". A path is how ' +
 			'a deployment names it, and the file at that path is read and named by the sha256 of its own bytes -- so ' +
 			'an edited handler is a different generation with nobody having to remember to say so (ADR-0086). A path ' +
-			'naming an entry point that still imports something is REFUSED, naming the command that bundles it. ' +
-			'`node` takes NONE: it receives its code only by `etherfold upload` (ADR-0094)',
+			'naming an entry point that still imports something is REFUSED, naming the command that bundles it.',
 	},
 	source: {
 		flag: '-d, --deployments <folder>',
@@ -1036,9 +1035,12 @@ export async function refuseUnbundledProcessor(
 	if (options.substitutedArrival) return undefined;
 	const contents = await readProcessorPath(processorPath, options.cwd === undefined ? {} : {cwd: options.cwd});
 	if (contents.kind === 'bundle') return contents.bundle;
+	// `upload` takes it as its <bundle> argument as often as by -p, so it is named as
+	// what it is there rather than by a flag the caller may not have typed.
+	const named = command === 'upload' ? 'the bundle' : nameOf('processor');
 	if (contents.kind === 'unreadable') {
 		throw new Error(
-			`${nameOf('processor')} ${JSON.stringify(processorPath)} is not a file this process can read: ` +
+			`${named} ${JSON.stringify(processorPath)} is not a file this process can read: ` +
 				`${contents.why}. It names ONE self-contained bundle on disk, whose bytes are the generation's ` +
 				`identity (ADR-0086) -- not a package name, a directory, or a build that has not run yet. Build it, ` +
 				`and point \`etherfold ${command}\` at the output:\n\n  ` +
@@ -1046,7 +1048,7 @@ export async function refuseUnbundledProcessor(
 		);
 	}
 	throw new Error(
-		`${nameOf('processor')} ${JSON.stringify(processorPath)} names an ENTRY POINT rather than a bundle: it still ` +
+		`${named} ${JSON.stringify(processorPath)} names an ENTRY POINT rather than a bundle: it still ` +
 			`imports ${contents.unresolvedImports.map((specifier) => JSON.stringify(specifier)).join(', ')}, which ` +
 			`nothing resolves for it. A processor is ONE self-contained file, named by the sha256 of its bytes ` +
 			`(ADR-0086). Build one, and point \`etherfold ${command}\` at it:\n\n  ` +
