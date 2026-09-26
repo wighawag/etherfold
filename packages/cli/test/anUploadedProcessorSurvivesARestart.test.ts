@@ -1,3 +1,4 @@
+import {generationDigestOf} from '@etherfold/core';
 import {GENERATION_TABLE} from '@etherfold/server';
 import {processorArtifactIdentity} from '@etherfold/utils';
 import {createClient} from '@libsql/client';
@@ -8,11 +9,22 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {build, index, node, run, type RunningIndexer, type RunningReceiver} from '../src/index.js';
+import {declareEntities} from '@etherfold/state-store';
+import {
+	build,
+	canonicalGenerationIn,
+	heldGenerationsIn,
+	index,
+	node,
+	run,
+	type RunningIndexer,
+	type RunningReceiver,
+} from '../src/index.js';
 import type {StartGuardDependencies} from '../src/startGuard.js';
 import type {Options} from '../src/types.js';
 import {uploadMain} from '../src/uploadCommand.js';
 import {ALICE, BOB, CAROL, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN UPLOADED PROCESSOR SURVIVES A RESTART, including one still catching up
@@ -27,20 +39,21 @@ import {ALICE, BOB, CAROL, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from 
 //
 // The uploads used to go to a `run` started with nothing configured; since ADR-0094 that
 // is `node`, and the cases moved to it. The `run -p` starts below are now `run` over a
-// database a `node` wrote (ADR-0094's one database opened by both commands), under
-// today's rules for a configured start.
+// database a `node` wrote (ADR-0094's one database opened by both commands).
 //
 //  - an upload that is CANONICAL is instantiated from its stored bytes and goes on
 //    folding (ADR-0092, ADR-0093);
 //  - an upload that was still CATCHING UP (the `successor`) is instantiated too,
 //    catches up, and is promoted under `on-catch-up` with nobody asking; the
 //    incumbent's fold then stops (ADR-0092's amendment of 2026-09-26);
-//  - a `run` started with a `--processor` over that database is an arrival like any
-//    other, and a START may not SILENTLY replace a different pending successor:
-//    interactive asks, non-interactive is refused unless `--override` (ADR-0084's and
-//    ADR-0093's amendments). That holds for EVERY start with a configured processor --
-//    `run`, a re-run `build` and an `index` receiver -- because all three open the same
-//    container over the same slots;
+//  - a `run` started with a `--processor` over that database folds toward EXACTLY what
+//    it names (ADR-0094): a different processor registers as the successor, the pending
+//    successor itself changes nothing, and the CANONICAL processor DISCARDS a different
+//    pending successor. A START may not SILENTLY delete a pending successor, by replacing
+//    or by discarding it: interactive asks, non-interactive is refused unless
+//    `--override` (ADR-0084's and ADR-0093's amendments). That holds for EVERY start
+//    with a configured processor -- `run`, a re-run `build` and an `index` receiver --
+//    because all three open the same container over the same slots;
 //  - an upload (on `node`) and a re-read (on `run`) still replace a pending successor
 //    without a question.
 //
@@ -55,6 +68,11 @@ const BUNDLE = join(FIXTURES, 'nfts.bundle.js');
 const EDITED_BUNDLE = join(FIXTURES, 'nfts-edited.bundle.js');
 
 const INDEXER = 'nfts';
+
+/** The entity both fixture bundles write, as a reader of the artifact has to name it. */
+const NFT = declareEntities([{name: 'nft', id: ['tokenID'], fields: {owner: 'text'}}]);
+/** The one token the transfers below move, padded exactly as the handlers pad it. */
+const TOKEN = {tokenID: '1'.padStart(78, '0')};
 const ADMIN_TOKEN = 'the-operators-own-secret';
 
 const LOGS = [
@@ -286,6 +304,41 @@ async function aNodeStoppedMidUpgrade(): Promise<{db: RemoteSQL; incumbent: stri
 	return {db, incumbent, successor};
 }
 
+/**
+ * A `node` whose first upload is canonical and whose SECOND upload CAUGHT UP beside it under `manual` and was
+ * not promoted: `successor` names it, with its bytes stored and its own state tables written, so its deletion is
+ * something the rows can show.
+ */
+async function aNodeWithACaughtUpPendingSuccessor(): Promise<{
+	db: RemoteSQL;
+	incumbent: string;
+	successor: {digest: string; id: {stream: string; processor: string}};
+}> {
+	const db = oneDatabase();
+	const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+	expect((await uploadWith(first, BUNDLE)).code).toBe(0);
+	const incumbent = (await digestOf(first, BUNDLE)) as string;
+	await waitFor('the first upload folded to the tip', async () => (await positionOf(first, incumbent)) === TIP);
+	expect((await uploadWith(first, EDITED_BUNDLE)).code).toBe(0);
+	const digest = (await digestOf(first, EDITED_BUNDLE)) as string;
+	await waitFor('the second upload caught up', async () => (await positionOf(first, digest)) === TIP);
+	const listing = await listingOf(first);
+	expect(listing.slots?.canonical?.digest).toBe(incumbent);
+	expect(listing.slots?.successor?.digest).toBe(digest);
+	const id = await identityOf(first, digest);
+	await stop();
+	return {db, incumbent, successor: {digest, id}};
+}
+
+/** The tables a generation's own namespace still has (ADR-0053: its state IS its namespace). */
+async function namespaceTables(db: RemoteSQL, id: {stream: string; processor: string}): Promise<string[]> {
+	const namespace = generationDigestOf(id);
+	const rows = await db
+		.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+		.all<{name: string}>();
+	return rows.results.map((row) => row.name).filter((table) => table.includes(namespace));
+}
+
 // ---------------------------------------------------------------------------------------------------
 
 describe('an upload that is CANONICAL survives a restart of the `node`', () => {
@@ -361,7 +414,7 @@ describe('an upload still CATCHING UP survives a restart, and the upgrade finish
 	});
 });
 
-describe('a `run` with `--processor` over a database a `node` wrote is an arrival like any other', () => {
+describe('a `run` with `--processor` over a database a `node` wrote folds toward exactly what it names', () => {
 	it('registers a DIFFERENT processor as the successor, where nothing is pending', async () => {
 		const db = oneDatabase();
 		const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
@@ -380,30 +433,26 @@ describe('a `run` with `--processor` over a database a `node` wrote is an arriva
 		expect(listing.slots?.successor?.digest).toBe(await digestOf(restarted, EDITED_BUNDLE));
 	});
 
-	it('changes NOTHING when it names the canonical processor: the pending upload stays, and folds', async () => {
-		const {db, incumbent, successor} = await aNodeStoppedMidUpgrade();
+	it('changes nothing when it names the canonical processor with nothing pending, and asks nothing', async () => {
+		const db = oneDatabase();
+		const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
+		expect((await uploadWith(first, BUNDLE)).code).toBe(0);
+		const uploaded = (await digestOf(first, BUNDLE)) as string;
+		await stop();
 		const asked: string[] = [];
 
 		const restarted = await aRunOver(
 			db,
 			fakeChain().serve(LOGS, TIP),
-			{...NOTHING, processor: BUNDLE, promotion: 'manual'},
-			{
-				startGuard: {
-					interactive: true,
-					confirm: async (question) => {
-						asked.push(question);
-						return false;
-					},
-				},
-			},
+			{...NOTHING, processor: BUNDLE},
+			{startGuard: {interactive: true, confirm: async (question) => (asked.push(question), false)}},
 		);
 
 		expect(asked).toEqual([]);
 		const listing = await listingOf(restarted);
-		expect(listing.slots?.canonical?.digest).toBe(incumbent);
-		expect(listing.slots?.successor?.digest).toBe(successor);
-		expect(foldedHere(restarted)).toContain((await identityOf(restarted, successor)).processor);
+		expect(listing.slots?.canonical?.digest).toBe(uploaded);
+		expect(listing.slots?.successor).toBeUndefined();
+		expect(listing.generations.map((entry) => entry.digest)).toEqual([uploaded]);
 	});
 
 	it('changes nothing when it names the pending successor itself, and asks nothing', async () => {
@@ -416,6 +465,96 @@ describe('a `run` with `--processor` over a database a `node` wrote is an arriva
 		});
 
 		expect((await listingOf(restarted)).slots?.successor?.digest).toBe(successor);
+	});
+});
+
+describe('a `run` naming the CANONICAL processor DISCARDS a different pending successor that arrived by upload (ADR-0094)', () => {
+	it('is REFUSED by name when nobody can be asked, with nothing deleted', async () => {
+		const {db, incumbent, successor} = await aNodeWithACaughtUpPendingSuccessor();
+
+		await expect(aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, processor: BUNDLE})).rejects.toThrow(
+			new RegExp(
+				`CANONICAL[\\s\\S]*DISCARD[\\s\\S]*${successor.digest}[\\s\\S]*REFUSED[\\s\\S]*--override to let this start discard it`,
+			),
+		);
+		running = undefined;
+
+		// the registry is exactly as it was: the upload is still pending, state and bytes and all
+		expect(await namespaceTables(db, successor.id)).not.toEqual([]);
+		const after = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		const listing = await listingOf(after);
+		expect(listing.slots?.canonical?.digest).toBe(incumbent);
+		expect(listing.slots?.successor?.digest).toBe(successor.digest);
+		expect(listing.generations.map((entry) => entry.digest).sort()).toEqual([incumbent, successor.digest].sort());
+		expect(await bundleStoredFor(db, successor.id.processor)).toBe(true);
+	});
+
+	it('discards it -- row, state and bytes -- under `--override`, never builds it, and the canonical generation keeps folding', async () => {
+		const {db, incumbent, successor} = await aNodeWithACaughtUpPendingSuccessor();
+		expect(await namespaceTables(db, successor.id)).not.toEqual([]);
+
+		// `on-catch-up`, the default: the caught-up upload WOULD have been promoted, had it been left pending
+		const restarted = await aRunOver(db, fakeChain().serve(LATER, LATER_TIP), {
+			...NOTHING,
+			processor: BUNDLE,
+			override: true,
+		});
+
+		const listing = await listingOf(restarted);
+		expect(listing.slots?.canonical?.digest).toBe(incumbent);
+		expect(listing.slots?.successor).toBeUndefined();
+		expect(listing.generations.map((entry) => entry.digest)).toEqual([incumbent]);
+		expect(await bundleStoredFor(db, successor.id.processor)).toBe(false);
+		expect(await namespaceTables(db, successor.id)).toEqual([]);
+		// the discarded upload was never built into a fold: it went before `foldTheSuccessor`
+		expect(foldedHere(restarted)).toEqual([processorArtifactIdentity(await bytesOf(BUNDLE))]);
+		await waitFor(
+			'the canonical generation folded on',
+			async () => (await positionOf(restarted, incumbent)) === LATER_TIP,
+		);
+		expect((await listingOf(restarted)).slots?.canonical?.digest).toBe(incumbent);
+	});
+
+	it('ASKS when it can, naming both generations, and a no leaves everything as it was', async () => {
+		const {db, incumbent, successor} = await aNodeWithACaughtUpPendingSuccessor();
+		const asked: string[] = [];
+
+		await expect(
+			aRunOver(
+				db,
+				fakeChain().serve(LOGS, TIP),
+				{...NOTHING, processor: BUNDLE},
+				{startGuard: {interactive: true, confirm: async (question) => (asked.push(question), false)}},
+			),
+		).rejects.toThrow(/Declined/);
+		running = undefined;
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toContain(successor.digest);
+		expect(asked[0]).toContain(incumbent);
+		expect(asked[0]).toMatch(/DISCARD[\s\S]*Discard it\? \[y\/N\] $/);
+		expect(asked[0]).not.toMatch(/REPLACES/);
+
+		const after = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		expect((await listingOf(after)).slots?.successor?.digest).toBe(successor.digest);
+		expect(await bundleStoredFor(db, successor.id.processor)).toBe(true);
+	});
+
+	it('and a yes discards it', async () => {
+		const {db, incumbent, successor} = await aNodeWithACaughtUpPendingSuccessor();
+
+		const restarted = await aRunOver(
+			db,
+			fakeChain().serve(LOGS, TIP),
+			{...NOTHING, processor: BUNDLE},
+			{startGuard: {interactive: true, confirm: async () => true}},
+		);
+
+		const listing = await listingOf(restarted);
+		expect(listing.slots?.canonical?.digest).toBe(incumbent);
+		expect(listing.slots?.successor).toBeUndefined();
+		expect(listing.generations.map((entry) => entry.digest)).toEqual([incumbent]);
+		expect(await bundleStoredFor(db, successor.id.processor)).toBe(false);
 	});
 });
 
@@ -576,7 +715,7 @@ describe('the deliberate arrivals on a RUNNING node still replace a pending succ
 	});
 });
 
-describe('a re-run `build` and an `index` receiver are STARTS too, guarded the same way', () => {
+describe('a re-run `build` and an `index` receiver are STARTS too, guarded the same way, and discard the same way', () => {
 	/** `etherfold build` over `db`: a one-shot to the tip, never the terminal. */
 	async function aBuildOver(db: RemoteSQL, processor: string, extra: Options = {}): Promise<void> {
 		await build(
@@ -657,5 +796,49 @@ describe('a re-run `build` and an `index` receiver are STARTS too, guarded the s
 			expect(await storedFor(EDITED_BUNDLE)).toBe(false);
 			expect(await storedFor(third)).toBe(true);
 		});
+
+		it(`\`${command}\` naming the CANONICAL processor is REFUSED by name when nobody can be asked, with nothing deleted`, async () => {
+			const {db, incumbent, successor} = await aNodeWithACaughtUpPendingSuccessor();
+
+			await expect(start(db, BUNDLE)).rejects.toThrow(
+				new RegExp(`CANONICAL[\\s\\S]*DISCARD[\\s\\S]*${successor.digest}[\\s\\S]*REFUSED[\\s\\S]*--override`),
+			);
+			receiving = undefined;
+
+			expect(await namespaceTables(db, successor.id)).not.toEqual([]);
+			const {listing, storedFor} = await whatTheRegistryHolds(db);
+			expect(listing.slots?.canonical?.digest).toBe(incumbent);
+			expect(listing.slots?.successor?.digest).toBe(successor.digest);
+			expect(await storedFor(EDITED_BUNDLE)).toBe(true);
+		});
+
+		it(`\`${command}\` naming the CANONICAL processor DISCARDS it -- row, state and bytes -- under \`--override\``, async () => {
+			const {db, incumbent, successor} = await aNodeWithACaughtUpPendingSuccessor();
+
+			await start(db, BUNDLE, {override: true});
+
+			expect(await namespaceTables(db, successor.id)).toEqual([]);
+			const {listing, storedFor} = await whatTheRegistryHolds(db);
+			expect(listing.slots?.canonical?.digest).toBe(incumbent);
+			expect(listing.slots?.successor).toBeUndefined();
+			expect(listing.generations.map((entry) => entry.digest)).toEqual([incumbent]);
+			expect(await storedFor(EDITED_BUNDLE)).toBe(false);
+		});
 	}
+
+	it('a re-run `build -p v1 --override` over a database with a pending, caught-up `v2` publishes an artifact serving `v1`', async () => {
+		const {db, successor} = await aNodeWithACaughtUpPendingSuccessor();
+		const v1 = processorArtifactIdentity(await bytesOf(BUNDLE));
+
+		await aBuildOver(db, BUNDLE, {override: true});
+
+		// read back after the process exited, through the pointer, as a reader of the artifact resolves it
+		expect((await canonicalGenerationIn(db, {indexer: INDEXER}))?.processor).toBe(v1);
+		expect((await heldGenerationsIn(db))[0]?.generations.map((record) => record.processor)).toEqual([v1]);
+		expect(await namespaceTables(db, successor.id)).toEqual([]);
+		// `nfts.bundle.js` credits the RECIPIENT of the last transfer (BOB); the discarded
+		// `nfts-edited.bundle.js` would have credited its SENDER (ALICE)
+		const store = await canonicalStoreIn(db, NFT, {indexer: INDEXER});
+		expect((await store.getCurrent<{owner: string}>('nft', TOKEN))?.owner).toBe(BOB.toLowerCase());
+	});
 });

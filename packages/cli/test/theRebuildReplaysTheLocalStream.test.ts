@@ -149,7 +149,7 @@ function specFor(db: RemoteSQL, fold: {declared: EntityProcessor<typeof abi>; id
  */
 async function openIndexer(
 	db: RemoteSQL,
-	options: {maxEmissionsPerChunk?: number} = {},
+	options: {maxEmissionsPerChunk?: number; configured?: Parameters<typeof specFor>[1]} = {},
 ): Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>> {
 	// BOTH state seams, under the namespace convention `openFolding` uses: the DROP
 	// of a generation's namespace, and the READ of how far the fold in it got -- which
@@ -166,7 +166,7 @@ async function openIndexer(
 		// follower re-folds, and it is why the upgrade costs a local scan.
 		replay: storedEmissionReplaySource(db, INDEXER),
 		...(options.maxEmissionsPerChunk === undefined ? {} : {maxEmissionsPerChunk: options.maxEmissionsPerChunk}),
-		generation: specFor(db, V1),
+		generation: specFor(db, options.configured ?? V1),
 	}) as Promise<ReceivingIndexer<typeof abi, unknown, WritableStateStore>>;
 }
 
@@ -438,8 +438,10 @@ describe('resumability, through a genuinely FRESH container between every chunk'
 		let chunks = 1;
 		let done = false;
 		while (!done) {
-			const revived = await openIndexer(db);
-			await revived.add(specFor(db, V2));
+			// revived CONFIGURED WITH THE PENDING SUCCESSOR, which changes nothing and so
+			// resumes it. Configured with the canonical `V1`, the start would DISCARD the
+			// pending `V2` (ADR-0094's third consequence), and there would be nothing to resume.
+			const revived = await openIndexer(db, {configured: V2});
 			const report = reportFor(await revived.rebuildMore({maxEmissions: 1}), V2.identity);
 			if (!report) throw new Error('no follower to advance');
 			chunks++;

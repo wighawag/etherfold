@@ -6,6 +6,8 @@ status: superseded in part by ADR-0094
 
 > **SUPERSEDED IN PART 2026-09-26 by ADR-0094:** the waiting mode moves from `run` to a command of its own, `node`, and `run` no longer receives uploads. What a node with nothing configured DOES is unchanged; WHICH command it is changes. The amendments below describe the code as it stood until ADR-0094 landed; the last amendment says what moved.
 
+> **AMENDED 2026-09-26 (ADR-0094, `a-configured-start-folds-toward-exactly-its-configuration`):** a configured processor naming the canonical generation no longer "changes nothing"; see the last amendment at the end.
+>
 > **AMENDED 2026-09-26 (`an-uploaded-processor-survives-a-restart`):** how a CONFIGURED processor relates to what was uploaded is now decided; see the amendment at the end.
 
 > **AMENDED 2026-09-26 (`a-successor-on-a-new-stream-is-fetched-by-its-own-writer`):** a `run` no longer holds ONE fetcher over ONE source set once: every stream a held fold reads is fetched, and what `fetchedSource` names follows the pointer; see the second amendment at the end.
@@ -74,3 +76,9 @@ ADR-0094's first change has landed, and it moves this ADR's subject without chan
 - **A `node` wires no re-read**, so a re-read on it answers what a host without that seam answers (`501 reconfigure-not-held`) rather than the `failed` this mode used to give.
 - **The first amendment's "configured processor is an arrival" is now about `run` over a database a `node` wrote** (ADR-0094's one database opened by both commands), under the configured-start rules as they stand. What a configured start naming the canonical generation does while another is pending is ADR-0094's next change, not this one.
 - **"Why `run` and nothing else" reads "why `node` and `run`'s assembly"**: `node` holds both halves in one process, which is the whole reason it can learn its source from an upload; the split `index` still does not get the mode.
+
+## Amendment, 2026-09-26 (ADR-0094, `a-configured-start-folds-toward-exactly-its-configuration`): a configured processor naming the canonical generation discards what is pending
+
+The first amendment above says a configured `--processor` naming the canonical generation "changes nothing: a node restarted with the processor it was first started with keeps folding whatever was uploaded to it since". No longer. Uploads now go to `etherfold node`, and a configured start (`run`, `build`, `index`) folds toward exactly what its configuration names (ADR-0094's third consequence). So a configured start naming the canonical generation while a DIFFERENT generation is pending in `successor`, an upload to a `node` over the same database included, DISCARDS it (row, state and stored bundle), behind the same start guard as a replacement: asked at a terminal, refused elsewhere unless `--override` (ADR-0084's second amendment of 2026-09-26). To keep what was uploaded, start `node` over the database, or configure the pending successor's own processor, which still changes nothing.
+
+Story 10's exception in that amendment therefore widens: an upload still catching up does not survive a configured restart that names a DIFFERENT processor OR the canonical one, where the operator confirmed by answering yes or by passing `--override`.

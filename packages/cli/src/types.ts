@@ -70,8 +70,8 @@ export type Options = {
 	dropOnPromotion?: boolean;
 	/**
 	 * `--override`: a plain boolean like `--drop-on-promotion`. Lets a START with a
-	 * configured processor (`run`, `build`, `index`) replace a DIFFERENT pending successor
-	 * without asking (ADR-0084's amendment of 2026-09-26).
+	 * configured processor (`run`, `build`, `index`) replace or discard a DIFFERENT pending
+	 * successor without asking (ADR-0084's amendments of 2026-09-26, ADR-0094).
 	 */
 	override?: boolean;
 	/**
@@ -235,7 +235,7 @@ export type BuildConfig<ABI extends Abi = Abi> = {
 	readonly destination: StoreTarget;
 	/** The name the ARTIFACT's stored stream is keyed on. See `RunConfig.indexer`. */
 	readonly indexer: string;
-	/** Whether this START may replace a DIFFERENT pending successor without asking. See `RunConfig.override`. */
+	/** Whether this START may replace or discard a DIFFERENT pending successor without asking. See `RunConfig.override`. */
 	readonly override: boolean;
 };
 
@@ -267,7 +267,7 @@ export type IndexConfig<ABI extends Abi = Abi> = {
 	readonly pruneIntervalSeconds: number | undefined;
 	readonly serving: Serving;
 	readonly wire: ReceivingWire;
-	/** Whether this START may replace a DIFFERENT pending successor without asking. See `RunConfig.override`. */
+	/** Whether this START may replace or discard a DIFFERENT pending successor without asking. See `RunConfig.override`. */
 	readonly override: boolean;
 };
 

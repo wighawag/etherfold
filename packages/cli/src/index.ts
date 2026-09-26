@@ -141,7 +141,7 @@ export type IndexingDependencies = {
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
 	/**
-	 * WHO A `run` OR `build` START ASKS before it replaces a different pending successor: whether
+	 * WHO A `run` OR `build` START ASKS before it replaces or discards a different pending successor: whether
 	 * anybody can be asked, and how (`startGuardFor`). Default to the terminal. `node` never asks:
 	 * it starts with no configured processor, so its starts replace nothing (ADR-0094).
 	 */

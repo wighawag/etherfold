@@ -446,23 +446,27 @@ describe('the slot is DURABLE, so a RESTART replaces rather than accumulates', (
 		expect(await storedBundleIdentities(db)).toEqual([first.generation.processor, V5]);
 	});
 
-	it('restarting on the CANONICAL generation registers nothing and displaces nothing', async () => {
+	it('restarting on the CANONICAL generation registers nothing, and DISCARDS a different pending successor (ADR-0094)', async () => {
 		const db = oneDatabase();
 		const first = await aDeploymentThatHasFolded(db);
 		const pending = await first.add(specFor(db, V2));
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor, pending.record.processor]);
 
 		// the ordinary restart of an unchanged deployment: its fold is what `canonical`
-		// already names, so it is not a successor to anything and the pending one it
-		// finds is not its to replace
+		// already names, so it registers nothing -- and a configured start folds toward
+		// EXACTLY its configuration, so the pending successor it finds is discarded rather
+		// than left to be promoted over it (this host passes no start guard, so nobody is
+		// asked; the CLI's commands ask)
 		const restarted = await openIndexer(db, V1);
 
 		expect(restarted.generation.processor).toBe(first.generation.processor);
-		expect(await registeredProcessors(db)).toEqual([first.generation.processor, pending.record.processor]);
+		expect(await registeredProcessors(db)).toEqual([first.generation.processor]);
 		expect(await slotProcessors(db)).toEqual({
 			canonical: first.generation.processor,
-			successor: pending.record.processor,
+			successor: null,
 			predecessor: null,
 		});
+		expect(await storedBundleIdentities(db)).toEqual([first.generation.processor]);
 	});
 });
 
