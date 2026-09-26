@@ -241,6 +241,12 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 							// at once -- so a changed processor reaches a RUNNING deployment instead of
 							// waiting for a restart, and nothing stops answering while it does.
 							reconfigure: () => prepared.reconfigure(),
+							// ...and the UPLOAD, which RECEIVES a bundle's bytes rather than re-reading the
+							// disk, and registers what they name beside the live fold in the same way
+							// (`upload.ts`, ADR-0085). Served where the re-read is, for the reason the
+							// re-read is: this shape holds the container, the database and the fetcher at
+							// once. A split deployment's `index` does not serve it (ADR-0093).
+							upload: (bundle) => prepared.upload(bundle),
 							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
 							// with the token it is publishing under. A combined process APPLIES the
 							// blocks, so it is a shape that can tell a reader the state moved; the two

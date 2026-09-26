@@ -398,8 +398,9 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * mechanism for production; an endpoint is called by a dev watcher, a deploy hook
 			 * or a CI step equally. And it is RE-READ rather than RECEIVE because a processor
 			 * is CODE and cannot cross HTTP: the watcher owns WHEN, the process owns WHAT. So
-			 * there is no body, and a body would be a format for shipping code that nobody
-			 * should invent.
+			 * there is no body. Shipping the code itself is a DIFFERENT arrival with its own
+			 * route below (`upload`), which carries a bundle's BYTES rather than a module
+			 * (ADR-0085), and this one stays a trigger.
 			 *
 			 * It sits under the SAME `/{indexer}/admin/` segment as the pointer move and
 			 * therefore under the same `ADMIN_TOKEN` guard: handing a remote caller the
@@ -536,7 +537,243 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 					generation: reported(report.generation),
 				} as const);
 			})
+			/**
+			 * THE UPLOAD: receive a processor bundle's BYTES and register the generation they
+			 * name beside the incumbent (ADR-0085's amendment of 2026-09-22, and its decisions
+			 * relocated from the upload spec).
+			 *
+			 * The Graph's deploy shape: bytes go to a running node, and the node indexes them
+			 * beside the live version before switching. The second half was already built --
+			 * a new generation registers as `successor`, catches up, and the promotion policy
+			 * moves the pointer -- so this route is the first half and nothing else.
+			 *
+			 * ## Where it lives, and on which credential
+			 *
+			 * Under `/{indexer}/admin/`, beside the re-read and the pointer move, so behind the
+			 * SAME `ADMIN_TOKEN` guard and its `401` (ADR-0057). A surface that registers a new
+			 * fold is at least as consequential as one that moves the pointer, and accepting
+			 * bytes makes the admin credential explicit remote-code-execution authority
+			 * (ADR-0085): one credential, one authorisation story.
+			 *
+			 * ## What this route decides, and what it leaves to the host
+			 *
+			 * The TRANSPORT's own refusals, all made BEFORE the host is reached so that none
+			 * of them can have registered anything:
+			 *
+			 * - `501 upload-not-held` where the host cannot turn bytes into a fold (a read tier,
+			 *   a receiving `index`, a host with no registry), decided before the body is read;
+			 * - `415 upload-wrong-content-type` unless the body is declared `text/javascript`
+			 *   (`UPLOAD_CONTENT_TYPE`), because a bundle is one ES module and that is its
+			 *   registered type (RFC 9239); parameters such as `charset` are ignored, since the
+			 *   identity is over the OCTETS and nothing here decodes them;
+			 * - `413 upload-too-large` for a body over `MAX_UPLOAD_BYTES`, refused from a
+			 *   declared `Content-Length` before a byte is read and otherwise the moment the
+			 *   stream crosses the bound, so an unbounded body on an authenticated route is
+			 *   never buffered whole.
+			 *
+			 * Everything else is the host's (`IndexerRegistryEntry.upload`): this package names
+			 * no runtime and cannot evaluate a module. The host hashes the bytes for the
+			 * identity (ADR-0086) -- nothing in the request can name one -- refuses a bundle
+			 * that is not self-contained, throws on evaluation, carries no processor or does
+			 * not match a source the operator configured, and only then registers.
+			 *
+			 * ## THE ANSWERS, which are the re-read's, with the arrival named
+			 *
+			 * The shared three-outcome report (`ReconfigureReport`) in the same shapes and on
+			 * the same status codes as `reconfigure` above, with `arrival: 'upload'`: `200`
+			 * `registered` naming the generation, `200` `unchanged` when the bytes name a
+			 * generation this deployment already folds, and `409 upload-failed` with the reason
+			 * and the deployment exactly as it was. `409` for the reason the re-read gives it
+			 * and so that a sender branches on ONE mapping from outcome to status whatever the
+			 * arrival. A host that THREW is reported as the same failure. The two transport
+			 * refusals above carry `arrival` and `outcome: 'failed'` too, since they are
+			 * refusals of this upload and a sender reads them as such.
+			 */
+			.post('/:indexer/admin/upload', async (c) => {
+				const resolved = resolveIndexer(options, c as never, 'admin');
+				if (!resolved.ok) return resolved.response;
+				const {entry, name} = resolved;
+
+				const upload = entry.upload;
+				if (!upload) {
+					logger.error(`admin: ${JSON.stringify(name)} cannot receive a processor, so an upload was refused`);
+					return c.json(
+						{
+							success: false,
+							error: 'upload-not-held',
+							indexer: name,
+							message:
+								`this named indexer cannot receive a processor bundle: it was registered by a host that cannot turn ` +
+								`bytes into a fold -- a read tier answers over a database written elsewhere, and a receiving host ` +
+								`is handed its fold rather than building one. A deployment that serves this registers an upload ` +
+								`alongside what it holds (\`etherfold run\`).`,
+						} as const,
+						501,
+					);
+				}
+
+				const declaredType = c.req.header('Content-Type');
+				if (!isUploadContentType(declaredType)) {
+					logger.error(
+						`admin: ${JSON.stringify(name)} refused an upload declared as ${JSON.stringify(declaredType ?? null)}`,
+					);
+					return c.json(
+						{
+							success: false,
+							error: 'upload-wrong-content-type',
+							indexer: name,
+							arrival: 'upload',
+							outcome: 'failed',
+							message:
+								`an upload is ONE self-contained ES module, sent as its raw bytes with Content-Type: ` +
+								`${UPLOAD_CONTENT_TYPE}; this request declared ${declaredType ? JSON.stringify(declaredType) : 'none'}. ` +
+								`Nothing was read or registered.`,
+						} as const,
+						415,
+					);
+				}
+
+				const body = await boundedBody(c.req.raw, MAX_UPLOAD_BYTES);
+				if (body === 'too-large') {
+					logger.error(`admin: ${JSON.stringify(name)} refused an upload over ${MAX_UPLOAD_BYTES} bytes`);
+					return c.json(
+						{
+							success: false,
+							error: 'upload-too-large',
+							indexer: name,
+							arrival: 'upload',
+							outcome: 'failed',
+							limit: MAX_UPLOAD_BYTES,
+							message:
+								`an uploaded bundle may be at most ${MAX_UPLOAD_BYTES} bytes, and this one is larger. The bound is ` +
+								`what keeps an authenticated route from being a way to exhaust this process (ADR-0085). Nothing was ` +
+								`registered.`,
+						} as const,
+						413,
+					);
+				}
+
+				let report: ReconfigureReport;
+				try {
+					report = await upload.call(entry, body);
+				} catch (err) {
+					// the same answer a reported failure gets, for the reason the re-read gives: the
+					// caller's situation is identical, and this route is the UPLOAD's, so the log
+					// still names the arrival
+					report = {arrival: 'upload', outcome: 'failed', message: err instanceof Error ? err.message : String(err)};
+				}
+
+				if (report.outcome === 'failed') {
+					logger.error(
+						`admin: ${JSON.stringify(name)} refused an uploaded processor (${report.message}). Nothing was ` +
+							`registered and the deployment is as it was.`,
+					);
+					return c.json(
+						{
+							success: false,
+							error: 'upload-failed',
+							indexer: name,
+							arrival: report.arrival,
+							outcome: 'failed',
+							message: report.message,
+						} as const,
+						409,
+					);
+				}
+
+				if (report.outcome === 'unchanged') {
+					logger.info(
+						`admin: ${JSON.stringify(name)} received an upload naming {stream: ${report.generation.stream}, ` +
+							`processor: ${report.generation.processor}}, which it already folds, so NOTHING was registered`,
+					);
+					return c.json({
+						success: true,
+						indexer: name,
+						arrival: report.arrival,
+						outcome: 'unchanged',
+						generation: reported(report.generation),
+						message: report.message,
+					} as const);
+				}
+
+				logger.info(
+					`admin: ${JSON.stringify(name)} received an upload and REGISTERED {stream: ${report.generation.stream}, ` +
+						`processor: ${report.generation.processor}} beside what answers reads`,
+				);
+				return c.json({
+					success: true,
+					indexer: name,
+					arrival: report.arrival,
+					outcome: 'registered',
+					generation: reported(report.generation),
+				} as const);
+			})
 	);
+}
+
+/**
+ * THE LARGEST PROCESSOR BUNDLE `POST /{indexer}/admin/upload` accepts: 16 MiB.
+ *
+ * Stated and enforced because this is the first endpoint whose payload size is not
+ * a function of chain data (ADR-0085), and an unbounded body on an authenticated
+ * route is still a way to exhaust a process. The number is generous on purpose: a
+ * minified processor carrying viem and its ABIs is well under a few MiB, and the
+ * loader wraps the bytes in a base64 `data:` URL (a third larger) before evaluating
+ * them, so the bound is on what one upload may cost this process at most rather
+ * than a size an author should aim for. A constant rather than an input: no
+ * deployment has asked for another value, and an input is a row in ADR-0048's
+ * table that nothing needs yet.
+ */
+export const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
+
+/**
+ * THE CONTENT TYPE an upload is declared as: `text/javascript`, the one registered
+ * type for an ES module (RFC 9239, which obsoletes `application/javascript`).
+ *
+ * Matched on the media type alone, case-insensitively, with parameters ignored: the
+ * identity is the hash of the OCTETS (ADR-0086) and nothing here decodes them, so a
+ * `charset` a client adds changes nothing about what is registered.
+ */
+export const UPLOAD_CONTENT_TYPE = 'text/javascript';
+
+/** Whether a declared `Content-Type` is the upload's, parameters aside. */
+function isUploadContentType(declared: string | undefined): boolean {
+	if (!declared) return false;
+	return declared.split(';')[0]?.trim().toLowerCase() === UPLOAD_CONTENT_TYPE;
+}
+
+/**
+ * READ A REQUEST BODY WITHIN A BOUND, or say it is over it without buffering it.
+ *
+ * A declared `Content-Length` over the bound is refused before a byte is read; a
+ * body with no declared length (chunked) is read chunk by chunk and abandoned the
+ * moment it crosses the bound. Written over the web `Request` rather than a
+ * runtime's stream, because this package names no runtime.
+ */
+async function boundedBody(request: Request, limit: number): Promise<Uint8Array | 'too-large'> {
+	const declared = request.headers.get('Content-Length');
+	if (declared !== null && Number(declared) > limit) return 'too-large';
+	if (!request.body) return new Uint8Array(0);
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const {done, value} = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > limit) {
+			await reader.cancel().catch(() => undefined);
+			return 'too-large';
+		}
+		chunks.push(value);
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return bytes;
 }
 
 /** A generation as this surface reports one: the two fields that KEY it, and the digest it is ADVERTISED by. */

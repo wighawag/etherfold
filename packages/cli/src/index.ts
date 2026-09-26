@@ -34,7 +34,8 @@ import {
 	requireArrivedBundle,
 	streamConfigFor,
 } from './folding.js';
-import {reconfigurerFor} from './reconfigure.js';
+import {arrivalQueue, reconfigurerFor} from './reconfigure.js';
+import {uploaderFor} from './upload.js';
 import type {BuildConfig, ConfigFor, Options, RunConfig} from './types.js';
 
 export * from './config.js';
@@ -51,7 +52,8 @@ export {
 	type FoldParts,
 	type FoldingAssembly,
 } from './folding.js';
-export {reconfigurerFor, type ReconfigureContext} from './reconfigure.js';
+export {arrivalQueue, reconfigurerFor, type ArrivalQueue, type ReconfigureContext} from './reconfigure.js';
+export {uploaderFor, type ConfiguredSource, type UploadContext} from './upload.js';
 export {canonicalGenerationIn, canonicalStateNamespaceIn, heldGenerationsIn, type ReadTierOptions} from './readTier.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
 export {
@@ -208,6 +210,17 @@ export type PreparedIndexing<
 	 * already draw.
 	 */
 	reconfigure(): Promise<ReconfigureReport>;
+	/**
+	 * RECEIVE a processor bundle's BYTES and register the generation they name, beside
+	 * the incumbent -- what `POST /{indexer}/admin/upload` does on this process
+	 * (`upload.ts`).
+	 *
+	 * Built here for the reason `reconfigure` is: it registers into the same container,
+	 * through the same fold assembly, over the same database, and it waits in the SAME
+	 * line as the re-read so two arrivals never decide against one registry at once.
+	 * `run` is the shape that exposes it; `build` has no HTTP surface to receive on.
+	 */
+	upload(bundle: Uint8Array): Promise<ReconfigureReport>;
 	/**
 	 * Drive the assembled pipeline, and return what the run did. Throws on a
 	 * `fatal` report.
@@ -398,6 +411,11 @@ export async function prepareIndexing<
 		},
 	);
 
+	// ONE LINE for every arrival this process answers -- the re-read and the upload --
+	// so no two of them decide "is this identity already held" against one registry at
+	// the same time (`arrivalQueue`, `reconfigure.ts`).
+	const arrivals = arrivalQueue();
+
 	return {
 		// the switch inside `resolveCommandConfig` produced exactly the arm named by
 		// `command`, which the compiler cannot see through a generic parameter
@@ -410,20 +428,38 @@ export async function prepareIndexing<
 		store,
 		stateOf,
 		db,
-		reconfigure: reconfigurerFor<ABI, ProcessResultType>({
-			options,
-			env,
-			provider,
-			db,
-			dbUrl: resolved.destination.db,
-			indexer: resolved.indexer,
-			container,
-			...(deps.importModule ? {importModule: deps.importModule} : {}),
-			// the SAME pair, so a re-read resolves the identity this process came up with
-			// rather than a second answer that would register a spurious successor on every
-			// call (`reconfigure.ts`)
-			...(deps.processorBundle === undefined ? {} : {processorBundle: deps.processorBundle}),
-		}),
+		reconfigure: reconfigurerFor<ABI, ProcessResultType>(
+			{
+				options,
+				env,
+				provider,
+				db,
+				dbUrl: resolved.destination.db,
+				indexer: resolved.indexer,
+				container,
+				...(deps.importModule ? {importModule: deps.importModule} : {}),
+				// the SAME pair, so a re-read resolves the identity this process came up with
+				// rather than a second answer that would register a spurious successor on every
+				// call (`reconfigure.ts`)
+				...(deps.processorBundle === undefined ? {} : {processorBundle: deps.processorBundle}),
+			},
+			arrivals,
+		),
+		// THE UPLOAD, over the same container, database and destination, in the same line.
+		// The source the operator CONFIGURED is handed over only where there is one: that
+		// is the only source an upload is held to (`upload.ts`), and a source that came from
+		// the processor module is not one.
+		upload: uploaderFor<ABI, ProcessResultType>(
+			{
+				provider,
+				db,
+				destination: resolved.destination,
+				stream: providedStreamConfig,
+				container,
+				...(resolved.source.from === 'processor-module' ? {} : {configured: {origin: resolved.source, source}}),
+			},
+			arrivals,
+		),
 		index: () => driveCycles(command, host, container, deps),
 	};
 }
