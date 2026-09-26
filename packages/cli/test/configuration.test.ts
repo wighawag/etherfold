@@ -1,5 +1,5 @@
 import {PROMOTION_POLICIES} from '@etherfold/core';
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -244,7 +244,10 @@ async function refusalOf(
 
 describe('a --processor path that names no bundle is refused, with the command that makes one', () => {
 	it('accepts a REAL bundle, so nobody who has migrated can meet the refusal', async () => {
-		await expect(refuseUnbundledProcessor('build', FIXTURE_BUNDLE)).resolves.toBeUndefined();
+		// ...and it hands back the bytes it judged, so a caller that SENDS them (`upload`)
+		// sends exactly what was checked rather than reading the file a second time
+		const judged = await refuseUnbundledProcessor('build', FIXTURE_BUNDLE);
+		expect([...(judged ?? [])]).toEqual([...(await readFile(FIXTURE_BUNDLE))]);
 	});
 
 	it('refuses an entry point that still imports, naming the path AND what it still imports', async () => {
@@ -293,7 +296,7 @@ describe('a --processor path that names no bundle is refused, with the command t
 				`export const createProcessor = () => ({entities: [], built});\n`,
 		);
 
-		await expect(refuseUnbundledProcessor('build', bundle)).resolves.toBeUndefined();
+		await expect(refuseUnbundledProcessor('build', bundle)).resolves.toBeInstanceOf(Uint8Array);
 	});
 
 	it('accepts a node BUILTIN, which a --platform=node bundle legitimately keeps', async () => {
@@ -305,7 +308,7 @@ describe('a --processor path that names no bundle is refused, with the command t
 			`import {createHash} from 'node:crypto';\nexport const createProcessor = () => ({entities: [], createHash});\n`,
 		);
 
-		await expect(refuseUnbundledProcessor('build', bundle)).resolves.toBeUndefined();
+		await expect(refuseUnbundledProcessor('build', bundle)).resolves.toBeInstanceOf(Uint8Array);
 	});
 
 	it('resolves a RELATIVE path against the cwd the loader resolves it against', async () => {
@@ -314,7 +317,9 @@ describe('a --processor path that names no bundle is refused, with the command t
 		// does not
 		const bundle = await aFileHolding('bundle.js', `export const createProcessor = () => ({entities: []});\n`);
 
-		await expect(refuseUnbundledProcessor('build', './bundle.js', {cwd: dirname(bundle)})).resolves.toBeUndefined();
+		await expect(refuseUnbundledProcessor('build', './bundle.js', {cwd: dirname(bundle)})).resolves.toBeInstanceOf(
+			Uint8Array,
+		);
 		await expect(refuseUnbundledProcessor('build', './bundle.js', {cwd: tmpdir()})).rejects.toThrow(/--processor/);
 	});
 
@@ -529,6 +534,73 @@ describe('the two asymmetries the table exists for', () => {
 	});
 });
 
+describe('`upload` takes a bundle, a node, a name and a credential, and nothing a deployment is configured with', () => {
+	const SENDING: Options = {bundle: './dist/processor.js', to: 'http://localhost:2000', indexer: 'nfts'};
+
+	it('resolves its row, with the credential from ADMIN_TOKEN behind --admin-token', () => {
+		expect(resolveCommandConfig('upload', SENDING, {ADMIN_TOKEN: 'secret'})).toEqual({
+			command: 'upload',
+			bundle: './dist/processor.js',
+			to: 'http://localhost:2000',
+			indexer: 'nfts',
+			adminToken: 'secret',
+		});
+		expect(resolveCommandConfig('upload', {...SENDING, adminToken: 'flag'}, {ADMIN_TOKEN: 'env'}).adminToken).toBe(
+			'flag',
+		);
+	});
+
+	it('takes the target from UPLOAD_TO and the name from INDEXER_NAME, as every command takes its inputs', () => {
+		const config = resolveCommandConfig(
+			'upload',
+			{bundle: './b.js'},
+			{UPLOAD_TO: 'https://node.example', INDEXER_NAME: 'nfts', ADMIN_TOKEN: 's'},
+		);
+		expect(config).toMatchObject({to: 'https://node.example', indexer: 'nfts'});
+	});
+
+	it('REQUIRES the indexer name, which `run` defaults, because a sender that defaulted it deploys to the wrong one', () => {
+		expect(() => resolveCommandConfig('upload', {bundle: './b.js', to: 'http://x'}, {ADMIN_TOKEN: 's'})).toThrow(
+			/--indexer \(INDEXER_NAME\) is required by `etherfold upload`.*never defaulted/s,
+		);
+	});
+
+	it('never reads ETH_NODE_URI as the node to send to, and ignores it as the ambient variable it is', () => {
+		expect(() =>
+			resolveCommandConfig('upload', {bundle: './b.js', indexer: 'n'}, {ADMIN_TOKEN: 's', ETH_NODE_URI: 'http://x'}),
+		).toThrow(/--to \(UPLOAD_TO\) is required by `etherfold upload`/);
+		// ambient, so not refused: a CI job that also runs `build` has it set
+		expect(() => resolveCommandConfig('upload', SENDING, {ADMIN_TOKEN: 's', ETH_NODE_URI: 'http://x'})).not.toThrow();
+	});
+
+	it('refuses the flags of the node it addresses, each pointing at where that input lives', () => {
+		const refusal = (extra: Options): string => {
+			try {
+				resolveCommandConfig('upload', {...SENDING, ...extra}, {ADMIN_TOKEN: 's'});
+			} catch (err) {
+				return (err as Error).message;
+			}
+			return '';
+		};
+		expect(refusal({nodeUrl: 'http://x'})).toMatch(/not accepted by `etherfold upload`.*--to \(UPLOAD_TO\)/s);
+		expect(refusal({deployments: './d'})).toMatch(/CARRIES ITS OWN CONTRACTS/);
+		expect(refusal({db: ':memory:'})).toMatch(/opens no database/);
+		expect(refusal({promotion: 'immediate'})).toMatch(/RECEIVING node/);
+		expect(refusal({ingestToken: 't'})).toMatch(/ADMIN credential/);
+	});
+
+	it('refuses --to and --admin-token on the five commands that send no bundle', () => {
+		for (const command of ['run', 'build', 'fetch', 'index', 'serve'] as const) {
+			expect(OWNERSHIP[command].to, command).toBe('refused');
+			expect(OWNERSHIP[command].adminToken, command).toBe('refused');
+		}
+		// the ones that SERVE the admin surface say where their own credential comes from
+		expect(() => resolveCommandConfig('run', {...FOLDING, adminToken: 's'}, {})).toThrow(
+			/read from ADMIN_TOKEN in its ENVIRONMENT/,
+		);
+	});
+});
+
 /** One options object carrying exactly the input under test, so the refusal has to be about that one. */
 function valueFor(input: ConfigInput): Options {
 	if (input === 'autoSetup') return {autoSetup: false};
@@ -619,9 +691,9 @@ describe('an operator selects WHEN a successor takes over', () => {
 		).toThrow(/is not available on this runtime/);
 	});
 
-	it('is owned by the ONE command that can apply it, and refused by the four that cannot', () => {
+	it('is owned by the ONE command that can apply it, and refused by every other', () => {
 		expect(OWNERSHIP.run.promotion).toBe('optional');
-		for (const command of ['build', 'fetch', 'index', 'serve'] as const) {
+		for (const command of ['build', 'fetch', 'index', 'serve', 'upload'] as const) {
 			expect(OWNERSHIP[command].promotion).toBe('refused');
 			expect(OWNERSHIP[command].dropOnPromotion).toBe('refused');
 		}
@@ -852,10 +924,10 @@ describe('--rps is a rate, and REQUESTS_PER_SECOND stands behind it', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------
-// FIVE ROWS, ONE PATH
+// SIX ROWS, ONE PATH
 // ---------------------------------------------------------------------------------------------------
 
-describe('all five rows of the table resolve', () => {
+describe('all six rows of the table resolve', () => {
 	const cases: {command: CommandName; options: Options; env: Record<string, string>}[] = [
 		{command: 'run', options: FOLDING, env: {}},
 		{command: 'build', options: FOLDING, env: {}},
@@ -870,6 +942,11 @@ describe('all five rows of the table resolve', () => {
 			env: {INGEST_TOKEN: 'shared', INDEXER_NAME: 'alpha'},
 		},
 		{command: 'serve', options: {}, env: {DB: 'file:./etherfold.db'}},
+		{
+			command: 'upload',
+			options: {bundle: './dist/processor.js'},
+			env: {UPLOAD_TO: 'http://node:2000', INDEXER_NAME: 'alpha', ADMIN_TOKEN: 'admin'},
+		},
 	];
 
 	for (const {command, options, env} of cases) {

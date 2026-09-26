@@ -54,6 +54,15 @@ export {
 } from './folding.js';
 export {arrivalQueue, reconfigurerFor, type ArrivalQueue, type ReconfigureContext} from './reconfigure.js';
 export {uploaderFor, type ConfiguredSource, type UploadContext} from './upload.js';
+export {
+	describeUpload,
+	upload,
+	uploadMain,
+	uploadRouteOf,
+	type UploadAnswer,
+	type UploadDependencies,
+	type UploadedGeneration,
+} from './uploadCommand.js';
 export {canonicalGenerationIn, canonicalStateNamespaceIn, heldGenerationsIn, type ReadTierOptions} from './readTier.js';
 export {recordReorg, reorgRecorderFor} from './reorgCounters.js';
 export {

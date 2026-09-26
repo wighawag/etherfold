@@ -1,6 +1,6 @@
 # etherfold
 
-The command line. `etherfold run` follows a chain, folds a processor into a libSQL database and answers HTTP over it, in one process; `etherfold build` is the same thing as a one-shot that exits at the tip; `etherfold fetch` is the chain-facing half of a split deployment, pushing raw logs to a server elsewhere; `etherfold index` is the half that receives those pushes and owns the database; `etherfold serve` is the READ tier over a database written elsewhere, answering `/status` -- health, schema version, reorg counters and the cursor the fold has reached.
+The command line. `etherfold run` follows a chain, folds a processor into a libSQL database and answers HTTP over it, in one process; `etherfold build` is the same thing as a one-shot that exits at the tip; `etherfold fetch` is the chain-facing half of a split deployment, pushing raw logs to a server elsewhere; `etherfold index` is the half that receives those pushes and owns the database; `etherfold serve` is the READ tier over a database written elsewhere, answering `/status` -- health, schema version, reorg counters and the cursor the fold has reached. Beside those five, `etherfold upload` DEPLOYS: it sends a processor bundle you already built to a running `run`, which indexes it beside the live version before switching.
 
 ```sh
 npm i -g etherfold        # or: npx etherfold …
@@ -20,6 +20,7 @@ Every command that folds is pointed at a processor BUNDLE rather than at a modul
 | to run the chain-facing half near your node, pushing to an indexer elsewhere | here, `fetch` |
 | to receive those pushes and own the database, on another host | here, `index` |
 | to answer over a database something else writes | here, `serve` |
+| to deploy a built processor to a running node, from a laptop or a CI job | here, `upload` |
 | to index inside a browser tab, with no server | [`@etherfold/browser`](https://github.com/wighawag/etherfold/tree/main/packages/browser) |
 | to write the processor being run | [`@etherfold/processor-entities`](https://github.com/wighawag/etherfold/tree/main/packages/processor-entities) |
 | to embed the same pipeline in your own Node program | [`@etherfold/core`](https://github.com/wighawag/etherfold/tree/main/packages/core) + [`@etherfold/fetcher-host`](https://github.com/wighawag/etherfold/tree/main/packages/fetcher-host) |
@@ -261,6 +262,27 @@ The one thing it does write is the fixed-table SCHEMA, applied at startup if it 
 
 The server's dependency tree is imported lazily, so `etherfold build` never pays for it.
 
+## `etherfold upload` -- deploy a built bundle to a running node
+
+```sh
+ADMIN_TOKEN=… etherfold upload ./dist/processor.bundle.js --to http://indexer:2000 --indexer my-indexer
+```
+
+**It DEPLOYS, and it is not a way to run anything.** The five commands above are deployment intents; this one is a CLIENT of a deployment that is already running. It reads the bundle you built, sends its raw bytes to the node's `POST /{indexer}/admin/upload` (`Content-Type: text/javascript`, on the admin credential), and prints what the node did. The node registers the generation those bytes name as a SUCCESSOR beside the one answering reads, the successor catches up, and the node's own promotion policy (`--promotion` on its `run`) moves the pointer, so deploying a new version never serves a half-built state. The identity is the node's hash of the bytes (ADR-0086): nothing you pass says which generation it is.
+
+**It only uploads; it never builds.** Produce the bundle first, with [the one build command](#producing-the-processor-bundle). A path naming an entry point that still imports something, or a build that has not run, is refused ON YOUR MACHINE before any request, with the same message and the same `esbuild` line every folding command's `--processor` gives.
+
+**The exit code is the contract a pipeline reads.** `0` when the node answers `registered` (a new generation) or `unchanged` (these bytes are already what it folds, so a re-run on an unchanged commit stays green). `1` on everything else: a missing or refused input, the local self-containment refusal, a wrong credential (`401`), a bundle over the node's bound (`413`, 16 MiB), a bundle the node refuses (`409`: it throws on evaluation, carries no processor, or its contracts do not match a source the node was STARTED with), a node that serves no uploads (`501`) or names no such indexer (`404`), and a node that cannot be reached at all. The outcome goes to stdout and every failure to stderr, one `key: value` per line (`outcome`, `arrival`, `generation`, `status`, `error`, `reason`), with the node's reason printed as it gave it.
+
+| input | |
+| --- | --- |
+| `<bundle>` | REQUIRED. The already-built, self-contained bundle, as the command's argument (or `-p`, the name every command gives the processor; not both) |
+| `--to <url>` | REQUIRED. The running node's base URL (or `UPLOAD_TO`); `/{indexer}/admin/upload` hangs off it. Deliberately NOT `-n` / `ETH_NODE_URI`, which is the chain's endpoint: `-n` is refused here, and `ETH_NODE_URI` in the environment is never read as the target |
+| `--indexer <name>` | REQUIRED, and never defaulted (or `INDEXER_NAME`). `run` defaults its own name to `default`, but a sender that defaulted would deploy to the wrong indexer without a word |
+| `--admin-token <token>` | REQUIRED (or `ADMIN_TOKEN`, the name the node's guard reads). Prefer the variable: a secret on a command line is visible to every process on the host |
+
+Everything a deployment is configured with -- the chain, the source, the database, the port, the promotion policy -- belongs to the node, so each of those flags is refused here with the reason. An upload carries its own contracts inside the bundle, and it is the node that checks them against a source ITS operator configured.
+
 ## Configuration: flags first, environment behind them
 
 Every command resolves every input THE SAME WAY, which is what makes moving between them a deployment change rather than a rewrite. The rules:
@@ -283,16 +305,20 @@ Some inputs have a variable and some do not, and the line is deliberate: **the e
 | `INGEST_TOKEN` | `--ingest-token` | the ingest wire's shared secret, the same name on both sides. Prefer the variable: a secret on a command line is visible to every process on the host |
 | `REQUESTS_PER_SECOND` | `--rps` | the rate limit applied to the node |
 | `PROMOTION_POLICY` | `--promotion` | WHEN a successor takes over answering reads: `on-catch-up` (the default), `immediate` or `manual`. `run` only |
+| `UPLOAD_TO` | `--to` | the running node `upload` sends a bundle to. `upload` only |
+| `ADMIN_TOKEN` | `--admin-token` | the admin credential `upload` presents. The commands that SERVE the admin surface read the same variable to check it, and refuse the flag |
 
 The CLI used to read a second name for the node URL (`ETHEREUM_NODE`). It is RETIRED: there is one name for it, and it is `ETH_NODE_URI`, which is what the fetcher deployable already refuses by.
 
-## The five names, and the two compositions
+## The five names, the two compositions, and the sixth command
 
-All five ship, and `CONTEXT.md` is the authority for what each one means. Two compositions hold in the CODE rather than in this sentence: **`run` IS `fetch` plus `index` plus `serve` in one process** (the first pairing is the in-process direct ingestion, the same log-fetcher and the same stream-builder with the transport removed), and **`build` is `run` without the serving**, stopping at the tip.
+All five intents ship, and `CONTEXT.md` is the authority for what each one means. Two compositions hold in the CODE rather than in this sentence: **`run` IS `fetch` plus `index` plus `serve` in one process** (the first pairing is the in-process direct ingestion, the same log-fetcher and the same stream-builder with the transport removed), and **`build` is `run` without the serving**, stopping at the tip.
 
 Which is why splitting is a deployment decision you can defer and then reverse. `packages/cli/test/equivalence.test.ts` asserts it at the commands rather than claiming it: the same processor, the same entity declarations and the same fixture chain -- reorg included, with the replacement branch carrying fewer events -- run once through `run` and once through `fetch` plus `index`, land on identical state and an identical cursor; and `index` plus `serve` against one database answer what `run` answers.
 
-All five rows of the configuration live in one table (`src/config.ts`), which is what makes moving between them a deployment change rather than a rewrite. Two asymmetries in it are load-bearing: `fetch` takes a source but no processor, and refuses `--store` and `--db` outright, because the chain-facing half holds no state (ADR-0003); and `index` resolves its source with NO chain call at all, so it takes it from `-d` or `INDEXING_SOURCE` and refuses a processor module that could only be resolved by asking a node for its chain id.
+`upload` is the sixth command and not a sixth intent: it runs no deployment, it sends a bundle to one. It still takes its inputs from the same table, which is why moving a flag onto it that belongs to the node is refused with the reason rather than ignored.
+
+All six rows of the configuration live in one table (`src/config.ts`), which is what makes moving between them a deployment change rather than a rewrite. Two asymmetries in it are load-bearing: `fetch` takes a source but no processor, and refuses `--store` and `--db` outright, because the chain-facing half holds no state (ADR-0003); and `index` resolves its source with NO chain call at all, so it takes it from `-d` or `INDEXING_SOURCE` and refuses a processor module that could only be resolved by asking a node for its chain id.
 
 ## Tests
 
