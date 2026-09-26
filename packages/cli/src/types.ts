@@ -159,7 +159,16 @@ export type Wire = SendingWire | ReceivingWire;
  */
 export type RunConfig<ABI extends Abi = Abi> = {
 	readonly command: 'run';
-	readonly processor: string;
+	/**
+	 * The bundle this process folds, or `undefined` for a node started with NOTHING
+	 * configured (ADR-0093): no processor AND no source, together, which is a MODE and
+	 * not a default. Such a node folds whatever its registry's canonical generation names,
+	 * or WAITS for its first upload. The resolver guarantees the pair: where this is
+	 * `undefined`, `source` is the processor-module arm, because the contracts a waiting
+	 * node indexes are the ones the processor that ARRIVES carries (a source with no
+	 * processor is refused, `resolveRunProcessor`).
+	 */
+	readonly processor: string | undefined;
 	readonly source: SourceOrigin<ABI>;
 	readonly nodeUrl: string;
 	readonly rps?: number;

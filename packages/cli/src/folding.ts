@@ -12,6 +12,7 @@ import {
 	type ProvidedStreamConfig,
 	type ReceivedGenerationSpec,
 	type ReceivingIndexer,
+	type ReceivingIndexerOptions,
 	type StreamWriter,
 } from '@etherfold/core';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
@@ -19,11 +20,12 @@ import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
 import {
 	localPosition,
 	openForWriting,
+	type EntityDeclaration,
 	type EntityProcessor,
 	type StateStore,
 	type WritableStateStore,
 } from '@etherfold/processor-entities';
-import type {StatusReport} from '@etherfold/server';
+import type {StatusReport, WaitingReport} from '@etherfold/server';
 // TYPE ONLY, so that naming the store this module builds costs no eager import of
 // libSQL: the value arrives through the dynamic import below.
 import type {VersionedStateStore as SQLiteStateStore} from '@etherfold/state-store-sqlite';
@@ -612,7 +614,191 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 	]);
 	const {stateFor} = parts;
 
-	const container = await openReceivingIndexer<ABI, ProcessResultType, WritableStateStore>({
+	const container = await openContainerOver<ABI, ProcessResultType>(server, db, context, {
+		stateFor,
+		// HOW A GENERATION THIS BUILD WAS NOT MADE WITH FOLDS AGAIN (ADR-0092): the bundle
+		// stored on its registry row goes through the SAME loader a `--processor` bundle
+		// goes through (ADR-0085), and the fold over it is assembled by the SAME
+		// `foldPartsFor` -- so its state is the namespace its identity names, which is the
+		// one it answered reads from, under this deployment's retention and finality. The
+		// container calls it when the pointer moves onto such a generation, which is the
+		// revert on a process redeployed with the new processor alone. It lives HERE and
+		// not in `@etherfold/core` because the loader is `@etherfold/utils`', which depends
+		// on core.
+		//
+		// The identity handed back is the loader's hash of the bytes, NOT the identity asked
+		// for: the container compares the two, so stored code that does not name its
+		// generation is refused rather than folded under a borrowed name.
+		instantiateGeneration: async (_id, bundle) => {
+			const outcome = await loadStoredBundle<ABI, ProcessResultType>(bundle);
+			const resumed = await foldPartsFor<ABI, ProcessResultType>(outcome.processor, target, db, context.finalityDepth, {
+				identity: outcome.identity,
+				bundle,
+			});
+			return resumed.generation;
+		},
+		generation: parts.generation,
+		source: context.source,
+	});
+
+	return {
+		container,
+		db,
+		stateOf: stateFor,
+		store: container.state,
+		processor: container.processor,
+		// THE WRITER of the stream the opening fold folds, which is the DEPLOYMENT's and
+		// not that fold's engine (ADR-0087). A fold has no receiver at all now, so what a
+		// caller reads here to say "which thing is fetching this stream" is this.
+		streamWriter: container.ingestion,
+	};
+}
+
+/**
+ * THE STORED BYTES, through the SAME loader a `--processor` bundle and an upload go
+ * through (ADR-0085), or a refusal naming why: what every instantiation from a
+ * registry row starts with.
+ */
+async function loadStoredBundle<ABI extends Abi, ProcessResultType>(bundle: Uint8Array) {
+	const outcome = await loadProcessorArtifact<ABI, ProcessResultType, EntityProcessor<ABI, any>>(bundle);
+	if (outcome.status === 'refused') {
+		throw new Error(`the stored bundle ${outcome.identity} was refused as ${outcome.reason}: ${outcome.why}`);
+	}
+	return outcome;
+}
+
+/**
+ * What a folding deployment started with NOTHING configured holds over its one
+ * database (ADR-0093): the container, the handle, and how any generation's state is
+ * read -- and no opening fold, no store and no writer, because it has none until a
+ * processor arrives.
+ */
+export type WaitingFoldingAssembly<ABI extends Abi, ProcessResultType = unknown> = Pick<
+	FoldingAssembly<ABI, ProcessResultType>,
+	'container' | 'db' | 'stateOf'
+> & {
+	/**
+	 * HOW THIS DEPLOYMENT BUILDS THE FOLD PARTS OF A PROCESSOR THAT ARRIVES: `foldPartsFor`,
+	 * noting the entities that processor declares.
+	 *
+	 * A configured deployment drops and reads any generation's namespace through the
+	 * entities of the processor it was CONFIGURED with (`openFolding`). A waiting one was
+	 * configured with none, so it uses every entity a processor that arrived in this
+	 * process declared -- a `DROP` is `IF EXISTS`, so naming more tables than a namespace
+	 * holds is harmless where naming fewer would leave some behind. An arrival that builds
+	 * its parts any other way would leave its tables out of that set.
+	 */
+	foldParts: typeof foldPartsFor;
+};
+
+/**
+ * Open the GENERATION CONTAINER of a `run` started with NOTHING configured (ADR-0093):
+ * the same registry, caps, ports and stream ends `openFolding` wires, over the same
+ * database -- and no fold and no source of its own.
+ *
+ * NOTHING stands in for either. There is no placeholder processor, source or
+ * generation: that is the defaulted input ADR-0048 and ADR-0093 both reject, a fold
+ * nobody chose looking healthy. What the container comes up holding is what its
+ * REGISTRY says:
+ *
+ *  - a CANONICAL GENERATION whose stored bundle this process can run is instantiated at
+ *    `open`, exactly as an upgrading restart instantiates it (ADR-0092), and the source
+ *    it folds is the one THAT BUNDLE CARRIES, resolved through the route a processor
+ *    module supplies its contracts by (`resolveSource`) -- which is what the container
+ *    then fetches (`ReceivingIndexer.fetchedSource`);
+ *  - a canonical generation it CANNOT instantiate is logged and served frozen, and the
+ *    deployment starts anyway, as a restart already does;
+ *  - with no canonical generation at all it holds nothing, fetches nothing, and waits.
+ *
+ * `provider` is the chain, for the one step of resolving a stored bundle's contracts
+ * that may cost an `eth_chainId` call.
+ */
+export async function openWaitingFolding<ABI extends Abi, ProcessResultType>(
+	target: StoreTarget,
+	db: RemoteSQL,
+	context: {
+		stream: ProvidedStreamConfig;
+		finalityDepth: number;
+		indexer: string;
+		promotion?: PromotionConfig;
+		provider: EIP1193ProviderWithoutEvents;
+	},
+): Promise<WaitingFoldingAssembly<ABI, ProcessResultType>> {
+	const [server, {VersionedStateStore}] = await Promise.all([
+		import('@etherfold/server'),
+		import('@etherfold/state-store-sqlite'),
+	]);
+
+	/** Every entity a processor that arrived here declared, first declaration of a name kept. */
+	const declared = new Map<string, EntityDeclaration>();
+	const stateFor = (id: GenerationId): SQLiteStateStore =>
+		new VersionedStateStore(db, [...declared.values()], {
+			tableNamespace: generationDigestOf(id),
+			retention: target.retention,
+			finalityDepth: context.finalityDepth,
+		});
+	const foldParts: typeof foldPartsFor = (processor, ...rest) => {
+		for (const entity of processor.entities) {
+			if (!declared.has(entity.name)) declared.set(entity.name, entity);
+		}
+		return foldPartsFor(processor, ...rest);
+	};
+
+	const container = await openContainerOver<ABI, ProcessResultType>(server, db, context, {
+		stateFor,
+		// THE SAME PATH FROM STORED BYTES TO A FOLD as a configured deployment's, plus the
+		// one thing a configured deployment already knows and this one cannot: WHAT the
+		// stored bundle indexes. It is read from the bundle itself, which always carries its
+		// own contracts (ADR-0085's amendment), so the generation folds the source it was
+		// registered under -- and the container refuses it as frozen where that is not so.
+		instantiateGeneration: async (_id, bundle) => {
+			const outcome = await loadStoredBundle<ABI, ProcessResultType>(bundle);
+			const source = await openIndexingSource<ABI, ProcessResultType>(
+				{from: 'processor-module'},
+				outcome.processorModule,
+				context.provider,
+			);
+			const resumed = await foldParts<ABI, ProcessResultType>(outcome.processor, target, db, context.finalityDepth, {
+				identity: outcome.identity,
+				bundle,
+			});
+			return {...resumed.generation, source};
+		},
+	});
+
+	return {container, db, stateOf: stateFor, foldParts};
+}
+
+/**
+ * THE CONTAINER OVER ONE DATABASE, with every seam this deployment injects: the
+ * registry substrate and how a generation's state is dropped and read, the caps, the
+ * promotion policy, the reorg counter, the stream's three ends, and how stored bytes
+ * become a fold.
+ *
+ * Written once for the two ways a folding deployment opens -- CONFIGURED, with a fold
+ * and a source of its own (`openFolding`), and with NOTHING configured, holding neither
+ * (`openWaitingFolding`, ADR-0093) -- so the two cannot differ in anything but that.
+ */
+async function openContainerOver<ABI extends Abi, ProcessResultType>(
+	server: typeof import('@etherfold/server'),
+	db: RemoteSQL,
+	context: {
+		stream: ProvidedStreamConfig;
+		indexer: string;
+		promotion?: PromotionConfig;
+	},
+	seams: {
+		/** Any generation's state, by identity, UNCLAIMED: what a DROP and a position read go through. */
+		stateFor(id: GenerationId): SQLiteStateStore;
+		instantiateGeneration: NonNullable<
+			ReceivingIndexerOptions<ABI, ProcessResultType, WritableStateStore>['instantiateGeneration']
+		>;
+		generation?: ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>;
+		source?: IndexingSource<ABI>;
+	},
+): Promise<ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>> {
+	const {stateFor} = seams;
+	return openReceivingIndexer<ABI, ProcessResultType, WritableStateStore>({
 		port: server.generationRegistryPortOnSQL(db, context.indexer, {
 			// deleting a generation is a DROP of its namespace, which is the whole reason
 			// the namespace was chosen over a column (ADR-0053). The registry cannot know
@@ -648,7 +834,6 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		// left behind. Absent is a real answer and the common one, and the container
 		// resolves the default from it.
 		...(context.promotion === undefined ? {} : {promotion: context.promotion}),
-		source: context.source,
 		stream: context.stream,
 		recordReorg: reorgRecorderFor(db),
 		// THE STREAM'S THREE ENDS, all over the one database this command folds into:
@@ -658,44 +843,16 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		appendEmissions: server.emissionAppenderFor(db, context.indexer),
 		streamCursor: server.streamCursorSourceOn(db, context.indexer),
 		replay: server.storedEmissionReplaySource<ABI>(db, context.indexer),
-		// HOW A GENERATION THIS BUILD WAS NOT MADE WITH FOLDS AGAIN (ADR-0092): the bundle
-		// stored on its registry row goes through the SAME loader a `--processor` bundle
-		// goes through (ADR-0085), and the fold over it is assembled by the SAME
-		// `foldPartsFor` -- so its state is the namespace its identity names, which is the
-		// one it answered reads from, under this deployment's retention and finality. The
-		// container calls it when the pointer moves onto such a generation, which is the
-		// revert on a process redeployed with the new processor alone. It lives HERE and
-		// not in `@etherfold/core` because the loader is `@etherfold/utils`', which depends
-		// on core.
-		//
-		// The identity handed back is the loader's hash of the bytes, NOT the identity asked
-		// for: the container compares the two, so stored code that does not name its
-		// generation is refused rather than folded under a borrowed name.
-		instantiateGeneration: async (_id, bundle) => {
-			const outcome = await loadProcessorArtifact<ABI, ProcessResultType, EntityProcessor<ABI, any>>(bundle);
-			if (outcome.status === 'refused') {
-				throw new Error(`the stored bundle ${outcome.identity} was refused as ${outcome.reason}: ${outcome.why}`);
-			}
-			const resumed = await foldPartsFor<ABI, ProcessResultType>(outcome.processor, target, db, context.finalityDepth, {
-				identity: outcome.identity,
-				bundle,
-			});
-			return resumed.generation;
-		},
-		generation: parts.generation,
+		// HOW STORED BYTES BECOME A FOLD (ADR-0092), which is the caller's: the two ways a
+		// deployment opens differ in where a stored bundle's SOURCE comes from.
+		instantiateGeneration: seams.instantiateGeneration,
+		// WHAT THIS HOST OPENS WITH, where it was configured with anything at all: its own
+		// fold and its source. Both ABSENT on a node started with nothing configured
+		// (ADR-0093), which opens holding only what its registry's canonical generation
+		// names and fetches whatever its first fold carries.
+		...(seams.generation === undefined ? {} : {generation: seams.generation}),
+		...(seams.source === undefined ? {} : {source: seams.source}),
 	});
-
-	return {
-		container,
-		db,
-		stateOf: stateFor,
-		store: container.state,
-		processor: container.processor,
-		// THE WRITER of the stream the opening fold folds, which is the DEPLOYMENT's and
-		// not that fold's engine (ADR-0087). A fold has no receiver at all now, so what a
-		// caller reads here to say "which thing is fetching this stream" is this.
-		streamWriter: container.ingestion,
-	};
 }
 
 /**
@@ -727,9 +884,16 @@ export async function foldingStatusReport<ABI extends Abi, ProcessResultType>(
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 	/** Any generation's state, unclaimed (`FoldingAssembly.stateOf`): where an unheld canonical position is read. */
 	stateOf: (id: GenerationId) => StateStore,
+	/**
+	 * Present exactly while this process is WAITING for a processor (ADR-0093): started
+	 * with nothing configured, it fetches nothing until an upload names what to index.
+	 * Carried onto the page verbatim, beside whatever else it holds.
+	 */
+	waiting?: WaitingReport,
 ): Promise<StatusReport> {
 	const canonical = await container.canonical();
 	return readStatusReport({
+		...(waiting === undefined ? {} : {waiting}),
 		folds: container.held().map((fold) => ({
 			generation: fold.record,
 			store: fold.state as StateStore,

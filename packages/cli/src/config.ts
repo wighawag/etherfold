@@ -156,7 +156,8 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'the event processor, as a path to a SELF-CONTAINED BUNDLE exporting "createProcessor". A path is how ' +
 			'a deployment names it, and the file at that path is read and named by the sha256 of its own bytes -- so ' +
 			'an edited handler is a different generation with nobody having to remember to say so (ADR-0086). A path ' +
-			'naming an entry point that still imports something is REFUSED, naming the command that bundles it',
+			'naming an entry point that still imports something is REFUSED, naming the command that bundles it. ' +
+			'`run` may be started with NEITHER a processor nor a source, and then waits for its first upload (ADR-0093)',
 	},
 	source: {
 		flag: '-d, --deployments <folder>',
@@ -260,7 +261,7 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  *
  * | command | processor | source | node URL | destination | serving | indexer name | ingest wire |
  * | --- | --- | --- | --- | --- | --- | --- | --- |
- * | `run` | required | required | required | store + database, required | port and host | optional, defaults | none |
+ * | `run` | required, or absent WITH the source (waits) | required | required | store + database, required | port and host | optional, defaults | none |
  * | `build` | required | required | required | store + database, required | none | optional, defaults | none |
  * | `fetch` | NOT ACCEPTED | required | required | NOT ACCEPTED | none | REQUIRED | endpoint + token, required |
  * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
@@ -287,8 +288,17 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * (ADR-0052). `serve` still refuses it outright, because a read tier folds
  * nothing and registers nothing, and would have nothing to do with the value.
  *
- * Two of those rows are asymmetries rather than accidents, and both are load-bearing:
+ * Three of those rows are asymmetries rather than accidents, and all are load-bearing:
  *
+ *  - **`run` may be started with NO processor and NO source, together** (ADR-0093,
+ *    the one exception ADR-0048 makes, stated as a MODE rather than a default). Such a
+ *    node folds whatever its registry's canonical generation names, or WAITS for its
+ *    first upload and says so on `/status`. A source WITHOUT a processor is still
+ *    refused, because contracts with nothing to fold them are a configuration error
+ *    rather than an intent to wait; a processor without a source is valid, as ever.
+ *    Every other command still requires what it required: `build` and `index` fold
+ *    at once and have nothing to wait on, and the split `index` does not wait because
+ *    its fetcher is another process an upload could not reach.
  *  - **`fetch` takes a SOURCE but no processor**, because the chain-facing half
  *    holds no processor by ADR-0003, and it owns no database, so `--store` and
  *    `--db` are REFUSED there rather than optional. A required store flag
@@ -305,7 +315,8 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  */
 export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput, Ownership>>>> = {
 	run: {
-		processor: 'required',
+		// OPTIONAL only together with the source (ADR-0093): see `resolveRunProcessor`
+		processor: 'optional',
 		source: 'optional',
 		nodeUrl: 'required',
 		rps: 'optional',
@@ -1209,10 +1220,11 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 			case 'run': {
 				const rps = resolveRequestsPerSecond(options, env);
 				const promotion = resolvePromotion('run', options, env);
+				const source = resolveSourceOrigin<ABI>(options, env);
 				return {
 					command: 'run',
-					processor: requireProcessor('run', options, env),
-					source: resolveSourceOrigin<ABI>(options, env),
+					processor: resolveRunProcessor(options, env, source),
+					source,
 					nodeUrl: requireNodeUrl('run', options, env),
 					...(rps === undefined ? {} : {rps}),
 					destination: resolveStoreTarget('run', options, env),
@@ -1333,6 +1345,39 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
  */
 export function resolveIndexerName(options: Options, env: EnvRecord): string {
 	return given('indexer', options, env) ?? DEFAULT_INDEXER_NAME;
+}
+
+/**
+ * `run`'s processor: the bundle it was given, or NOTHING, which is a mode (ADR-0093).
+ *
+ * `run` may be started with no processor AND no source, together, and then it waits for
+ * its first upload. That is the one exception ADR-0048 makes to "a missing input is a
+ * refusal", and it is not a default: nothing is filled in, and a node that folds nothing
+ * says on `/status` that it is WAITING, which is the loud failure a defaulted input
+ * would not have.
+ *
+ * So ONLY the pair may be absent. A SOURCE with no processor is REFUSED, naming both
+ * ways out: contracts with nothing to fold them are a configuration error, not an intent
+ * to wait, and the source an operator configured would otherwise be silently dropped
+ * (a waiting node takes the contracts its first upload CARRIES).
+ */
+function resolveRunProcessor<ABI extends Abi>(
+	options: Options,
+	env: EnvRecord,
+	source: SourceOrigin<ABI>,
+): string | undefined {
+	const processor = given('processor', options, env);
+	if (processor !== undefined) return processor;
+	if (source.from === 'processor-module') return undefined;
+	const named =
+		source.from === 'deployments' ? `${INPUTS.source.flag.split(' <')[0]} ${source.folder}` : 'INDEXING_SOURCE';
+	throw new Error(
+		`${nameOf('processor')} is required by \`etherfold run\` when a source is given, and this one was given ` +
+			`${named} with no processor. Contracts with nothing to fold them are a configuration error rather than an ` +
+			`intent to wait (ADR-0093): either add ${nameOf('processor')}, the self-contained bundle that folds them, or ` +
+			`give NEITHER, and the node starts with nothing configured and waits for its first upload ` +
+			`(\`etherfold upload\`), which carries its own contracts. ${NO_VARIABLE}`,
+	);
 }
 
 function requireProcessor(command: CommandName, options: Options, env: EnvRecord): string {

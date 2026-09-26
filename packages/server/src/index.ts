@@ -54,6 +54,7 @@ export type {
 	ReportedGeneration,
 	StatusCursor,
 	StatusReport,
+	WaitingReport,
 } from './cursor.js';
 /**
  * THE `/status` FETCHER FIELD (ADR-0074): what the chain-facing half of this

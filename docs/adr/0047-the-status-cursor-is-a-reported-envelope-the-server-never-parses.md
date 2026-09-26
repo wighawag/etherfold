@@ -1,6 +1,8 @@
 # The `/status` cursor is an envelope around a value the server never parses, and the generation dimension grows inside it
 
 > **AMENDED 2026-09-26 (ADR-0092): the envelope also names the CANONICAL generation on its own, with whether it folds here and where it stands, because since ADR-0092 it may be one this host does not hold.** Read the amendment at the end.
+>
+> **AMENDED 2026-09-26 (ADR-0093): the envelope also says when the host is WAITING for a processor.** Read the second amendment at the end.
 
 `/status` reports how far the pipeline has got as `cursor: {reported: true, value: <whatever the host's reporter returned>}`, or `cursor: {reported: false, reason: <why not>}`, and the field is ABSENT on a host that injects no reporter. The value is placed in the response verbatim: `@etherfold/server` has no store dependency and the sync cursor is an opaque string behind the storage seam (ADR-0027), so only the process that owns the store can read one and only the processor knows what one means. The server owns the ENVELOPE; the host owns the CONTENTS.
 
@@ -33,3 +35,12 @@ What this deliberately does NOT do:
 
 - **`generations` keeps its meaning.** It is still what this host HOLDS. Widening it to every REGISTERED generation was the shortest diff and was rejected: it re-means a published field, and costs a cursor read per registered generation on every `/status`. The canonical report costs one `folding` answer and at most one extra cursor read, and only when the canonical generation is not held.
 - **Nothing is removed or renamed.** A reader of today's page sees every field it saw. The one visible change to an existing field is the one its definition always asked for: top-level `value` is "where the generation answering reads has got to", so a frozen canonical generation now fills it from its own namespace, and `reported` is `true` where it used to be `false` with a reason that was not true (the canonical generation HAS a cursor; nothing here was reading it). A reader that needs "is it advancing" reads `canonical.folding`, which is what it is for.
+
+## Amendment, 2026-09-26 (ADR-0093): the envelope says when the host is WAITING for a processor
+
+A `run` started with no processor and no source (ADR-0093) holds no fold and fetches nothing until an upload tells it what to index, and its page would otherwise read exactly like a stalled node or one watching a quiet chain: no `value`, no `generations`, no `canonical`. So the envelope grows ONE more key, additively and in the same place: `cursor.waiting: {for, message}`, on both branches, present exactly while the host is waiting and ABSENT on every other host (`WaitingReport`, `@etherfold/server`).
+
+- `for` names what would end the wait, as one string a caller branches on. It is `processor` today; a later reason to wait is a new value rather than a re-meaning of this one.
+- `message` is the operator's words: what the node holds, and the upload that ends the wait.
+
+It sits beside the other slots rather than replacing any, because they fail independently here too: a node waiting over a canonical generation whose stored code cannot run here still reports that generation in `canonical`, frozen with the reason, and its position in `value`. Where there is no `value`, `reason` says the node is waiting rather than the generic "named no cursor". Nothing existing is renamed or removed.

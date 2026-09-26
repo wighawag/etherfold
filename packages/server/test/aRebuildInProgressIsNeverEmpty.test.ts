@@ -131,10 +131,31 @@ describe('an operator watches a rebuild on /status, inside the field ADR-0047 re
 		expect(nothingYet.cursor.canonical).toEqual({generation: frozen, folding: 'held'});
 	});
 
+	it('carries WAITING verbatim, on both branches, for a node started with nothing configured (ADR-0093)', async () => {
+		const waiting = {for: 'processor', message: 'upload a bundle to start'} as const;
+
+		// nothing held and nothing canonical: the page SAYS it is waiting, rather than reading
+		// like a stalled node or a quiet chain
+		const {status, body} = await statusOf(() => ({generations: [], waiting}));
+		expect(status).toBe(200);
+		expect(body.cursor).toEqual({
+			reported: false,
+			reason: expect.stringContaining('waiting for a processor'),
+			generations: [],
+			waiting,
+		});
+
+		// ...and beside a frozen canonical generation that still has a position
+		const frozen = {generation: generationDigestOf(generation('v1')), folding: 'frozen'} as const;
+		const {body: overFrozen} = await statusOf(() => ({value: {lastToBlock: 9}, canonical: frozen, waiting}));
+		expect(overFrozen.cursor).toEqual({reported: true, value: {lastToBlock: 9}, canonical: frozen, waiting});
+	});
+
 	it('invents no generations key on a host whose reporter names none', async () => {
 		const {body} = await statusOf(() => ({value: {lastToBlock: 7}}));
 		expect(body.cursor).toEqual({reported: true, value: {lastToBlock: 7}});
 		expect('generations' in body.cursor).toBe(false);
+		expect('waiting' in body.cursor).toBe(false);
 	});
 
 	it('still carries no cursor field at all on a host that injects no reporter', async () => {
