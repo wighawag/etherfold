@@ -2,20 +2,18 @@ import type {Abi, IndexingSource, PromotionConfig} from '@etherfold/core';
 import type {RetentionSetting} from '@etherfold/processor-entities';
 
 /**
- * The five deployment intents, named for what a process DOES rather than for the
- * component split behind it (`CONTEXT.md`, "The COMMAND SET names deployment
- * intents, not components").
- *
- * All five are named here, and four of them are REGISTERED (`src/program.ts`).
- * The last one, `index`, arrives in its own task and consumes this resolution
- * rather than extending it: its row already exists in `OWNERSHIP` and its
- * resolved shape already exists below, so what that task adds is a command
- * registration and an assembly, never a second way to read a flag.
+ * The six commands: the five deployment INTENTS, named for what a process DOES
+ * rather than for the component split behind it (`CONTEXT.md`, "The COMMAND SET
+ * names deployment intents, not components"), plus `upload`, which is not a way to
+ * RUN a deployment at all but a CLIENT action against one that is running: it
+ * sends an already-built bundle to a node's `POST /{indexer}/admin/upload` and
+ * exits (ADR-0085). It is in this union because it takes its inputs the way every
+ * other command does, through the one table (ADR-0048's 2026-09-26 amendment).
  */
-export type CommandName = 'run' | 'build' | 'fetch' | 'index' | 'serve';
+export type CommandName = 'run' | 'build' | 'fetch' | 'index' | 'serve' | 'upload';
 
 /**
- * The flags ANY of the five takes, exactly as commander hands them over.
+ * The flags ANY of the six takes, exactly as commander hands them over.
  *
  * Everything is a string and everything is OPTIONAL, deliberately: requiredness
  * lives in the resolver (`resolveCommandConfig`) and not in the parser, so every
@@ -66,6 +64,17 @@ export type Options = {
 	 * `true` is the only thing a user can have passed.
 	 */
 	dropOnPromotion?: boolean;
+	/**
+	 * `upload`'s positional `<bundle>` argument, which is not a flag: the path of the
+	 * already-built bundle to send. It is the `processor` input spelled the way the
+	 * one command that only SENDS a bundle takes it, and `-p` names the same input
+	 * there too; naming it both ways at once is refused (`resolveCommandConfig`).
+	 */
+	bundle?: string;
+	/** `--to <url>`, behind it `UPLOAD_TO`: the running node `upload` sends to. */
+	to?: string;
+	/** `--admin-token <token>`, behind it `ADMIN_TOKEN`: the credential `upload` PRESENTS to the node's admin guard. */
+	adminToken?: string;
 };
 
 /**
@@ -220,13 +229,31 @@ export type ServeConfig = {
 	readonly serving: Serving;
 };
 
+/**
+ * `upload`: a CLIENT of a running node. A bundle to send, the node to send it to,
+ * the named indexer on that node, and the admin credential. No chain, no source, no
+ * database and no port: the node it addresses owns all of those.
+ */
+export type UploadConfig = {
+	readonly command: 'upload';
+	/** The path of the already-built bundle, as given; resolved against the cwd when it is read. */
+	readonly bundle: string;
+	/** The node's base URL: `/{indexer}/admin/upload` hangs off it. */
+	readonly to: string;
+	/** The named indexer on that node. REQUIRED and never defaulted, unlike on `run`. */
+	readonly indexer: string;
+	/** The credential the node's admin guard checks (`ADMIN_TOKEN`). */
+	readonly adminToken: string;
+};
+
 /** One row of the command table, resolved. */
 export type ResolvedConfig<ABI extends Abi = Abi> =
 	| RunConfig<ABI>
 	| BuildConfig<ABI>
 	| FetchConfig<ABI>
 	| IndexConfig<ABI>
-	| ServeConfig;
+	| ServeConfig
+	| UploadConfig;
 
 /** The resolved shape of ONE named command. */
 export type ConfigFor<C extends CommandName, ABI extends Abi = Abi> = Extract<ResolvedConfig<ABI>, {command: C}>;

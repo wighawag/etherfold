@@ -38,6 +38,7 @@ function programUnderTest(deps: ProgramDependencies = {}) {
 	const followed: Options[] = [];
 	const fetched: Options[] = [];
 	const received: Options[] = [];
+	const uploaded: Options[] = [];
 	const output: string[] = [];
 	const program = createProgram({
 		env: {},
@@ -59,6 +60,9 @@ function programUnderTest(deps: ProgramDependencies = {}) {
 		index: async (options) => {
 			received.push(options);
 		},
+		upload: async (options) => {
+			uploaded.push(options);
+		},
 		...deps,
 	});
 	silence(program, output);
@@ -68,6 +72,7 @@ function programUnderTest(deps: ProgramDependencies = {}) {
 		followed,
 		fetched,
 		received,
+		uploaded,
 		output,
 		run: (argv: string[]) => program.parseAsync(argv, {from: 'user'}),
 	};
@@ -302,7 +307,10 @@ describe('no command is implicit', () => {
 		expect(cli.followed).toEqual([]);
 		expect(cli.fetched).toEqual([]);
 		expect(cli.received).toEqual([]);
-		expect(cli.output.join('')).toMatch(/Commands:[\s\S]*run[\s\S]*build[\s\S]*fetch[\s\S]*index[\s\S]*serve/);
+		expect(cli.uploaded).toEqual([]);
+		expect(cli.output.join('')).toMatch(
+			/Commands:[\s\S]*run[\s\S]*build[\s\S]*fetch[\s\S]*index[\s\S]*serve[\s\S]*upload/,
+		);
 	});
 
 	it('refuses the old default-command form rather than folding under no name', async () => {
@@ -312,6 +320,78 @@ describe('no command is implicit', () => {
 			cli.run(['-p', './processor.js', '--store', 'sqlite', '--db', ':memory:', '-n', 'http://localhost:8545']),
 		).rejects.toThrow(/unknown option/i);
 		expect(cli.built).toEqual([]);
+	});
+});
+
+describe('`upload` sends an already-built bundle to a running node, and is a client rather than a deployment', () => {
+	it('resolves, and hands its handler the bundle ARGUMENT beside the flags a sender owns', async () => {
+		const cli = programUnderTest();
+
+		await cli.run([
+			'upload',
+			'./dist/processor.js',
+			'--to',
+			'http://localhost:2000',
+			'--indexer',
+			'nfts',
+			'--admin-token',
+			'secret',
+		]);
+		expect(cli.uploaded[0]).toMatchObject({
+			bundle: './dist/processor.js',
+			to: 'http://localhost:2000',
+			indexer: 'nfts',
+			adminToken: 'secret',
+		});
+		// and nothing else ran: an upload runs no deployment
+		expect(cli.followed).toEqual([]);
+		expect(cli.built).toEqual([]);
+	});
+
+	it('does not make the bundle a PARSER requirement, so the resolver refuses it by name', async () => {
+		const cli = programUnderTest();
+
+		await cli.run(['upload', '--to', 'http://localhost:2000', '--indexer', 'nfts']);
+		expect(cli.uploaded[0]!.bundle).toBeUndefined();
+	});
+
+	it('shows the bundle, the node, the name and the credential, and nothing a deployment is configured with', async () => {
+		const cli = programUnderTest();
+
+		await expect(cli.run(['upload', '--help'])).rejects.toMatchObject({code: 'commander.helpDisplayed'});
+		const help = cli.output.join('');
+		for (const owned of ['bundle', '--to', 'UPLOAD_TO', '--indexer', 'ADMIN_TOKEN', '--processor']) {
+			expect(help).toMatch(owned);
+		}
+		// as an OPTION line: the description of --to names --node-url, precisely to say it is not that
+		for (const notOwned of [
+			'--node-url',
+			'--deployments',
+			'--db',
+			'--store',
+			'--port',
+			'--ingest-endpoint',
+			'--promotion',
+		]) {
+			expect(help).not.toMatch(new RegExp(`^ {2}(-\\w, )?${notOwned}\\b`, 'm'));
+		}
+	});
+
+	it('parses --node-url on `upload` rather than calling it an unknown option, so the resolver can say why', async () => {
+		const cli = programUnderTest();
+
+		await cli.run(['upload', './b.js', '--to', 'http://x', '--indexer', 'n', '-n', 'http://localhost:8545']);
+		expect(cli.uploaded[0]).toMatchObject({nodeUrl: 'http://localhost:8545'});
+	});
+
+	it('keeps --to and --admin-token out of every other command`s help', async () => {
+		for (const command of ['run', 'build', 'fetch', 'index', 'serve']) {
+			const cli = programUnderTest();
+			await expect(cli.run([command, '--help'])).rejects.toMatchObject({code: 'commander.helpDisplayed'});
+			const help = cli.output.join('');
+			expect(help, command).not.toMatch('--to ');
+			expect(help, command).not.toMatch('--admin-token');
+		}
 	});
 });
 

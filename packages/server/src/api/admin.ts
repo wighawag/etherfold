@@ -47,10 +47,12 @@ const logger = logs('@etherfold/server');
  * It is the only affordance that exists on EVERY deployment shape. On Cloudflare
  * there is no CLI at all -- a Worker is reachable only over HTTP -- so a flag on
  * a command could not serve a serverless deployment, and a library call with no
- * operator surface does not deliver the story at all. The command set is pinned
- * at five verbs with no default command, so a sixth is unavailable, and hanging
- * `--revert` on `run` would conflate a long-running fold with a one-shot control
- * action.
+ * operator surface does not deliver the story at all. Hanging `--revert` on `run`
+ * would conflate a long-running fold with a one-shot control action. The command
+ * set is no longer pinned at five verbs: it grew a sixth, `etherfold upload`, which
+ * SENDS a bundle to the upload route below (ADR-0057's 2026-09-26 amendment). That
+ * does not re-open this: an upload is something an author does FROM a machine
+ * with a CLI, while a revert has to reach a Worker too, which only HTTP does.
  *
  * `/admin/setup` already exists, so `/admin` is an ESTABLISHED namespace rather
  * than a new class of surface -- and that is what matters, because the
@@ -298,9 +300,10 @@ export function getAdminAPI<CustomEnv extends Env>(options: ServerOptions<Custom
 			 * ## Why it is HERE and not a sixth CLI verb
 			 *
 			 * The same argument that put the pointer move here (ADR-0057), which this does not
-			 * re-litigate: a Worker is reachable only over HTTP, the command set is pinned at
-			 * five names, and an operator affordance that exists on one deployment shape is not
-			 * an affordance. It takes NO BODY, for the reason `reconfigure` takes none: the
+			 * re-litigate: a Worker is reachable only over HTTP, and an operator affordance that
+			 * exists on one deployment shape is not an affordance. (The command set has since
+			 * grown a sixth verb, `upload`, for the one admin action that only ever starts from
+			 * an author's machine; that changes nothing here.) It takes NO BODY, for the reason `reconfigure` takes none: the
 			 * rule decides which generations go, so there is nothing for a caller to name and no
 			 * input that could be got wrong.
 			 *

@@ -8,6 +8,7 @@ import {indexMain} from './indexCommand.js';
 import {runMain} from './run.js';
 import {serve} from './serve.js';
 import type {CommandName, Options} from './types.js';
+import {uploadMain} from './uploadCommand.js';
 
 /**
  * What `cli.ts` supplies and a test substitutes.
@@ -30,6 +31,12 @@ export type ProgramDependencies = {
 	index?: (options: Options) => void | Promise<void>;
 	/** Starts the read tier. Defaults to `serve`, which resolves its database and starts the Node adapter. */
 	serve?: (options: Options) => Promise<void>;
+	/**
+	 * Sends a bundle to a running node. Defaults to `uploadMain`, which resolves the exit
+	 * code a pipeline reads: `0` on `registered` or `unchanged`, `1` on anything else.
+	 * Handed the options with the positional `<bundle>` already folded in as `bundle`.
+	 */
+	upload?: (options: Options) => void | Promise<void>;
 };
 
 /**
@@ -63,7 +70,8 @@ function registerInputs(command: Command, name: CommandName): void {
 }
 
 /**
- * The command surface: five names, each of them meaning one thing.
+ * The command surface: five deployment intents, each of them meaning one thing,
+ * plus `upload`, the one command that runs no deployment and is a CLIENT of one.
  *
  * `CONTEXT.md` ("The COMMAND SET names deployment intents, not components")
  * is the authority for the set, and all five now ship: **`run`** follows the
@@ -77,6 +85,14 @@ function registerInputs(command: Command, name: CommandName): void {
  * was a registration and an assembly rather than a second way to read a flag,
  * because every row of the table already resolved through one resolver
  * (`OWNERSHIP` in `src/config.ts`).
+ *
+ * **`upload`** is the sixth, and it is a different KIND of command: it sends an
+ * already-built bundle to a running `run`'s `POST /{indexer}/admin/upload` and
+ * exits, so deploying a processor is one command, the same on a laptop and in CI
+ * (ADR-0085). It is not a deployment intent and does not re-open the argument that
+ * kept the revert an HTTP route rather than a verb (ADR-0057's 2026-09-26
+ * amendment): the revert has to reach a Worker, which only HTTP does, while an
+ * upload is by construction something an author does FROM a machine with a CLI.
  *
  * ## Why there is no DEFAULT command any more
  *
@@ -194,6 +210,26 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 	registerInputs(serveCommand, 'serve');
 	serveCommand.action(async (options: Options) => {
 		await runServe(options);
+	});
+
+	const runUpload =
+		deps.upload ??
+		(async (options: Options) => {
+			await uploadMain(options, {env});
+		});
+
+	const uploadCommand = program
+		.command('upload')
+		.description(
+			'upload an already-built processor bundle to a running node (`etherfold run`), which registers it beside ' +
+				'the generation answering reads: a client of a node rather than a way to run one. It never builds, and ' +
+				'exits non-zero on anything short of `registered` or `unchanged`',
+		)
+		.argument('[bundle]', 'the already-built, self-contained bundle to send (or -p)')
+		.usage('<bundle> --to http://localhost:2000 --indexer <name>   (ADMIN_TOKEN in the environment)');
+	registerInputs(uploadCommand, 'upload');
+	uploadCommand.action(async (bundle: string | undefined, options: Options) => {
+		await runUpload(bundle === undefined ? options : {...options, bundle});
 	});
 
 	return program;

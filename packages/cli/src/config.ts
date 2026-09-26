@@ -23,8 +23,10 @@ import type {
 // ---------------------------------------------------------------------------------------------------
 // ONE CONFIGURATION PATH FOR EVERY COMMAND (ADR-0048)
 // ---------------------------------------------------------------------------------------------------
-// Moving between the five commands is a DEPLOYMENT change and never a rewrite,
-// and that is a property of this file. Every command reads the same inputs, under
+// Moving between the five deployment commands is a DEPLOYMENT change and never a
+// rewrite, and that is a property of this file. The sixth, `upload`, is a CLIENT of
+// a running deployment rather than a way to run one, and it takes its inputs here
+// too, under the same rules, for the same reason (ADR-0048's 2026-09-26 amendment). Every command reads the same inputs, under
 // the same flag and the same variable, through the same resolver, and refuses in
 // the same shape.
 //
@@ -70,7 +72,9 @@ export type ConfigInput =
 	| 'ingestEndpoint'
 	| 'ingestToken'
 	| 'promotion'
-	| 'dropOnPromotion';
+	| 'dropOnPromotion'
+	| 'to'
+	| 'adminToken';
 
 /**
  * What ONE command does with ONE input.
@@ -200,7 +204,8 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'route that acts on one (/{indexer}/feed, /{indexer}/ingest), and on the WIRE it is required and ' +
 			`never defaulted, because a receiving host registers the names it was built with. A combined run ` +
 			`routes no batch by name -- it serves reads under this name and accepts no pushes -- so there it is ` +
-			`optional and defaults to '${DEFAULT_INDEXER_NAME}'`,
+			`optional and defaults to '${DEFAULT_INDEXER_NAME}'. \`upload\` requires it: a sender that defaulted ` +
+			`it would deploy to the wrong indexer without a word`,
 	},
 	ingestEndpoint: {
 		flag: '--ingest-endpoint <url>',
@@ -233,6 +238,21 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'whole reason non-canonical generations are kept. A deployment that would rather bound its storage ' +
 			'than keep a way back opts in',
 	},
+	to: {
+		flag: '--to <url>',
+		variable: 'UPLOAD_TO',
+		describe:
+			'the RUNNING NODE to upload the bundle to, as its base URL (e.g. http://localhost:2000): ' +
+			'/{indexer}/admin/upload hangs off it. Deliberately NOT --node-url / ETH_NODE_URI, which is the ' +
+			"CHAIN's JSON-RPC endpoint on every command that takes it",
+	},
+	adminToken: {
+		flag: '--admin-token <token>',
+		variable: 'ADMIN_TOKEN',
+		describe:
+			"the credential the node's admin guard checks, the same name the node reads it by. Prefer " +
+			'ADMIN_TOKEN: a secret on a command line is visible to every process on the host',
+	},
 };
 
 /**
@@ -245,6 +265,15 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * | `fetch` | NOT ACCEPTED | required | required | NOT ACCEPTED | none | REQUIRED | endpoint + token, required |
  * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
  * | `serve` | NOT ACCEPTED | none | NOT ACCEPTED | database, required | port and host | NOT ACCEPTED | none |
+ * | `upload` | the BUNDLE, required | NOT ACCEPTED | NOT ACCEPTED | NOT ACCEPTED | none | REQUIRED | none; `--to` + `ADMIN_TOKEN`, required |
+ *
+ * `upload` is the one row that is not a deployment intent: it is a CLIENT of a
+ * running `run`, sending an already-built bundle to its admin route and exiting
+ * (ADR-0085). Its two inputs no other command owns are the node it sends TO
+ * (`--to` / `UPLOAD_TO`, never the chain's `-n` / `ETH_NODE_URI`) and the admin
+ * credential it PRESENTS (`--admin-token` / `ADMIN_TOKEN`). The five deployment
+ * commands refuse both flags; the ones that SERVE the admin surface still read
+ * `ADMIN_TOKEN` from their environment, in the HTTP layer, as they always have.
  *
  * The INDEXER NAME has a column of its own, because it is NOT a wire input
  * (ADR-0036: the name is universal, and one discriminator has two sources for
@@ -292,6 +321,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'optional',
 		dropOnPromotion: 'optional',
+		to: 'refused',
+		adminToken: 'refused',
 	},
 	build: {
 		processor: 'required',
@@ -310,6 +341,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		to: 'refused',
+		adminToken: 'refused',
 	},
 	fetch: {
 		processor: 'refused',
@@ -328,6 +361,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		to: 'refused',
+		adminToken: 'refused',
 	},
 	index: {
 		processor: 'required',
@@ -346,6 +381,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		to: 'refused',
+		adminToken: 'refused',
 	},
 	serve: {
 		processor: 'refused',
@@ -364,6 +401,28 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		to: 'refused',
+		adminToken: 'refused',
+	},
+	upload: {
+		processor: 'required',
+		source: 'refused',
+		nodeUrl: 'refused',
+		rps: 'refused',
+		store: 'refused',
+		db: 'refused',
+		retention: 'refused',
+		pruneInterval: 'refused',
+		port: 'refused',
+		host: 'refused',
+		autoSetup: 'refused',
+		indexer: 'required',
+		ingestEndpoint: 'refused',
+		ingestToken: 'refused',
+		promotion: 'refused',
+		dropOnPromotion: 'refused',
+		to: 'required',
+		adminToken: 'required',
 	},
 };
 
@@ -505,8 +564,65 @@ const NEVER_PROMOTES_SERVE =
 	'a read tier folds nothing and promotes nothing: it READS the canonical pointer that whatever wrote the ' +
 	'database moves. When that pointer moves is the writer\u2019s configuration, which is `run`.';
 
+// ---------------------------------------------------------------------------------------------------
+// WHY THE SENDER'S TWO INPUTS ARE ITS OWN, and why it takes nothing else
+// ---------------------------------------------------------------------------------------------------
+// `upload` is a CLIENT of a running node (ADR-0085): it reads a bundle from disk
+// and sends its bytes. Everything a deployment is configured with -- the chain,
+// the source, the database, the port, the promotion policy -- belongs to the NODE
+// it addresses, so each is refused here with the reason and the place it lives.
+// ---------------------------------------------------------------------------------------------------
+
+const NOT_A_SENDER =
+	'--to names the running node `etherfold upload` sends a bundle TO, and this command sends no bundle ' +
+	'anywhere. (The one that pushes raw logs to another process is `fetch`, and its target is --ingest-endpoint.)';
+
+const CHECKS_ADMIN_FROM_ENV =
+	'this command SERVES the admin surface rather than calling it, and the credential its guard checks is read ' +
+	'from ADMIN_TOKEN in its ENVIRONMENT by that HTTP surface -- never from a flag, so the secret is not in the ' +
+	'process list. Set the variable. The flag is the SENDER\u2019s: `etherfold upload` presents it to a node.';
+
+const NO_ADMIN_SURFACE =
+	'this command neither serves nor calls the admin surface, so there is no admin credential to give it. The ' +
+	'flag is `etherfold upload`\u2019s, which presents it to a running node.';
+
+const UPLOAD_CARRIES_ITS_CONTRACTS =
+	'an upload CARRIES ITS OWN CONTRACTS, inside the bundle, through the route a processor module supplies ' +
+	'them by (ADR-0085), and it is the NODE that checks them against a source its operator configured. A ' +
+	'source given here would be one nothing reads. To start a node on an explicit source, that is `run`.';
+
+const UPLOAD_IS_NOT_THE_CHAIN =
+	'-n / ETH_NODE_URI is the CHAIN\u2019s JSON-RPC endpoint on every command that takes it, and `upload` makes ' +
+	'no chain call. The running node it sends the bundle to is --to (UPLOAD_TO), a deliberately different name, ' +
+	'so that a bundle can never be sent to a chain endpoint by reusing one.';
+
+const UPLOAD_MAKES_NO_CHAIN_CALL =
+	'`upload` makes no chain call, so there is no request rate to cap: the chain is read by the node it sends to.';
+
+const UPLOAD_HOLDS_NO_STATE =
+	'`upload` holds no state and opens no database: it sends bytes to a running node, and the database, the ' +
+	'retention and the prune schedule are THAT node\u2019s configuration (its `run`).';
+
+const UPLOAD_SERVES_NOTHING =
+	'`upload` is a client: it binds no port and serves nothing. The node it addresses is --to (UPLOAD_TO).';
+
+const UPLOAD_IS_NOT_INGEST =
+	'`upload` does not use the ingest wire, which carries raw logs from `fetch` to `index` on its own ' +
+	'credential. The node it sends to is --to (UPLOAD_TO), and it authenticates with the ADMIN credential ' +
+	'(ADMIN_TOKEN), which is deliberately not the ingest one (ADR-0057).';
+
+const UPLOAD_DOES_NOT_PROMOTE =
+	'WHEN an uploaded generation takes over is the RECEIVING node\u2019s promotion policy, configured on its ' +
+	'`run` (--promotion / PROMOTION_POLICY): an upload registers a successor, and that policy moves the pointer.';
+
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
-	run: {pruneInterval: PRUNES_PER_CYCLE, ingestEndpoint: NO_WIRE_COMBINED, ingestToken: NO_WIRE_COMBINED},
+	run: {
+		pruneInterval: PRUNES_PER_CYCLE,
+		ingestEndpoint: NO_WIRE_COMBINED,
+		ingestToken: NO_WIRE_COMBINED,
+		to: NOT_A_SENDER,
+		adminToken: CHECKS_ADMIN_FROM_ENV,
+	},
 	build: {
 		pruneInterval: PRUNES_PER_CYCLE,
 		port: NOT_SERVING_BUILD,
@@ -516,6 +632,8 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_COMBINED,
 		promotion: NEVER_PROMOTES_BUILD,
 		dropOnPromotion: NEVER_PROMOTES_BUILD,
+		to: NOT_A_SENDER,
+		adminToken: NO_ADMIN_SURFACE,
 	},
 	fetch: {
 		processor: NO_PROCESSOR_FETCH,
@@ -528,6 +646,8 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		autoSetup: NOT_SERVING_FETCH,
 		promotion: NEVER_PROMOTES_FETCH,
 		dropOnPromotion: NEVER_PROMOTES_FETCH,
+		to: NOT_A_SENDER,
+		adminToken: NO_ADMIN_SURFACE,
 	},
 	index: {
 		nodeUrl: NO_CHAIN_INDEX,
@@ -535,6 +655,8 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestEndpoint: INDEX_RECEIVES,
 		promotion: NEVER_PROMOTES_INDEX,
 		dropOnPromotion: NEVER_PROMOTES_INDEX,
+		to: NOT_A_SENDER,
+		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
 	serve: {
 		processor: NO_PROCESSOR_SERVE,
@@ -549,6 +671,24 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_SERVE,
 		promotion: NEVER_PROMOTES_SERVE,
 		dropOnPromotion: NEVER_PROMOTES_SERVE,
+		to: NOT_A_SENDER,
+		adminToken: CHECKS_ADMIN_FROM_ENV,
+	},
+	upload: {
+		source: UPLOAD_CARRIES_ITS_CONTRACTS,
+		nodeUrl: UPLOAD_IS_NOT_THE_CHAIN,
+		rps: UPLOAD_MAKES_NO_CHAIN_CALL,
+		store: UPLOAD_HOLDS_NO_STATE,
+		db: UPLOAD_HOLDS_NO_STATE,
+		retention: UPLOAD_HOLDS_NO_STATE,
+		pruneInterval: UPLOAD_HOLDS_NO_STATE,
+		port: UPLOAD_SERVES_NOTHING,
+		host: UPLOAD_SERVES_NOTHING,
+		autoSetup: UPLOAD_SERVES_NOTHING,
+		ingestEndpoint: UPLOAD_IS_NOT_INGEST,
+		ingestToken: UPLOAD_IS_NOT_INGEST,
+		promotion: UPLOAD_DOES_NOT_PROMOTE,
+		dropOnPromotion: UPLOAD_DOES_NOT_PROMOTE,
 	},
 };
 
@@ -615,6 +755,10 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			// materialises nothing unless it was typed, so only `true` is something a user
 			// passed
 			return options.dropOnPromotion === true ? 'true' : undefined;
+		case 'to':
+			return options.to;
+		case 'adminToken':
+			return options.adminToken;
 	}
 }
 
@@ -747,15 +891,19 @@ export type ProcessorBundleOptions = {
  * unit measured that a `data:` URL resolves `node:crypto` and bare `crypto`, so a
  * `--platform=node` bundle that keeps them is self-contained and a refusal would
  * be one an author cannot act on.
+ *
+ * It RESOLVES TO THE BYTES it judged (nothing, for a substituted arrival), so a
+ * caller that goes on to use them -- `upload`, which sends them -- sends exactly the
+ * bytes this check read rather than reading the file a second time.
  */
 export async function refuseUnbundledProcessor(
 	command: CommandName,
 	processorPath: string,
 	options: ProcessorBundleOptions = {},
-): Promise<void> {
-	if (options.substitutedArrival) return;
+): Promise<Uint8Array | undefined> {
+	if (options.substitutedArrival) return undefined;
 	const contents = await readProcessorPath(processorPath, options.cwd === undefined ? {} : {cwd: options.cwd});
-	if (contents.kind === 'bundle') return;
+	if (contents.kind === 'bundle') return contents.bundle;
 	if (contents.kind === 'unreadable') {
 		throw new Error(
 			`${nameOf('processor')} ${JSON.stringify(processorPath)} is not a file this process can read: ` +
@@ -1144,6 +1292,21 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 						),
 					},
 				};
+			case 'upload':
+				return {
+					command: 'upload',
+					bundle: requireUploadBundle(options, env),
+					to: requireUploadTarget(options, env),
+					indexer: requireIndexerName('upload', options, env),
+					adminToken: requireInput(
+						'adminToken',
+						'upload',
+						options,
+						env,
+						'the credential the node\u2019s admin guard checks, under the name the node reads it by. The guard ' +
+							'fails CLOSED, so an upload without it is answered 401 and deploys nothing',
+					),
+				};
 			case 'serve':
 			default:
 				return {
@@ -1207,9 +1370,75 @@ function requireIndexerName(command: CommandName, options: Options, env: EnvReco
 		command === 'fetch'
 			? 'the named indexer this fetcher pushes into, which is the first segment of every ingest route it ' +
 					'calls. It must be a name the receiving server was built with, or every push is refused with a 404'
-			: 'the named indexer this server hosts, which is the route segment a fetcher addresses it by. A host ' +
+			: command === 'upload'
+				? 'the named indexer on the node that the bundle is for: the first segment of the route it is sent ' +
+					'to (/{indexer}/admin/upload). It is never defaulted here, although `run` defaults its own to ' +
+					`'${DEFAULT_INDEXER_NAME}': a sender that defaulted it would deploy to the wrong indexer without a word`
+				: 'the named indexer this server hosts, which is the route segment a fetcher addresses it by. A host ' +
 					'answers only for the names it registers, so a push to any other is refused rather than defaulted',
 	);
+}
+
+/** A flag value that is really there: blank is nothing, as it is for every input. */
+function nonBlank(value: string | undefined): string | undefined {
+	return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+/**
+ * THE BUNDLE `upload` SENDS: its positional argument, or `-p`, and never both.
+ *
+ * It is the `processor` input -- a path to one self-contained bundle whose bytes
+ * are the generation's identity (ADR-0086) -- spelled as an ARGUMENT on the one
+ * command whose whole job is that file (`etherfold upload ./dist/processor.js`),
+ * while `-p` stays the ONE name every command gives that input, so a copied
+ * command line still resolves. Naming it both ways is refused rather than
+ * resolved by precedence, because two paths on one command line is a mistake about
+ * WHICH bytes get deployed, and guessing would deploy one of them silently.
+ */
+function requireUploadBundle(options: Options, env: EnvRecord): string {
+	const argument = nonBlank(options.bundle);
+	const flag = given('processor', options, env);
+	if (argument !== undefined && flag !== undefined) {
+		throw new Error(
+			`\`etherfold upload\` was given the bundle twice: ${JSON.stringify(argument)} as its argument and ` +
+				`${JSON.stringify(flag)} as ${nameOf('processor')}. It sends ONE bundle, so name it once.`,
+		);
+	}
+	const path = argument ?? flag;
+	if (path === undefined) {
+		throw new Error(
+			'The BUNDLE PATH is required by `etherfold upload`, as its argument (`etherfold upload <bundle> --to <url> ' +
+				`--indexer <name>\`) or as ${nameOf('processor')}: the already-built, self-contained bundle to send, whose ` +
+				'bytes the node names its generation by (ADR-0086). This command never builds one. ' +
+				NO_VARIABLE,
+		);
+	}
+	return path;
+}
+
+/** THE NODE `upload` sends to: required, never defaulted, and an http(s) URL. */
+function requireUploadTarget(options: Options, env: EnvRecord): string {
+	const to = requireInput(
+		'to',
+		'upload',
+		options,
+		env,
+		'the running node the bundle is uploaded to, as its base URL (e.g. --to http://localhost:2000). It is never ' +
+			'read from -n / ETH_NODE_URI, which is the CHAIN\u2019s endpoint',
+	);
+	let url: URL | undefined;
+	try {
+		url = new URL(to);
+	} catch {
+		url = undefined;
+	}
+	if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+		throw new Error(
+			`${nameOf('to')} ${JSON.stringify(to)} is not an http(s) URL. It is the running node\u2019s base URL, e.g. ` +
+				`--to http://localhost:2000, and /{indexer}/admin/upload hangs off it.`,
+		);
+	}
+	return to;
 }
 
 function requireNodeUrl(command: CommandName, options: Options, env: EnvRecord): string {
