@@ -406,7 +406,7 @@ describe('a revert across a FILTER CHANGE moves the pointer and FREEZES, rather 
 		expect(cursor.canonical).toMatchObject({
 			generation: old,
 			folding: 'frozen',
-			frozen: {reason: 'stream-not-fetched'},
+			frozen: {reason: 'stream-not-fetched', message: expect.stringMatching(/revert across a filter change/)},
 			value: {lastToBlock: TIP},
 		});
 		expect(cursor.value).toEqual(cursor.canonical?.value);
