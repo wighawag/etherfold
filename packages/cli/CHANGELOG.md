@@ -1,5 +1,18 @@
 # ethereum-indexer-cli
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [414576d]
+  - @etherfold/core@0.9.0
+  - @etherfold/fetcher-host@0.2.1
+  - @etherfold/processor-entities@0.2.1
+  - @etherfold/server@0.2.1
+  - @etherfold/utils@0.8.1
+  - @etherfold/platform-nodejs@0.2.1
+  - @etherfold/platform-nodejs-fetcher@0.2.1
+
 ## 0.8.0
 
 ### Minor Changes

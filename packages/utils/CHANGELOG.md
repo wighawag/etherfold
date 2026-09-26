@@ -1,5 +1,12 @@
 # ethereum-indexer-utils
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [414576d]
+  - @etherfold/core@0.9.0
+
 ## 0.8.0
 
 ### Minor Changes
