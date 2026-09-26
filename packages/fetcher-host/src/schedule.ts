@@ -1,5 +1,4 @@
-import type {Abi} from '@etherfold/core';
-import type {CycleReport, FetcherHost} from './host.js';
+import type {CycleReport} from './host.js';
 
 /**
  * How a host schedules a fetcher: a LOOP, driven by whoever owns the process.
@@ -60,6 +59,23 @@ export type RunSummary = {
 	error?: unknown;
 };
 
+/**
+ * WHAT THE LOOP DRIVES: something that runs one classified cycle and says how long to
+ * wait after it.
+ *
+ * A `FetcherHost` is one, over one source. So is anything that runs SEVERAL of them as
+ * one cycle -- a combined `run` that fetches a second stream beside the first, for a
+ * successor that arrived with new contracts, drives one of those -- which is why the
+ * loop asks for these two methods and nothing else: scheduling is the same whatever is
+ * behind them.
+ */
+export type CycleRunner = {
+	/** Run one cycle and classify it. Does not throw, and does not wait. */
+	runCycle(): Promise<CycleReport>;
+	/** How long to wait after `report` before the next cycle. */
+	delayFor(report: CycleReport): number;
+};
+
 export type LoopOptions = {
 	/** Abort to stop the loop; it finishes the cycle in flight and returns. */
 	signal?: AbortSignal;
@@ -85,10 +101,7 @@ export type LoopOptions = {
  * adapter's (exit non-zero, fail the invocation), and both are louder than
  * staying up.
  */
-export async function runFetcherLoop<ABI extends Abi>(
-	host: FetcherHost<ABI>,
-	options: LoopOptions = {},
-): Promise<RunSummary> {
+export async function runFetcherLoop(host: CycleRunner, options: LoopOptions = {}): Promise<RunSummary> {
 	const wait = options.sleep ?? sleep;
 	const summary: RunSummary = {cycles: 0, pushed: 0, stoppedBecause: 'stopped'};
 

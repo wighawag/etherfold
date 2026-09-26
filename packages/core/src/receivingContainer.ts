@@ -128,7 +128,11 @@ const namedLogger = logs('@etherfold/core');
  * least one registered generation this container holds folds that stream. So a
  * deployment whose every held fold is a SUCCESSOR re-folding stored history STILL
  * FETCHES, which is exactly the failure this replaces -- a restarted deployment
- * that asked the node for `["eth_chainId"]` and nothing else, for ever.
+ * that asked the node for `["eth_chainId"]` and nothing else, for ever. The same
+ * derivation, seen from the fetching side, is `fetchedStreams`: EVERY live stream is
+ * fetched, each by its own fetcher through its one writer, so a successor on a NEW
+ * stream catches up beside the incumbent's rather than waiting for a fetcher that
+ * only ever fetched one source (ADR-0087's amendment of 2026-09-26).
  *
  * ## Two rules of the chain-facing container that deliberately do NOT come over
  *
@@ -488,9 +492,12 @@ export class GenerationInstantiationError extends Error {
  *   built (`GenerationInstantiationError`: the loader refused the bytes, they name
  *   another fold, or its factories threw). Remembered from the attempt rather than
  *   re-tried to answer a question, and forgotten when a later attempt succeeds.
- * - **`stream-not-fetched`**: the code is fine and its stream is not the one this
- *   deployment fetches (a filter change's generation), so a move onto it moves the
- *   pointer and freezes, which is what a revert across a filter change is.
+ * - **`stream-not-fetched`**: the code is fine and its stream is not one this
+ *   deployment fetches (a filter change's predecessor), so a move onto it moves the
+ *   pointer and freezes, which is what a revert across a filter change is. It is never
+ *   the answer for a pending SUCCESSOR on a new stream: that one is instantiated at
+ *   `open` and its stream is fetched by a writer of its own (`fetchedStreams`), so it is
+ *   `held`.
  */
 export type FrozenReason = 'no-bundle' | 'no-instantiator' | 'instantiation-failed' | 'stream-not-fetched';
 
@@ -552,6 +559,46 @@ export type HeldFold<ABI extends Abi, ProcessResultType = unknown, State = unkno
 	 */
 	readonly rebuild: GenerationRebuild<ABI, ProcessResultType>;
 };
+
+/**
+ * ONE STREAM THIS DEPLOYMENT FETCHES: its digest, the source a fetcher fetches it over,
+ * the stream config it was provided with, and its ONE writer (ADR-0087).
+ *
+ * Answered by `ReceivingIndexer.fetchedStreams`, one entry per stream a registered
+ * generation held here folds -- which is the same set `liveIngestions` answers, seen
+ * from the FETCHING side: a host builds one fetcher per entry, pointed at the entry's
+ * source, and every batch it pushes reaches `writer` by its wire context. So a
+ * successor on a NEW stream (an upload that adds an event) is fetched by its own
+ * fetcher through its own writer while the incumbent's stream goes on being fetched
+ * beside it, and a stream leaves this list, and its fetcher stops, once no fold here
+ * reads it any more.
+ */
+export type FetchedStream<ABI extends Abi> = {
+	/** WHICH stream, as `streamDigestOf` renders it: the key a host holds one fetcher under. */
+	readonly stream: string;
+	/** What a fetcher of this stream fetches: the fetch filter half of its identity. */
+	readonly source: IndexingSource<ABI>;
+	/** The stream config it was provided with, which a fetcher must assert unchanged to reach `writer`. */
+	readonly config: ProvidedStreamConfig | undefined;
+	/** The ONE writer of this stream, the deployment's (ADR-0087). */
+	readonly writer: StreamWriter<ABI>;
+};
+
+/**
+ * WHY A STORED GENERATION IS BEING INSTANTIATED, which decides whether its stream may
+ * be one this deployment does not fetch yet.
+ *
+ * - **`open`**: it is the canonical generation or the pending successor, and has to
+ *   fold from the moment the process starts. Its stream is FETCHED whatever it is: the
+ *   canonical generation answers reads, and the successor is catching up and nothing
+ *   else would ever advance or promote it (a successor on a new stream, an upload that
+ *   adds an event, included).
+ * - **`move`**: a pointer move onto a generation this process holds no fold for (a
+ *   revert). A move onto a generation whose stream nothing here fetches stays the
+ *   FREEZE ADR-0057's 2026-09-25 amendment describes: re-fetching a predecessor's
+ *   stream is not what a revert does.
+ */
+type InstantiationOccasion = 'open' | 'move';
 
 /**
  * What a stored generation's bundle came to at a pointer move: a fold built from it,
@@ -850,7 +897,7 @@ export class ReceivingIndexer<
 	 * the STREAM's own coverage claim for its position and appends through the
 	 * deployment's appender.
 	 */
-	private readonly writers = new Map<string, StreamWriter<ABI>>();
+	private readonly writers = new Map<string, FetchedStream<ABI>>();
 
 	/**
 	 * ONE ADVANCE AT A TIME PER FOLD, which is what stops the two ways a fold moves
@@ -982,15 +1029,17 @@ export class ReceivingIndexer<
 	private canonicalFold: HeldFold<ABI, ProcessResultType, unknown> | undefined;
 
 	/**
-	 * THE SOURCE A DEPLOYMENT STARTED WITH NOTHING CONFIGURED TOOK FROM ITS FIRST FOLD
+	 * THE SOURCE A DEPLOYMENT STARTED WITH NOTHING CONFIGURED TOOK FROM ITS FOLDS
 	 * (ADR-0093), and never set on one that was configured with a source.
 	 *
-	 * Set ONCE, by the first fold this container holds, and never moved afterwards: it
-	 * is what the deployment FETCHES, and a host builds its one fetcher over it, so a
-	 * later fold on another stream (an upload carrying different contracts) is a
-	 * successor on a new stream exactly as it is on a deployment whose source came from
-	 * its processor module. In memory, like `canonicalFold`: it is which stream THIS
-	 * process fetches, and a restart takes it again from the fold it comes up with.
+	 * Set by the first fold this container holds, and MOVED WITH THE POINTER afterwards:
+	 * a promotion onto a generation on another stream (an upload that added an event)
+	 * makes that generation's source this one (`movePointer`), so what the deployment
+	 * says it fetches is the canonical generation's stream, as a restart with nothing
+	 * configured also finds it. It is NOT the whole of what is fetched: a successor on a
+	 * new stream is fetched beside it by a writer of its own (`fetchedStreams`). In
+	 * memory, like `canonicalFold`: a restart takes it again from the fold it comes up
+	 * with, which is the canonical generation's.
 	 */
 	private adopted: IndexingSource<ABI> | undefined;
 
@@ -1061,15 +1110,20 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * THE SOURCE THIS DEPLOYMENT FETCHES: the one it was configured with, or, on a
-	 * deployment started with NOTHING configured (ADR-0093), the one its FIRST FOLD
-	 * carried -- the canonical generation instantiated at `open` from its stored bundle,
-	 * or the first generation an arrival added.
+	 * THE SOURCE THIS DEPLOYMENT FETCHES FOR ITS CANONICAL GENERATION: the one it was
+	 * configured with, or, on a deployment started with NOTHING configured (ADR-0093), the
+	 * one its first fold carried -- the canonical generation instantiated at `open` from
+	 * its stored bundle, or the first generation an arrival added -- and from then on the
+	 * source of whatever generation a promotion made canonical.
+	 *
+	 * It is the source a fold that names none of its own defaults to, and it is NOT the
+	 * whole of what is fetched: every stream a held fold reads is fetched, each by its own
+	 * fetcher through its own writer (`fetchedStreams`), so a successor on a new stream
+	 * catches up beside the incumbent rather than waiting for this to move.
 	 *
 	 * `undefined` is a real answer and not a gap to paper over: such a deployment has
 	 * been told nothing about what to fetch yet, so it fetches nothing and says it is
-	 * WAITING. A host that builds its fetcher over a source asks this, and builds it the
-	 * moment there is one.
+	 * WAITING.
 	 */
 	get fetchedSource(): IndexingSource<ABI> | undefined {
 		return this.options.source ?? this.adopted;
@@ -1175,7 +1229,7 @@ export class ReceivingIndexer<
 				: `it does NOT catch up and is not promoted; the next arrival replaces it as usual`;
 		let resumed: ResumedFold<ABI, ProcessResultType>;
 		try {
-			resumed = await this.instantiate(record, instantiateGeneration);
+			resumed = await this.instantiate(record, instantiateGeneration, 'open');
 		} catch (err) {
 			if (!(err instanceof GenerationInstantiationError)) throw err;
 			namedLogger.error(`${which} could not be instantiated at open, so ${stalled} (ADR-0092): ${err.why}`, err);
@@ -1303,7 +1357,7 @@ export class ReceivingIndexer<
 	 * every caller's type for a case `open` cannot produce.
 	 */
 	get ingestion(): StreamWriter<ABI> {
-		const writer = this.writers.get(this.opening.streamDigest);
+		const writer = this.writers.get(this.opening.streamDigest)?.writer;
 		if (!writer) {
 			throw new Error(
 				`this ReceivingIndexer holds no writer for the stream ${this.opening.streamDigest}, which \`open\` cannot ` +
@@ -1377,7 +1431,7 @@ export class ReceivingIndexer<
 	 */
 	async folding(): Promise<GenerationFolding[]> {
 		const registered = await this.registry.list();
-		const fetched = this.fetchedStream();
+		const fetched = this.heldStreams();
 		const reports: GenerationFolding[] = [];
 		for (const generation of registered) {
 			reports.push(await this.foldingIn(generation, fetched));
@@ -1396,21 +1450,25 @@ export class ReceivingIndexer<
 	 * not a second one, so the two surfaces cannot disagree about a generation.
 	 */
 	async foldingOf(generation: GenerationRecord): Promise<GenerationFolding> {
-		return this.foldingIn(generation, this.fetchedStream());
+		return this.foldingIn(generation, this.heldStreams());
 	}
 
 	/**
-	 * The stream this deployment FETCHES: what an instantiation here would fold. NOTHING
-	 * on a deployment started with nothing configured that holds no fold yet (ADR-0093),
-	 * which fetches no stream at all.
+	 * THE STREAMS THIS DEPLOYMENT FETCHES, as far as this process knows synchronously:
+	 * every stream a fold it holds reads. EMPTY on a deployment started with nothing
+	 * configured that holds no fold yet (ADR-0093), which fetches no stream at all.
+	 *
+	 * It used to be ONE stream, the configured source's or the first fold's, because a
+	 * `run` held one fetcher. A successor on a new stream is now fetched by a writer of its
+	 * own beside the incumbent's (`fetchedStreams`), so what a revert could fold without
+	 * fetching anything new is any of them.
 	 */
-	private fetchedStream(): string | undefined {
-		const source = this.fetchedSource;
-		return source ? streamDigestOf(source, resolveStreamConfig(this.options.stream)) : undefined;
+	private heldStreams(): ReadonlySet<string> {
+		return new Set(this.folds.map((fold) => fold.streamDigest));
 	}
 
 	/** One generation's answer for `folding`, the reasons in the order an operator would act on them. */
-	private async foldingIn(generation: GenerationRecord, fetched: string | undefined): Promise<GenerationFolding> {
+	private async foldingIn(generation: GenerationRecord, fetched: ReadonlySet<string>): Promise<GenerationFolding> {
 		if (this.folds.some((fold) => sameGeneration(fold.record, generation))) {
 			return {generation, folding: 'held'};
 		}
@@ -1441,11 +1499,11 @@ export class ReceivingIndexer<
 		}
 		// A deployment that fetches NOTHING yet (ADR-0093) takes the source of the first
 		// generation it folds, so no stream is ruled out here until one is fetched.
-		if (fetched !== undefined && generation.stream !== fetched) {
+		if (fetched.size > 0 && !fetched.has(generation.stream)) {
 			return frozen(
 				'stream-not-fetched',
-				`its stream ${generation.stream} is not one this deployment fetches (it fetches ${fetched}), so nothing ` +
-					`here would fold it: a move onto it is a freeze`,
+				`its stream ${generation.stream} is not one this deployment fetches (it fetches ${[...fetched].join(', ')}), ` +
+					`so nothing here would fold it: a move onto it is a freeze`,
 			);
 		}
 		return {generation, folding: 'instantiable'};
@@ -1530,12 +1588,45 @@ export class ReceivingIndexer<
 		// fold publishes what it applied (ADR-0083). The pointer is durable and shared,
 		// so it is read where the records are.
 		this.noteCanonical(await this.registry.canonical());
-		const live: LogIngestion[] = [];
-		for (const [digest, writer] of this.writers) {
+		return this.liveStreams(registered).map((fetched) => fetched.writer);
+	}
+
+	/**
+	 * THE STREAMS THIS DEPLOYMENT FETCHES: one entry per stream a registered generation
+	 * held here folds, each with the source a fetcher fetches it over and its ONE writer
+	 * (`FetchedStream`, ADR-0087).
+	 *
+	 * The FETCHING side of `liveIngestions`, from the same derivation, so the two cannot
+	 * disagree: a host that fetches (the CLI's `run` and `build`) holds ONE fetcher per
+	 * entry and asks this before every cycle, and so the set of fetchers follows the
+	 * folds, which follow the slots:
+	 *
+	 * - a successor on a NEW stream (an upload that adds an event, a re-read after a
+	 *   filter change) is held from its registration, so its stream appears here and is
+	 *   fetched BESIDE the incumbent's, which goes on being fetched and answering;
+	 * - a PROMOTION onto it stops folding the incumbent where it read another stream
+	 *   (`movePointer`), so the old stream leaves this list and its fetcher stops, once
+	 *   no other fold here reads it;
+	 * - a REPLACED successor is dropped (`dropReplaced`), and its stream leaves with it
+	 *   on the same terms;
+	 * - at `open` the canonical generation and the pending successor are instantiated
+	 *   whatever stream each is on, so a restart mid-catch-up fetches both.
+	 *
+	 * Each stream has exactly ONE writer here whoever fetches it: this adds streams, never
+	 * a second writer of one.
+	 */
+	async fetchedStreams(): Promise<readonly FetchedStream<ABI>[]> {
+		return this.liveStreams(await this.registry.list());
+	}
+
+	/** Every stream whose writer is live: one a registered generation held here still folds. */
+	private liveStreams(registered: readonly GenerationRecord[]): FetchedStream<ABI>[] {
+		const live: FetchedStream<ABI>[] = [];
+		for (const [digest, fetched] of this.writers) {
 			const stillFolded = this.folds.some(
 				(fold) => fold.streamDigest === digest && registered.some((record) => sameGeneration(record, fold.record)),
 			);
-			if (stillFolded) live.push(writer);
+			if (stillFolded) live.push(fetched);
 		}
 		return live;
 	}
@@ -1697,12 +1788,13 @@ export class ReceivingIndexer<
 	): void {
 		this.folds.push(fold);
 		// A deployment started with NOTHING configured takes what it fetches from its FIRST
-		// fold, once, and keeps it (ADR-0093): see `fetchedSource`.
+		// fold (ADR-0093), and from then on from whatever a promotion makes canonical: see
+		// `fetchedSource`.
 		if (!this.options.source && !this.adopted) {
 			this.adopted = source;
 			namedLogger.info(
 				`this deployment was started with nothing configured, and its first fold ({stream: ${fold.record.stream}, ` +
-					`processor: ${fold.record.processor}}) names what it fetches from now on (ADR-0093)`,
+					`processor: ${fold.record.processor}}) names what it fetches (ADR-0093)`,
 			);
 		}
 		// ...and the STREAM's own writer, built once per stream and AFTER the record
@@ -1742,18 +1834,19 @@ export class ReceivingIndexer<
 		// An identity nothing registered is the REGISTRY's refusal to make, by name, at
 		// the move itself (`UnknownGenerationError`): there are no bytes to look for.
 		const record = (await this.registry.list()).find((candidate) => sameGeneration(candidate, id));
-		return record ? this.instantiate(record, instantiateGeneration) : undefined;
+		return record ? this.instantiate(record, instantiateGeneration, 'move') : undefined;
 	}
 
 	private async instantiate(
 		record: GenerationRecord,
 		instantiateGeneration: NonNullable<ReceivingIndexerOptions<ABI, ProcessResultType, State>['instantiateGeneration']>,
+		occasion: InstantiationOccasion,
 	): Promise<ResumedFold<ABI, ProcessResultType>> {
 		// WHAT THE ATTEMPT CAME TO is remembered for `folding`, so a generation whose code
 		// could not be built is REPORTED as frozen rather than merely logged (ADR-0092).
 		const key = keyOf(record);
 		try {
-			const resumed = await this.buildFromBundle(record, instantiateGeneration);
+			const resumed = await this.buildFromBundle(record, instantiateGeneration, occasion);
 			if (resumed.fold) {
 				this.lastAttempt.delete(key);
 			} else {
@@ -1771,6 +1864,7 @@ export class ReceivingIndexer<
 	private async buildFromBundle(
 		record: GenerationRecord,
 		instantiateGeneration: NonNullable<ReceivingIndexerOptions<ABI, ProcessResultType, State>['instantiateGeneration']>,
+		occasion: InstantiationOccasion,
 	): Promise<ResumedFold<ABI, ProcessResultType>> {
 		const id: GenerationId = {stream: record.stream, processor: record.processor};
 		const replay = this.options.replay;
@@ -1810,19 +1904,24 @@ export class ReceivingIndexer<
 		const provided = spec.stream ?? this.options.stream;
 		const streamConfig = resolveStreamConfig(provided);
 		const context: GenerationContext = {stream: streamDigestOf(source, streamConfig)};
-		// ...and whatever the instantiation named, a deployment folds only the stream it
-		// FETCHES, once it fetches one: a generation whose own contracts name another stream
-		// is a filter change's, frozen here exactly as a configured deployment freezes it.
-		const fetched = this.fetchedStream();
-		const fetchesAnother = spec.source !== undefined && fetched !== undefined && fetched !== record.stream;
+		// ...and at a MOVE, whatever the instantiation named, a deployment folds only a
+		// stream it already FETCHES, once it fetches any: a revert onto a generation on
+		// another stream is a filter change's, frozen here (ADR-0057) -- including one on
+		// the stream a configured source names, once a promotion has moved the fetch off
+		// it, since re-fetching a predecessor's stream is not what a revert does. At `open` there is no such rule: the
+		// canonical generation and the pending successor fold whatever stream they are on,
+		// and that stream gets its own writer and is fetched (`fetchedStreams`).
+		const fetched = this.heldStreams();
+		const fetchesAnother = occasion === 'move' && fetched.size > 0 && !fetched.has(record.stream);
 		if (context.stream !== record.stream || fetchesAnother) {
-			// A FILTER CHANGE's generation, not broken code: its stream is not the one this
+			// A FILTER CHANGE's generation, not broken code: its stream is not one this
 			// deployment fetches, so the move goes ahead and it answers reads frozen, as a
 			// revert across a filter change always did (ADR-0057).
+			const fetching = fetched.size > 0 ? [...fetched].join(', ') : context.stream;
 			return {
 				fold: undefined,
 				frozen:
-					`its stream ${record.stream} is not one this deployment fetches (it fetches ${fetched ?? context.stream}), so its ` +
+					`its stream ${record.stream} is not one this deployment fetches (it fetches ${fetching}), so its ` +
 					`code was loaded and nothing folds it: a revert across a filter change is a freeze`,
 			};
 		}
@@ -1867,7 +1966,7 @@ export class ReceivingIndexer<
 		provided: ProvidedStreamConfig | undefined,
 	): StreamWriter<ABI> {
 		const held = this.writers.get(stream);
-		if (held) return held;
+		if (held) return held.writer;
 		const appendEmissions = this.options.appendEmissions;
 		const cursor = this.options.streamCursor;
 		if (!appendEmissions) refuseContainerThatCannotFetch('appendEmissions');
@@ -1881,7 +1980,7 @@ export class ReceivingIndexer<
 			// so nothing about which folds are present can change what was stored.
 			deliver: (delta) => this.offerToFolds(delta),
 		});
-		this.writers.set(stream, writer);
+		this.writers.set(stream, {stream, source, config: provided, writer});
 		return writer;
 	}
 
@@ -2304,6 +2403,12 @@ export class ReceivingIndexer<
 		// `undefined` where this container holds no fold for the target, which is the
 		// ordinary post-redeploy revert: nothing here publishes then, and nothing should.
 		this.noteCanonical(record);
+		// WHAT THIS DEPLOYMENT SAYS IT FETCHES FOLLOWS THE POINTER on a deployment started
+		// with nothing configured (ADR-0093): once a generation on another stream answers
+		// reads, its source is the one `fetchedSource` names, as a restart would find it.
+		if (!this.options.source && this.canonicalFold) {
+			this.adopted = this.writers.get(this.canonicalFold.streamDigest)?.source ?? this.adopted;
+		}
 		// NOTHING IS DISARMED HERE. The target is canonical now, so it is no longer
 		// waiting to become so -- and the registry took it out of the `successor` slot in
 		// the same commit as the move, which is the only place that fact was ever kept.
@@ -2353,6 +2458,22 @@ export class ReceivingIndexer<
 		// back.
 		if (this.promotionConfig.dropOnPromotion && superseded && wasPromotion) {
 			await this.dropSuperseded(superseded, record);
+		} else if (superseded && this.canonicalFold && wasPromotion && superseded.streamDigest !== record.stream) {
+			// A PROMOTION ONTO ANOTHER STREAM MOVES THE FETCH WITH THE POINTER: the incumbent
+			// stops being folded here, however it arrived, so its stream stops being fetched once
+			// no other fold here reads it (`fetchedStreams`). Folding it on would keep a whole
+			// fetcher -- chain calls for a stream nobody reads -- running for the life of the
+			// process, which a fold on the SAME stream never costs, so that case keeps the
+			// retention it always had. It is RETAINED -- registered, with its state and its
+			// bundle, and named by `predecessor` -- and a revert onto it is the freeze a revert
+			// across a filter change always was (ADR-0057).
+			this.stopDriving(supersededRecord);
+			namedLogger.info(
+				`the generation {stream: ${supersededRecord.stream}, processor: ${supersededRecord.processor}} was ` +
+					`superseded by a promotion onto the stream ${record.stream}, so this process no longer folds it, and its ` +
+					`stream ${supersededRecord.stream} stops being fetched once nothing here reads it. It is kept, with its ` +
+					`state and its stored bundle.`,
+			);
 		} else if (superseded && this.canonicalFold && this.instantiatedHere.has(superseded)) {
 			// A FOLD THIS PROCESS BUILT FROM STORED BYTES IS HELD WHILE THE POINTER NAMES IT,
 			// and a promotion is the pointer leaving it: the incumbent an upgrading restart

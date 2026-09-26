@@ -441,9 +441,14 @@ describe('every refusal answers its own status and reason, and leaves the node E
 
 describe('a node whose source came from its processor module takes an upload carrying NEW contracts', () => {
 	it('registers it as a successor on its new stream, rather than refusing it', async () => {
-		const {indexer} = await aNodeServing();
+		// PARKED, so the registration is read before the new stream is fetched and the
+		// successor promoted: that it then catches up and takes over is
+		// `aSuccessorOnANewStreamIsFetchedByItsOwnWriter.test.ts`
+		const clock = aParkableClock();
+		const {indexer} = await aNodeServing({}, clock.sleep);
 		const incumbent = indexer.container.generation;
 		const approval = await bytesOf(APPROVAL_BUNDLE);
+		clock.park();
 
 		const answer = await upload(indexer, approval);
 
@@ -459,6 +464,7 @@ describe('a node whose source came from its processor module takes an upload car
 		);
 		// the incumbent still answers
 		expect((await feedOf(indexer, LOGS.length)).generation).toBe(generationDigestOf(incumbent));
+		clock.release();
 	});
 });
 
