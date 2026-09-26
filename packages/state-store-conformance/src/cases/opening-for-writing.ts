@@ -74,8 +74,8 @@ export function openingForWritingCases(
 			const first = await openForWriting(store);
 			const second = await openForWriting(store);
 
-			// the shipped generation pattern hands ONE store instance to EVERY
-			// generation, so both of these are the canonical writer and its successor.
+			// a host MAY hand ONE store instance to several generations, and then both
+			// of these are the canonical writer and its successor.
 			// If the second open claimed afresh, the process would refuse itself.
 			expect(second).toBe(first);
 			await first.applyBlock(block(LADDER_BASE), [owns('1', '0xalice', 1)]);

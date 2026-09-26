@@ -48,6 +48,8 @@ export EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe 
 node run.mjs
 ```
 
+**WebKit may not relaunch on a re-run.** Re-running this on 2026-09-17 to verify the committed results, Chromium and Firefox reproduced exactly (110 verdicts per engine, none differing from `results/csp-*.json`), and WebKit then threw `browserContext.newPage: Target page, context or browser has been closed` on its first page, under the same recipe that had produced `results/csp-webkit.json` minutes earlier. Not investigated: it is a harness signal, not a result one. Expect to fight the WebKit launch when re-verifying, and do not read a red WebKit run as a changed answer.
+
 ## Two instrument notes, because both changed a result
 
 **The driver must pass a FUNCTION to `waitForFunction`, never a string.** A string is delivered to the page as `Runtime.evaluate`, which is exactly what `script-src 'self'` forbids, so the first complete run reported "the harness never finished" for six of the eight policies. That is the driver being refused, not the mechanism. `browser-storage-headroom-for-generations.md` records the same lesson from the other side: clear the instrument before believing a row.

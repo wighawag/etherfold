@@ -436,11 +436,14 @@ export type OpenForWritingOptions = {
  * ## It is IDEMPOTENT per store instance, and that is load-bearing
  *
  * A second call on the same instance returns the SAME handle and does not claim
- * again. The shipped generation pattern hands ONE store instance to EVERY
- * generation (`createState: () => store`), so if each generation claimed
+ * again. A host MAY hand ONE store instance to several generations
+ * (`createState: () => store`), and then, if each generation claimed
  * independently, building a successor would invalidate the canonical generation
  * and the guard would refuse the process against ITSELF. One storage, one
- * claim.
+ * claim. (Generations that fold SIDE BY SIDE need their own storage, a table
+ * namespace or a database each, or they collide on rows and on the sync cursor;
+ * that is what the shipped hosts do. Sharing one instance is legal, not the
+ * pattern to copy.)
  *
  * ## Construction, not a lease
  *

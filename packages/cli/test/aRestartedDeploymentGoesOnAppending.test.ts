@@ -24,7 +24,7 @@ import {ALICE, BOB, CAROL, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} fro
 // it.
 //
 // THE THREE NUMBERS THIS FILE LANDS ON, which are what the family was measured
-// against (`work/questions/task-a-restarted-deployment-hands-over-the-write-duty-it-cannot-discharge.md`):
+// against (ADR-0087, "The defect that forced it"):
 //
 //   today (the defect)     `_emissions` holds 2 rows and NOTHING appends afterwards.
 //   naive hand-over        `_emissions` holds 4 rows where 2 are correct: the whole
