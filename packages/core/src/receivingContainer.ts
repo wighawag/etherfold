@@ -426,6 +426,21 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 * configured processor passes one, the one-shot `build` included.
 	 */
 	confirmReplacingSuccessorAtStart?: (replacement: SuccessorReplacementAtStart) => Promise<void> | void;
+	/**
+	 * WHETHER THIS HOST FETCHES ITS OWN STREAMS: `true` on a host that runs one fetcher per
+	 * stream `fetchedStreams` lists (the CLI's `run` and `build`), ABSENT or `false` on a
+	 * PUSH-FED receiver whose streams another process fetches (the split `index`, the
+	 * server package's receiving hosts) (ADR-0087's and ADR-0093's amendments of 2026-09-26).
+	 *
+	 * It decides ONE rule: what a PROMOTION ONTO ANOTHER STREAM does to the incumbent. Where
+	 * this host fetches, the incumbent stops being folded here, however it arrived, so its
+	 * stream leaves `fetchedStreams` and its fetcher stops once nothing here reads it;
+	 * folding it on would keep a whole fetcher's chain calls running for a stream nobody
+	 * reads. Where it is push-fed, the incumbent keeps today's retention: it goes on folding
+	 * and its stream goes on accepting pushes, since what fetches it is not this process
+	 * and costs it nothing. A same-stream promotion is unaffected either way.
+	 */
+	fetchesItsOwnStreams?: boolean;
 };
 
 /**
@@ -1606,7 +1621,9 @@ export class ReceivingIndexer<
 	 *   fetched BESIDE the incumbent's, which goes on being fetched and answering;
 	 * - a PROMOTION onto it stops folding the incumbent where it read another stream
 	 *   (`movePointer`), so the old stream leaves this list and its fetcher stops, once
-	 *   no other fold here reads it;
+	 *   no other fold here reads it -- on a host that says it fetches its own streams
+	 *   (`fetchesItsOwnStreams`); a push-fed receiver keeps the incumbent folding, since
+	 *   what fetches its streams is another process;
 	 * - a REPLACED successor is dropped (`dropReplaced`), and its stream leaves with it
 	 *   on the same terms;
 	 * - at `open` the canonical generation and the pending successor are instantiated
@@ -2458,15 +2475,25 @@ export class ReceivingIndexer<
 		// back.
 		if (this.promotionConfig.dropOnPromotion && superseded && wasPromotion) {
 			await this.dropSuperseded(superseded, record);
-		} else if (superseded && this.canonicalFold && wasPromotion && superseded.streamDigest !== record.stream) {
-			// A PROMOTION ONTO ANOTHER STREAM MOVES THE FETCH WITH THE POINTER: the incumbent
+		} else if (
+			this.options.fetchesItsOwnStreams === true &&
+			superseded &&
+			this.canonicalFold &&
+			wasPromotion &&
+			superseded.streamDigest !== record.stream
+		) {
+			// ON A HOST THAT FETCHES ITS OWN STREAMS (`fetchesItsOwnStreams`: the CLI's `run` and
+			// `build`), A PROMOTION ONTO ANOTHER STREAM MOVES THE FETCH WITH THE POINTER: the incumbent
 			// stops being folded here, however it arrived, so its stream stops being fetched once
 			// no other fold here reads it (`fetchedStreams`). Folding it on would keep a whole
 			// fetcher -- chain calls for a stream nobody reads -- running for the life of the
 			// process, which a fold on the SAME stream never costs, so that case keeps the
 			// retention it always had. It is RETAINED -- registered, with its state and its
 			// bundle, and named by `predecessor` -- and a revert onto it is the freeze a revert
-			// across a filter change always was (ADR-0057).
+			// across a filter change always was (ADR-0057). A PUSH-FED host (the split `index`,
+			// the server's receiving hosts) never gets here: its streams are fetched by another
+			// process that costs this one nothing, so the incumbent keeps folding and its stream
+			// keeps accepting pushes, as it always did.
 			this.stopDriving(supersededRecord);
 			namedLogger.info(
 				`the generation {stream: ${supersededRecord.stream}, processor: ${supersededRecord.processor}} was ` +

@@ -249,18 +249,35 @@ describe('an operator SEES what the deployment holds, slot by slot', () => {
 });
 
 describe('an operator SEES whether each generation can fold here, where the host can say (ADR-0092)', () => {
-	it('reports it per generation from the container, which folds the two on the stream it now fetches', async () => {
+	it('reports it per generation from the container, which folds all three of these', async () => {
 		const listed = await listGenerations(deployment);
 
-		// a fold this process was HANDED keeps folding after a promotion on its OWN stream, so
-		// the second and third are held; the promotion onto ANOTHER stream stopped folding the
-		// first, so that its stream stops being fetched (ADR-0087's amendment of 2026-09-26),
-		// and this host was given no way to run its stored bytes again
-		const generations = listed.body.generations as {digest: string; folding?: string; frozen?: {reason?: string}}[];
-		expect(generations.map((one) => one.folding)).toEqual(['frozen', 'held', 'held']);
-		expect(generations[0]?.digest).toBe(generationDigestOf(deployment.garbage));
-		expect(generations[0]?.frozen?.reason).toBe('no-instantiator');
-		expect(generations.slice(1).every((one) => one.frozen === undefined)).toBe(true);
+		// every fold this process was HANDED keeps folding after a promotion, so all three are held
+		const generations = listed.body.generations as {digest: string; folding?: string; frozen?: unknown}[];
+		expect(generations.map((one) => one.folding)).toEqual(['held', 'held', 'held']);
+		expect(generations.every((one) => one.frozen === undefined)).toBe(true);
+	});
+
+	it('keeps folding the incumbent a promotion onto ANOTHER stream superseded, whose stream still accepts a push', async () => {
+		const {indexer, garbage} = deployment;
+
+		// this host is PUSH-FED (no `fetchesItsOwnStreams`): another process fetches its streams,
+		// so the promotion onto the reconfigured source's stream stopped nothing here
+		const first = indexer.held().find((fold) => fold.record.processor === garbage.processor);
+		expect(first?.streamDigest).toBe(garbage.stream);
+		expect((await indexer.liveIngestions()).map((one) => one.streamDigest)).toContain(garbage.stream);
+
+		const receiver = (await indexer.liveIngestions()).find((one) => one.streamDigest === garbage.stream)!;
+		const before = await receiver.expectedFromBlock();
+		await receiver.receive({
+			context: receiver.context,
+			fromBlock: before,
+			toBlock: START_BLOCK + 20,
+			latestBlock: START_BLOCK + 20,
+			logs: [transfer(START_BLOCK + 15, '0xa115', BOB, 3n, 0, CONTRACT)],
+		});
+		expect(await receiver.expectedFromBlock()).toBeGreaterThan(before);
+		expect(await emissionRows(deployment.db, garbage.stream)).toBe(2);
 	});
 
 	it('WIDENS the listing and changes nothing else: a host that cannot say gets no such field', async () => {
@@ -286,9 +303,7 @@ describe('an operator SEES whether each generation can fold here, where the host
 		const entries = (body: Record<string, unknown>) => body.generations as Record<string, unknown>[];
 		expect(entries(narrow.body).every((one) => !('folding' in one) && !('frozen' in one))).toBe(true);
 		// ...and what the narrow listing says, the wide one says identically beside the new field
-		expect(entries(wide.body).map(({folding: _folding, frozen: _frozen, ...rest}) => rest)).toEqual(
-			entries(narrow.body),
-		);
+		expect(entries(wide.body).map(({folding: _folding, ...rest}) => rest)).toEqual(entries(narrow.body));
 		const {generations: _wide, ...wideRest} = wide.body;
 		const {generations: _narrow, ...narrowRest} = narrow.body;
 		expect(wideRest).toEqual(narrowRest);

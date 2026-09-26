@@ -624,6 +624,14 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 * and one registered on another stream stays frozen, as a filter change's always was.
 		 */
 		sourceCarriedByBundle?: {provider: EIP1193ProviderWithoutEvents};
+		/**
+		 * WHETHER THIS PROCESS FETCHES ITS OWN STREAMS (`ReceivingIndexerOptions.fetchesItsOwnStreams`):
+		 * `true` from `run` and `build`, which hold one fetcher per stream the container lists,
+		 * so a promotion onto another stream stops folding the incumbent and its fetcher stops.
+		 * ABSENT from `index`, which is PUSH-FED: the incumbent keeps folding and its stream
+		 * keeps accepting pushes from the fetcher that is another process.
+		 */
+		fetchesItsOwnStreams?: boolean;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([
@@ -674,6 +682,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		},
 		generation: parts.generation,
 		source: context.source,
+		...(context.fetchesItsOwnStreams === true ? {fetchesItsOwnStreams: true} : {}),
 		...(context.confirmReplacingSuccessorAtStart === undefined
 			? {}
 			: {confirmReplacingSuccessorAtStart: context.confirmReplacingSuccessorAtStart}),
@@ -803,6 +812,8 @@ export async function openWaitingFolding<ABI extends Abi, ProcessResultType>(
 			});
 			return {...resumed.generation, source};
 		},
+		// ...and it is only ever a `run`, which fetches every stream it folds itself
+		fetchesItsOwnStreams: true,
 	});
 
 	return {container, db, stateOf: stateFor, foldParts};
@@ -839,6 +850,8 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 			ProcessResultType,
 			WritableStateStore
 		>['confirmReplacingSuccessorAtStart'];
+		/** `true` where this process fetches its own streams (`run`, `build`); absent where it is push-fed (`index`). */
+		fetchesItsOwnStreams?: boolean;
 	},
 ): Promise<ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>> {
 	const {stateFor} = seams;
@@ -901,6 +914,10 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		...(seams.confirmReplacingSuccessorAtStart === undefined
 			? {}
 			: {confirmReplacingSuccessorAtStart: seams.confirmReplacingSuccessorAtStart}),
+		// WHO FETCHES THIS DEPLOYMENT'S STREAMS, which decides what a promotion onto another
+		// stream does to the incumbent (ADR-0087's amendment of 2026-09-26): this process
+		// (`run`, `build`), or another one pushing to it (`index`, where it is absent).
+		...(seams.fetchesItsOwnStreams === true ? {fetchesItsOwnStreams: true} : {}),
 	});
 }
 

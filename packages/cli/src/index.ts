@@ -448,6 +448,10 @@ export async function prepareIndexing<
 			// restart it can go on fetching that stream (mid-catch-up) or the one the canonical
 			// generation was promoted onto. A source the operator configured overrides it.
 			...(resolved.source.from === 'processor-module' ? {sourceCarriedByBundle: {provider}} : {}),
+			// THIS PROCESS FETCHES EVERY STREAM IT FOLDS (`StreamFetchers` below), so a promotion
+			// onto another stream stops folding the incumbent and lets its fetcher stop. `index`,
+			// which is push-fed, does not say this and keeps the incumbent folding.
+			fetchesItsOwnStreams: true,
 		},
 	);
 

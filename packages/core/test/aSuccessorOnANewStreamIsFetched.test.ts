@@ -2,7 +2,17 @@ import {describe, expect, it} from 'vitest';
 import type {IndexingSource} from '../src/index.js';
 import type {GenerationFolding, ReceivingIndexer} from '../src/receivingContainer.js';
 import {identityOf} from './utils/processorIdentity.js';
-import {abi, SOURCE, START_BLOCK, world, type MemoryStore, type TestABI, type World} from './utils/receivingWorld.js';
+import {
+	abi,
+	AT_101,
+	batch,
+	SOURCE,
+	START_BLOCK,
+	world,
+	type MemoryStore,
+	type TestABI,
+	type World,
+} from './utils/receivingWorld.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A SUCCESSOR ON A NEW STREAM IS FETCHED, at the container seam (ADR-0087's amendment of 2026-09-26)
@@ -43,10 +53,17 @@ async function fetchedStreamsOf(indexer: Container): Promise<string[]> {
 	return (await indexer.fetchedStreams()).map((one) => one.stream);
 }
 
-/** An incumbent on `SOURCE`, and a successor on `OTHER_SOURCE` registered beside it. */
-async function aSuccessorOnANewStream() {
+/**
+ * An incumbent on `SOURCE`, and a successor on `OTHER_SOURCE` registered beside it, on a host
+ * that FETCHES ITS OWN STREAMS (`fetchesItsOwnStreams`, as the CLI's `run` and `build` are)
+ * unless told it is PUSH-FED (the split `index`, the server's receiving hosts).
+ */
+async function aSuccessorOnANewStream(host: 'fetching' | 'push-fed' = 'fetching') {
 	const w = world();
-	const incumbent = await w.open('v1', 1, {instantiateGeneration: w.instantiateFromBundle});
+	const incumbent = await w.open('v1', 1, {
+		instantiateGeneration: w.instantiateFromBundle,
+		...(host === 'fetching' ? {fetchesItsOwnStreams: true} : {}),
+	});
 	const successor = await incumbent.add({...w.specFor('v2', 1), source: OTHER_SOURCE});
 	return {w, indexer: incumbent, oldStream: incumbent.streamDigest, newStream: successor.record.stream};
 }
@@ -82,6 +99,24 @@ describe('a successor on a NEW stream is fetched beside the incumbent', () => {
 		await indexer.promote(incumbent);
 		expect((await indexer.canonical())?.processor).toBe(identityOf('v1'));
 		expect(await fetchedStreamsOf(indexer)).toEqual([newStream]);
+	});
+
+	it('on a PUSH-FED receiver, keeps folding the incumbent after that promotion, and its stream still accepts a push', async () => {
+		const {indexer, oldStream, newStream} = await aSuccessorOnANewStream('push-fed');
+
+		await indexer.promote({stream: newStream, processor: identityOf('v2')});
+
+		// another process fetches these streams, so nothing here stops: both stay live
+		expect(await fetchedStreamsOf(indexer)).toEqual([oldStream, newStream]);
+		expect(indexer.held().map((fold) => fold.record.processor)).toEqual([identityOf('v1'), identityOf('v2')]);
+		expect(await foldingOf(indexer, 'v1')).toMatchObject({folding: 'held'});
+		// ...and a push onto the incumbent's stream still lands in it, and moves it on
+		const oldWriter = indexer.ingestion;
+		expect(oldWriter.streamDigest).toBe(oldStream);
+		expect(await indexer.liveIngestions()).toContain(oldWriter);
+		const fromBlock = await oldWriter.expectedFromBlock();
+		await oldWriter.receive(batch(indexer, {toBlock: 105, latestBlock: 105, logs: [AT_101]}, fromBlock));
+		expect(await oldWriter.expectedFromBlock()).toBeGreaterThan(fromBlock);
 	});
 
 	it('takes a REPLACED successor’s stream out with it', async () => {

@@ -285,6 +285,8 @@ type Deployment = {
 	db: RemoteSQL;
 	/** The deployment as it is RUNNING NOW: the restarted host, holding only its own fold. */
 	indexer: ReceivingIndexer<typeof abi, unknown, WritableStateStore>;
+	/** The container that performed the two upgrades, which still HOLDS a fold for the garbage. */
+	upgraded: ReceivingIndexer<typeof abi, unknown, WritableStateStore>;
 	/** The generation NO SLOT NAMES, on a stream of its own: what a reclaim is for. */
 	garbage: GenerationId;
 	/** What `predecessor` holds: the way back from the upgrade below, which a reclaim must never take. */
@@ -342,6 +344,7 @@ async function aDeploymentUpgradedTwice(): Promise<Deployment> {
 	return {
 		db,
 		indexer: restarted,
+		upgraded: indexer,
 		garbage: first,
 		predecessor: idOf(second),
 		canonical: idOf(third),
@@ -399,19 +402,7 @@ describe('an operator RECLAIMS every generation no slot names, in one action', (
 	});
 
 	it('stops DRIVING a fold it reclaimed, rather than folding into state that is gone', async () => {
-		// Two PROCESSOR upgrades over ONE stream, in one process: a promotion onto the SAME
-		// stream keeps folding what it superseded, so this process still HOLDS the first
-		// generation once no slot names it. (Across a SOURCE change it would not: a promotion
-		// onto another stream stops folding the incumbent, so that its stream stops being
-		// fetched -- which is why this does not use `aDeploymentUpgradedTwice`.)
-		const db = oneDatabase();
-		await applySchema(db);
-		const upgraded = await openIndexer(db, V1, SOURCE_A);
-		await feed(upgraded, upgraded.opening, {address: CONTRACT, toBlock: START_BLOCK + 100, to: ALICE, id: 1n});
-		const garbage = upgraded.generation;
-		await upgraded.promote(idOf(await upgraded.add(specFor(db, V2, SOURCE_A))));
-		await upgraded.promote(idOf(await upgraded.add(specFor(db, V3, SOURCE_A))));
-		expect(unslottedGenerations(await upgraded.generations(), await upgraded.slots())).toMatchObject([garbage]);
+		const {db, upgraded, garbage} = await aDeploymentUpgradedTwice();
 		expect(upgraded.held().some((fold) => fold.record.processor === garbage.processor)).toBe(true);
 
 		const report = await upgraded.reclaim();
