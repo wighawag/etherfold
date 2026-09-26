@@ -914,13 +914,16 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 		// THE SUCCESSOR, reaching a process that is running: a different fold over the
 		// same stream. Nothing is cleared and nothing is re-fetched -- the successor
 		// re-folds the stream this process already stored.
+		// the configured fold's identity, taken NOW: once the promotion stops folding it
+		// (ADR-0092's third amendment), the container's opening fold is the successor
+		const incumbentId = combined.container.generation;
 		const successor = await combined.container.add(successorSpec(combined.db, V2, V2_IDENTITY));
 		// ...and it does NOT write the stream: that duty stays with the oldest surviving
 		// generation on it (ADR-0044), so the history stays ONE history
 
 		// both are held, and the pointer has not moved: the incumbent still answers
 		expect((await combined.container.generations()).length).toBe(2);
-		expect(await combined.container.canonical()).toMatchObject(combined.container.generation);
+		expect(await combined.container.canonical()).toMatchObject(incumbentId);
 		expect(await readsOver(combinedDB)).toEqual(incumbent);
 
 		// the rebuild is driven by the RUN itself, between its own cycles: nothing here
@@ -939,23 +942,23 @@ describe('`run` adds a successor beside the live fold and promotes it in-process
 
 		// and the incumbent was RETAINED rather than dropped, which is what makes moving
 		// the pointer BACK a revert instead of a re-index: its state is exactly what it
-		// was, in its own tables
+		// was, in its own tables -- and no engine runs for it here any more, since nobody
+		// reads it and a revert instantiates it again from its stored bundle (ADR-0092)
 		expect((await combined.container.generations()).length).toBe(2);
+		expect(combined.container.held().map((fold) => fold.record.processor)).toEqual([successor.record.processor]);
 		const incumbentStore = new VersionedStateStore(createNodeDB(combinedDB), nftEntities, {
-			tableNamespace: generationDigestOf(combined.container.generation),
+			tableNamespace: generationDigestOf(incumbentId),
 		});
 		expect(await incumbentStore.getCurrent('counter', {name: 'transfers'})).toMatchObject({value: 3});
 
-		// ...and `/status` says so on the page an operator already watches: two entries,
-		// exactly one canonical
+		// ...and `/status` says so on the page an operator already watches: its entries are
+		// what this host HOLDS (ADR-0047), which is now the canonical generation alone
 		const reported = (await statusOf(combined.url)).cursor?.generations ?? [];
-		expect(reported.map((entry) => entry.generation).sort()).toEqual(
-			[generationDigestOf(combined.container.generation), generationDigestOf(successor.record)].sort(),
-		);
+		expect(reported.map((entry) => entry.generation)).toEqual([generationDigestOf(successor.record)]);
 		expect(reported.filter((entry) => entry.canonical).map((entry) => entry.generation)).toEqual([
 			generationDigestOf(successor.record),
 		]);
-		// ...and BOTH report `follows`, because on this runtime every generation folds the
+		// ...and it reports `follows`, because on this runtime every generation folds the
 		// stream the deployment stored (ADR-0087): the field says how a fold advances,
 		// and there is one way now rather than two.
 		expect(reported.every((entry) => entry.follows)).toBe(true);

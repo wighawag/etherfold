@@ -147,7 +147,8 @@ export function uploaderFor<ABI extends Abi, ProcessResultType>(
 		// BYTES NAMING A FOLD THIS PROCESS ALREADY HOLDS, where `canonical` or `successor`
 		// already names it, change NOTHING, and say so. Every other arrival goes to `add`,
 		// which is where what it MEANS is decided: in particular a held generation that
-		// `predecessor` names (a same-stream promotion keeps the superseded fold it built)
+		// `predecessor` names (held only where a revert could not build it again: a promotion
+		// stops folding what it superseded wherever it could, ADR-0092's third amendment)
 		// is RE-ARMED into `successor` by the registry, with no second fold (ADR-0094). This
 		// reads the slot only to answer `unchanged` truthfully; the re-arm is not decided here.
 		const slots = await held.container.slots();

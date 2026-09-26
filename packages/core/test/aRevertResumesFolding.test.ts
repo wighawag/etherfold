@@ -106,15 +106,22 @@ describe('the generation a revert lands on is INSTANTIATED from its stored bundl
 
 	it('instantiates nothing on a move onto a generation it already folds', async () => {
 		const {world: w} = await anIncumbentThatHasFolded();
-		const both = await w.open('v1', 1, {instantiateGeneration: w.instantiateFromBundle});
+		// held under `manual`, so the move onto it is the operator's: a promotion now stops
+		// folding what it superseded on this host (ADR-0092's third amendment), so the one
+		// non-canonical generation still held here is the successor
+		const both = await w.open('v1', 1, {
+			instantiateGeneration: w.instantiateFromBundle,
+			promotion: {policy: 'manual'},
+		});
 		await both.add(w.specFor('v2', 10));
 		await catchUp(both, 'v2');
+		expect(heldHere(both)).toEqual([identityOf('v1'), identityOf('v2')]);
 
-		await both.promote(v1(both));
+		await both.promote(v2(both));
 
 		expect(w.instantiated).toEqual([]);
-		// the one moved away from stops being folded here too, for the same reason
-		expect(heldHere(both)).toEqual([identityOf('v1')]);
+		// the one moved away from stops being folded here too
+		expect(heldHere(both)).toEqual([identityOf('v2')]);
 	});
 });
 

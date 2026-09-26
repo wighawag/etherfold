@@ -47,7 +47,9 @@ async function slotsOf(indexer: Container): Promise<Record<string, string | unde
 /**
  * `v1` folded, `v2` arrived and was PROMOTED over it in that process, so `v1` is what
  * `predecessor` names. The process that did it is handed back too: it still HOLDS a
- * fold for `v1` (a same-stream promotion keeps the superseded fold it built).
+ * fold for `v1`: it was opened with no `instantiateGeneration`, and there a promotion keeps
+ * the superseded fold it built, since a revert could not rebuild it (ADR-0092's third
+ * amendment; on a host that can, `aPromotionLeavesNoEngineForThePredecessor.test.ts`).
  */
 async function anUpgradeThatLanded(): Promise<{world: World; first: Container}> {
 	const {world: w, incumbent} = await anIncumbentThatHasFolded();
