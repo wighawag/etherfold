@@ -4,6 +4,8 @@ status: accepted
 
 # A generation is held by NAMED DURABLE SLOTS, and `canonical` is merely the first one
 
+> **AMENDED 2026-09-26 (`an-uploaded-processor-survives-a-restart`):** a START may no longer SILENTLY replace a different pending `successor`; see the amendment at the end, which changes the redeploy-per-commit case this ADR's second symptom describes.
+>
 > **AMENDED 2026-09-25 (ADR-0092):** the 2026-09-19 LANDED block's "nothing retains, re-imports or reconstructs past processor code" no longer describes the deployment; its dated amendment sits right under that sentence.
 
 A registry holds generations keyed by CONTENT (`GenerationId` is `{stream, processor}`) and exactly one durable named pointer at them, `canonical`. Every other lifecycle question -- which generation is a pending successor, which is dead work, which a revert returns to -- is answered in MEMORY, by what one container has done since it opened. We propose to record that a generation is held by a small set of DURABLE NAMED SLOTS, of which `canonical` is simply the one that already exists: a slot is an assignment pointing at a generation, `successor` holds at most one so registering into it REPLACES what it held, `predecessor` is what a revert returns to, and a generation no slot names is dead.
@@ -93,3 +95,15 @@ The working name through the design discussion was `staging`, and it is rejected
 **No upgrade path is provided, deliberately.** A registry predating slots holds generations no slot names, and `predecessor` could not be reconstructed for them: which generation a revert would want is exactly the fact that was never recorded, so the missing fact this ADR exists to supply is also the one its own migration would need. That is moot rather than unsolved. Nobody runs these packages, every consumer is a repository we own, and `CONTEXT.md` records this as a standing convention, so the correct shape is built directly and no persisted state is carried forward. This consequence is the one to revisit if slots land after something outside our repositories holds state.
 
 **Reaping follows the generation, unchanged.** Replacing a successor that was the last registered on its stream reaps that stream, which is already what `deleteGeneration` does and already why a drop is declined while another held fold follows the stream.
+
+## Amendment, 2026-09-26 (`an-uploaded-processor-survives-a-restart`, ADR-0093): a START may not silently replace a pending successor
+
+"Registering into an occupied `successor` replaces its occupant" is unchanged, and so is what a replacement deletes: the row, the state namespace and, since ADR-0092, the stored bundle. What changed is that the replace is no longer SILENT when a process STARTS. Uploads (ADR-0085's amendment) made a pending successor something a person sent to a running node, often the only copy of that code, and a restart with a configured processor would delete it with nobody asked. The maintainer decided on 2026-09-26:
+
+- **A configured `--processor` is an arrival.** Where it names a processor different from the canonical generation's, it registers as the new `successor` exactly as before, and the promotion policy decides from there. Where it names the canonical generation, or the successor already pending, it changes nothing.
+- **Where a START would replace a DIFFERENT pending successor**, however that successor arrived, it is asked about BEFORE anything is registered. An interactive start (stdin is a TTY) asks, naming both generations, and proceeds only on a yes. A non-interactive start is REFUSED by name, with nothing registered or deleted, unless `--override` is given.
+- **Only the START is guarded.** The re-read (`POST /{indexer}/admin/reconfigure`) and an upload are already deliberate acts on a running node, and replace a pending successor without a question, as before.
+
+This changes the redeploy-per-commit case in "One missing fact": a pipeline that restarts with a new processor while the previous one is still catching up now passes `--override`, once, in its deploy configuration. The slots still keep such a deployment starting (the count does not grow), which was the point of that paragraph; what it gains is that the deletion is something the pipeline said it wanted.
+
+Where it lives: the container asks through `ReceivingIndexerOptions.confirmReplacingSuccessorAtStart` from `open` alone, before `add`, and never from `add` itself (`@etherfold/core`). `etherfold run` answers it (`startGuardFor`, `packages/cli/src/startGuard.ts`) and owns `--override`; `build` and `index` supply no answer and replace at start-up as before, and refuse the flag.

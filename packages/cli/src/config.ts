@@ -73,6 +73,7 @@ export type ConfigInput =
 	| 'ingestToken'
 	| 'promotion'
 	| 'dropOnPromotion'
+	| 'override'
 	| 'to'
 	| 'adminToken';
 
@@ -239,6 +240,15 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'whole reason non-canonical generations are kept. A deployment that would rather bound its storage ' +
 			'than keep a way back opts in',
 	},
+	override: {
+		flag: '--override',
+		describe:
+			'let this START replace a DIFFERENT pending successor. Starting with a --processor that differs from the ' +
+			'canonical generation registers it as the new `successor`, and that slot holds one: what it held -- often ' +
+			'an upload still catching up -- is DELETED, row, state and stored bytes. An interactive start ASKS first; ' +
+			'a non-interactive one is REFUSED unless this is given, so a pipeline that redeploys per commit passes it ' +
+			'once in its deploy configuration. A re-read and an upload replace a pending successor without it',
+	},
 	to: {
 		flag: '--to <url>',
 		variable: 'UPLOAD_TO',
@@ -332,6 +342,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'optional',
 		dropOnPromotion: 'optional',
+		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -352,6 +363,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -372,6 +384,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -392,6 +405,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -412,6 +426,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -432,6 +447,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'required',
 		adminToken: 'required',
 	},
@@ -626,6 +642,28 @@ const UPLOAD_DOES_NOT_PROMOTE =
 	'WHEN an uploaded generation takes over is the RECEIVING node\u2019s promotion policy, configured on its ' +
 	'`run` (--promotion / PROMOTION_POLICY): an upload registers a successor, and that policy moves the pointer.';
 
+// ---------------------------------------------------------------------------------------------------
+// WHY ONLY `run` TAKES --override
+// ---------------------------------------------------------------------------------------------------
+// `--override` lets a START replace a DIFFERENT pending successor (ADR-0084's and
+// ADR-0093's amendments of 2026-09-26). `run` is the command that GUARDS its start
+// that way, because it is the one an upload reaches: a pending successor there is
+// often a deploy somebody sent to the running node, and a restart that silently
+// deleted it would make an upload a session rather than a deployment. The other
+// commands do not guard their start, so the flag would permit nothing there and is
+// refused rather than accepted and ignored. Turning one of those refusals into an
+// optional input later is additive (ADR-0048).
+// ---------------------------------------------------------------------------------------------------
+
+const ONLY_RUN_GUARDS_ITS_START =
+	'only `etherfold run` guards its START against replacing a different pending successor, because it is the ' +
+	'command an upload reaches (ADR-0093); this command replaces one at start-up as it always has, so --override ' +
+	'would permit nothing here.';
+
+const OVERRIDE_IS_THE_NODES =
+	'an upload is already a deliberate act on a running node and replaces a pending successor without being asked. ' +
+	'--override is `etherfold run`\u2019s: it lets a node\u2019s START replace one.';
+
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
 	run: {
 		pruneInterval: PRUNES_PER_CYCLE,
@@ -643,6 +681,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_COMBINED,
 		promotion: NEVER_PROMOTES_BUILD,
 		dropOnPromotion: NEVER_PROMOTES_BUILD,
+		override: ONLY_RUN_GUARDS_ITS_START,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 	},
@@ -657,6 +696,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		autoSetup: NOT_SERVING_FETCH,
 		promotion: NEVER_PROMOTES_FETCH,
 		dropOnPromotion: NEVER_PROMOTES_FETCH,
+		override: ONLY_RUN_GUARDS_ITS_START,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 	},
@@ -666,6 +706,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestEndpoint: INDEX_RECEIVES,
 		promotion: NEVER_PROMOTES_INDEX,
 		dropOnPromotion: NEVER_PROMOTES_INDEX,
+		override: ONLY_RUN_GUARDS_ITS_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
@@ -682,6 +723,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_SERVE,
 		promotion: NEVER_PROMOTES_SERVE,
 		dropOnPromotion: NEVER_PROMOTES_SERVE,
+		override: ONLY_RUN_GUARDS_ITS_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
@@ -700,6 +742,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: UPLOAD_IS_NOT_INGEST,
 		promotion: UPLOAD_DOES_NOT_PROMOTE,
 		dropOnPromotion: UPLOAD_DOES_NOT_PROMOTE,
+		override: OVERRIDE_IS_THE_NODES,
 	},
 };
 
@@ -766,6 +809,9 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			// materialises nothing unless it was typed, so only `true` is something a user
 			// passed
 			return options.dropOnPromotion === true ? 'true' : undefined;
+		case 'override':
+			// the same plain BOOLEAN shape as `--drop-on-promotion`
+			return options.override === true ? 'true' : undefined;
 		case 'to':
 			return options.to;
 		case 'adminToken':
@@ -1239,6 +1285,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// said nothing, so the default stays written in one place (see
 					// `resolvePromotion`).
 					...(promotion === undefined ? {} : {promotion}),
+					// whether this START may replace a DIFFERENT pending successor without asking
+					// (ADR-0084's amendment of 2026-09-26). A flag and no variable: see `INPUTS`.
+					override: given('override', options, env) !== undefined,
 				};
 			}
 			case 'build': {

@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A processor may be PUSHED as a content-addressed artifact, and the artifact's hash IS its version
 
 > **AMENDED 2026-09-22: the pushed route is UN-DEFERRED, and the amendment at the end says what it now includes.** The decision below stands; what changed is WHEN to build the upload and what surrounds it.
@@ -70,7 +66,7 @@ The node that has nothing configured and waits for its first upload is ADR-0093.
 
 ## Decisions relocated from the upload spec when it was tasked, 2026-09-26
 
-The spec `a-processor-artifact-is-pushed-to-a-running-deployment` made these decisions, and they are relocated here so they outlive its launch snapshot. None of them is built yet.
+The spec `a-processor-artifact-is-pushed-to-a-running-deployment` made these decisions, and they are relocated here so they outlive its launch snapshot. All of them are built: the upload chain that tasked them landed its last task, `an-uploaded-processor-survives-a-restart`, on 2026-09-26. _This sentence was corrected in place when that task landed: it first said none of them was built yet, which was true when the spec was tasked and stopped being true with that task. The front-matter `status: accepted, not yet implemented` line came off in the same change._
 
 - **An admin route on the existing credential**, beside the re-read and the pointer move, for ADR-0057's reasons. A surface that registers a new fold is at least as consequential as one that moves the pointer, and it is explicit remote-code-execution authority.
 - **The identity is the receiver's hash of the received bytes**, never taken from the sender (ADR-0086).
@@ -84,7 +80,7 @@ The spec `a-processor-artifact-is-pushed-to-a-running-deployment` made these dec
 
 ## The upload route as built, 2026-09-26
 
-`a-processor-bundle-is-uploaded-to-a-running-node` built the RECEIVING half of the decisions above: the route, the credential, the bound, the content type, the refusals before registering, the receiver's identity and the configured-source match. The sender (`etherfold upload`), a node that waits for its first upload (ADR-0093) and a pushed processor surviving a restart are still their own tasks. The values the decisions above left open are these:
+`a-processor-bundle-is-uploaded-to-a-running-node` built the RECEIVING half of the decisions above: the route, the credential, the bound, the content type, the refusals before registering, the receiver's identity and the configured-source match. The sender (`etherfold upload`), a node that waits for its first upload (ADR-0093) and a pushed processor surviving a restart were their own tasks, and all three have landed since: `an-upload-command-sends-a-built-bundle`, `a-run-node-with-nothing-configured-waits-for-its-first-upload` and `an-uploaded-processor-survives-a-restart` (the last amends ADR-0084, ADR-0092 and ADR-0093). _That sentence was updated on 2026-09-26, when the last of them landed; it used to say they were still to be built._ The values the decisions above left open are these:
 
 - **Where it lives:** `POST /{indexer}/admin/upload`, beside `reconfigure`, served by `etherfold run` (the combined shape) and by nothing else. A host that cannot turn bytes into a fold answers `501 upload-not-held`.
 - **The body** is the bundle's raw octets, declared **`Content-Type: text/javascript`**, the one registered type for an ES module (RFC 9239). Only the media type is matched, case-insensitively; parameters such as `charset` are ignored, because the identity is the hash of the octets and nothing decodes them. Anything else answers `415 upload-wrong-content-type`.

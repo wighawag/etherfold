@@ -598,6 +598,16 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 * (ADR-0092). Passed straight through to `foldPartsFor`, and REQUIRED there.
 		 */
 		arrived: ArrivedBundle;
+		/**
+		 * WHETHER THIS START MAY REPLACE A DIFFERENT PENDING SUCCESSOR, where the command
+		 * guards its start (`startGuardFor`, ADR-0084's amendment of 2026-09-26). Absent: it
+		 * replaces without asking, as `build` and `index` do.
+		 */
+		confirmReplacingSuccessorAtStart?: ReceivingIndexerOptions<
+			ABI,
+			ProcessResultType,
+			WritableStateStore
+		>['confirmReplacingSuccessorAtStart'];
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([
@@ -639,6 +649,9 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		},
 		generation: parts.generation,
 		source: context.source,
+		...(context.confirmReplacingSuccessorAtStart === undefined
+			? {}
+			: {confirmReplacingSuccessorAtStart: context.confirmReplacingSuccessorAtStart}),
 	});
 
 	return {
@@ -795,6 +808,11 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		>;
 		generation?: ReceivedGenerationSpec<ABI, ProcessResultType, WritableStateStore>;
 		source?: IndexingSource<ABI>;
+		confirmReplacingSuccessorAtStart?: ReceivingIndexerOptions<
+			ABI,
+			ProcessResultType,
+			WritableStateStore
+		>['confirmReplacingSuccessorAtStart'];
 	},
 ): Promise<ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>> {
 	const {stateFor} = seams;
@@ -852,6 +870,11 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		// names and fetches whatever its first fold carries.
 		...(seams.generation === undefined ? {} : {generation: seams.generation}),
 		...(seams.source === undefined ? {} : {source: seams.source}),
+		// WHO IS ASKED before this START replaces a different pending successor, where the
+		// command guards its start at all (ADR-0084's amendment of 2026-09-26).
+		...(seams.confirmReplacingSuccessorAtStart === undefined
+			? {}
+			: {confirmReplacingSuccessorAtStart: seams.confirmReplacingSuccessorAtStart}),
 	});
 }
 
