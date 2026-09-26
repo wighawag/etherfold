@@ -116,7 +116,14 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 * the same one `/status` is reported from.
 	 */
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
-	/** The sending half, plus the policy for reading what a cycle did. */
+	/**
+	 * The sending half, plus the policy for reading what a cycle did.
+	 *
+	 * REFUSED, rather than answered with a placeholder, on a node started with NOTHING
+	 * configured until it has been told what to fetch (ADR-0093): that node has no
+	 * fetcher until then. So are `store`, `processor` and `streamWriter` until it folds
+	 * anything.
+	 */
 	host: FetcherHost<ABI>;
 	/**
 	 * Resolves when the loop has stopped, with what the run did; REJECTS with the
@@ -260,7 +267,11 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// ONE entry per generation held, which is one until something adds a
 			// successor and two while it catches up: the shape of `/status` does not
 			// depend on how many a deployment happens to hold.
-			getCursorReport: () => foldingStatusReport(prepared.container, prepared.stateOf),
+			//
+			// ...and WAITING, on a node started with nothing configured that has not been told
+			// what to fetch yet (ADR-0093): the page says so rather than reading like a stalled
+			// node or a quiet chain.
+			getCursorReport: () => foldingStatusReport(prepared.container, prepared.stateOf, prepared.waiting()),
 			// The other half of the pipeline, on the same page: what the CHAIN-FACING half
 			// has learned about the node it reads (ADR-0074). `run` is the shape that can
 			// report it at all, because it is the one that holds both halves -- `index` and
@@ -269,7 +280,10 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// Reported so an operator can hand it BACK through `LEARNED_RANGE` on the next
 			// start. Nothing here persists it: the fetcher holds no state worth losing, and
 			// this is what moves the memory to whoever is already durable.
-			getFetcherLimits: () => prepared.host.fetcher.limits,
+			//
+			// NOTHING while this process is WAITING for a processor (ADR-0093): it has no
+			// fetcher yet, and the field says the reporter had nothing to report.
+			getFetcherLimits: () => (prepared.waiting() ? undefined : prepared.host.fetcher.limits),
 			// WHEN THIS PROCESS TAKES A SUCCESSOR OVER, on the page an operator already
 			// watches. `run` is the shape that decides it at all -- it is the one command
 			// that registers a successor beside a live fold -- and this is the CONTAINER's
@@ -291,7 +305,16 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// swallow anything, because a promise may have any number of reactions.
 		stopped.catch(() => undefined);
 
-		log(`etherfold run: following the chain into ${destination.db}, answering on ${server.url}`);
+		if (prepared.waiting()) {
+			// NOTHING CONFIGURED, and nothing in the registry it could fold: said on the line an
+			// operator reads first, with the one thing that ends the wait (ADR-0093).
+			log(
+				`etherfold run: started with no processor and no source, WAITING for a processor to be uploaded to ` +
+					`${server.url}/${indexer}/admin/upload (\`etherfold upload\`), folding into ${destination.db}`,
+			);
+		} else {
+			log(`etherfold run: following the chain into ${destination.db}, answering on ${server.url}`);
+		}
 		log(`  status: ${server.url}/status`);
 		// WHERE THE READS ARE, named because the route segment is the one thing an app
 		// pointed at this process has to know and the one thing it cannot guess: this
@@ -305,11 +328,22 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			url: server.url,
 			port: server.port,
 			db: prepared.db,
-			store: prepared.store,
-			processor: prepared.processor,
-			streamWriter: prepared.streamWriter,
+			// READ PER ASK rather than captured: on a node started with nothing configured
+			// these exist only once a processor has arrived, and are refused until then
+			// (ADR-0093). On every other `run` they are the values `open` came up with.
+			get store() {
+				return prepared.store;
+			},
+			get processor() {
+				return prepared.processor;
+			},
+			get streamWriter() {
+				return prepared.streamWriter;
+			},
 			container: prepared.container,
-			host: prepared.host,
+			get host() {
+				return prepared.host;
+			},
 			stopped,
 			stop: async () => {
 				controller.abort();

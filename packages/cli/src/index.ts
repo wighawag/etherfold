@@ -20,7 +20,7 @@ import {
 	type Sleep,
 } from '@etherfold/fetcher-host';
 import type {EntityProcessor, StateStore, WritableStateStore} from '@etherfold/processor-entities';
-import type {ReconfigureReport} from '@etherfold/server';
+import type {ReconfigureReport, WaitingReport} from '@etherfold/server';
 import {openProcessorArrival} from '@etherfold/utils';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
@@ -31,6 +31,7 @@ import {
 	openFolding,
 	openFoldingDatabase,
 	openIndexingSource,
+	openWaitingFolding,
 	requireArrivedBundle,
 	streamConfigFor,
 } from './folding.js';
@@ -48,9 +49,11 @@ export {
 	openFoldingDatabase,
 	openExplicitSource,
 	openIndexingSource,
+	openWaitingFolding,
 	streamConfigFor,
 	type FoldParts,
 	type FoldingAssembly,
+	type WaitingFoldingAssembly,
 } from './folding.js';
 export {arrivalQueue, reconfigurerFor, type ArrivalQueue, type ReconfigureContext} from './reconfigure.js';
 export {uploaderFor, type ConfiguredSource, type UploadContext} from './upload.js';
@@ -158,6 +161,12 @@ export type PreparedIndexing<
 	 * command would be a second call site for one answer.
 	 */
 	config: ConfigFor<C, ABI>;
+	/**
+	 * What this process fetches. On a `run` started with NOTHING configured it is the
+	 * source its first fold carried, and it is REFUSED until there is one (ADR-0093) --
+	 * as are `host` below, and `processor`, `store` and `streamWriter` until something
+	 * folds: see `waiting`.
+	 */
 	source: IndexingSource<ABI>;
 	processor: EventProcessor<ABI, ProcessResultType>;
 	/**
@@ -231,6 +240,16 @@ export type PreparedIndexing<
 	 */
 	upload(bundle: Uint8Array): Promise<ReconfigureReport>;
 	/**
+	 * WHAT `/status` SAYS while this process is WAITING for a processor (ADR-0093), and
+	 * nothing when it is not.
+	 *
+	 * Only a `run` started with NOTHING configured ever waits, and only until something
+	 * names what it fetches: until then it has no fetcher, and `host` and `source` are
+	 * refused rather than answered with a placeholder. Every configured assembly answers
+	 * nothing here.
+	 */
+	waiting(): WaitingReport | undefined;
+	/**
 	 * Drive the assembled pipeline, and return what the run did. Throws on a
 	 * `fatal` report.
 	 *
@@ -295,7 +314,9 @@ export async function prepareIndexing<
 	// path naming an unbundled entry point is refused HERE, with the build command an
 	// author needs, rather than from inside a loader once a database is open
 	// (ADR-0086, ADR-0048). Nothing has been imported or opened at this line.
-	await refuseUnbundledProcessor(command, resolved.processor, {substitutedArrival: deps.importModule !== undefined});
+	if (resolved.processor !== undefined) {
+		await refuseUnbundledProcessor(command, resolved.processor, {substitutedArrival: deps.importModule !== undefined});
+	}
 
 	logger.info({nodeUrl: resolved.nodeUrl, store: resolved.destination.store, source: resolved.source.from});
 
@@ -307,6 +328,15 @@ export async function prepareIndexing<
 			requestsPerSecond: resolved.rps,
 		}) as unknown as EIP1193ProviderWithoutEvents);
 
+	// NOTHING CONFIGURED (ADR-0093): a `run` given neither a processor nor a source, which
+	// the resolver has already told apart from a source with no processor (refused). It
+	// is assembled over the SAME database, registry and stream ends, with no fold and no
+	// source of its own, and its fetcher comes to exist when a source does.
+	if (resolved.processor === undefined) {
+		return prepareWaiting<ABI, ProcessResultType, C>(command, options, deps, env, resolved as RunConfig<ABI>, provider);
+	}
+	const processorPath = resolved.processor;
+
 	// WHAT THE `--processor` PATH TURNS OUT TO BE. A path is still how a deployment
 	// names its processor and that has not changed (ADR-0086); what the path points
 	// AT must be a self-contained BUNDLE, which is read and hashed here and whose hash
@@ -317,7 +347,7 @@ export async function prepareIndexing<
 	//
 	// The CLI intentionally constructs the processor with NO factory argument (the
 	// server passes its folder); see MEDIUM-3.
-	const arrival = await openProcessorArrival<ABI, ProcessResultType, EntityProcessor<ABI, any>>(resolved.processor, {
+	const arrival = await openProcessorArrival<ABI, ProcessResultType, EntityProcessor<ABI, any>>(processorPath, {
 		...(deps.importModule ? {importModule: deps.importModule} : {}),
 	});
 	const {processorModule} = arrival;
@@ -327,7 +357,7 @@ export async function prepareIndexing<
 	// SUBSTITUTED states the bytes it stands for, because a module object has none (see
 	// `IndexingDependencies.processorBundle`). Absent from both is a fold with no name
 	// and no code, which is refused rather than papered over (`requireArrivedBundle`).
-	const arrived = requireArrivedBundle(resolved.processor, arrival, deps.processorBundle);
+	const arrived = requireArrivedBundle(processorPath, arrival, deps.processorBundle);
 
 	// derived ONCE and handed to both halves below: the sending fetcher host and the
 	// receiving stream builder hash this same object into the wire identity
@@ -388,36 +418,13 @@ export async function prepareIndexing<
 		},
 	);
 
-	const host = createFetcherHost<ABI>(
-		resolveFetcherHostConfig<ABI>(env, {
-			source,
-			nodeUrl: resolved.nodeUrl,
-			stream: providedStreamConfig,
-			...(resolved.rps === undefined ? {} : {requestsPerSecond: resolved.rps}),
-		}),
-		{
-			provider,
-			// THE WIRE WITH NO WIRE: the same two components a split deployment runs, in one
-			// process, with nothing between them -- and, exactly as on the HTTP side, the
-			// receiver a batch reaches is RESOLVED at the moment of the ask rather than
-			// captured here.
-			//
-			// It used to be `createDirectIngestion(container.ingestion)`, one receiver read
-			// off the container at `open`. Two things were wrong with that and only one of
-			// them was visible. The visible one: that getter THROWS for a FOLD with no
-			// receiver, so the whole assembly rested on the opening fold never being a
-			// follower -- which ADR-0087 retires, since no generation fetches and what a
-			// stream's address resolves to is the DEPLOYMENT's own writer of it. The other:
-			// a captured receiver is PINNED, so a deployment whose live set moved while it
-			// ran (a successor registered beside the incumbent, a generation deleted by
-			// another process) went on feeding the one it read at start-up.
-			//
-			// `container.liveIngestions()` is the question the ingest route already asks per
-			// batch (`@etherfold/server`), answered from the REGISTRY rather than from
-			// memory, and it reconciles writer succession on the way. So the combined shape
-			// and the split shape now route on one fact.
-			target: createDirectIngestion(() => container.liveIngestions()),
-		},
+	const host = fetcherHostOver<ABI, ProcessResultType>(
+		source,
+		resolved,
+		env,
+		providedStreamConfig,
+		provider,
+		container,
 	);
 
 	// ONE LINE for every arrival this process answers -- the re-read and the upload --
@@ -469,7 +476,229 @@ export async function prepareIndexing<
 			},
 			arrivals,
 		),
+		// ...and it is not WAITING: it was configured with what it folds and what it fetches
+		waiting: () => undefined,
 		index: () => driveCycles(command, host, container, deps),
+	};
+}
+
+/**
+ * THE ONE FETCHER a chain-following command builds, over the source it fetches.
+ *
+ * Built at start on a configured deployment, and on a `run` started with NOTHING
+ * configured (ADR-0093) at the moment its container first names a source -- from the
+ * canonical generation it instantiated at `open`, or from its first upload. Either way it
+ * is built ONCE, over ONE source, which is what a `run` has always fetched: a later
+ * upload carrying different contracts is a successor on a new stream, exactly as on a
+ * deployment whose source came from its processor module.
+ */
+function fetcherHostOver<ABI extends Abi, ProcessResultType>(
+	source: IndexingSource<ABI>,
+	resolved: RunConfig<ABI> | BuildConfig<ABI>,
+	env: EnvRecord,
+	providedStreamConfig: ReturnType<typeof streamConfigFor>,
+	provider: EIP1193ProviderWithoutEvents,
+	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
+): FetcherHost<ABI> {
+	return createFetcherHost<ABI>(
+		resolveFetcherHostConfig<ABI>(env, {
+			source,
+			nodeUrl: resolved.nodeUrl,
+			stream: providedStreamConfig,
+			...(resolved.rps === undefined ? {} : {requestsPerSecond: resolved.rps}),
+		}),
+		{
+			provider,
+			// THE WIRE WITH NO WIRE: the same two components a split deployment runs, in one
+			// process, with nothing between them -- and, exactly as on the HTTP side, the
+			// receiver a batch reaches is RESOLVED at the moment of the ask rather than
+			// captured here.
+			//
+			// It used to be `createDirectIngestion(container.ingestion)`, one receiver read
+			// off the container at `open`. Two things were wrong with that and only one of
+			// them was visible. The visible one: that getter THROWS for a FOLD with no
+			// receiver, so the whole assembly rested on the opening fold never being a
+			// follower -- which ADR-0087 retires, since no generation fetches and what a
+			// stream's address resolves to is the DEPLOYMENT's own writer of it. The other:
+			// a captured receiver is PINNED, so a deployment whose live set moved while it
+			// ran (a successor registered beside the incumbent, a generation deleted by
+			// another process) went on feeding the one it read at start-up.
+			//
+			// `container.liveIngestions()` is the question the ingest route already asks per
+			// batch (`@etherfold/server`), answered from the REGISTRY rather than from
+			// memory, and it reconciles writer succession on the way. So the combined shape
+			// and the split shape now route on one fact.
+			target: createDirectIngestion(() => container.liveIngestions()),
+		},
+	);
+}
+
+/**
+ * How long a `run` started with NOTHING configured waits between two looks at whether it
+ * has been told what to fetch, where nothing woke it sooner.
+ *
+ * An upload WAKES it at once; this is the bound for every other way a source can arrive
+ * (an operator's promote onto a generation it can instantiate), so it is a ceiling on
+ * how long such a node sits with a source and no fetcher, not a cadence anything folds on.
+ */
+export const WAITING_POLL_MS = 1_000;
+
+/**
+ * THE WORDS `/status` CARRIES while a node started with nothing configured has no source
+ * to fetch (ADR-0093).
+ */
+function waitingFor(indexer: string): WaitingReport {
+	return {
+		for: 'processor',
+		message:
+			`this node was started with no processor and no source (ADR-0093), and nothing it holds names what to ` +
+			`fetch: it fetches nothing and folds nothing new until a processor is uploaded to it (\`etherfold upload\`, ` +
+			`POST /${indexer}/admin/upload). Reads are answered by the canonical generation where its registry names one, ` +
+			`and refused until then.`,
+	};
+}
+
+/**
+ * The accessor of a thing a node started with NOTHING configured does not have yet,
+ * refused with the reason rather than answered with a placeholder (ADR-0093).
+ */
+function notYet(what: string): never {
+	throw new Error(
+		`this \`etherfold run\` was started with no processor and no source (ADR-0093) and has not been told what to ` +
+			`fetch yet, so it has no ${what}: it is WAITING for a processor to be uploaded.`,
+	);
+}
+
+/**
+ * Assemble a `run` started with NOTHING configured (ADR-0093): the same database, the
+ * same registry and the same stream ends a configured `run` has, a container with no fold
+ * and no source of its own (`openWaitingFolding`), and NO FETCHER until there is
+ * something to fetch.
+ *
+ * ## How the fetcher comes to exist after start
+ *
+ * A configured `run` builds its one fetcher over the source it resolved at start. This
+ * one has none, and a placeholder source would fetch something nobody chose, so the
+ * fetcher is built LATE, by the drive loop (`index`), at the first moment the container
+ * names what this deployment fetches (`ReceivingIndexer.fetchedSource`): at `open`, where
+ * the registry's canonical generation could be instantiated from its stored bundle, or at
+ * the first upload the container registers. From then on it is the fetcher a configured
+ * `run` has, over the same wire, and `driveCycles` drives it exactly as it drives that
+ * one.
+ *
+ * Until then `index` WAITS -- on a wake an upload rings, and on `WAITING_POLL_MS` for
+ * any other arrival -- and `/status` says so (`waiting`).
+ */
+async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends ChainFollowingCommand>(
+	command: C,
+	options: Options,
+	deps: IndexingDependencies,
+	env: EnvRecord,
+	resolved: RunConfig<ABI>,
+	provider: EIP1193ProviderWithoutEvents,
+): Promise<PreparedIndexing<ABI, ProcessResultType, C>> {
+	const providedStreamConfig = streamConfigFor(env);
+	const streamConfig = resolveStreamConfig(providedStreamConfig);
+	const db = await openFoldingDatabase(resolved.destination, {
+		applyFixedSchema: resolved.serving.autoSetup,
+		...(deps.createDB ? {createDB: deps.createDB} : {}),
+	});
+	const {container, stateOf, foldParts} = await openWaitingFolding<ABI, ProcessResultType>(resolved.destination, db, {
+		stream: providedStreamConfig,
+		finalityDepth: streamConfig.finality,
+		indexer: resolved.indexer,
+		...(resolved.promotion === undefined ? {} : {promotion: resolved.promotion}),
+		provider,
+	});
+
+	/** The one fetcher, once there is a source; see the JSDoc for when. */
+	let host: FetcherHost<ABI> | undefined;
+	const startFetchingIfTold = (): FetcherHost<ABI> | undefined => {
+		if (host) return host;
+		const source = container.fetchedSource;
+		if (!source) return undefined;
+		host = fetcherHostOver<ABI, ProcessResultType>(source, resolved, env, providedStreamConfig, provider, container);
+		logger.info(
+			`run: this node was started with nothing configured and now knows what to fetch, so it starts fetching ` +
+				`(ADR-0093)`,
+		);
+		return host;
+	};
+	// the canonical generation instantiated at `open` may have told it already
+	startFetchingIfTold();
+
+	/** Rung by an upload the container registered, so the wait ends at once rather than on the next look. */
+	let wake: () => void = () => {};
+	const arrivals = arrivalQueue();
+	const receive = uploaderFor<ABI, ProcessResultType>(
+		{
+			provider,
+			db,
+			destination: resolved.destination,
+			stream: providedStreamConfig,
+			container,
+			// NO `configured`: a node started with nothing configured has no source the
+			// OPERATOR chose, so an upload carrying different contracts is a successor on a
+			// new stream rather than a mismatch (`upload.ts`, ADR-0093)
+			foldParts,
+		},
+		arrivals,
+	);
+
+	return {
+		config: resolved as ConfigFor<C, ABI>,
+		get source(): IndexingSource<ABI> {
+			return container.fetchedSource ?? notYet('source');
+		},
+		get processor(): EventProcessor<ABI, ProcessResultType> {
+			return container.processor;
+		},
+		get streamWriter(): StreamWriter<ABI> {
+			return container.ingestion;
+		},
+		container,
+		get host(): FetcherHost<ABI> {
+			return host ?? notYet('fetcher');
+		},
+		get store(): WritableStateStore {
+			return container.state;
+		},
+		stateOf,
+		db,
+		reconfigure: reconfigurerFor<ABI, ProcessResultType>(
+			{
+				options,
+				env,
+				provider,
+				db,
+				dbUrl: resolved.destination.db,
+				indexer: resolved.indexer,
+				container,
+				...(deps.importModule ? {importModule: deps.importModule} : {}),
+			},
+			arrivals,
+		),
+		upload: async (bundle) => {
+			const report = await receive(bundle);
+			wake();
+			return report;
+		},
+		waiting: () => (host ? undefined : waitingFor(resolved.indexer)),
+		index: async () => {
+			const wait = deps.sleep ?? sleep;
+			// WAITING, until something names what to fetch or the process is asked to stop:
+			// a wait that fetches nothing and folds nothing, and says so on `/status`.
+			while (!startFetchingIfTold()) {
+				if (deps.signal?.aborted) return {cycles: 0, pushed: 0, stoppedBecause: 'stopped'};
+				await Promise.race([
+					new Promise<void>((resolve) => {
+						wake = resolve;
+					}),
+					wait(WAITING_POLL_MS, deps.signal),
+				]);
+			}
+			return driveCycles(command, startFetchingIfTold() as FetcherHost<ABI>, container, deps);
+		},
 	};
 }
 

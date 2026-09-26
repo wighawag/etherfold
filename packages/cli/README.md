@@ -47,6 +47,16 @@ It is ASSEMBLY and not a fourth engine. A log-fetcher pushes into a stream-build
 | `--promotion <on-catch-up\|immediate\|manual>` | WHEN a successor takes over answering reads, without anyone asking (or `PROMOTION_POLICY`). Defaults to `on-catch-up`, everywhere. Only this command takes it -- see below |
 | `--drop-on-promotion` | discard the superseded generation at the promotion instead of retaining it. OFF by default, because the retained generation is what the pointer moves BACK to |
 
+**It can be started with NOTHING configured, and then it waits for its first upload** (ADR-0093). Stand a node up once, and deploy to it afterwards:
+
+```sh
+ADMIN_TOKEN=… etherfold run --store sqlite --db file:./etherfold.db -n https://rpc.example
+# later, from a laptop or a CI job:
+ADMIN_TOKEN=… etherfold upload ./dist/processor.bundle.js --to http://indexer:2000 --indexer default
+```
+
+With no `-p` AND no source (neither `--deployments` nor `INDEXING_SOURCE`), the node does what its database says. Where the registry already has a canonical generation, it runs that generation from the bundle stored for it and folds the contracts THAT bundle carries. Where it has none, it serves, fetches nothing, answers reads with `503 no-canonical-generation` (the answer a fresh deployment gives before its first fold) and says on `/status` that it is waiting: `cursor.waiting: {for: "processor", message}`. Where the canonical generation's stored code cannot run here, it starts anyway, serves that generation frozen (`cursor.canonical.folding: "frozen"` with the reason) and fetches nothing. The first upload it registers names what it fetches from then on and makes it index; the first generation a registry holds takes `canonical` by the usual rule. Later uploads are never refused for carrying different contracts, since nothing the operator configured is there to match: one with other contracts is a successor on a new stream, as on any node whose source came from its processor. It is a MODE and not a default: only the pair may be absent, so a source with no processor is refused (contracts with nothing to fold them are a configuration error), and `build`, `index` and `fetch` still require what they required. A re-read (`POST /{indexer}/admin/reconfigure`) on such a node answers `failed`, since there is no `--processor` path to re-read.
+
 **How it stops.** On `SIGINT` or `SIGTERM` it finishes the cycle in flight and exits `0`; nothing needs to be saved, because the store holds the rows AND the sync cursor in one transaction (ADR-0027), which is also why an interrupted run resumes from the store rather than from the start block. A refusal no waiting fixes -- a foreign `{source, config}`, the wrong chain, a suspected truncation -- ends it with a non-zero code, so a supervisor can tell a stop from a wedge. A retryable failure (an unreachable node) is retried indefinitely on an escalating, capped backoff rather than after N attempts: a transient outage should not leave a stopped indexer behind. Reaching the tip is not one of the ways it ends; that is `build`.
 
 **`/status` reports a cursor that advances**, which is how a running deployment is observable before a query layer exists:

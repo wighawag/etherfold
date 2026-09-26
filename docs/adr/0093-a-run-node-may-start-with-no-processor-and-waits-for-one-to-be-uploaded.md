@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A `run` node may start with NO processor, and waits for one to be uploaded
 
 The Graph's deploy UX starts from a node with nothing configured: deployments ARRIVE. ADR-0085's amendment of 2026-09-22 makes that the target, and code retention (ADR-0092) makes it reachable, because a generation's bundle is stored with it and can be instantiated at open. We decide that **`etherfold run` may be started with no processor and no source.** Such a node runs whatever its registry's canonical generation names; if it has never received a processor, it WAITS for one to be uploaded. This is not a default: ADR-0048 refuses a missing input because a defaulted one fails silently, and a waiting node fails loudly by saying it is waiting.
@@ -34,4 +30,6 @@ _Corrected in place on 2026-09-26, under ADR-FORMAT's rule for text that never d
 
 On the disk path, a configured source today still OVERRIDES a module's own contract data (flag, then `INDEXING_SOURCE`, then the module); whether that should also become a match check is not decided here.
 
-**It depends on two unbuilt things**, so it is built after them: stored bytes and instantiation at open (ADR-0092), and the upload route itself (ADR-0085).
+**It was built on two things that came first**: stored bytes and instantiation at open (ADR-0092), and the upload route itself (ADR-0085). _This sentence was corrected on 2026-09-26, when the mode landed: it used to say those two were unbuilt, which stopped being true with them._
+
+**Where it lives.** `etherfold run` resolves no processor and the processor-module source origin (`resolveRunProcessor`, `packages/cli/src/config.ts`), and refuses a source with no processor there. The container is opened with no generation and no source (`ReceivingIndexerOptions.generation` and `.source` are optional, `@etherfold/core`): `open` registers nothing of its own and instantiates the registry's canonical generation from its stored bundle, where the host's instantiation names the source that bundle carries (`openWaitingFolding`, `packages/cli/src/folding.ts`). What the deployment fetches is `ReceivingIndexer.fetchedSource`: the configured source, or the source its FIRST fold carried, set once. The one fetcher is built late, by the drive loop, the first time that answer exists (`prepareWaiting`, `packages/cli/src/index.ts`), and until then `/status` carries `cursor.waiting: {for: 'processor', message}` (`WaitingReport`, `@etherfold/server`).

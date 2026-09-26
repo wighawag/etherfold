@@ -1,6 +1,8 @@
 # Every command input has ONE name, and only the port may default
 
 > **AMENDED 2026-09-26 (ADR-0085): the table has a SIXTH row, `upload`, and two inputs only it owns.** Read the amendment at the end.
+>
+> **AMENDED 2026-09-26 (ADR-0093): `run`'s processor and source may be absent TOGETHER, as a MODE rather than a default.** Read the second amendment at the end.
 
 Every `etherfold` command resolves every input through one module (`packages/cli/src/config.ts`): a FLAG first, then the ONE environment variable behind it, then a REFUSAL that names both — never a default. The exception is the port, which falls back to `2000`, and it is the only one. The variables are the ones a deployable already publishes — the fetcher host's `INDEXING_SOURCE`, `ETH_NODE_URI`, `INGEST_ENDPOINT`, `INGEST_TOKEN`, `REQUESTS_PER_SECOND` and the Node server host's `DB`, `PORT` — and the CLI's own second name for the node URL (`ETHEREUM_NODE`) is retired, because two names for one input is how two deployments of one image end up meaning different things.
 
@@ -39,3 +41,12 @@ What it adds:
 
 The rule about which inputs get a variable holds: the target node and the credential vary between deployments of one pipeline, so both have one.
 
+## Amendment, 2026-09-26 (ADR-0093): `run` may be started with nothing configured, and waits
+
+This ADR says a missing input is a REFUSAL and never a default, because a defaulted input fails silently. ADR-0093 makes ONE exception, and it is not a default: **`etherfold run` may be started with no processor and no source, together.** Nothing is filled in for either. The node does what its database says: it folds the registry's canonical generation from the bundle stored for it (ADR-0092) where it can, and otherwise it serves, fetches nothing, answers reads with the `503 no-canonical-generation` a fresh deployment answers (ADR-0058), and says on `/status` that it is WAITING for a processor (`cursor.waiting`). That is the loud failure this ADR asks every input to have, which is why the exception passes the test it sets ("what does it look like when this is wrong and nobody notices?": a waiting node says so on the page an operator watches).
+
+What changed in the table, and what did not:
+
+- **`run`'s processor is `optional` in `OWNERSHIP`, and only the PAIR may be absent** (`resolveRunProcessor`, `config.ts`). A processor with no source stays valid, as before: its module supplies the contracts. A SOURCE with no processor is still REFUSED, naming both ways out (add `--processor`, or give neither and wait for an upload), because contracts with nothing to fold them are a configuration error rather than an intent to wait, and a waiting node would otherwise drop the source an operator configured in favour of the contracts its first upload carries.
+- **Every other command still requires what it required.** `build` and `index` fold at once and have nothing to wait on. The split `index` does not get the mode at all (ADR-0093): its fetcher is another process, which an upload cannot reach.
+- **No variable is added**, and the rule about which inputs have one holds: the absence of `-p` is not an input, it is a mode, and nothing about it varies between deployments of one image.

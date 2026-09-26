@@ -131,8 +131,11 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 
 	const run = program
 		.command('run')
-		.description('follow the chain, fold a processor into a libSQL database, and answer queries over it')
-		.usage(`-p <processor's path> --store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545]`);
+		.description(
+			'follow the chain, fold a processor into a libSQL database, and answer queries over it. Started with no ' +
+				'processor and no source, it WAITS for its first `etherfold upload` (ADR-0093)',
+		)
+		.usage(`[-p <processor's path>] --store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545]`);
 	registerInputs(run, 'run');
 	run.action(async (options: Options) => {
 		await runFollower(options);

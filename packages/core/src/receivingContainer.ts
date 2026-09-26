@@ -275,12 +275,31 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 * because a cap nobody can set is not a bound, it is a constant.
 	 */
 	caps?: GenerationCaps;
-	/** The fetch filter a fold that names none of its own folds, which is half the stream identity. */
-	source: IndexingSource<ABI>;
+	/**
+	 * The fetch filter a fold that names none of its own folds, which is half the stream
+	 * identity: the source this deployment was CONFIGURED to fetch.
+	 *
+	 * OPTIONAL, and absent only together with `generation`, for a deployment started
+	 * with NOTHING configured (ADR-0093). Such a container is not handed a placeholder:
+	 * it holds no source until its FIRST FOLD brings one (`fetchedSource`) -- the
+	 * canonical generation instantiated at `open` from its stored bundle, or the first
+	 * generation an arrival adds -- and every spec it is handed must then name its own.
+	 */
+	source?: IndexingSource<ABI>;
 	/** The stream config, which is the other half. Resolved and hashed into both identities. */
 	stream?: ProvidedStreamConfig;
-	/** The fold THIS host opens with: its state, then the processor over it. Others arrive through `add`. */
-	generation: ReceivedGenerationSpec<ABI, ProcessResultType, State>;
+	/**
+	 * The fold THIS host opens with: its state, then the processor over it. Others arrive
+	 * through `add`.
+	 *
+	 * ABSENT on a deployment started with NOTHING configured (ADR-0093), which is a MODE
+	 * and not a default: `open` then registers nothing of its own, instantiates the
+	 * registry's canonical generation from its stored bundle where there is one, and
+	 * otherwise holds no fold at all until one ARRIVES through `add`. No placeholder
+	 * generation stands in for the missing one, because a defaulted fold is the thing
+	 * ADR-0048 refuses: it folds something nobody chose and looks healthy doing it.
+	 */
+	generation?: ReceivedGenerationSpec<ABI, ProcessResultType, State>;
 	/** Where a concluded reorg is counted (ADR-0050). Handed to every receiver unchanged. */
 	recordReorg?: ReorgRecorder;
 	/**
@@ -540,6 +559,22 @@ function refuseFoldWithNoStream(stream: string): never {
  * precisely the failure ADR-0087's second amendment measured, so it is refused
  * here rather than discovered by reading which methods a node was asked for.
  */
+/**
+ * A fold that names no source, on a container that has none to lend it.
+ *
+ * Only a container opened with NOTHING configured (ADR-0093) can reach this, and only
+ * before its first fold: every fold arriving there must say what it indexes, because
+ * there is no configured source to default it to and inventing one would be the
+ * defaulted input ADR-0048 refuses.
+ */
+function refuseFoldWithNoSource(): never {
+	throw new Error(
+		`this generation names no source and this container has none to lend it: it was opened with nothing ` +
+			`configured (ADR-0093), so it fetches nothing until a fold says what to index. Hand \`add\` a spec that ` +
+			`names its own \`source\` (an upload always does: it carries its own contracts).`,
+	);
+}
+
 function refuseContainerThatCannotFetch(missing: string): never {
 	throw new Error(
 		`this container was given no \`${missing}\`, so it has no way to write the stream it would fetch. Under ` +
@@ -904,6 +939,19 @@ export class ReceivingIndexer<
 	 */
 	private canonicalFold: HeldFold<ABI, ProcessResultType, unknown> | undefined;
 
+	/**
+	 * THE SOURCE A DEPLOYMENT STARTED WITH NOTHING CONFIGURED TOOK FROM ITS FIRST FOLD
+	 * (ADR-0093), and never set on one that was configured with a source.
+	 *
+	 * Set ONCE, by the first fold this container holds, and never moved afterwards: it
+	 * is what the deployment FETCHES, and a host builds its one fetcher over it, so a
+	 * later fold on another stream (an upload carrying different contracts) is a
+	 * successor on a new stream exactly as it is on a deployment whose source came from
+	 * its processor module. In memory, like `canonicalFold`: it is which stream THIS
+	 * process fetches, and a restart takes it again from the fold it comes up with.
+	 */
+	private adopted: IndexingSource<ABI> | undefined;
+
 	constructor(registry: GenerationRegistry, options: ReceivingIndexerOptions<ABI, ProcessResultType, State>) {
 		this.registry = registry;
 		this.options = options;
@@ -929,8 +977,28 @@ export class ReceivingIndexer<
 	 * PROTECTING is protected by the slot instead; see `applyPolicyTo`.
 	 */
 	async open(): Promise<void> {
-		await this.add(this.options.generation);
+		// NOTHING CONFIGURED is a mode, not a missing argument (ADR-0093): there is no fold
+		// of this host's own to register, and the canonical generation below is the only
+		// thing `open` may come up folding.
+		if (this.options.generation) {
+			await this.add(this.options.generation);
+		}
 		await this.foldTheCanonicalGeneration();
+	}
+
+	/**
+	 * THE SOURCE THIS DEPLOYMENT FETCHES: the one it was configured with, or, on a
+	 * deployment started with NOTHING configured (ADR-0093), the one its FIRST FOLD
+	 * carried -- the canonical generation instantiated at `open` from its stored bundle,
+	 * or the first generation an arrival added.
+	 *
+	 * `undefined` is a real answer and not a gap to paper over: such a deployment has
+	 * been told nothing about what to fetch yet, so it fetches nothing and says it is
+	 * WAITING. A host that builds its fetcher over a source asks this, and builds it the
+	 * moment there is one.
+	 */
+	get fetchedSource(): IndexingSource<ABI> | undefined {
+		return this.options.source ?? this.adopted;
 	}
 
 	/**
@@ -1011,8 +1079,9 @@ export class ReceivingIndexer<
 		const first = this.folds[0];
 		if (!first) {
 			throw new Error(
-				`this ReceivingIndexer holds no fold yet: it is built by openReceivingIndexer, which adds the one it was ` +
-					`opened with before handing it over.`,
+				`this ReceivingIndexer holds no fold yet: it was opened with NOTHING configured (ADR-0093), its registry ` +
+					`named no canonical generation it could fold, and no generation has arrived since. There is no opening ` +
+					`fold to report until one does.`,
 			);
 		}
 		return first as HeldFold<ABI, ProcessResultType, State>;
@@ -1201,13 +1270,18 @@ export class ReceivingIndexer<
 		return this.foldingIn(generation, this.fetchedStream());
 	}
 
-	/** The stream this deployment FETCHES: what an instantiation here would fold. */
-	private fetchedStream(): string {
-		return streamDigestOf(this.options.source, resolveStreamConfig(this.options.stream));
+	/**
+	 * The stream this deployment FETCHES: what an instantiation here would fold. NOTHING
+	 * on a deployment started with nothing configured that holds no fold yet (ADR-0093),
+	 * which fetches no stream at all.
+	 */
+	private fetchedStream(): string | undefined {
+		const source = this.fetchedSource;
+		return source ? streamDigestOf(source, resolveStreamConfig(this.options.stream)) : undefined;
 	}
 
 	/** One generation's answer for `folding`, the reasons in the order an operator would act on them. */
-	private async foldingIn(generation: GenerationRecord, fetched: string): Promise<GenerationFolding> {
+	private async foldingIn(generation: GenerationRecord, fetched: string | undefined): Promise<GenerationFolding> {
 		if (this.folds.some((fold) => sameGeneration(fold.record, generation))) {
 			return {generation, folding: 'held'};
 		}
@@ -1236,7 +1310,9 @@ export class ReceivingIndexer<
 		if (attempt) {
 			return frozen(attempt.reason, attempt.message);
 		}
-		if (generation.stream !== fetched) {
+		// A deployment that fetches NOTHING yet (ADR-0093) takes the source of the first
+		// generation it folds, so no stream is ruled out here until one is fetched.
+		if (fetched !== undefined && generation.stream !== fetched) {
 			return frozen(
 				'stream-not-fetched',
 				`its stream ${generation.stream} is not one this deployment fetches (it fetches ${fetched}), so nothing ` +
@@ -1278,10 +1354,13 @@ export class ReceivingIndexer<
 	async canonicalGeneration(): Promise<GenerationId | undefined> {
 		const canonical = this.noteCanonical(await this.registry.canonical());
 		if (!canonical) {
+			const opening = this.folds[0];
 			namedLogger.info(
-				`the registry names no canonical generation, so this container answers NONE rather than falling back to the ` +
-					`fold it opened with ({stream: ${this.generation.stream}, processor: ${this.generation.processor}}). A read ` +
-					`is refused rather than served from a generation the pointer does not name (ADR-0058).`,
+				`the registry names no canonical generation, so this container answers NONE rather than falling back to ` +
+					(opening
+						? `the fold it opened with ({stream: ${opening.record.stream}, processor: ${opening.record.processor}})`
+						: `anything: it holds no fold, having been opened with nothing configured (ADR-0093)`) +
+					`. A read is refused rather than served from a generation the pointer does not name (ADR-0058).`,
 			);
 			return undefined;
 		}
@@ -1374,7 +1453,7 @@ export class ReceivingIndexer<
 		// THE CODE FIRST, before any state is opened: a fold with no bundle is one this
 		// runtime could never resume, and refusing it here leaves nothing behind at all.
 		const bundle = requireBundle(spec.bundle);
-		const source = spec.source ?? this.options.source;
+		const source = spec.source ?? this.fetchedSource ?? refuseFoldWithNoSource();
 		const provided = spec.stream ?? this.options.stream;
 		// The RESOLVED config, exactly as the writer and the rebuild resolve it, so the
 		// digest this container files a generation under and the digest its stream is
@@ -1488,6 +1567,15 @@ export class ReceivingIndexer<
 		provided: ProvidedStreamConfig | undefined,
 	): void {
 		this.folds.push(fold);
+		// A deployment started with NOTHING configured takes what it fetches from its FIRST
+		// fold, once, and keeps it (ADR-0093): see `fetchedSource`.
+		if (!this.options.source && !this.adopted) {
+			this.adopted = source;
+			namedLogger.info(
+				`this deployment was started with nothing configured, and its first fold ({stream: ${fold.record.stream}, ` +
+					`processor: ${fold.record.processor}}) names what it fetches from now on (ADR-0093)`,
+			);
+		}
 		// ...and the STREAM's own writer, built once per stream and AFTER the record
 		// exists, for the reason the registry states: a stream subtree no registered
 		// generation claims is what the sweep collects, so nothing may write a stream
@@ -1579,18 +1667,33 @@ export class ReceivingIndexer<
 					`under`,
 			);
 		}
-		const source = spec.source ?? this.options.source;
+		// The host's source for it where the instantiation named one -- a deployment started
+		// with NOTHING configured has no other way to learn what a stored bundle indexes
+		// (ADR-0093) -- and otherwise the one this deployment fetches.
+		const source = spec.source ?? this.fetchedSource;
+		if (!source) {
+			throw new GenerationInstantiationError(
+				id,
+				`nothing names what it indexes: this container was opened with no source (ADR-0093) and the host's ` +
+					`instantiation named none either`,
+			);
+		}
 		const provided = spec.stream ?? this.options.stream;
 		const streamConfig = resolveStreamConfig(provided);
 		const context: GenerationContext = {stream: streamDigestOf(source, streamConfig)};
-		if (context.stream !== record.stream) {
+		// ...and whatever the instantiation named, a deployment folds only the stream it
+		// FETCHES, once it fetches one: a generation whose own contracts name another stream
+		// is a filter change's, frozen here exactly as a configured deployment freezes it.
+		const fetched = this.fetchedStream();
+		const fetchesAnother = spec.source !== undefined && fetched !== undefined && fetched !== record.stream;
+		if (context.stream !== record.stream || fetchesAnother) {
 			// A FILTER CHANGE's generation, not broken code: its stream is not the one this
 			// deployment fetches, so the move goes ahead and it answers reads frozen, as a
 			// revert across a filter change always did (ADR-0057).
 			return {
 				fold: undefined,
 				frozen:
-					`its stream ${record.stream} is not one this deployment fetches (it fetches ${context.stream}), so its ` +
+					`its stream ${record.stream} is not one this deployment fetches (it fetches ${fetched ?? context.stream}), so its ` +
 					`code was loaded and nothing folds it: a revert across a filter change is a freeze`,
 			};
 		}

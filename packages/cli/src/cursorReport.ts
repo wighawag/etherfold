@@ -1,6 +1,6 @@
 import {generationDigestOf, sameGeneration, type GenerationFolding, type GenerationId} from '@etherfold/core';
 import {parseStoredCursor, SYNC_CURSOR_KEY, type StateStore} from '@etherfold/processor-entities';
-import type {CanonicalReport, GenerationReport, StatusReport} from '@etherfold/server';
+import type {CanonicalReport, GenerationReport, StatusReport, WaitingReport} from '@etherfold/server';
 import {logs} from 'named-logs';
 
 const logger = logs('etherfold');
@@ -147,6 +147,8 @@ export async function readStatusReport(held: {
 	 * writer. Consulted only when the canonical generation is not held.
 	 */
 	canonicalState?: StateStore;
+	/** Present exactly while the host is WAITING for a processor (ADR-0093), and reported verbatim. */
+	waiting?: WaitingReport;
 }): Promise<StatusReport> {
 	const generations: GenerationReport[] = [];
 	let value: StoreCursorReport | undefined;
@@ -174,6 +176,7 @@ export async function readStatusReport(held: {
 		...(value === undefined ? {} : {value}),
 		generations,
 		...(held.canonical ? {canonical: canonicalReportOf(held.canonical, held.canonicalFolding, value)} : {}),
+		...(held.waiting === undefined ? {} : {waiting: held.waiting}),
 	};
 }
 

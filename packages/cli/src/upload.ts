@@ -111,6 +111,13 @@ export type UploadContext<ABI extends Abi = Abi, ProcessResultType = unknown> = 
 	 * and then an upload's own contracts stand (see the header).
 	 */
 	configured?: ConfiguredSource<ABI>;
+	/**
+	 * How THIS deployment builds the fold parts of a processor that arrives, where it is
+	 * not plain `foldPartsFor`: a node started with NOTHING configured notes the entities
+	 * each arrival declares (`WaitingFoldingAssembly.foldParts`, ADR-0093). Absent means
+	 * `foldPartsFor`, the one way every configured deployment builds them.
+	 */
+	foldParts?: typeof foldPartsFor;
 };
 
 /**
@@ -162,7 +169,7 @@ export function uploaderFor<ABI extends Abi, ProcessResultType>(
 			}
 			// 4. THE FOLD PARTS, the one way this deployment builds them, named by the
 			// loader's hash of the bytes and carrying those bytes to the registration.
-			parts = await foldPartsFor<ABI, ProcessResultType>(
+			parts = await (held.foldParts ?? foldPartsFor)<ABI, ProcessResultType>(
 				artifact.processor,
 				held.destination,
 				held.db,

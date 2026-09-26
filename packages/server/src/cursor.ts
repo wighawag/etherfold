@@ -119,6 +119,25 @@ export type CanonicalReport = {
 };
 
 /**
+ * A NODE THAT FETCHES NOTHING BECAUSE NOTHING HAS TOLD IT WHAT TO FETCH YET, as an
+ * operator reads it off `/status` (ADR-0093).
+ *
+ * A `run` may be started with no processor and no source, and then it WAITS for its
+ * first upload. That is a MODE rather than a default precisely because it says so, and
+ * this is where it says so: without it such a node's page would read exactly like one
+ * that is stalled, or one watching a quiet chain.
+ *
+ * `for` names WHAT it waits for, so a caller branches on one string and a later reason
+ * to wait is a new value rather than a re-meaning. `message` is the words an operator
+ * acts on: what the node holds, and what ends the wait.
+ */
+export type WaitingReport = {
+	/** What would end the wait: a PROCESSOR, delivered by an upload (`POST /{indexer}/admin/upload`). */
+	readonly for: 'processor';
+	readonly message: string;
+};
+
+/**
  * What a host's reporter hands over: the CONTENTS of the `cursor` envelope.
  *
  * THREE SLOTS, filled independently. `value` is where the generation that answers
@@ -148,6 +167,12 @@ export type StatusReport = {
 	 * where the host names none.
 	 */
 	readonly canonical?: CanonicalReport;
+	/**
+	 * Present exactly while the host is WAITING for a processor (`WaitingReport`,
+	 * ADR-0093): started with nothing configured, it fetches nothing until an upload tells
+	 * it what to index. Omit it on every host that is not waiting.
+	 */
+	readonly waiting?: WaitingReport;
 };
 
 /**
@@ -188,8 +213,20 @@ export type ReportedCanonical = Omit<CanonicalReport, 'value'> & {value?: unknow
  * HOST writes its reporter, which is the only place that can honour it anyway.
  */
 export type StatusCursor =
-	| {reported: true; value: unknown; generations?: readonly ReportedGeneration[]; canonical?: ReportedCanonical}
-	| {reported: false; reason: string; generations?: readonly ReportedGeneration[]; canonical?: ReportedCanonical};
+	| {
+			reported: true;
+			value: unknown;
+			generations?: readonly ReportedGeneration[];
+			canonical?: ReportedCanonical;
+			waiting?: WaitingReport;
+	  }
+	| {
+			reported: false;
+			reason: string;
+			generations?: readonly ReportedGeneration[];
+			canonical?: ReportedCanonical;
+			waiting?: WaitingReport;
+	  };
 
 /**
  * Ask the host's reporter, and never let the answer fail the request.
@@ -241,15 +278,21 @@ export async function reportCursor(
 	// rides on BOTH branches, because a canonical generation that has committed nothing is
 	// still the one answering reads.
 	const canonical = reported.canonical === undefined ? {} : {canonical: reported.canonical as ReportedCanonical};
+	// ...and WAITING the same way, on both branches: a node waiting over a frozen canonical
+	// generation still has a position to report (ADR-0093).
+	const waiting = reported.waiting === undefined ? {} : {waiting: reported.waiting};
 
 	if (reported.value === undefined) {
 		return {
 			reported: false,
-			reason: `the cursor reporter named no cursor for the generation that answers reads`,
+			reason: reported.waiting
+				? `this node is waiting for a processor, and no generation answers reads yet`
+				: `the cursor reporter named no cursor for the generation that answers reads`,
 			...generations,
 			...canonical,
+			...waiting,
 		};
 	}
 
-	return {reported: true, value: reported.value, ...generations, ...canonical};
+	return {reported: true, value: reported.value, ...generations, ...canonical, ...waiting};
 }

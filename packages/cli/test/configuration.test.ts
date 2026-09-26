@@ -99,6 +99,17 @@ describe('a required input that is missing is refused, naming the flag and the v
 		expect(() => resolveCommandConfig('build', noProcessor, {})).toThrow(/no environment fallback/);
 	});
 
+	it('still refuses a missing processor on every command that required one, `run` aside (ADR-0093)', () => {
+		const {processor, ...noProcessor} = FOLDING;
+		const {deployments, ...nothingAtAll} = noProcessor;
+		expect(() => resolveCommandConfig('build', nothingAtAll, {})).toThrow(
+			/--processor is required by `etherfold build`/,
+		);
+		expect(() => resolveCommandConfig('build', noProcessor, {})).toThrow(
+			/--processor is required by `etherfold build`/,
+		);
+	});
+
 	it('refuses a missing --store, naming the value there is', () => {
 		const {store, ...noStore} = FOLDING;
 		expect(() => resolveCommandConfig('build', noStore, {})).toThrow(/--store.*sqlite/s);
@@ -733,6 +744,65 @@ describe('an operator selects WHEN a successor takes over', () => {
 // ---------------------------------------------------------------------------------------------------
 // A SOURCE WITHOUT A CHAIN CALL
 // ---------------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------------
+// `run` MAY BE STARTED WITH NOTHING CONFIGURED, AND ONLY THE PAIR MAY BE ABSENT (ADR-0093)
+// ---------------------------------------------------------------------------------------------------
+
+describe('`run` may be started with no processor and no source, together, and nothing else is defaulted', () => {
+	const {processor, deployments, ...NOTHING} = FOLDING;
+
+	it('resolves NO processor and the processor-module origin, rather than inventing either', () => {
+		const config = resolveCommandConfig('run', NOTHING, {});
+		expect(config.processor).toBeUndefined();
+		// the contracts a waiting node indexes are the ones the processor that ARRIVES carries
+		expect(config.source).toEqual({from: 'processor-module'});
+		expect(OWNERSHIP.run.processor).toBe('optional');
+	});
+
+	it('still refuses a SOURCE with no processor, by either spelling, naming both ways out', () => {
+		expect(() => resolveCommandConfig('run', {...NOTHING, deployments: './deployments'}, {})).toThrow(
+			/--processor is required by `etherfold run` when a source is given.*--deployments \.\/deployments.*give NEITHER/s,
+		);
+		expect(() => resolveCommandConfig('run', NOTHING, {INDEXING_SOURCE: SOURCE_JSON})).toThrow(
+			/given INDEXING_SOURCE with no processor.*configuration error rather than an intent to wait/s,
+		);
+	});
+
+	it('still takes a processor with no source, as it always did', () => {
+		const config = resolveCommandConfig('run', {...NOTHING, processor: './p.js'}, {});
+		expect(config.processor).toBe('./p.js');
+		expect(config.source).toEqual({from: 'processor-module'});
+	});
+
+	it('still requires everything else `run` required: the chain, the store and the database', () => {
+		const {nodeUrl, ...noNode} = NOTHING;
+		expect(() => resolveCommandConfig('run', noNode, {})).toThrow(/--node-url \(ETH_NODE_URI\)/);
+		const {db, ...noDb} = NOTHING;
+		expect(() => resolveCommandConfig('run', noDb, {})).toThrow(/--db \(DB\)/);
+	});
+
+	it('is a mode of `run` alone: `build`, `fetch` and `index` still require what they required', () => {
+		expect(() => resolveCommandConfig('build', NOTHING, {})).toThrow(/--processor is required by `etherfold build`/);
+		expect(() =>
+			resolveCommandConfig(
+				'index',
+				{store: 'sqlite', db: 'file:./x.db', deployments: './d', ingestToken: 't', indexer: 'alpha'},
+				{},
+			),
+		).toThrow(/--processor is required by `etherfold index`/);
+		expect(() =>
+			resolveCommandConfig(
+				'fetch',
+				{nodeUrl: 'http://x', ingestEndpoint: 'http://s', ingestToken: 't', indexer: 'a'},
+				{},
+			),
+		).toThrow(/--deployments.*INDEXING_SOURCE/s);
+		for (const command of ['build', 'index'] as const) {
+			expect(OWNERSHIP[command].processor).toBe('required');
+		}
+	});
+});
 
 describe('the source resolves without a chain call, or is refused naming both explicit forms', () => {
 	it('takes the deployments folder first', () => {

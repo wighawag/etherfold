@@ -409,7 +409,27 @@ export function world() {
 		});
 	}
 
+	/**
+	 * A CONTAINER OVER THIS WORLD OPENED WITH NOTHING CONFIGURED (ADR-0093): no fold of
+	 * its own and no source, over the same durable rows. Everything it comes to fold
+	 * either arrives through `add` naming its own source, or is the canonical generation
+	 * instantiated from its stored bundle.
+	 */
+	function openWithNothing(
+		extra: Partial<ReceivingIndexerOptions<TestABI, string[], MemoryStore>> = {},
+	): Promise<ReceivingIndexer<TestABI, string[], MemoryStore>> {
+		return openReceivingIndexer<TestABI, string[], MemoryStore>({
+			port,
+			stream: {finality: FINALITY},
+			appendEmissions: (write) => stream.append(write),
+			streamCursor: stream.cursor(),
+			replay: stream.source(),
+			...extra,
+		});
+	}
+
 	return {
+		openWithNothing,
 		port,
 		instantiateFromBundle,
 		instantiated,
