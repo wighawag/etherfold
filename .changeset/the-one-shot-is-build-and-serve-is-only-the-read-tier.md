@@ -1,5 +1,5 @@
 ---
-'etherfold': major
+'etherfold': minor
 '@etherfold/platform-nodejs': patch
 '@etherfold/server': patch
 ---

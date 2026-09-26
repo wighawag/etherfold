@@ -1,5 +1,5 @@
 ---
-'@etherfold/state-store': major
+'@etherfold/state-store': minor
 '@etherfold/state-store-conformance': minor
 '@etherfold/state-store-indexeddb': minor
 '@etherfold/state-store-sqlite': minor

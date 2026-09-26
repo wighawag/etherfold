@@ -1,8 +1,8 @@
 ---
-'@etherfold/browser': major
-'@etherfold/core': major
-'etherfold': major
-'@etherfold/utils': major
+'@etherfold/browser': minor
+'@etherfold/core': minor
+'etherfold': minor
+'@etherfold/utils': minor
 '@etherfold/processor-entities': patch
 '@etherfold/processor-sqlite': patch
 '@etherfold/state-store-patch': patch

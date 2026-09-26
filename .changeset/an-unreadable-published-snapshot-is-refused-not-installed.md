@@ -1,9 +1,9 @@
 ---
 '@etherfold/core': minor
 '@etherfold/browser': patch
-'@etherfold/state-store': major
-'@etherfold/processor-entities': major
-'etherfold': major
+'@etherfold/state-store': minor
+'@etherfold/processor-entities': minor
+'etherfold': minor
 ---
 
 A published snapshot a client cannot read is REFUSED, never installed as state — closing the last corner `tagged-bigint-codec-across-storage-adapters` left open knowingly (ADR-0040).

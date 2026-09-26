@@ -1,9 +1,9 @@
 ---
-'@etherfold/state-store': major
-'@etherfold/state-store-conformance': major
-'@etherfold/processor-entities': major
+'@etherfold/state-store': minor
+'@etherfold/state-store-conformance': minor
+'@etherfold/processor-entities': minor
 '@etherfold/processor-sqlite': minor
-'@etherfold/browser': major
+'@etherfold/browser': minor
 'etherfold': minor
 '@etherfold/state-store-sqlite': patch
 '@etherfold/state-store-indexeddb': patch

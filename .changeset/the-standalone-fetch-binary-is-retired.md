@@ -1,5 +1,5 @@
 ---
-'@etherfold/platform-nodejs-fetcher': major
+'@etherfold/platform-nodejs-fetcher': minor
 ---
 
 **BREAKING: the `etherfold-fetch` binary is RETIRED, with its `bin` entry, and this package survives as a LIBRARY.**

@@ -1,5 +1,5 @@
 ---
-'@etherfold/core': major
+'@etherfold/core': minor
 ---
 
 **BREAKING: the `parse.logValues` knob is DELETED.** No configuration can strip the raw log out of what is stored or sent any more, and the guarantee is STRUCTURAL rather than stated.

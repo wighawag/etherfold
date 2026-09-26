@@ -1,5 +1,5 @@
 ---
-'etherfold': major
+'etherfold': minor
 ---
 
 One configuration path for every command: flags first, environment behind them, and a refusal that names both.

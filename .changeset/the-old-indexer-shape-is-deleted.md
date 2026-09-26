@@ -1,6 +1,6 @@
 ---
-'@etherfold/browser': major
-'@etherfold/core': major
+'@etherfold/browser': minor
+'@etherfold/core': minor
 'etherfold': patch
 ---
 
