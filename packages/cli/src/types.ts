@@ -65,6 +65,12 @@ export type Options = {
 	 */
 	dropOnPromotion?: boolean;
 	/**
+	 * `--override`: a plain boolean like `--drop-on-promotion`. Lets a START with a
+	 * configured processor (`run`, `build`, `index`) replace a DIFFERENT pending successor
+	 * without asking (ADR-0084's amendment of 2026-09-26).
+	 */
+	override?: boolean;
+	/**
 	 * `upload`'s positional `<bundle>` argument, which is not a flag: the path of the
 	 * already-built bundle to send. It is the `processor` input spelled the way the
 	 * one command that only SENDS a bundle takes it, and `-p` names the same input
@@ -187,6 +193,17 @@ export type RunConfig<ABI extends Abi = Abi> = {
 	 * beside a live fold -- see `resolvePromotion` and the ownership table.
 	 */
 	readonly promotion?: PromotionConfig;
+	/**
+	 * WHETHER THIS START MAY REPLACE A DIFFERENT PENDING SUCCESSOR without asking
+	 * (`--override`, ADR-0084's and ADR-0093's amendments of 2026-09-26).
+	 *
+	 * Starting with a processor that differs from the canonical generation's registers it
+	 * into `successor`, and that deletes whatever the slot held -- often an upload still
+	 * catching up. Where it would, an interactive start ASKS and a non-interactive one is
+	 * REFUSED unless this is `true`. A start that replaces nothing ignores it, because
+	 * there is nothing for it to permit.
+	 */
+	readonly override: boolean;
 };
 
 /** `build`: the same, without the serving, stopping at the tip. */
@@ -199,6 +216,8 @@ export type BuildConfig<ABI extends Abi = Abi> = {
 	readonly destination: StoreTarget;
 	/** The name the ARTIFACT's stored stream is keyed on. See `RunConfig.indexer`. */
 	readonly indexer: string;
+	/** Whether this START may replace a DIFFERENT pending successor without asking. See `RunConfig.override`. */
+	readonly override: boolean;
 };
 
 /**
@@ -229,6 +248,8 @@ export type IndexConfig<ABI extends Abi = Abi> = {
 	readonly pruneIntervalSeconds: number | undefined;
 	readonly serving: Serving;
 	readonly wire: ReceivingWire;
+	/** Whether this START may replace a DIFFERENT pending successor without asking. See `RunConfig.override`. */
+	readonly override: boolean;
 };
 
 /** `serve`: the read tier. A database and an address, and nothing else at all. */

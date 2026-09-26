@@ -1,5 +1,7 @@
 # A `run` node may start with NO processor, and waits for one to be uploaded
 
+> **AMENDED 2026-09-26 (`an-uploaded-processor-survives-a-restart`):** how a CONFIGURED processor relates to what was uploaded is now decided; see the amendment at the end.
+
 The Graph's deploy UX starts from a node with nothing configured: deployments ARRIVE. ADR-0085's amendment of 2026-09-22 makes that the target, and code retention (ADR-0092) makes it reachable, because a generation's bundle is stored with it and can be instantiated at open. We decide that **`etherfold run` may be started with no processor and no source.** Such a node runs whatever its registry's canonical generation names; if it has never received a processor, it WAITS for one to be uploaded. This is not a default: ADR-0048 refuses a missing input because a defaulted one fails silently, and a waiting node fails loudly by saying it is waiting.
 
 ## What a node with nothing configured does
@@ -33,3 +35,13 @@ On the disk path, a configured source today still OVERRIDES a module's own contr
 **It was built on two things that came first**: stored bytes and instantiation at open (ADR-0092), and the upload route itself (ADR-0085). _This sentence was corrected on 2026-09-26, when the mode landed: it used to say those two were unbuilt, which stopped being true with them._
 
 **Where it lives.** `etherfold run` resolves no processor and the processor-module source origin (`resolveRunProcessor`, `packages/cli/src/config.ts`), and refuses a source with no processor there. The container is opened with no generation and no source (`ReceivingIndexerOptions.generation` and `.source` are optional, `@etherfold/core`): `open` registers nothing of its own and instantiates the registry's canonical generation from its stored bundle, where the host's instantiation names the source that bundle carries (`openWaitingFolding`, `packages/cli/src/folding.ts`). What the deployment fetches is `ReceivingIndexer.fetchedSource`: the configured source, or the source its FIRST fold carried, set once. The one fetcher is built late, by the drive loop, the first time that answer exists (`prepareWaiting`, `packages/cli/src/index.ts`), and until then `/status` carries `cursor.waiting: {for: 'processor', message}` (`WaitingReport`, `@etherfold/server`).
+
+## Amendment, 2026-09-26 (`an-uploaded-processor-survives-a-restart`, ADR-0084): a configured processor is an arrival, and an upload survives a restart
+
+The Consequences above say what a node started with NOTHING configured does, and "Require the processor at start" says only that a node started WITH one "still works exactly as today". That left open how a configured processor relates to what was uploaded to the same database, and the maintainer decided it on 2026-09-26:
+
+- **An upload survives a restart, including one still catching up.** A node instantiates the generation `successor` names at open as well as the canonical one (ADR-0092's amendment of the same day), so an upload that had not caught up when the process stopped goes on catching up after the restart and is promoted under the node's policy. This holds with nothing configured and with a configured processor alike.
+- **A configured `--processor` is an ARRIVAL like any other.** Where it names a processor different from the canonical generation's, it registers as the new `successor`, and the promotion policy decides from there. Where it names the canonical generation, or the successor already pending, it changes nothing: a node restarted with the processor it was first started with keeps folding whatever was uploaded to it since.
+- **A START may not SILENTLY replace a different pending successor**, whatever it arrived by (ADR-0084's amendment). An interactive start asks, naming both generations; a non-interactive one is refused by name unless `--override` is given. The re-read and the upload replace a pending successor as they always did.
+
+So story 10 of `a-processor-artifact-is-pushed-to-a-running-deployment` ("an upload survives a restart") has exactly ONE exception: the operator restarts with a DIFFERENT configured processor AND confirms replacing the pending upload, by answering yes or by passing `--override`.

@@ -1,5 +1,7 @@
 # A generation's CODE is stored beside its state, and goes with it
 
+> **AMENDED 2026-09-26 (`an-uploaded-processor-survives-a-restart`): the pending `successor` is instantiated at open too, and `predecessor` still is not.** Read the amendment at the end before "A bundle is instantiated when its generation has to FOLD" below.
+
 A generation is a stream plus a fold over it, and the fold is code. A Node deployment redeployed with a new processor holds no engine for any other generation, so a revert moves the pointer to a state that answers reads and can never advance again, and a restart-upgrade freezes the incumbent's answers for the whole catch-up. We decide that on a NODE deployment **each generation's bundle is stored in the database beside its state, instantiated when that generation has to fold, and deleted when the generation is deleted.** Holding a generation then means holding something runnable rather than something readable.
 
 These decisions were made in the spec `a-generation-retains-the-code-that-folds-it` and are relocated here when it was tasked, so the rationale outlives the spec's launch snapshot.
@@ -31,3 +33,11 @@ These decisions were made in the spec `a-generation-retains-the-code-that-folds-
 **Make bundling optional.** Rejected: two classes of generation, resumable and frozen, differing invisibly until the moment the difference matters.
 
 **Instantiate every slotted generation at open.** Rejected for the reason above: live engines for generations nobody is reading.
+
+## Amendment, 2026-09-26 (`an-uploaded-processor-survives-a-restart`): the pending successor folds from open
+
+"The canonical generation ... is needed from open" named the only generation that answers reads, and left out the one generation that is CATCHING UP. On a node whose processors arrive by upload, the stored bytes are the only copy of a pending successor's code (ADR-0085's amendment), so an upload still catching up when the process stopped sat in `successor` with nothing folding it: it never caught up and was never promoted, and the upload behaved like a session rather than a deployment. The maintainer decided on 2026-09-26 that a `successor` also has to fold from open.
+
+So at `open`, the generation `successor` names is instantiated from its stored bundle when the process holds no fold for it, through the same seam as the canonical generation and a revert (`ReceivingIndexerOptions.instantiateGeneration`, reached through the container's one `instantiate`). The promotion policy then speaks about it exactly as it does about a fold `add` registered: under `on-catch-up` it is promoted once it has caught up, and the fold instantiated for the incumbent stops being folded when the pointer leaves it. Two orders are load-bearing. It runs AFTER the configured fold is added, so a configured processor that REPLACES the pending successor has done so before anything is built for it. And it runs after the canonical generation, so a node started with nothing configured (ADR-0093) takes what it fetches from the generation that answers reads.
+
+`predecessor` is still NOT instantiated at open. Nobody reads it and it is not catching up, so "live engines for generations nobody is reading" still rules it out; it is instantiated at the moment a revert moves the pointer onto it, as before. Stored successor code that cannot be built is logged and the deployment starts, for the canonical generation's reason: the successor then does not advance, reports `folding: frozen` with `instantiation-failed`, and the next arrival replaces it as usual.

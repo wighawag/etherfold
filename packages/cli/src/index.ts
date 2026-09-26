@@ -36,6 +36,7 @@ import {
 	streamConfigFor,
 } from './folding.js';
 import {arrivalQueue, reconfigurerFor} from './reconfigure.js';
+import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
 import {uploaderFor} from './upload.js';
 import type {BuildConfig, ConfigFor, Options, RunConfig} from './types.js';
 
@@ -135,6 +136,11 @@ export type IndexingDependencies = {
 	onReport?: (report: CycleReport) => void;
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
+	/**
+	 * WHO A `run` OR `build` START ASKS before it replaces a different pending successor: whether
+	 * anybody can be asked, and how (`startGuardFor`). Default to the terminal.
+	 */
+	startGuard?: StartGuardDependencies;
 };
 
 /**
@@ -415,6 +421,11 @@ export async function prepareIndexing<
 			// flag is a question about that command's inputs which nothing has answered --
 			// so it is refused rather than carried (`NEVER_PROMOTES_BUILD`).
 			...(resolved.command === 'run' && resolved.promotion !== undefined ? {promotion: resolved.promotion} : {}),
+			// A START MAY NOT SILENTLY REPLACE A DIFFERENT PENDING SUCCESSOR (ADR-0084's amendment
+			// of 2026-09-26): it asks, is refused, or goes ahead under --override. `run` and a
+			// re-run `build` are both starts with a configured processor over the same slots, so
+			// both are guarded, as `index` is (`indexCommand.ts`).
+			confirmReplacingSuccessorAtStart: startGuardFor(resolved.override, deps.startGuard),
 		},
 	);
 

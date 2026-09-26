@@ -73,6 +73,7 @@ export type ConfigInput =
 	| 'ingestToken'
 	| 'promotion'
 	| 'dropOnPromotion'
+	| 'override'
 	| 'to'
 	| 'adminToken';
 
@@ -239,6 +240,15 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'whole reason non-canonical generations are kept. A deployment that would rather bound its storage ' +
 			'than keep a way back opts in',
 	},
+	override: {
+		flag: '--override',
+		describe:
+			'let this START replace a DIFFERENT pending successor. Starting with a --processor that differs from the ' +
+			'canonical generation registers it as the new `successor`, and that slot holds one: what it held -- often ' +
+			'an upload still catching up -- is DELETED, row, state and stored bytes. An interactive start ASKS first; ' +
+			'a non-interactive one is REFUSED unless this is given, so a pipeline that redeploys per commit passes it ' +
+			'once in its deploy configuration. A re-read and an upload replace a pending successor without it',
+	},
 	to: {
 		flag: '--to <url>',
 		variable: 'UPLOAD_TO',
@@ -332,6 +342,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'optional',
 		dropOnPromotion: 'optional',
+		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -352,6 +363,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -372,6 +384,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -392,6 +405,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -412,6 +426,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -432,6 +447,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
+		override: 'refused',
 		to: 'required',
 		adminToken: 'required',
 	},
@@ -626,6 +642,30 @@ const UPLOAD_DOES_NOT_PROMOTE =
 	'WHEN an uploaded generation takes over is the RECEIVING node\u2019s promotion policy, configured on its ' +
 	'`run` (--promotion / PROMOTION_POLICY): an upload registers a successor, and that policy moves the pointer.';
 
+// ---------------------------------------------------------------------------------------------------
+// WHICH COMMANDS TAKE --override
+// ---------------------------------------------------------------------------------------------------
+// `--override` lets a START replace a DIFFERENT pending successor (ADR-0084's and
+// ADR-0093's amendments of 2026-09-26). EVERY command that starts with a configured
+// `--processor` over a registry guards its start that way -- `run`, `build` and
+// `index` -- because all three open the same container over the same slots
+// (`openFolding`), and a pending successor is work in progress however it arrived:
+// an `index -p X` or a `build -p X` against a database holding an upload still
+// catching up would otherwise delete it silently. `fetch` and `serve` hold no
+// processor, register nothing and so replace nothing: the flag would permit nothing
+// there, and is refused rather than accepted and ignored.
+// ---------------------------------------------------------------------------------------------------
+
+const NO_PROCESSOR_TO_START =
+	'--override lets a START with a configured --processor replace a different pending successor, and this ' +
+	'command holds no processor, so it registers nothing and replaces nothing. The commands that take it are ' +
+	'`run`, `build` and `index`.';
+
+const OVERRIDE_IS_THE_NODES =
+	'an upload is already a deliberate act on a running node and replaces a pending successor without being asked. ' +
+	'--override belongs to the commands that START with a configured --processor (`run`, `build`, `index`): it ' +
+	'lets such a start replace one.';
+
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
 	run: {
 		pruneInterval: PRUNES_PER_CYCLE,
@@ -657,6 +697,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		autoSetup: NOT_SERVING_FETCH,
 		promotion: NEVER_PROMOTES_FETCH,
 		dropOnPromotion: NEVER_PROMOTES_FETCH,
+		override: NO_PROCESSOR_TO_START,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 	},
@@ -682,6 +723,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_SERVE,
 		promotion: NEVER_PROMOTES_SERVE,
 		dropOnPromotion: NEVER_PROMOTES_SERVE,
+		override: NO_PROCESSOR_TO_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
@@ -700,6 +742,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: UPLOAD_IS_NOT_INGEST,
 		promotion: UPLOAD_DOES_NOT_PROMOTE,
 		dropOnPromotion: UPLOAD_DOES_NOT_PROMOTE,
+		override: OVERRIDE_IS_THE_NODES,
 	},
 };
 
@@ -766,6 +809,9 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			// materialises nothing unless it was typed, so only `true` is something a user
 			// passed
 			return options.dropOnPromotion === true ? 'true' : undefined;
+		case 'override':
+			// the same plain BOOLEAN shape as `--drop-on-promotion`
+			return options.override === true ? 'true' : undefined;
 		case 'to':
 			return options.to;
 		case 'adminToken':
@@ -1239,6 +1285,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// said nothing, so the default stays written in one place (see
 					// `resolvePromotion`).
 					...(promotion === undefined ? {} : {promotion}),
+					// whether this START may replace a DIFFERENT pending successor without asking
+					// (ADR-0084's amendment of 2026-09-26). A flag and no variable: see `INPUTS`.
+					override: given('override', options, env) !== undefined,
 				};
 			}
 			case 'build': {
@@ -1253,6 +1302,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// the ARTIFACT carries the name its stream is stored under, so a `run`
 					// continuing it and a feed served over it find the same rows
 					indexer: resolveIndexerName(options, env),
+					// a re-run `build` against a database holding a DIFFERENT pending successor is a
+					// START like `run`'s, guarded the same way (ADR-0084's amendment of 2026-09-26)
+					override: given('override', options, env) !== undefined,
 				};
 			}
 			case 'fetch': {
@@ -1291,6 +1343,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					destination: resolveStoreTarget('index', options, env),
 					pruneIntervalSeconds: parsePruneInterval(given('pruneInterval', options, env)),
 					serving: resolveServing(options, env),
+					// a receiver's START registers its configured processor exactly as `run`'s does,
+					// so it is guarded the same way (ADR-0084's amendment of 2026-09-26)
+					override: given('override', options, env) !== undefined,
 					wire: {
 						kind: 'receiving',
 						indexer: requireIndexerName('index', options, env),
