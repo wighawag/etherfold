@@ -1,0 +1,34 @@
+{
+  "name": "example-node-dev-loop",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "The etherfold dev loop: a local chain, an `etherfold node`, and a watcher that rebuilds and uploads the processor on every save.",
+  "devDependencies": {
+    "@etherfold/utils": "workspace:*",
+    "@types/node": "^25.9.1",
+    "as-soon": "^0.1.6",
+    "etherfold": "workspace:*",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "wait-on": "^9.1.0"
+  },
+  "scripts": {
+    "---- THE WHOLE LOOP in one terminal, as a zellij layout (zellij.kdl): chain, contract, node, watcher, shell ----": "",
+    "start": "zellij -n zellij.kdl -s etherfold-node-dev-loop",
+    "---- OR ONE TERMINAL EACH, in this order ----": "",
+    "chain": "anvil --block-time 1",
+    "deploy:contract": "wait-on tcp:127.0.0.1:8545 && node scripts/deploy.mjs",
+    "indexer": "etherfold node --store sqlite --db file:./dev.db",
+    "dev": "wait-on http-get://localhost:2000/status && as-soon -w src pnpm build:upload",
+    "---- THE PIECES the watcher runs ----": "",
+    "build": "../../packages/utils/node_modules/.bin/esbuild src/processor.ts --bundle --format=esm --minify --outfile=dist/processor.bundle.js",
+    "upload": "etherfold upload dist/processor.bundle.js",
+    "build:upload": "pnpm build && pnpm upload",
+    "activity": "node scripts/activity.mjs",
+    "---- CHECKS the repo's gate runs ----": "",
+    "typecheck": "tsc -p tsconfig.json",
+    "pretest": "pnpm build",
+    "test": "vitest run"
+  }
+}
