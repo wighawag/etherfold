@@ -1,7 +1,3 @@
----
-status: accepted
----
-
 # A generation is held by NAMED DURABLE SLOTS, and `canonical` is merely the first one
 
 > **AMENDED 2026-09-26 (`an-uploaded-processor-survives-a-restart`):** a START may no longer SILENTLY replace a different pending `successor`; see the amendment at the end, which changes the redeploy-per-commit case this ADR's second symptom describes.
