@@ -4,31 +4,29 @@ import type {GenerationId} from './generation/registry.js';
  * WHICH WAY a processor reached the running deployment, named after WHAT ARRIVED
  * rather than after the package that received it.
  *
- * - **`re-read`** -- the process re-resolved its own configuration and re-loaded
- *   its processor from disk (`POST /{indexer}/admin/reconfigure`, whose re-read is
- *   `etherfold run`'s).
- * - **`upload`** -- the bytes of an already-built bundle were SENT to the running
- *   node over its admin credential (ADR-0085's amendment of 2026-09-22). Named
- *   here before anything produces it, so the upload route answers in a vocabulary
- *   that already exists (`a-processor-bundle-is-uploaded-to-a-running-node`).
+ * - **`upload`** -- the bytes of an already-built bundle were SENT to a running
+ *   `etherfold node` over its admin credential (`POST /{indexer}/admin/upload`,
+ *   ADR-0085's amendment of 2026-09-22, ADR-0094). It is the ONE way code reaches
+ *   a running Node process: a configured `etherfold run` receives no code and
+ *   changes what it folds by restarting.
  * - **`hot-update`** -- a bundler replaced the module and handed the page a module
  *   OBJECT, which a tab registers itself (`reconfigureFromHotUpdate`).
  *
  * Not a package name, because a package is where the receiving code happens to
- * live and not what an operator saw happen: the re-read spans `@etherfold/cli`
- * and `@etherfold/server`, and the upload will be received by the same server
- * package as the re-read. What a log reader wants is "someone uploaded" versus
- * "the node re-read its disk" versus "a tab hot-updated".
+ * live and not what an operator saw happen: the upload spans `@etherfold/cli`
+ * and `@etherfold/server`. What a log reader wants is "someone uploaded" versus
+ * "a tab hot-updated".
  */
-export type ReconfigureArrival = 're-read' | 'upload' | 'hot-update';
+export type ReconfigureArrival = 'upload' | 'hot-update';
 
 /**
  * WHAT ONE ARRIVAL DID, in the three answers a caller has to be able to tell
  * apart.
  *
- * A processor reaches a RUNNING deployment in more than one way -- re-READ off a
- * filesystem by `POST /{indexer}/admin/reconfigure`, and HANDED OVER as a module
- * object by a browser tab's own hot update (ADR-0085) -- and the thing those
+ * A processor reaches a RUNNING deployment in more than one way -- UPLOADED as
+ * the bytes of a bundle to a running `etherfold node` (ADR-0094), and HANDED
+ * OVER as a module object by a browser tab's own hot update (ADR-0085) -- and
+ * the thing those
  * arrivals have in common is the only thing that matters downstream: register
  * this processor as a successor beside the live one. They are thin adapters in
  * front of ONE call, so they answer ONE shape, and a watcher (or a tab's
@@ -67,7 +65,7 @@ export type ReconfigureArrival = 're-read' | 'upload' | 'hot-update';
  * ## WHICH ARRIVAL, on a field BESIDE the outcome
  *
  * Every arm carries `arrival` (`ReconfigureArrival`), REQUIRED, because the same
- * outcome from two arrivals reads identically otherwise: "the endpoint said
+ * outcome from two arrivals reads identically otherwise: "the upload said
  * unchanged" and "HMR handed us the same module" are one line in a log. It is a
  * field and NOT a fourth outcome, because it answers a different question: the
  * outcome says what HAPPENED and is what a watcher branches on, once, whatever
@@ -88,7 +86,7 @@ export type ReconfigureArrival = 're-read' | 'upload' | 'hot-update';
  *
  * ## WHY IT LIVES IN CORE, and why it is not called `ReconfigureOutcome`
  *
- * It is here because the arrivals are in DIFFERENT PACKAGES -- the re-read is
+ * It is here because the arrivals are in DIFFERENT PACKAGES -- the upload is
  * `@etherfold/cli` behind a `@etherfold/server` route, the hot update is
  * `@etherfold/browser` -- and this is the only package all of them already
  * depend on. Two packages that each declared their own three-arm union would

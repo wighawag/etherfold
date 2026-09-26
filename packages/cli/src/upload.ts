@@ -14,7 +14,7 @@ import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {foldPartsFor, openIndexingSource} from './folding.js';
-import {arrivalQueue, sameIdentity, type ArrivalQueue} from './reconfigure.js';
+import {arrivalQueue, sameIdentity, type ArrivalQueue} from './arrivalQueue.js';
 import type {StoreTarget} from './types.js';
 
 const logger = logs('etherfold');
@@ -82,7 +82,7 @@ export type UploadContext<ABI extends Abi = Abi, ProcessResultType = unknown> = 
 	destination: StoreTarget;
 	/**
 	 * The stream config this process came up with, AS PROVIDED (`streamConfigFor`), and
-	 * what `add` is handed. Taken from the start rather than re-read: an upload changes
+	 * what `add` is handed. Taken from the start rather than resolved again: an upload changes
 	 * the processor and the contracts it carries, and nothing else about the deployment.
 	 */
 	stream: ProvidedStreamConfig;

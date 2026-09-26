@@ -11,7 +11,7 @@ import type {BrowserGenerationSpec} from './IndexerState.js';
 const logger = logs('etherfold');
 
 // ---------------------------------------------------------------------------------------------------
-// THE THIRD ARRIVAL: a processor HANDED OVER by a dev server, to the tab it is already running in
+// THE SECOND ARRIVAL: a processor HANDED OVER by a dev server, to the tab it is already running in
 // ---------------------------------------------------------------------------------------------------
 // A developer running an indexer in a browser tab edits a handler. Their bundler
 // hot-replaces the module and the indexer goes on folding with the OLD one,
@@ -20,21 +20,21 @@ const logger = logs('etherfold');
 // family of work exists to remove.
 //
 // The fix needs almost nothing, and understanding WHY is what keeps it that way.
-// On a server, reconfiguring means re-READING a processor (off a disk, or out of
-// pushed bytes) and defeating a module cache to do it. In a tab the bundler has
-// ALREADY done the module replacement and handed the page a new module OBJECT,
-// so there are no bytes to send, no URL to instantiate, no cache to defeat, no
-// route and no credential -- and no authorisation question at all, because there
-// is no remote caller. The tab reconfigures ITSELF with what its own dev server
-// just gave it (ADR-0085).
+// A processor reaches a running deployment two ways. On a server it is UPLOADED:
+// the bytes of a built bundle are sent to a running `etherfold node`, which hashes
+// and instantiates them (ADR-0094). In a tab the bundler has ALREADY done the module
+// replacement and handed the page a new module OBJECT, so there are no bytes to
+// send, no URL to instantiate, no route and no credential -- and no authorisation
+// question at all, because there is no remote caller. The tab updates ITSELF with
+// what its own dev server just gave it (ADR-0085).
 //
 // ## THIS PACKAGE DOES NOT SUBSCRIBE TO ANYTHING
 //
 // There is no reference to `import.meta.hot` here, or anywhere in this package,
 // and that is a decision rather than an omission. NOTICING a change is the
 // application's job, which is the same rule the server side already follows:
-// whatever watches a file stays outside the process, and the endpoint only
-// re-reads (`a-change-reaches-a-running-deployment`). HMR is an instance of that
+// whatever watches a file stays outside the process and calls `etherfold upload`,
+// and the node only receives. HMR is an instance of that
 // rule and not an exception to it -- the bundler IS the watcher, and it already
 // exists.
 //
@@ -150,8 +150,8 @@ export type HotUpdateGeneration<ABI extends Abi, ProcessResultType, ProcessorCon
  * ## WHAT IT ANSWERS
  *
  * `ReconfigureReport` (`@etherfold/core`), which is the SAME shape the admin
- * re-read route answers, because the arrivals are thin adapters in front of one
- * call and a caller should branch on one contract rather than three (ADR-0085):
+ * upload route answers, because the arrivals are thin adapters in front of one
+ * call and a caller should branch on one contract rather than two (ADR-0085):
  *
  * - **`registered`** -- the handler edit moved the identity, so a successor is
  *   folding beside the incumbent. The incumbent answered every read throughout

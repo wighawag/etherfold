@@ -12,9 +12,9 @@ import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './ut
 // ---------------------------------------------------------------------------------------------------
 // A RESTART WITH A CHANGED PROCESSOR FINISHES THE UPGRADE, AND A REVERT SURVIVES ONE
 // ---------------------------------------------------------------------------------------------------
-// A successor arrives two ways: through `POST /{indexer}/admin/reconfigure` on a
-// process that keeps running (`theDeploymentSelectsItsPromotionPolicy.test.ts`),
-// and by RESTARTING the deployment with different bytes at `--processor`. The
+// A successor arrives two ways: by an UPLOAD to a `node` that keeps running
+// (ADR-0094), and by RESTARTING the deployment with different bytes at `--processor`
+// (`theDeploymentSelectsItsPromotionPolicy.test.ts` asserts the policy on both). The
 // second is the one a developer does by hand and the one a redeploy does on its
 // own, and until ADR-0084's arming landed it could never finish: a generation
 // registered at `open` was never armed, the trigger could not be EVALUATED with
@@ -291,7 +291,7 @@ describe('a restart with a changed processor FINISHES the upgrade', () => {
 
 		// nothing said anything about promotion, so this is the default everywhere --
 		// and the whole claim is that it now means the same thing on the restart path
-		// as it does through the reconfigure endpoint
+		// as it does on an upload to a running `node`
 		await waitUntilCanonical(indexer, successor);
 		expect((await feedOf(indexer)).generation).toBe(successor);
 
@@ -322,7 +322,7 @@ describe('a restart with a changed processor FINISHES the upgrade', () => {
 		// NOT a race and not a poll: the policy acts inside `add`, which is inside
 		// `open`, so the pointer had moved before `run` returned -- while the successor
 		// had folded nothing. That is what this value buys and what it costs, and it is
-		// the same thing it means through the reconfigure endpoint: one policy, however
+		// the same thing it means on an upload to a running `node`: one policy, however
 		// the successor arrived.
 		expect(await canonicalOf(indexer)).toBe(successor);
 		expect((await listingOf(indexer)).generations.map((entry) => entry.digest).sort()).toEqual(

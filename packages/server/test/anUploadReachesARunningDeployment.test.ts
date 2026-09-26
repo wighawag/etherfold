@@ -359,16 +359,8 @@ describe('the transport refuses before the host is reached, and so registers not
 });
 
 describe('a deployment that cannot receive a processor refuses HONESTLY', () => {
-	it('answers `501 upload-not-held`, independently of the pointer move and the re-read it may hold', async () => {
-		const entry: IndexerRegistryEntry = {
-			...indexerEntryOn(deployment.db, deployment.indexer),
-			reconfigure: async () => ({
-				arrival: 're-read',
-				outcome: 'unchanged',
-				generation: deployment.incumbent,
-				message: '',
-			}),
-		};
+	it('answers `501 upload-not-held`, independently of the pointer move it may hold', async () => {
+		const entry: IndexerRegistryEntry = indexerEntryOn(deployment.db, deployment.indexer);
 		const app = createServer<TestEnv>({
 			getDB: () => deployment.db,
 			getEnv: () => ({ADMIN_TOKEN}),
@@ -387,5 +379,21 @@ describe('a deployment that cannot receive a processor refuses HONESTLY', () => 
 		expect(body.error).toBe('upload-not-held');
 		expect(body.indexer).toBe(NAME);
 		expect(body.message).toMatch(/The deployment that receives uploads is `etherfold node`/);
+	});
+});
+
+describe('the upload is the ONE way code reaches a running deployment (ADR-0094)', () => {
+	it('serves no re-read route: `POST /{indexer}/admin/reconfigure` is a route that does not exist, even here', async () => {
+		// a host that holds EVERYTHING this seam can carry, the upload included, and an
+		// authenticated caller: what is left is the route table, and the re-read is not in it
+		const before = await everythingHeld(deployment);
+		const res = await deployment.app.request(`/${NAME}/admin/reconfigure`, {
+			method: 'POST',
+			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
+		});
+
+		expect(res.status).toBe(404);
+		expect(deployment.received).toEqual([]);
+		expect(await everythingHeld(deployment)).toEqual(before);
 	});
 });

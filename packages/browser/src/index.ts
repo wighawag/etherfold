@@ -89,7 +89,7 @@ export type {
 	// WHAT AN ARRIVAL DID: `registered`, `unchanged` or `failed`. Named here
 	// because `reconfigureFromHotUpdate` answers one, and a caller that cannot name
 	// the type cannot annotate the value it branches on. It lives in
-	// `@etherfold/core` because the admin re-read route answers the SAME shape from
+	// `@etherfold/core` because the admin upload route answers the SAME shape from
 	// another package, and one contract across the arrivals is the claim (ADR-0085).
 	ReconfigureReport,
 	LogParseConfig,

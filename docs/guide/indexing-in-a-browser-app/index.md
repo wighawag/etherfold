@@ -412,7 +412,7 @@ if (import.meta.hot) {
 
 **This library subscribes to nothing.** There is no reference to `import.meta.hot` anywhere in `@etherfold/browser`, and that is deliberate: *noticing* a change is your job, which is the same rule the server side follows — whatever watches a file stays outside the process. Your bundler is already the watcher. So a build with no HMR at all is unaffected by construction rather than by a guard, and because this is a plain function rather than a method on the indexer, the production build that eliminates your `if (import.meta.hot)` block drops it too.
 
-**Three outcomes, because "I saved and nothing happened" otherwise has three causes.** `ReconfigureReport` is the same shape the server's `POST /{indexer}/admin/reconfigure` answers, so the arrivals share one contract ([ADR-0085](https://github.com/wighawag/etherfold/blob/main/docs/adr/0085-a-processor-may-be-pushed-as-a-content-addressed-artifact-and-its-hash-is-its-version.md)):
+**Three outcomes, because "I saved and nothing happened" otherwise has three causes.** `ReconfigureReport` is the same shape the server's `POST /{indexer}/admin/upload` answers when a bundle is uploaded to a running `etherfold node`, so the two arrivals share one contract ([ADR-0085](https://github.com/wighawag/etherfold/blob/main/docs/adr/0085-a-processor-may-be-pushed-as-a-content-addressed-artifact-and-its-hash-is-its-version.md)):
 
 | outcome | what happened |
 | --- | --- |

@@ -6,7 +6,8 @@ import {join} from 'node:path';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {UPLOAD_CONTENT_TYPE} from '@etherfold/server';
+import {node, run, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
@@ -33,18 +34,21 @@ import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './ut
 //                 somebody asks -- so an operator can inspect a successor before
 //                 it answers anybody.
 //
-// The successor is introduced exactly as a deployment introduces one: an EDIT to
-// the processor bundle on disk and `POST /{indexer}/admin/reconfigure`. That is
-// what makes the assertion honest rather than a test of `container.add` wearing a
-// command line -- and it is the only way a successor reaches a RUNNING CLI
-// deployment, which is why `run` is the one command that owns this input.
+// The successor is introduced exactly as a deployment introduces one, on BOTH commands
+// that take this input (ADR-0094), and every case runs on each:
 //
-// The OTHER way one arrives is by RESTARTING the deployment with different bytes,
-// which is what a redeploy does, and the three values mean the same three things
-// there: `packages/cli/test/aRestartFinishesTheUpgrade.test.ts` asserts them on
-// that path (ADR-0084). The cases below are deliberately NOT rewritten onto the
-// shorter path now that one exists -- what they assert is the reconfigure
-// ENDPOINT's behaviour, which nothing else covers.
+//   `node`   an EDITED bundle's bytes UPLOADED to the running process
+//            (`POST /{indexer}/admin/upload`): the policy acting IN-PROCESS on a
+//            successor that arrived while the node was serving;
+//   `run`    a RESTART with the edited bundle at `-p`, over the same database: the
+//            flag acting on a successor registered at START, which still catches up
+//            while the process runs -- the reason `run` keeps the flag.
+//
+// That is what makes the assertion honest rather than a test of `container.add`
+// wearing a command line. (These cases used to add the successor through a re-read
+// endpoint on a running `run`; that endpoint is deleted, ADR-0094.)
+// `packages/cli/test/aRestartFinishesTheUpgrade.test.ts` asserts more of the restart
+// path (ADR-0084).
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'nfts';
@@ -131,9 +135,9 @@ afterEach(async () => {
 });
 
 /** The command line a deployment is stood up with, plus whatever it says about promotion. */
-function optionsFor(processor: string, promotion?: Partial<Options>): Options {
+function optionsFor(processor: string | undefined, promotion?: Partial<Options>): Options {
 	return {
-		processor,
+		...(processor === undefined ? {} : {processor}),
 		nodeUrl: 'http://localhost:0',
 		store: 'sqlite',
 		db: ':memory:',
@@ -143,12 +147,28 @@ function optionsFor(processor: string, promotion?: Partial<Options>): Options {
 	};
 }
 
-/** A `run` that has folded `LOGS` and is answering, under whatever promotion it was given. */
-async function aRunServing(processorPath: string, promotion?: Partial<Options>): Promise<RunningIndexer> {
+/** The two commands that take `--promotion` (ADR-0094). */
+type Shape = 'node' | 'run';
+const SHAPES: readonly Shape[] = ['node', 'run'];
+
+function oneDatabase(): RemoteSQL {
+	return new RemoteLibSQL(createClient({url: ':memory:'}));
+}
+
+/**
+ * START `run -p processorPath` (or a `node`, with no processor) over `db`, under
+ * whatever promotion it was given. The handle is the caller's, so a second start over
+ * the same `db` is a restart.
+ */
+async function aStartOver(
+	shape: Shape,
+	db: RemoteSQL,
+	processorPath: string | undefined,
+	promotion?: Partial<Options>,
+): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	const chain = fakeChain().serve(LOGS, TIP);
-	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	const started = await run(optionsFor(processorPath, promotion), {
+	const started = await (shape === 'node' ? node : run)(optionsFor(processorPath, promotion), {
 		provider: chain.provider,
 		createDB: () => db,
 		sleep: async () => {
@@ -159,8 +179,29 @@ async function aRunServing(processorPath: string, promotion?: Partial<Options>):
 		env: {MAX_BLOCKS_PER_FETCH: '20'},
 	});
 	running = started;
+	return started;
+}
+
+/** A `run` that has folded `LOGS` and is answering, under whatever promotion it was given. */
+async function aRunServing(processorPath: string, promotion?: Partial<Options>): Promise<RunningIndexer> {
+	const started = await aStartOver('run', oneDatabase(), processorPath, promotion);
 	await feedOf(started, LOGS.length);
 	return started;
+}
+
+/** WHAT A WATCHER DOES after its rebuild on a `node`: `etherfold upload`, the bundle's bytes. */
+async function upload(
+	indexer: RunningIndexer,
+	source: string,
+): Promise<{outcome?: string; generation?: {digest: string}}> {
+	const res = await fetch(`${indexer.url}/${INDEXER}/admin/upload`, {
+		method: 'POST',
+		headers: {'Content-Type': UPLOAD_CONTENT_TYPE, Authorization: `Bearer ${ADMIN_TOKEN}`},
+		body: source,
+	});
+	const body = (await res.json()) as {outcome?: string; generation?: {digest: string}};
+	expect(res.status, JSON.stringify(body)).toBe(200);
+	return body;
 }
 
 /** READ THE FEED, refusing anything but a served answer: the incumbent answers throughout. */
@@ -179,24 +220,15 @@ async function feedOf(
 	}
 }
 
-/** WHAT A WATCHER DOES after its rebuild: one call, no body. */
-async function reconfigure(indexer: RunningIndexer): Promise<{outcome?: string; generation?: {digest: string}}> {
-	const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
-		method: 'POST',
-		headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
-	});
-	const body = (await res.json()) as {outcome?: string; generation?: {digest: string}};
-	expect(res.status, JSON.stringify(body)).toBe(200);
-	return body;
-}
+type Listed = {digest: string; canonical: boolean; stream: string; processor: string};
 
 /** Every generation this deployment holds, as the operator's own listing reports them. */
-async function generationsOf(indexer: RunningIndexer): Promise<{digest: string; canonical: boolean}[]> {
+async function generationsOf(indexer: RunningIndexer): Promise<Listed[]> {
 	const res = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
 		headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
 	});
 	expect(res.status).toBe(200);
-	return ((await res.json()) as {generations: {digest: string; canonical: boolean}[]}).generations;
+	return ((await res.json()) as {generations: Listed[]}).generations;
 }
 
 /** WHICH generation answers reads right now. */
@@ -227,57 +259,89 @@ async function statusOf(indexer: RunningIndexer): Promise<StatusBody> {
 }
 
 /**
+ * HOW FAR ONE GENERATION HAS GOT, read off its own table namespace through the
+ * registry (`GenerationRegistryPort.readStateCursor`) rather than off `/status`: a
+ * restarted `run` need not hold a fold for the incumbent, so the number the promotion
+ * compares need not be on that page at all.
+ */
+async function positionOf(indexer: RunningIndexer, digest: string): Promise<number | undefined> {
+	const target = (await generationsOf(indexer)).find((entry) => entry.digest === digest);
+	if (!target) throw new Error(`this deployment holds no generation ${digest}`);
+	return indexer.container.registry.readStateCursor({stream: target.stream, processor: target.processor});
+}
+
+/**
  * Wait until the successor has caught the incumbent UP, which is the moment
  * `on-catch-up` acts on and the moment `manual` deliberately does not.
- *
- * Asserted off `/status`, which is where the rebuild is already visible: an entry
- * with no `value` has folded nothing, and level means its `lastToBlock` has
- * reached the number the entry that was canonical when the successor was created
- * carries.
  */
 async function waitUntilLevel(indexer: RunningIndexer, successor: string, incumbent: string): Promise<void> {
 	const deadline = Date.now() + 10_000;
 	for (;;) {
-		const entries = (await statusOf(indexer)).cursor.generations ?? [];
-		const behind = entries.find((entry) => entry.generation === successor)?.value?.lastToBlock;
-		const ahead = entries.find((entry) => entry.generation === incumbent)?.value?.lastToBlock;
+		const behind = await positionOf(indexer, successor);
+		const ahead = await positionOf(indexer, incumbent);
 		if (behind !== undefined && ahead !== undefined && behind >= ahead) return;
 		if (Date.now() > deadline) throw new Error(`the successor never became level with the incumbent`);
 		await new Promise((resolve) => setTimeout(resolve, 5));
 	}
 }
 
-/** A deployment that has folded, has been edited, and has registered the successor that edit names. */
+/**
+ * A deployment that has folded, has been EDITED, and has registered the successor that
+ * edit names -- on each command the way that command meets an edit.
+ *
+ *   `node`  the incumbent is its first upload, and the edited bytes are UPLOADED to the
+ *           running process: the policy acts in-process.
+ *   `run`   the incumbent is what `-p` named on a first start; the edited bundle is
+ *           written to the same path and the deployment RESTARTED with the flag, so the
+ *           successor is registered at start and catches up while `run` runs.
+ */
 async function aDeploymentWithASuccessor(
+	shape: Shape,
 	promotion?: Partial<Options>,
 ): Promise<{indexer: RunningIndexer; incumbent: string; successor: string}> {
-	const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
-	const indexer = await aRunServing(path, promotion);
-	const incumbent = generationDigestOf(indexer.container.generation);
+	const db = oneDatabase();
+	if (shape === 'node') {
+		const indexer = await aStartOver('node', db, undefined, promotion);
+		expect((await upload(indexer, processorBundleSource({credit: 'to'}))).outcome).toBe('registered');
+		await feedOf(indexer, LOGS.length);
+		const incumbent = generationDigestOf(indexer.container.generation);
 
-	// THE REBUILD a watcher notices: one edited handler at the same path, so the
-	// bytes moved and the identity with them, with no author action
+		// THE REBUILD a watcher sends: one edited handler, so the bytes moved and the
+		// identity with them, with no author action
+		const registered = await upload(indexer, processorBundleSource({credit: 'from'}));
+		expect(registered.outcome).toBe('registered');
+		const successor = registered.generation?.digest as string;
+		expect(successor).not.toBe(incumbent);
+		return {indexer, incumbent, successor};
+	}
+
+	const path = await aProcessorBundleOnDisk(processorBundleSource({credit: 'to'}));
+	const first = await aStartOver('run', db, path);
+	await feedOf(first, LOGS.length);
+	const incumbent = generationDigestOf(first.container.generation);
+	await first.stop();
+	running = undefined;
+
+	// THE REDEPLOY: one edited handler at the same path, restarted under the flag
 	await writeFile(path, processorBundleSource({credit: 'from'}), 'utf-8');
-	const registered = await reconfigure(indexer);
-	expect(registered.outcome).toBe('registered');
-	const successor = registered.generation?.digest as string;
-	expect(successor).not.toBe(incumbent);
-	return {indexer, incumbent, successor};
+	const indexer = await aStartOver('run', db, path, promotion);
+	const successor = (await generationsOf(indexer)).map((entry) => entry.digest).find((one) => one !== incumbent);
+	expect(successor, `the restart registered no successor beside ${incumbent}`).toBeDefined();
+	return {indexer, incumbent, successor: successor as string};
 }
 
 // ---------------------------------------------------------------------------------------------------
 
-describe('`--promotion immediate`: the successor answers the moment it exists', () => {
-	it('has already moved the pointer by the time the reconfigure has answered', async () => {
-		const {indexer, incumbent, successor} = await aDeploymentWithASuccessor({promotion: 'immediate'});
+describe.each(SHAPES)('`--promotion immediate` on `%s`: the successor answers the moment it exists', (shape) => {
+	it('has already moved the pointer by the time the call that registered it has answered', async () => {
+		const {indexer, incumbent, successor} = await aDeploymentWithASuccessor(shape, {promotion: 'immediate'});
 
 		// NOT a race and not a poll: the policy acts INSIDE `add`, which is inside the
-		// call that registered the successor, so the pointer has moved before the
-		// watcher's request came back -- while the successor has folded NOTHING. That is
-		// the whole of what this value buys and the whole of what it costs.
+		// call that registered the successor (the upload on `node`, the start on `run`),
+		// so the pointer has moved before that call came back -- while the successor has
+		// folded NOTHING. That is the whole of what this value buys and what it costs.
 		expect(await canonicalOf(indexer)).toBe(successor);
-		const entries = (await statusOf(indexer)).cursor.generations ?? [];
-		expect(entries.find((entry) => entry.generation === incumbent)?.canonical).toBe(false);
+		expect((await generationsOf(indexer)).find((entry) => entry.digest === incumbent)?.canonical).toBe(false);
 
 		// and the deployment SAYS which value it is running under, so an operator
 		// confirms it rather than inferring it from the move they just watched
@@ -289,9 +353,9 @@ describe('`--promotion immediate`: the successor answers the moment it exists', 
 	});
 });
 
-describe('the DEFAULT is unchanged: the successor takes over when it has caught up', () => {
+describe.each(SHAPES)('the DEFAULT on `%s` is unchanged: the successor takes over when it has caught up', (shape) => {
 	it('keeps the incumbent answering until the rebuild is level, then moves on its own', async () => {
-		const {indexer, incumbent, successor} = await aDeploymentWithASuccessor();
+		const {indexer, incumbent, successor} = await aDeploymentWithASuccessor(shape);
 
 		// nothing was said, so what runs is what ran before this input existed -- and
 		// it is reported as the RESOLVED value rather than as the absence that was
@@ -316,9 +380,9 @@ describe('the DEFAULT is unchanged: the successor takes over when it has caught 
 	});
 });
 
-describe('`--promotion manual`: it moves only when asked', () => {
+describe.each(SHAPES)('`--promotion manual` on `%s`: it moves only when asked', (shape) => {
 	it('leaves the pointer alone even once the successor is LEVEL, and moves it when an operator asks', async () => {
-		const {indexer, incumbent, successor} = await aDeploymentWithASuccessor({promotion: 'manual'});
+		const {indexer, incumbent, successor} = await aDeploymentWithASuccessor(shape, {promotion: 'manual'});
 
 		expect((await statusOf(indexer)).promotion).toMatchObject({reported: true, policy: 'manual'});
 
@@ -337,10 +401,7 @@ describe('`--promotion manual`: it moves only when asked', () => {
 
 		// `manual` means ONLY WHEN ASKED and never NEVER: the verb an operator calls is
 		// ungated under every value.
-		const target = (await generationsOf(indexer)).find((entry) => entry.digest === successor) as unknown as {
-			stream: string;
-			processor: string;
-		};
+		const target = (await generationsOf(indexer)).find((entry) => entry.digest === successor) as Listed;
 		expect(await promote(indexer, {stream: target.stream, processor: target.processor})).toBe(200);
 		expect(await canonicalOf(indexer)).toBe(successor);
 	});
@@ -365,14 +426,16 @@ describe('the combination this runtime cannot honour is refused BEFORE anything 
 		expect(chain.calls ?? []).toEqual([]);
 	});
 
-	it('accepts either half on its own, because only the pair is unbuildable here', async () => {
-		const {indexer} = await aDeploymentWithASuccessor({dropOnPromotion: true});
-		expect((await statusOf(indexer)).promotion).toEqual({
-			reported: true,
-			policy: 'on-catch-up',
-			dropOnPromotion: true,
+	for (const shape of SHAPES) {
+		it(`accepts either half on its own on \`${shape}\`, because only the pair is unbuildable here`, async () => {
+			const {indexer} = await aDeploymentWithASuccessor(shape, {dropOnPromotion: true});
+			expect((await statusOf(indexer)).promotion).toEqual({
+				reported: true,
+				policy: 'on-catch-up',
+				dropOnPromotion: true,
+			});
 		});
-	});
+	}
 });
 
 describe('every value the type names is reachable from a command line', () => {

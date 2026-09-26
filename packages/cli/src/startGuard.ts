@@ -28,9 +28,8 @@ const logger = logs('etherfold');
 //    goes ahead only on a yes;
 //  - otherwise: it is REFUSED by name, naming `--override`.
 //
-// Only the START is guarded. A re-read (on `run`) and an upload (on `node`, ADR-0094)
-// are already deliberate acts on a running node and replace a pending successor as
-// they always did. `node` itself is never guarded: it starts with no configured
+// Only the START is guarded. An upload (on `node`, ADR-0094) is already a deliberate
+// act on a running node and replaces a pending successor as it always did. `node` itself is never guarded: it starts with no configured
 // processor, so its starts replace nothing.
 // ---------------------------------------------------------------------------------------------------
 

@@ -69,21 +69,19 @@ const logger = logs('etherfold');
 // reaches it only by `etherfold upload` (`POST /{indexer}/admin/upload`, `upload.ts`).
 // It WAITS for its first upload and says so on `/status` (ADR-0093's waiting mode, a
 // command of its own now). The two share everything below -- the server, the
-// read-only registration, the drive loop -- and differ in exactly which ARRIVAL each
-// wires: `run` the re-read, `node` the upload, never both on one process, so each has
-// ONE source of truth. That is why this file holds both: the difference is one field
-// of the registration, and two copies of the rest would drift.
+// read-only registration, the drive loop -- and differ in exactly one thing: `node`
+// wires the upload and `run` wires NO arrival at all, so each has ONE source of truth.
+// That is why this file holds both: the difference is one field of the registration,
+// and two copies of the rest would drift.
 //
-// ## ...and `run` is the shape a RECONFIGURE can reach
+// ## How a successor reaches each of them
 //
-// A successor used to arrive exactly one way -- by restarting this process, so
-// that the container registered a new generation as it OPENED -- because nothing
-// watched a file and no route added one. `POST /{indexer}/admin/reconfigure`
-// (`@etherfold/server`) is the trigger that removes the restart, and this process
-// answers it: it RE-READS its own configuration, re-imports the processor module
-// and registers whatever generation that names beside the live fold
-// (`reconfigure.ts`). Whatever noticed the file changed stays OUTSIDE, so one
-// mechanism serves a dev watcher, a deploy hook and a CI step, and this process
+// On `run`, by RESTARTING with a different `-p` or source: the container registers
+// the new generation as it OPENS, beside the incumbent, and it catches up while the
+// process runs. On `node`, by an UPLOAD, the ONE way code reaches a running Node
+// process (ADR-0094): the dev loop is `etherfold node` plus a watcher that calls
+// `etherfold upload` on each build. Whatever noticed the file changed stays OUTSIDE,
+// so one mechanism serves a dev watcher, a deploy hook and a CI step, and this process
 // never grows an opinion about how anybody's editor saves files.
 // ---------------------------------------------------------------------------------------------------
 
@@ -123,8 +121,8 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 * THE GENERATIONS THIS PROCESS HOLDS: the registry, the canonical pointer, and
 	 * the folds over them.
 	 *
-	 * Exposed because this is the shape that may grow one. A reconfigure reaching a
-	 * long-running host is `container.add(...)`, which registers a SUCCESSOR beside
+	 * Exposed because this is the shape that may grow one. An upload reaching a
+	 * running `node` is `container.add(...)`, which registers a SUCCESSOR beside
 	 * the live fold rather than discarding its state, and the pointer moves on its
 	 * own once that successor has caught up. It is the same object `index` holds and
 	 * the same one `/status` is reported from.
@@ -187,8 +185,8 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
  * generation names, where it can.
  *
  * The same shape `run` returns, over the same assembly: what differs is that it is
- * configured with no processor and no source, and serves the UPLOAD route rather than
- * the re-read. Its code arrives by `etherfold upload`.
+ * configured with no processor and no source, and serves the UPLOAD route, which `run`
+ * does not. Its code arrives by `etherfold upload`.
  */
 export async function node<ABI extends Abi = Abi, ProcessResultType = unknown>(
 	options: Options,
@@ -197,7 +195,7 @@ export async function node<ABI extends Abi = Abi, ProcessResultType = unknown>(
 	return startServing<ABI, ProcessResultType>('node', options, deps);
 }
 
-/** `run` and `node`, which differ only in which arrival their one registration wires. */
+/** `run` and `node`, which differ only in whether their one registration wires the upload. */
 async function startServing<ABI extends Abi, ProcessResultType>(
 	command: 'run' | 'node',
 	options: Options,
@@ -225,8 +223,8 @@ async function startServing<ABI extends Abi, ProcessResultType>(
 			signal: controller.signal,
 		});
 		const {serving, destination, indexer} = prepared.config;
-		// the ONE arrival this command wires: the re-read on `run`, the upload on `node`
-		const {reconfigure, upload} = prepared;
+		// the ONE arrival a Node process takes, wired on `node` alone (ADR-0094)
+		const {upload} = prepared;
 
 		// The Node fetcher adapter's own handler, reused rather than written again:
 		// which signals a container sends, and what happens to the cycle in flight, is
@@ -282,7 +280,7 @@ async function startServing<ABI extends Abi, ProcessResultType>(
 							promote: (id) => prepared.container.promote(id),
 							// ...and WHAT EACH SLOT NAMES, plus the verb that takes what NONE of them
 							// does (ADR-0084). This is the shape that ACCUMULATES generations -- every
-							// reconfigure registers one beside the live fold -- so it is the shape whose
+							// upload or changed restart registers one beside the live fold -- so it is the shape whose
 							// operator most needs the disk back, and a cap that refuses here names what
 							// could be deleted and would otherwise hand over nothing to delete it with.
 							slots: () => prepared.container.slots(),
@@ -290,17 +288,11 @@ async function startServing<ABI extends Abi, ProcessResultType>(
 							// ...and WHETHER EACH GENERATION CAN FOLD HERE (ADR-0092): held, instantiable from
 							// its stored bundle, or frozen and why -- what an operator reads before a revert.
 							folding: () => prepared.container.folding(),
-							// ...and the ARRIVAL this command takes, and only that one (ADR-0094). On
-							// `run`, the TRIGGER that gives an operator something to point AT: this
-							// process RE-READS its own configuration and registers whatever generation
-							// that now names, beside the live fold (`reconfigure.ts`) -- it holds the
-							// module path, the source and the container at once. On `node`, the UPLOAD,
-							// which RECEIVES a bundle's bytes and registers what they name beside the live
-							// fold (`upload.ts`, ADR-0085). Each ABSENT where it is not this command's, so
-							// its route answers what a host without the seam answers: `run` receives no
-							// code, and `node` has no configuration of its code to re-read. A split
-							// deployment's `index` serves neither.
-							...(reconfigure === undefined ? {} : {reconfigure: () => reconfigure.call(prepared)}),
+							// ...and the UPLOAD, on `node` alone (ADR-0094): it RECEIVES a bundle's bytes
+							// and registers what they name beside the live fold (`upload.ts`, ADR-0085),
+							// which gives an operator something to point AT. ABSENT on `run`, so its route
+							// answers what a host without the seam answers: `run` is CONFIGURED and receives
+							// no code. A split deployment's `index` serves it neither.
 							...(upload === undefined ? {} : {upload: (bundle: Uint8Array) => upload.call(prepared, bundle)}),
 							// ...and the SIGNAL this fold publishes as it applies each block (ADR-0083),
 							// with the token it is publishing under. A combined process APPLIES the
