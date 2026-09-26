@@ -27,6 +27,7 @@ import {
 import {DEFAULT_PRUNE_BUDGET, DEFAULT_PRUNE_INTERVAL_SECONDS, pruneHeldMore} from './pruning.js';
 import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
 import type {IndexConfig, Options} from './types.js';
+import {printMessage} from './printMessage.js';
 
 const logger = logs('etherfold');
 
@@ -711,7 +712,7 @@ export async function indexMain(
 	} = {},
 ): Promise<void> {
 	const exit = deps.exit ?? ((code: number) => process.exit(code));
-	const error = deps.error ?? console.error;
+	const error = deps.error ?? printMessage;
 
 	let running: RunningReceiver | undefined;
 	try {
@@ -721,6 +722,7 @@ export async function indexMain(
 		exit(0);
 	} catch (err) {
 		error(err);
+		logger.error('the command stopped', err);
 		await running?.close().catch(() => undefined);
 		exit(1);
 	}

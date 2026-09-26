@@ -424,3 +424,63 @@ describe('a `node` honours --promotion', () => {
 		expect(listing.slots?.canonical?.digest).toBe(edited.digest);
 	});
 });
+
+// ---------------------------------------------------------------------------------------------------
+// THE LINES AN OPERATOR READS FIRST (found by a hand smoke test on 2026-09-26)
+// ---------------------------------------------------------------------------------------------------
+
+/** START a `node` over `db` and return what it printed at start. `ADMIN_TOKEN` is set only when given. */
+async function startupLinesOf(db: RemoteSQL, chain: ReturnType<typeof fakeChain>, token?: string): Promise<string> {
+	delete process.env.ADMIN_TOKEN;
+	if (token !== undefined) process.env.ADMIN_TOKEN = token;
+	const lines: string[] = [];
+	running = await node(NOTHING, {
+		provider: chain.provider,
+		createDB: () => db,
+		sleep: async () => {
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		},
+		handleSignals: false,
+		log: (...args) => lines.push(args.map(String).join(' ')),
+		env: {MAX_BLOCKS_PER_FETCH: '20'},
+	});
+	return lines.join('\n');
+}
+
+describe('what a `node` says when it starts', () => {
+	it('WARNS that it can never receive a processor when ADMIN_TOKEN is not set', async () => {
+		const said = await startupLinesOf(oneDatabase(), fakeChain().serve(LOGS, TIP));
+		expect(said).toMatch(/WARNING: ADMIN_TOKEN is not set, so this node refuses every upload \(401\)/);
+		// ...and it means it: the first upload is refused
+		const res = await fetch(`${running!.url}/${INDEXER}/admin/upload`, {
+			method: 'POST',
+			headers: {'Content-Type': 'text/javascript', Authorization: `Bearer ${ADMIN_TOKEN}`},
+			body: new Uint8Array(await bytesOf(BUNDLE)),
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it('does not warn when ADMIN_TOKEN is set', async () => {
+		const said = await startupLinesOf(oneDatabase(), fakeChain().serve(LOGS, TIP), ADMIN_TOKEN);
+		expect(said).not.toMatch(/WARNING/);
+	});
+
+	it('names the generation it RESUMED on a restart, which nothing on its command line names', async () => {
+		const db = oneDatabase();
+		const first = await aWaitingNodeOver(db, fakeChain().serve(LOGS, TIP));
+		expect((await uploadWith(first, BUNDLE)).code).toBe(0);
+		await waitFor('the upload folded to the tip', async () => (await canonicalReachedOn(first)) === TIP);
+		const resumed = (await listingOf(first)).generations[0]!;
+		await stop();
+
+		const said = await startupLinesOf(db, fakeChain().serve(LOGS, TIP), ADMIN_TOKEN);
+		expect(said).toContain(`serving generation ${resumed.digest} (processor ${resumed.processor})`);
+	});
+
+	it('says what a FIRST upload does, without claiming another generation answers reads', async () => {
+		const indexer = await aWaitingNodeOver(oneDatabase(), fakeChain().serve(LOGS, TIP));
+		const ran = await uploadWith(indexer, BUNDLE);
+		expect(ran.code, ran.err).toBe(0);
+		expect(ran.out).toMatch(/if none does yet \(a first upload\) it answers them as soon as it has folded/);
+	});
+});
