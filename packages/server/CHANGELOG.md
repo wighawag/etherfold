@@ -1,5 +1,12 @@
 # @etherfold/server
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [414576d]
+  - @etherfold/core@0.9.0
+
 ## 0.2.0
 
 ### Minor Changes

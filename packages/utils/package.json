@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/utils",
-	"version": "0.8.0",
+	"version": "0.8.1",
 	"description": "Node-side glue for hosts that take a processor from an operator, as a path or as bundled BYTES: load it, get the authoring object out of it, name the bytes by their hash, and resolve which contracts it indexes.",
 	"publishConfig": {
 		"access": "public"

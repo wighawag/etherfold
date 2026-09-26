@@ -1,5 +1,13 @@
 # ethereum-indexer-browser
 
+## 0.9.1
+
+### Patch Changes
+
+- Updated dependencies [414576d]
+  - @etherfold/core@0.9.0
+  - @etherfold/state-store-indexeddb@0.2.0
+
 ## 0.9.0
 
 ### Minor Changes

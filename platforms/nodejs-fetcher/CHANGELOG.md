@@ -1,5 +1,13 @@
 # @etherfold/platform-nodejs-fetcher
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [414576d]
+  - @etherfold/core@0.9.0
+  - @etherfold/fetcher-host@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
