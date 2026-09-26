@@ -464,6 +464,49 @@ export class CanonicalGenerationNotHeldError extends Error {
 }
 
 /**
+ * TWO SPECS OF ONE OPEN would both take the `successor` slot, and it holds AT MOST ONE
+ * (ADR-0084).
+ *
+ * `open` registers every spec before it builds any engine (ADR-0088), and on a registry
+ * whose `canonical` is already named every other distinct spec goes into `successor`.
+ * A second one would DISPLACE the first -- its row and its state deleted by the shared
+ * rule (`displacedBySuccessor`, ADR-0071) -- while `open` still meant to build an engine
+ * for it, which left the container holding a fold nothing in the registry named.
+ *
+ * REFUSED rather than resolved by list order, because a list is not a sequence of
+ * arrivals: nothing in it is "newer" than anything else, and letting the last-listed
+ * spec win would make what survives a function of how the caller spelled its array,
+ * which is the dependence ADR-0088 removed from `follows`. Refused BEFORE any spec of the
+ * same open is deleted, so the earlier spec keeps its row, its slot and its state; what the refused
+ * spec's factories opened is left exactly as a cap refusal leaves it. The fix is the
+ * caller's: open with at most one generation beside the canonical one, and `add` the
+ * next when it genuinely arrives -- that is the act `successor` replacement is for.
+ *
+ * The CAPS do not prevent it, whatever they are: the displaced record is dropped
+ * BEFORE the arriving one is created, so the count never exceeds the cap (measured with
+ * the browser's two). What keeps a browser tab clear of it is that every browser host
+ * opens with ONE spec; it is reachable through `openIndexer` with several.
+ */
+export class OpenedSpecsDisplaceOneAnotherError extends Error {
+	readonly name = 'OpenedSpecsDisplaceOneAnotherError';
+
+	constructor(
+		/** The spec registered earlier in this open, which already holds `successor`. */
+		readonly displaced: GenerationId,
+		/** The later spec whose registration would have displaced it. */
+		readonly arriving: GenerationId,
+	) {
+		super(
+			`this open was given two generations that would both take the \`successor\` slot, which holds at most one: ` +
+				`{stream: ${arriving.stream}, processor: ${arriving.processor}} would DISPLACE ` +
+				`{stream: ${displaced.stream}, processor: ${displaced.processor}}, deleting the row and state of a ` +
+				`generation this same open was asked to hold. Nothing this open was asked to hold was deleted. Open with at most one generation ` +
+				`beside the canonical one, and \`add\` the next when it arrives (ADR-0084).`,
+		);
+	}
+}
+
+/**
  * PAUSING A FOLLOWER, which is not a thing a cap can express.
  *
  * A pause CAPS the block a generation fetches up to, and a **follower** fetches
@@ -752,11 +795,30 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 * no bytes to hash, so `GenerationSpec.processorIdentity` is filled in from
 	 * inside `createProcessor` and a generation genuinely cannot be named before it
 	 * is built (ADR-0086).
+	 *
+	 * ## AND NO SPEC MAY DISPLACE ANOTHER SPEC OF THE SAME OPEN
+	 *
+	 * Phase one registers into `successor`, which holds AT MOST ONE (ADR-0084), so two
+	 * distinct specs beside the canonical generation would have the second displace the
+	 * first mid-open, and phase two would then build an engine for a generation whose
+	 * record was gone. Such an open is REFUSED before any of its own specs is deleted
+	 * (`OpenedSpecsDisplaceOneAnotherError`): every fold this container holds is one the
+	 * registry names.
 	 */
 	async open(specs: readonly AnyGenerationSpec<ABI, ProcessResultType>[]): Promise<void> {
 		const registered: RegisteredGeneration<ABI, ProcessResultType>[] = [];
 		for (const spec of specs) {
-			registered.push(await this.registerGeneration(spec));
+			// THE SPECS ALREADY REGISTERED BY THIS OPEN are handed down, so a later one that
+			// would DISPLACE one of them is refused before that spec is deleted
+			// (`OpenedSpecsDisplaceOneAnotherError`). Without it the displaced spec's row and
+			// state went, and phase two still built an engine for it: a held fold nothing in
+			// the registry named.
+			registered.push(
+				await this.registerGeneration(
+					spec,
+					registered.map((one) => one.record),
+				),
+			);
 		}
 		// EVERY FOLD THIS CONTAINER WILL HOLD, known before the first engine exists.
 		// The records carry their own `createdAt`, so ranking them is the registry's
@@ -840,6 +902,12 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	 */
 	protected async registerGeneration(
 		spec: AnyGenerationSpec<ABI, ProcessResultType>,
+		/**
+		 * The records `open` has registered for its EARLIER specs, which this registration
+		 * may not displace. Empty for `add`, whose arrival replaces a pending successor as
+		 * it always did.
+		 */
+		openedAlongside: readonly GenerationRecord[] = [],
 	): Promise<RegisteredGeneration<ABI, ProcessResultType>> {
 		const source = spec.source ?? this.source;
 		const context: GenerationContext = {
@@ -866,7 +934,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// eviction: a replaced successor is dead the moment a newer one takes its place,
 		// whether the registry holds two generations or none to spare, and a rule that
 		// fired only near the bound would make a deterministic lifecycle a heuristic.
-		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream);
+		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore, context.stream, openedAlongside);
 		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
 		// that means for this identity: the first generation of an empty registry takes
 		// `canonical` instead, a generation `canonical` or `successor` ALREADY names stays
@@ -1812,11 +1880,23 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		registered: readonly GenerationRecord[],
 		slots: SlottedGenerations,
 		arrivingStream: string,
+		openedAlongside: readonly GenerationRecord[] = [],
 	): Promise<void> {
 		const displaced = displacedBySuccessor(arriving, registered, slots, {
 			heldHere: (record) => this.heldHere(record),
 			unheldIsCollectable: true,
 		});
+
+		// ONE OPEN MAY NOT DISPLACE ITS OWN SPECS, and it is refused BEFORE anything below
+		// deletes anything. The rule deciding WHAT is displaced stays `displacedBySuccessor`'s
+		// (ADR-0071); this only says that a spec of the same open is not something it may
+		// take. A list is not a sequence of arrivals, so neither spec is "newer" than the
+		// other, and replacing the earlier one would leave phase two building an engine for a
+		// generation whose row and state had just gone.
+		const ownSpec = displaced.find((record) => openedAlongside.some((spec) => sameGeneration(spec, record)));
+		if (ownSpec) {
+			throw new OpenedSpecsDisplaceOneAnotherError(ownSpec, arriving);
+		}
 
 		const surviving = [...registered];
 		for (const record of displaced) {

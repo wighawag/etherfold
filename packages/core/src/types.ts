@@ -254,6 +254,32 @@ export type EventProcessor<ABI extends Abi, ProcessResultType = void> = {
 	 * rather than naming it something a later edit could not move.
 	 */
 	getCodeFingerprint(): string | undefined;
+	/**
+	 * PREPARE THIS FOLD TO ADVANCE, and answer its persisted state and cursor, or
+	 * `undefined` when it has folded nothing.
+	 *
+	 * **It is handed the source THIS FOLD folds under, and only ever that one.** A
+	 * processor MAY key its cursor by `source` and answer `undefined` for a source it
+	 * never folded under; neither shipped implementation does (their cursor is keyed by
+	 * the generation's own namespace, ADR-0053), which is exactly why a caller handing
+	 * the WRONG source would go unnoticed, so the callers are what guarantee it. The
+	 * callers are the engines that DRIVE one fold, each built with that fold's own source
+	 * (`IndexerGeneration` on the chain-facing container, `GenerationRebuild` on the
+	 * receiving one, `StreamBuilder` for a lone receiver), and the one-shot preparations
+	 * of a fold about to be driven (`replayFixtureInto`, the CLI's `index` start-up). No
+	 * container calls it with a source of its own.
+	 *
+	 * **It is not a READ, and no cursor read goes through it.** It may write: the entity
+	 * processors record the finality, run their migrations and check retention here, so
+	 * it belongs to the advance path, which is where it is called. What a container
+	 * COMPARES or REPORTS -- the promotion trigger, `/status`, `folding()` -- is read
+	 * without it: the chain-facing container keeps the cursor each engine last reported,
+	 * and the receiving one reads the persisted cursor by identity
+	 * (`GenerationRegistryPort.readStateCursor`), which also answers for a generation
+	 * this process holds no fold for. Pinned by
+	 * `packages/core/test/aFoldIsLoadedOnlyWithTheSourceItFolds.test.ts`, with a double
+	 * that honours `source`.
+	 */
 	load: (
 		source: IndexingSource<ABI>,
 		streamConfig: UsedStreamConfig,
