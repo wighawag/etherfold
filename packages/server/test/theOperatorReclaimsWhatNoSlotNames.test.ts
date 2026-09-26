@@ -249,13 +249,18 @@ describe('an operator SEES what the deployment holds, slot by slot', () => {
 });
 
 describe('an operator SEES whether each generation can fold here, where the host can say (ADR-0092)', () => {
-	it('reports it per generation from the container, which folds all three of these', async () => {
+	it('reports it per generation from the container, which folds the two on the stream it now fetches', async () => {
 		const listed = await listGenerations(deployment);
 
-		// every fold this process was HANDED keeps folding after a promotion, so all three are held
-		const generations = listed.body.generations as {digest: string; folding?: string; frozen?: unknown}[];
-		expect(generations.map((one) => one.folding)).toEqual(['held', 'held', 'held']);
-		expect(generations.every((one) => one.frozen === undefined)).toBe(true);
+		// a fold this process was HANDED keeps folding after a promotion on its OWN stream, so
+		// the second and third are held; the promotion onto ANOTHER stream stopped folding the
+		// first, so that its stream stops being fetched (ADR-0087's amendment of 2026-09-26),
+		// and this host was given no way to run its stored bytes again
+		const generations = listed.body.generations as {digest: string; folding?: string; frozen?: {reason?: string}}[];
+		expect(generations.map((one) => one.folding)).toEqual(['frozen', 'held', 'held']);
+		expect(generations[0]?.digest).toBe(generationDigestOf(deployment.garbage));
+		expect(generations[0]?.frozen?.reason).toBe('no-instantiator');
+		expect(generations.slice(1).every((one) => one.frozen === undefined)).toBe(true);
 	});
 
 	it('WIDENS the listing and changes nothing else: a host that cannot say gets no such field', async () => {
@@ -281,7 +286,9 @@ describe('an operator SEES whether each generation can fold here, where the host
 		const entries = (body: Record<string, unknown>) => body.generations as Record<string, unknown>[];
 		expect(entries(narrow.body).every((one) => !('folding' in one) && !('frozen' in one))).toBe(true);
 		// ...and what the narrow listing says, the wide one says identically beside the new field
-		expect(entries(wide.body).map(({folding: _folding, ...rest}) => rest)).toEqual(entries(narrow.body));
+		expect(entries(wide.body).map(({folding: _folding, frozen: _frozen, ...rest}) => rest)).toEqual(
+			entries(narrow.body),
+		);
 		const {generations: _wide, ...wideRest} = wide.body;
 		const {generations: _narrow, ...narrowRest} = narrow.body;
 		expect(wideRest).toEqual(narrowRest);

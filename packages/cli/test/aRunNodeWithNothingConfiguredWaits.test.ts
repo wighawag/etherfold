@@ -68,18 +68,25 @@ function oneDatabase(): RemoteSQL {
 const NOTHING: Options = {nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER};
 
 /** START a `run` with nothing configured over `db`, which may already hold generations. */
-async function aWaitingNodeOver(db: RemoteSQL, chain: ReturnType<typeof fakeChain>): Promise<RunningIndexer> {
+async function aWaitingNodeOver(
+	db: RemoteSQL,
+	chain: ReturnType<typeof fakeChain>,
+	options: Partial<Options> = {},
+): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-	running = await run(NOTHING, {
-		provider: chain.provider,
-		createDB: () => db,
-		sleep: async () => {
-			await new Promise((resolve) => setTimeout(resolve, 1));
+	running = await run(
+		{...NOTHING, ...options},
+		{
+			provider: chain.provider,
+			createDB: () => db,
+			sleep: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			},
+			handleSignals: false,
+			log: () => {},
+			env: {MAX_BLOCKS_PER_FETCH: '20'},
 		},
-		handleSignals: false,
-		log: () => {},
-		env: {MAX_BLOCKS_PER_FETCH: '20'},
-	});
+	);
 	return running;
 }
 
@@ -223,7 +230,10 @@ describe('its first upload makes it index', () => {
 	});
 
 	it('registers a second upload as `successor`, whether it carries the same contracts or different ones', async () => {
-		const indexer = await aWaitingNodeOver(oneDatabase(), fakeChain().serve(LOGS, TIP));
+		// `manual`, so what is read is the REGISTRATION: under `on-catch-up` the successor on a
+		// new stream is fetched and promoted as soon as it catches up, which is
+		// `aSuccessorOnANewStreamIsFetchedByItsOwnWriter.test.ts`
+		const indexer = await aWaitingNodeOver(oneDatabase(), fakeChain().serve(LOGS, TIP), {promotion: 'manual'});
 		expect((await uploadWith(indexer, BUNDLE)).code).toBe(0);
 		await waitFor('the first upload folded to the tip', async () => (await canonicalReachedOn(indexer)) === TIP);
 		const first = (await listingOf(indexer)).generations[0]!;

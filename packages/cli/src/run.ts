@@ -5,6 +5,7 @@ import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
 import type {WritableStateStore} from '@etherfold/processor-entities';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
+import type {StreamFetchers} from './fetchers.js';
 import {foldingStatusReport} from './folding.js';
 import {prepareIndexing, type IndexingDependencies} from './index.js';
 import type {Options} from './types.js';
@@ -117,7 +118,10 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 */
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
 	/**
-	 * The sending half, plus the policy for reading what a cycle did.
+	 * The sending half, plus the policy for reading what a cycle did: the OLDEST fetcher
+	 * this process runs, which is the only one until a successor arrives on a new stream
+	 * (`fetchers`). Read per ask, so after a promotion onto another stream it is that
+	 * stream's.
 	 *
 	 * REFUSED, rather than answered with a placeholder, on a node started with NOTHING
 	 * configured until it has been told what to fetch (ADR-0093): that node has no
@@ -125,6 +129,12 @@ export type RunningIndexer<ABI extends Abi = Abi, ProcessResultType = unknown> =
 	 * anything.
 	 */
 	host: FetcherHost<ABI>;
+	/**
+	 * EVERY FETCHER THIS PROCESS RUNS, one per stream it fetches (`StreamFetchers`): the
+	 * canonical generation's, and beside it a successor's on a new stream while it catches
+	 * up. EMPTY on a node still waiting for a processor.
+	 */
+	fetchers: StreamFetchers<ABI>;
 	/**
 	 * Resolves when the loop has stopped, with what the run did; REJECTS with the
 	 * error of a `fatal` report, which is a refusal no waiting fixes.
@@ -344,6 +354,7 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			get host() {
 				return prepared.host;
 			},
+			fetchers: prepared.fetchers,
 			stopped,
 			stop: async () => {
 				controller.abort();
