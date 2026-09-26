@@ -10,6 +10,14 @@ covers: []
 
 The release half of ADR-0017. This is the ordered sequence that puts the `@etherfold` packages on npm, migrates the two consumers we own, and retires the old names.
 
+> **STATUS (verified 2026-09-26, the fourth correction to this file): DONE. Steps 1, 3 and 4 were checked against the live registry, not assumed, and step 2 was split out into its own task.**
+>
+> - **Step 1:** all SIXTEEN non-private packages (derived from `packages/*` and `platforms/*`, which now include `@etherfold/state-moved-conformance`) are on npm at their workspace versions, e.g. `@etherfold/core@0.9.0`, `@etherfold/browser@0.9.1`, `etherfold@0.8.1`, and `npm view etherfold bin` reports `{etherfold: 'dist/cli.js'}`. `@etherfold/state-moved-conformance` was first published by hand on 2026-09-26, because npm trusted publishing cannot create a package that does not exist yet; it needs a trusted publisher configured for the release workflow like the others.
+> - **Step 3:** all seven old names carry the messages below (`npm view <name> deprecated`), four naming their replacement and three naming the ADR that retired the path. `ethereum-indexer-server` and `ethereum-indexer-db-utils` are NOT deprecated.
+> - **Step 4:** `npx etherfold@latest --help` prints usage under the program name `etherfold`; a clean directory with `@etherfold/browser@0.9.1` and `@etherfold/processor-entities@0.2.1` installed from the registry type-checks a trivial entity processor under `strict` (and rejects a misspelt event argument, so the check is not vacuous).
+> - **Step 2 is NOT done and is not mechanical.** `wighawag/stratagems` (last commit 2024-12-18) still imports `ethereum-indexer-browser`, `ethereum-indexer-fs` and `ethereum-indexer-js-processor` in `contracts/`, `indexer/` and `web/`, and `stratagems-snapshots` runs `pnpm indexer:index` hourly against it. Two of those three names have no successor package: moving is a PORT of its processors to `@etherfold/processor-entities` and of its file storage to SQLite (ADR-0037, ADR-0041), not a rename. The deprecations went out first deliberately: a deprecation only warns at install, so the hourly job keeps working. It is now `port-stratagems-to-the-etherfold-packages`, which also corrects this box's count: `stratagems` resolves five old names, including `ethereum-indexer-cli` and the archived `ethereum-indexer-server`.
+> - The `blockedBy` tasks are all done.
+>
 > **DRIFT CORRECTION (verified 2026-09-08, the third correction to this file): STEP 1 IS DONE. "Nothing has been published" is no longer true, and this task is now much smaller than it reads.**
 >
 > All FIFTEEN publishable packages are live on npm at real versions, not placeholders: `etherfold@0.7.0` (and `npm view etherfold bin` reports `{etherfold: 'dist/cli.js'}`, so the placeholder-supersede check in step 1 has passed), `@etherfold/browser@0.8.0`, `@etherfold/core@0.7.0`, `@etherfold/utils@0.7.0`, and `@etherfold/fetcher-host`, `@etherfold/platform-nodejs`, `@etherfold/platform-nodejs-fetcher`, `@etherfold/processor-entities`, `@etherfold/processor-sqlite`, `@etherfold/server`, `@etherfold/state-store`, `@etherfold/state-store-conformance`, `@etherfold/state-store-indexeddb`, `@etherfold/state-store-patch`, `@etherfold/state-store-sqlite` at `0.1.0`.
@@ -108,15 +116,15 @@ effect of this one.
 
 ## Acceptance criteria
 
-- [ ] **Every** non-private package under `packages/*` and `platforms/*` is on npm under its new name, the list DERIVED at publish time and never read off this file, and `npm view etherfold bin` reports the `etherfold` bin. A criterion naming a fixed count can pass while packages newer than the count go unpublished, which is the failure this wording exists to prevent. (Verified satisfied 2026-09-08 at fifteen packages; re-derive, because the set grows.)
-- [ ] `stratagems` and `stratagems-snapshots` build and pass CI against the new names, with no `ei` invocation left.
-- [ ] All seven old names are deprecated, and each message tells the TRUTH about its name: the four
+- [x] **Every** non-private package under `packages/*` and `platforms/*` is on npm under its new name, the list DERIVED at publish time and never read off this file, and `npm view etherfold bin` reports the `etherfold` bin. A criterion naming a fixed count can pass while packages newer than the count go unpublished, which is the failure this wording exists to prevent. (Verified satisfied 2026-09-08 at fifteen packages; re-derive, because the set grows.)
+- [x] MOVED on 2026-09-26 to `port-stratagems-to-the-etherfold-packages`: `stratagems` and `stratagems-snapshots` build and pass CI against the new names, with no `ei` invocation left.
+- [x] All seven old names are deprecated, and each message tells the TRUTH about its name: the four
       RENAMED ones name their replacement package, and the three RETIRED ones (`-js-processor`, `-fs`,
       `-fs-cache`) name the ADR that deleted the path and the surviving alternative, never a
       `@etherfold/*` package that will never be published.
-- [ ] `ethereum-indexer-server` and `ethereum-indexer-db-utils` are NOT deprecated as part of this task (they were archived, not renamed; their npm fate is ADR-0010's).
-- [ ] A clean-room install of the browser + processor-entities pair works from the published registry, not just from the workspace.
-- [ ] `etherfold --help` works from a global install.
+- [x] `ethereum-indexer-server` and `ethereum-indexer-db-utils` are NOT deprecated as part of this task (they were archived, not renamed; their npm fate is ADR-0010's).
+- [x] A clean-room install of the browser + processor-entities pair works from the published registry, not just from the workspace.
+- [x] `etherfold --help` works from a global install.
 
 ## Blocked by
 
@@ -170,3 +178,8 @@ package pages will NOT link to a mismatched repo, and there is nothing to tolera
 surviving `jolly-roger` reference is an unrelated local `test:manual` script path in
 `packages/cli/package.json`, which is a developer convenience pointing at a sibling checkout and is
 not a rename leftover.
+
+## Decisions
+
+- **The deprecations went out before the consumers were migrated**, reversing this task's "do this BEFORE step 3" ordering. That ordering existed only to keep deprecation warnings out of our own CI. The migration turned out to be a port (two of the old packages have no successor, and the snapshot job's output format has no direct replacement), and a deprecation only warns at install, so holding seven deprecations behind it would have left the public names unmarked for an unknown time to spare our own logs a warning.
+- **Step 2 was split into `port-stratagems-to-the-etherfold-packages` rather than kept here**, so this task records what the release did and the port can be answered, scheduled or retired on its own terms. It is staged in the backlog with `needsAnswers`, because whether stratagems (idle since 2024-12) is worth porting at all is the first question.
