@@ -132,7 +132,10 @@ describe('a successor on a new stream still PENDING at a restart is fetched from
 	it('is instantiated on its own stream, held, and fetched beside the incumbent’s', async () => {
 		const {w, oldStream, newStream} = await aSuccessorOnANewStream();
 
-		const restarted = await w.open('v1', 1, {
+		// restarted with NOTHING configured (a `node`, ADR-0094): a start configured with the
+		// canonical `v1` would DISCARD the pending `v2` rather than fetch it (ADR-0094's third
+		// consequence, `aPendingSuccessorSurvivesARestart.test.ts`)
+		const restarted = await w.openWithNothing({
 			instantiateGeneration: instantiatingWith(w, new Map([[newStream, OTHER_SOURCE]])),
 		});
 

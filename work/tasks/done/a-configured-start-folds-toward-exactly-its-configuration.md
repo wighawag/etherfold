@@ -44,3 +44,10 @@ Done means: `-p v1` means v1, and whatever else was pending is either kept by th
 FIRST, check this task against current reality. If the start guard or successor-at-open differ from what this assumes, route to needs-attention with the discrepancy.
 
 RECORD non-obvious in-scope decisions in a `## Decisions` block at the end of your FINAL REPORT. Do not write the done record, the commit message or the PR body yourself.
+
+## Decisions
+
+- **A failed delete during a discard stops the start.** When a replacement's delete fails it is only logged, because the arriving generation takes the slot anyway. In a discard nothing takes the slot, so a failed delete would leave the successor to be promoted, which is exactly what this change exists to prevent. The alternative was to reuse `dropReplaced`'s log-and-carry-on behaviour. This affects only `ReceivingIndexer.open`, and it adds a new way for a start to fail: whatever error the database raises.
+- **A host that passes no guard discards without asking.** This matches how an unguarded start already replaces without asking. The alternative, discarding only when a guard is supplied, would make the rule depend on whether a host passes a callback. In practice only core test setups pass no guard, since every CLI command passes one.
+- **The type and method keep their names; `kind` tells the cases apart.** The discard variant carries `canonical`, not `arriving`, because nothing arrives in a discard. I considered renaming `SuccessorReplacementAtStart`, `confirmReplacingSuccessorAtStart` and `confirmTheStartMayReplace`, but the task names them as the seams, so I only widened their JSDoc. This changes a public type in `@etherfold/core`, which the changeset records. A rename to something like "deletion at start" is left for a human to decide.
+- **Where "the state is gone" is tested.** The core test setup records no dropped state, so the state half of the deletion is checked in the CLI tests against a real SQLite database (the discarded generation's tables are gone). I did not change the shared core test helper, because other suites use it.

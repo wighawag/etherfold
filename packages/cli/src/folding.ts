@@ -908,7 +908,7 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		// names and fetches whatever its first fold carries.
 		...(seams.generation === undefined ? {} : {generation: seams.generation}),
 		...(seams.source === undefined ? {} : {source: seams.source}),
-		// WHO IS ASKED before this START replaces a different pending successor (ADR-0084's
+		// WHO IS ASKED before this START replaces or discards a different pending successor (ADR-0084's
 		// amendment of 2026-09-26).
 		...(seams.confirmReplacingSuccessorAtStart === undefined
 			? {}

@@ -402,27 +402,32 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 		bundle: Uint8Array,
 	) => Promise<Omit<ReceivedGenerationSpec<ABI, ProcessResultType, State>, 'bundle'>>;
 	/**
-	 * WHETHER THIS START MAY REPLACE A DIFFERENT PENDING SUCCESSOR: the host's answer,
+	 * WHETHER THIS START MAY DELETE A DIFFERENT PENDING SUCCESSOR: the host's answer,
 	 * asked at `open` and nowhere else (ADR-0084's and ADR-0093's amendments of
-	 * 2026-09-26).
+	 * 2026-09-26, and ADR-0094's third consequence).
 	 *
-	 * Registering `generation` into `successor` REPLACES what that slot holds and
-	 * deletes it -- row, state and stored bytes -- and a pending successor is work in
-	 * progress, often an upload somebody sent to the running node. So where the fold
-	 * this host was configured with would displace a DIFFERENT generation `successor`
-	 * names, this is called BEFORE anything is registered, built or deleted. Resolving
-	 * lets the start go ahead exactly as before; THROWING refuses it, and `open` rethrows
-	 * that error with the registry untouched.
+	 * A start deletes what `successor` holds -- row, state and stored bytes -- in two
+	 * cases, and a pending successor is work in progress, often an upload somebody sent
+	 * to a `node` over the same database. So in either case this is called BEFORE
+	 * anything is registered, built or deleted, with the case named by `kind`:
 	 *
-	 * It is not called where nothing would be replaced: an empty `successor` slot, a
-	 * configured generation that IS the pending successor, or one some slot already names
-	 * (the canonical generation, or the one a revert returned to), none of which takes
-	 * anybody's place.
+	 *  - `replace`: the fold this host was configured with is a generation no slot names,
+	 *    so registering it into `successor` REPLACES the different one pending there;
+	 *  - `discard`: the fold this host was configured with IS the canonical generation,
+	 *    so the start folds toward exactly that and DISCARDS the different one pending,
+	 *    which would otherwise go on to be promoted and serve code the configuration
+	 *    does not name (ADR-0094).
+	 *
+	 * Resolving lets the start go ahead; THROWING refuses it, and `open` rethrows that
+	 * error with the registry, the slots, the state and the bytes untouched.
+	 *
+	 * It is not called where nothing would be deleted: an empty `successor` slot, a
+	 * configured generation that IS the pending successor, or one `predecessor` names.
 	 *
 	 * ONLY THE START is asked. `add` -- a re-read, an upload -- is already a deliberate
 	 * act on a running deployment and replaces a pending successor as it always has.
-	 * ABSENT means a start replaces without asking, which is what a host that passes
-	 * nothing (a test world, an embedder) gets. Every CLI command that starts with a
+	 * ABSENT means a start replaces or discards without asking, which is what a host that
+	 * passes nothing (a test world, an embedder) gets. Every CLI command that starts with a
 	 * configured processor passes one, the one-shot `build` included.
 	 */
 	confirmReplacingSuccessorAtStart?: (replacement: SuccessorReplacementAtStart) => Promise<void> | void;
@@ -444,16 +449,30 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 };
 
 /**
- * WHAT A START WOULD REPLACE, handed to `confirmReplacingSuccessorAtStart`: the
- * generation `successor` names now, which the registration would delete, and the one
- * this host was configured with, which would take its place.
+ * WHAT A START WOULD DELETE, handed to `confirmReplacingSuccessorAtStart`: the
+ * generation `successor` names now, and why the start would delete it.
+ *
+ *  - `replace`: the generation this host was configured with (`arriving`) takes the
+ *    `successor` slot, which holds one.
+ *  - `discard`: the generation this host was configured with IS the canonical one
+ *    (`canonical`), so the start folds toward exactly that and nothing takes the slot:
+ *    it is left EMPTY (ADR-0094's third consequence).
  */
-export type SuccessorReplacementAtStart = {
-	/** What `successor` names now: registered, catching up, and about to be deleted with its state and bytes. */
-	readonly pending: GenerationRecord;
-	/** The generation this host was configured with, which would take the `successor` slot. */
-	readonly arriving: GenerationId;
-};
+export type SuccessorReplacementAtStart =
+	| {
+			readonly kind: 'replace';
+			/** What `successor` names now: registered, catching up, and about to be deleted with its state and bytes. */
+			readonly pending: GenerationRecord;
+			/** The generation this host was configured with, which would take the `successor` slot. */
+			readonly arriving: GenerationId;
+	  }
+	| {
+			readonly kind: 'discard';
+			/** What `successor` names now: registered, catching up, and about to be deleted with its state and bytes. */
+			readonly pending: GenerationRecord;
+			/** The generation this host was configured with, which IS the canonical one and keeps folding. */
+			readonly canonical: GenerationId;
+	  };
 
 /**
  * A STORED GENERATION THAT COULD NOT BE MADE TO FOLD, so the pointer did NOT move
@@ -1087,8 +1106,10 @@ export class ReceivingIndexer<
 		// of this host's own to register, and the canonical generation below is the only
 		// thing `open` may come up folding.
 		if (this.options.generation) {
-			// A START MAY NOT SILENTLY REPLACE A DIFFERENT PENDING SUCCESSOR: the host is asked
-			// first, before anything is registered or deleted (ADR-0084's amendment).
+			// A START MAY NOT SILENTLY DELETE A DIFFERENT PENDING SUCCESSOR: the host is asked
+			// first, before anything is registered or deleted (ADR-0084's amendment). Where the
+			// configured fold IS the canonical generation, the pending successor is DISCARDED
+			// here, and so BEFORE `foldTheSuccessor` could build an engine for it (ADR-0094).
 			await this.confirmTheStartMayReplace(this.options.generation);
 			await this.add(this.options.generation);
 		}
@@ -1097,21 +1118,30 @@ export class ReceivingIndexer<
 	}
 
 	/**
-	 * ASK THE HOST before a START replaces a DIFFERENT pending successor
-	 * (`confirmReplacingSuccessorAtStart`), and do nothing where nothing would be
-	 * replaced.
+	 * ASK THE HOST before a START deletes a DIFFERENT pending successor
+	 * (`confirmReplacingSuccessorAtStart`), DISCARD it where the configured fold is the
+	 * canonical generation, and do nothing where nothing would be deleted.
 	 *
 	 * The arriving identity is derived exactly as `add` derives it -- the spec's source
 	 * or this deployment's, over the resolved stream config, and the arrival's own
 	 * processor identity -- WITHOUT running either factory, so a refusal leaves no state
-	 * opened behind it. What is "replaced" is `displacedBySuccessor`'s first clause read
-	 * off the slots: the registry has a canonical generation, `successor` names one, and
-	 * no slot already names the arriving generation. A configured fold with no source to
-	 * name a stream by is not this question's: `add` refuses it by its own rule.
+	 * opened behind it. A configured fold with no source to name a stream by is not this
+	 * question's: `add` refuses it by its own rule. Then, with a canonical generation and
+	 * a `successor` both named, it is decided by which slot names the arriving generation:
+	 *
+	 *  - NONE: it is a `replace`, `displacedBySuccessor`'s first clause read off the slots.
+	 *    Only the question is asked here; `add` performs the replacement, as it does for
+	 *    every registration.
+	 *  - `canonical`: it is a `discard` (ADR-0094's third consequence: configuration is the
+	 *    truth on a configured command). Asked, then performed HERE (`discardThePendingSuccessor`),
+	 *    because `add` registers nothing for a generation already canonical and so
+	 *    displaces nothing.
+	 *  - `successor`: the configured fold is the pending successor itself, and nothing
+	 *    changes.
+	 *  - `predecessor`: unchanged here (`an-arrival-of-the-predecessor-re-arms-it-as-successor`).
 	 */
 	private async confirmTheStartMayReplace(spec: ReceivedGenerationSpec<ABI, ProcessResultType, State>): Promise<void> {
 		const confirm = this.options.confirmReplacingSuccessorAtStart;
-		if (!confirm) return;
 		const source = spec.source ?? this.fetchedSource;
 		if (!source) return;
 		const arriving: GenerationId = {
@@ -1120,8 +1150,43 @@ export class ReceivingIndexer<
 		};
 		const slots = await this.registry.slots();
 		const pending = slots.successor;
-		if (!pending || !slots.canonical || slotHolding(slots, arriving)) return;
-		await confirm({pending, arriving});
+		if (!pending || !slots.canonical) return;
+		const holding = slotHolding(slots, arriving);
+		if (holding === undefined) {
+			await confirm?.({kind: 'replace', pending, arriving});
+			return;
+		}
+		if (holding === 'canonical') {
+			await confirm?.({kind: 'discard', pending, canonical: arriving});
+			await this.discardThePendingSuccessor(pending, arriving);
+		}
+	}
+
+	/**
+	 * DISCARD THE PENDING SUCCESSOR because this START names the canonical generation
+	 * (ADR-0094's third consequence): its row, its state namespace and its stored bundle
+	 * go through the registry's `deleteGeneration`, which clears the `successor` slot in
+	 * the same commit, exactly as a replaced successor goes. The stream is NOT reaped
+	 * (ADR-0087).
+	 *
+	 * Unlike `dropReplaced`, a FAILED delete REFUSES the start rather than being logged
+	 * and carried past. There, the arriving generation takes the slot anyway, so what
+	 * failed to go is named by nothing; here nothing takes the slot, so a delete that
+	 * failed would leave it pending, to be instantiated and promoted -- a configured
+	 * command serving code its configuration does not name, the one thing this exists
+	 * to prevent.
+	 */
+	private async discardThePendingSuccessor(pending: GenerationRecord, canonical: GenerationId): Promise<void> {
+		await this.registry.deleteGeneration(pending);
+		this.stopDriving(pending);
+		namedLogger.info(
+			`the generation {stream: ${pending.stream}, processor: ${pending.processor}} was pending in the ` +
+				`\`successor\` slot, and this start is configured with the CANONICAL generation {stream: ` +
+				`${canonical.stream}, processor: ${canonical.processor}}, so it has been DISCARDED: a configured start ` +
+				`folds toward exactly what its configuration names (ADR-0094), and left pending it would have been ` +
+				`promoted. Its row, its state namespace and its stored bundle are gone, the \`successor\` slot is ` +
+				`empty, and the stream ${pending.stream} is KEPT (ADR-0087).`,
+		);
 	}
 
 	/**
@@ -1202,8 +1267,9 @@ export class ReceivingIndexer<
 	 *
 	 * AFTER `add` and after the canonical generation, and both orders are load-bearing.
 	 * After `add`, because a configured fold that REPLACES the pending successor has
-	 * already done so by then, and instantiating the one it replaced first would build an
-	 * engine for a generation about to be deleted. After the canonical generation, so a
+	 * already done so by then, as has one naming the canonical generation that DISCARDS it
+	 * (`confirmTheStartMayReplace`, ADR-0094), and instantiating the one it replaced or
+	 * discarded first would build an engine for a generation about to be deleted. After the canonical generation, so a
 	 * deployment started with nothing configured takes what it fetches from the
 	 * generation that answers reads rather than from the one catching up beside it.
 	 *

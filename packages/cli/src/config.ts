@@ -243,8 +243,10 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 	override: {
 		flag: '--override',
 		describe:
-			'let this START replace a DIFFERENT pending successor. Starting with a --processor that differs from the ' +
-			'canonical generation registers it as the new `successor`, and that slot holds one: what it held -- often ' +
+			'let this START delete a DIFFERENT pending successor. Starting with a --processor that differs from the ' +
+			'canonical generation registers it as the new `successor`, and that slot holds one, so what it held is ' +
+			'REPLACED; starting with the canonical generation\u2019s own processor folds toward exactly that, so a ' +
+			'different pending successor is DISCARDED rather than left to be promoted. Either way what it held -- often ' +
 			'an upload still catching up -- is DELETED, row, state and stored bytes. An interactive start ASKS first; ' +
 			'a non-interactive one is REFUSED unless this is given, so a pipeline that redeploys per commit passes it ' +
 			'once in its deploy configuration. A re-read and an upload replace a pending successor without it',
@@ -676,8 +678,8 @@ const UPLOAD_DOES_NOT_PROMOTE =
 // ---------------------------------------------------------------------------------------------------
 // WHICH COMMANDS TAKE --override
 // ---------------------------------------------------------------------------------------------------
-// `--override` lets a START replace a DIFFERENT pending successor (ADR-0084's and
-// ADR-0093's amendments of 2026-09-26). EVERY command that starts with a configured
+// `--override` lets a START replace or discard a DIFFERENT pending successor (ADR-0084's
+// and ADR-0093's amendments of 2026-09-26, ADR-0094's third consequence). EVERY command that starts with a configured
 // `--processor` over a registry guards its start that way -- `run`, `build` and
 // `index` -- because all three open the same container over the same slots
 // (`openFolding`), and a pending successor is work in progress however it arrived:
@@ -688,14 +690,14 @@ const UPLOAD_DOES_NOT_PROMOTE =
 // ---------------------------------------------------------------------------------------------------
 
 const NO_PROCESSOR_TO_START =
-	'--override lets a START with a configured --processor replace a different pending successor, and this ' +
+	'--override lets a START with a configured --processor replace or discard a different pending successor, and this ' +
 	'command holds no processor, so it registers nothing and replaces nothing. The commands that take it are ' +
 	'`run`, `build` and `index`.';
 
 const OVERRIDE_IS_THE_NODES =
 	'an upload is already a deliberate act on a running `etherfold node` and replaces a pending successor there ' +
 	'without being asked. --override belongs to the commands that START with a configured --processor (`run`, ' +
-	'`build`, `index`): it lets such a start replace one.';
+	'`build`, `index`): it lets such a start replace or discard one.';
 
 // ---------------------------------------------------------------------------------------------------
 // WHY `node` TAKES NO CODE ON ITS COMMAND LINE (ADR-0094)
@@ -1351,7 +1353,7 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// ABSENT where the operator said nothing, so the default stays written in one
 					// place (see `resolvePromotion`).
 					...(promotion === undefined ? {} : {promotion}),
-					// whether this START may replace a DIFFERENT pending successor without asking
+					// whether this START may replace or discard a DIFFERENT pending successor without asking
 					// (ADR-0084's amendment of 2026-09-26). A flag and no variable: see `INPUTS`.
 					override: given('override', options, env) !== undefined,
 				};

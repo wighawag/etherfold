@@ -19,6 +19,9 @@ import {anIncumbentThatHasFolded, SOURCE} from './utils/receivingWorld.js';
 //  - a configured fold that would REPLACE a different pending successor asks the host
 //    first (`confirmReplacingSuccessorAtStart`), and a refusal registers and deletes
 //    nothing; where nothing would be replaced it is not asked at all;
+//  - a configured fold that names the CANONICAL generation while a different one is
+//    pending DISCARDS it (ADR-0094's third consequence), asked the same way, and
+//    BEFORE the pending successor would have been instantiated;
 //  - `add` -- a re-read, an upload -- is never asked.
 // ---------------------------------------------------------------------------------------------------
 
@@ -76,24 +79,6 @@ describe('the pending successor FOLDS from open', () => {
 		expect((await restarted.canonical())?.processor).toBe(identityOf('v2'));
 		expect(heldHere(restarted)).toEqual([identityOf('v2')]);
 		expect((await restarted.slots()).predecessor?.processor).toBe(identityOf('v1'));
-	});
-
-	it('is instantiated beside a configured fold that names the canonical generation, which changes nothing', async () => {
-		const w = await aStoppedDeploymentWithAPendingSuccessor();
-		const asked: SuccessorReplacementAtStart[] = [];
-
-		const restarted = await w.open('v1', 1, {
-			instantiateGeneration: w.instantiateFromBundle,
-			confirmReplacingSuccessorAtStart: (replacement) => {
-				asked.push(replacement);
-			},
-		});
-
-		expect(asked).toEqual([]);
-		expect(w.instantiated.map((call) => call.processor)).toEqual([identityOf('v2')]);
-		expect(heldHere(restarted)).toEqual([identityOf('v1'), identityOf('v2')]);
-		await catchUp(restarted, 'v2');
-		expect((await restarted.canonical())?.processor).toBe(identityOf('v2'));
 	});
 
 	it('waits under `manual`: folded, caught up, and NOT promoted until somebody asks', async () => {
@@ -166,9 +151,11 @@ describe('a START that would replace a DIFFERENT pending successor asks first', 
 		).rejects.toBe(refused);
 
 		expect(asked).toHaveLength(1);
-		expect(asked[0]?.pending.processor).toBe(identityOf('v2'));
-		expect(asked[0]?.arriving.processor).toBe(identityOf('v3'));
-		expect(asked[0]?.arriving.stream).toBe(asked[0]?.pending.stream);
+		const replacement = asked[0];
+		if (replacement?.kind !== 'replace') throw new Error(`asked about a ${replacement?.kind}, not a replacement`);
+		expect(replacement.pending.processor).toBe(identityOf('v2'));
+		expect(replacement.arriving.processor).toBe(identityOf('v3'));
+		expect(replacement.arriving.stream).toBe(replacement.pending.stream);
 		// the registry is exactly as it was: v2 still pending, with its bundle, and no v3
 		const after = await w.openWithNothing({promotion: {policy: 'manual'}});
 		const slots = await after.slots();
@@ -214,20 +201,112 @@ describe('a START that would replace a DIFFERENT pending successor asks first', 
 
 	it('never asks an ARRIVAL: `add` on a running container replaces the pending successor as it always did', async () => {
 		const w = await aStoppedDeploymentWithAPendingSuccessor();
-		const asked: SuccessorReplacementAtStart[] = [];
-		const restarted = await w.open('v1', 1, {
+		// the START is answered, and discards v2: it names the canonical generation
+		let started = false;
+		const askedAfterStart: SuccessorReplacementAtStart[] = [];
+		const restarted = await w.open('v2', 10, {
 			instantiateGeneration: w.instantiateFromBundle,
 			promotion: {policy: 'manual'},
+			confirmReplacingSuccessorAtStart: (replacement) => {
+				if (started) askedAfterStart.push(replacement);
+			},
+		});
+		started = true;
+
+		await restarted.add(w.specFor('v3', 100));
+
+		expect(askedAfterStart).toEqual([]);
+		expect((await restarted.slots()).successor?.processor).toBe(identityOf('v3'));
+		expect((await restarted.generations()).map((record) => record.processor)).not.toContain(identityOf('v2'));
+		expect(heldHere(restarted)).toEqual([identityOf('v1'), identityOf('v3')]);
+	});
+});
+
+describe('a START that names the CANONICAL generation DISCARDS a different pending successor (ADR-0094)', () => {
+	it('asks, naming both, and a refusal deletes, builds and promotes NOTHING', async () => {
+		const w = await aStoppedDeploymentWithAPendingSuccessor();
+		const asked: SuccessorReplacementAtStart[] = [];
+		const refused = new Error('not without --override');
+
+		await expect(
+			w.open('v1', 1, {
+				instantiateGeneration: w.instantiateFromBundle,
+				confirmReplacingSuccessorAtStart: (replacement) => {
+					asked.push(replacement);
+					throw refused;
+				},
+			}),
+		).rejects.toBe(refused);
+
+		expect(asked).toHaveLength(1);
+		const discard = asked[0];
+		if (discard?.kind !== 'discard') throw new Error(`asked about a ${discard?.kind}, not a discard`);
+		expect(discard.pending.processor).toBe(identityOf('v2'));
+		expect(discard.canonical.processor).toBe(identityOf('v1'));
+		// the registry is exactly as it was: v2 still pending, with its bundle and its state
+		const after = await w.openWithNothing({promotion: {policy: 'manual'}});
+		const slots = await after.slots();
+		expect(slots.canonical?.processor).toBe(identityOf('v1'));
+		expect(slots.successor?.processor).toBe(identityOf('v2'));
+		expect((await after.generations()).map((record) => record.processor)).toEqual([identityOf('v1'), identityOf('v2')]);
+		expect(await after.registry.bundleOf(slots.successor!)).toBeDefined();
+		expect(w.instantiated).toEqual([]);
+	});
+
+	it('discards it -- row, slot and bytes -- when the host lets it, BEFORE it is instantiated, and it is never promoted', async () => {
+		const w = await aStoppedDeploymentWithAPendingSuccessor();
+		const v2 = (await (await w.openWithNothing({promotion: {policy: 'manual'}})).slots()).successor!;
+		// the STATE half of the deletion is the registry's `deleteGeneration`, which this
+		// world's substrate records no state for; it is asserted over a real database in
+		// `packages/cli/test/anUploadedProcessorSurvivesARestart.test.ts`
+		const asked: SuccessorReplacementAtStart[] = [];
+
+		const restarted = await w.open('v1', 1, {
+			instantiateGeneration: w.instantiateFromBundle,
 			confirmReplacingSuccessorAtStart: (replacement) => {
 				asked.push(replacement);
 			},
 		});
 
-		await restarted.add(w.specFor('v3', 100));
+		expect(asked.map((one) => one.kind)).toEqual(['discard']);
+		const slots = await restarted.slots();
+		expect(slots.canonical?.processor).toBe(identityOf('v1'));
+		expect(slots.successor).toBeUndefined();
+		expect((await restarted.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
+		expect(await restarted.registry.bundleOf(v2)).toBeUndefined();
+		// the discarded successor was never built into an engine: the discard ran first
+		expect(w.instantiated).toEqual([]);
+		expect(heldHere(restarted)).toEqual([identityOf('v1')]);
+		// ...and the canonical generation keeps folding, and nothing is promoted over it
+		await catchUp(restarted, 'v1');
+		expect((await restarted.canonical())?.processor).toBe(identityOf('v1'));
+	});
+
+	it('discards it with nobody asked where the host passes no answer, as a replacement does', async () => {
+		const w = await aStoppedDeploymentWithAPendingSuccessor();
+
+		const restarted = await w.open('v1', 1, {instantiateGeneration: w.instantiateFromBundle});
+
+		expect((await restarted.slots()).successor).toBeUndefined();
+		expect((await restarted.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
+		expect(w.instantiated).toEqual([]);
+	});
+
+	it('does not ask, and changes nothing, where the canonical generation has nothing pending beside it', async () => {
+		const {world: w} = await anIncumbentThatHasFolded();
+		const asked: SuccessorReplacementAtStart[] = [];
+
+		const restarted = await w.open('v1', 1, {
+			instantiateGeneration: w.instantiateFromBundle,
+			confirmReplacingSuccessorAtStart: (replacement) => {
+				asked.push(replacement);
+			},
+		});
 
 		expect(asked).toEqual([]);
-		expect((await restarted.slots()).successor?.processor).toBe(identityOf('v3'));
-		expect((await restarted.generations()).map((record) => record.processor)).not.toContain(identityOf('v2'));
-		expect(heldHere(restarted)).toEqual([identityOf('v1'), identityOf('v3')]);
+		const slots = await restarted.slots();
+		expect(slots.canonical?.processor).toBe(identityOf('v1'));
+		expect(slots.successor).toBeUndefined();
+		expect((await restarted.generations()).map((record) => record.processor)).toEqual([identityOf('v1')]);
 	});
 });

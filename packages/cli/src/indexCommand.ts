@@ -199,7 +199,7 @@ export type IndexDependencies = {
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
 	/**
-	 * WHO THIS START ASKS before it replaces a different pending successor: whether
+	 * WHO THIS START ASKS before it replaces or discards a different pending successor: whether
 	 * anybody can be asked, and how (`startGuardFor`). Defaults to the terminal.
 	 */
 	startGuard?: StartGuardDependencies;

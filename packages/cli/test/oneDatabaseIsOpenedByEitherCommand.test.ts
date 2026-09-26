@@ -20,10 +20,10 @@ import {abi, ALICE, BOB, CAROL, fakeChain, START_BLOCK, transfer, ZERO} from './
 // each command's one source of truth rather than by a mode stored on disk.
 //
 //  - `run` over a database a `node` wrote is an ordinary CONFIGURED start, under the
-//    rules a configured start has today (a start naming a different processor registers
-//    it as the successor: `anUploadedProcessorSurvivesARestart.test.ts`). The DISCARD rule
-//    for a start naming the canonical generation while another is pending is not this
-//    suite's (`a-configured-start-folds-toward-exactly-its-configuration`).
+//    rules every configured start has: it folds toward exactly what `-p` names (a
+//    different processor registers as the successor, and the canonical processor DISCARDS
+//    a different pending one, behind the start guard). Those rules are asserted in
+//    `anUploadedProcessorSurvivesARestart.test.ts`, not here.
 //  - `node` over a database a `run` wrote instantiates the canonical generation from its
 //    STORED bundle, over the contracts THAT BUNDLE carries (ADR-0093). Where `run` had
 //    been given a source the bundle does not carry, that generation is on a stream the
