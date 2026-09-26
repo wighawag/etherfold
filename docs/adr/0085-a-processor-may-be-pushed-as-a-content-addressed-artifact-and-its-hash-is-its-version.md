@@ -67,3 +67,17 @@ The consequence above deferred the pushed route until "a deployment exists that 
 - **A pushed processor survives a restart only because its bytes are stored** (ADR-0092). This reverses the push spec's launch claim that the route "does not need retention": for a node whose processors arrive by upload, the stored bytes are the only copy of the code it runs. So the upload is built after code retention.
 
 The node that has nothing configured and waits for its first upload is ADR-0093.
+
+## Decisions relocated from the upload spec when it was tasked, 2026-09-26
+
+The spec `a-processor-artifact-is-pushed-to-a-running-deployment` made these decisions, and they are relocated here so they outlive its launch snapshot. None of them is built yet.
+
+- **An admin route on the existing credential**, beside the re-read and the pointer move, for ADR-0057's reasons. A surface that registers a new fold is at least as consequential as one that moves the pointer, and it is explicit remote-code-execution authority.
+- **The identity is the receiver's hash of the received bytes**, never taken from the sender (ADR-0086).
+- **A size bound and a content type are stated and enforced**, because an unbounded body on an authenticated route is still a way to exhaust a process.
+- **Everything that can refuse happens before anything is registered**: self-containment, evaluation and the contract match. A refused upload leaves the deployment exactly as it was.
+- **The contract match applies only to a source the OPERATOR configured.** Decided by the maintainer on 2026-09-26: a source changes legitimately, in development and in production (a new event a new handler needs, a contract upgraded with new events). So an upload is refused for carrying a different source only where the node was STARTED with an explicit one (`--deployments` or `INDEXING_SOURCE`), and "match" means the same resolved source (chain, contracts, events, start block). Where the node's source came from its processor module, or it was started with nothing (ADR-0093), an upload with different contracts is a successor on a new stream, as a re-read after a filter change already is. The disk path's precedence is unchanged.
+- **The sender is `etherfold upload`**, named by the maintainer on 2026-09-26. It takes a bundle path, the target as `--to <url>` (never `--node-url`, which is the chain's RPC endpoint on every other command), a REQUIRED `--indexer` and the admin credential. It checks self-containment locally with the existing check, and never builds. `build` is taken and `deploy` is left for a later build-and-upload command.
+- **The arrival is named in the outcome.** The three outcomes (`registered`, `unchanged`, `failed`) stay three, and which arrival produced one is a field beside them.
+- **Three answers of 2026-09-26 that the tasks record where they belong.** A `successor` is also instantiated at open, so an upload that was still catching up survives a restart and is promoted as usual, while a `predecessor` still is not (an amendment to ADR-0092). A configured `--processor` that differs from the canonical generation's is an arrival like any other and registers as the new `successor` (an amendment to ADR-0093). And a START may not SILENTLY replace a different pending successor, however it arrived: an interactive start asks, a non-interactive one is refused unless `--override` is given, so a redeploy-per-commit pipeline passes it once in its configuration; the re-read and the upload, already deliberate acts, replace as before (amendments to ADR-0084 and ADR-0093).
+

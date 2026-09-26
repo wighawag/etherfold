@@ -42,37 +42,9 @@ What makes the three arrivals (re-read, upload, HMR in a tab) ONE feature is tha
 11. As an operator, I want to start `etherfold run` with no processor and no source and have it WAIT for its first upload, saying so on `/status` and answering reads with "no generation yet", so that I can stand a node up once and deploy to it afterwards.
 12. As an operator, I want an uploaded processor to be promoted by the node's existing promotion policy once it has caught up, so that deploying a new version never serves a half-built state.
 
-### Autonomy notes
+## Detail moved
 
-Neither gate. Every decision this spec rests on is recorded (ADR-0085 and its amendment, ADR-0086, ADR-0092, ADR-0093), and the refusal shapes, the credential and the three-outcome contract are established by the existing admin surface. It is tasked AFTER code retention has LANDED, not merely after it was tasked: the storage and instantiation seams it builds on are shaped by those builds, so tasking earlier would write tasks against a guess.
-
-## Implementation Decisions
-
-**It is an admin route on the existing credential**, beside the reconfigure endpoint and the pointer move, for ADR-0057's recorded reasons. A surface that registers a new fold is at least as consequential as one that moves the pointer. It is also explicit remote-code-execution authority, which ADR-0085 already says should be written down rather than discovered.
-
-**The identity is the hash of the received bytes, computed by the receiver and never taken from the sender** (ADR-0086).
-
-**The size bound and the content type are stated and enforced**, because an unbounded body on an authenticated route is still a way to exhaust a process.
-
-**Validation happens BEFORE anything is registered**: self-containment, evaluation, and the contract match. A processor that throws on evaluation, or whose contracts do not match, leaves the deployment exactly as it was.
-
-**The contract match compares what the upload carries with what the node already indexes**, where the node has a known source. On a waiting `run` node there is nothing to match yet, and the first upload's contracts define the stream. The disk path's precedence (a configured source overrides the module's contracts) is NOT changed by this spec (ADR-0093).
-
-**The waiting mode is `run` only** (ADR-0093). A split deployment's `index` cannot change what its separate fetcher fetches, so it does not wait with nothing configured; it may still accept uploads whose contracts match its fetcher's source.
-
-**The sender is a new CLI command that takes a bundle path, a node URL and the admin credential.** Its name is the tasker's to propose; it must not be `build`, which already names the one-shot fold-to-completion command. It verifies self-containment locally before uploading, using the check that already exists, so the common mistake fails on the author's machine.
-
-**The arrival is NAMED in the outcome.** The three outcomes stay three, and which arrival produced one is a field beside them.
-
-## Testing Decisions
-
-The claim worth asserting is the round trip an operator actually performs: a running node, a bundle uploaded with the sender command, a generation registered beside the incumbent, the incumbent answering reads throughout, and the pointer moving once the successor has caught up.
-
-The restart claim is its own end-to-end case: upload, restart the node with NO processor configured, and observe it still folding the uploaded processor.
-
-The waiting node is its own case: start `run` with nothing configured, observe `/status` say it is waiting and reads answer "no generation yet", upload, observe it fold.
-
-Each refusal is its own case and each must leave the deployment untouched: a bundle that is not self-contained, a body over the bound, a wrong or missing credential, a processor that throws on evaluation, and contracts that do not match the node's source. The evaluation failure is the one worth driving hardest, because "nothing partial is registered" distinguishes failing before registering from unwinding after.
+Tasked on 2026-09-26 into `every-arrival-names-itself-in-its-outcome`, `a-processor-bundle-is-uploaded-to-a-running-node`, `an-upload-command-sends-a-built-bundle`, `a-run-node-with-nothing-configured-waits-for-its-first-upload` and `an-uploaded-processor-survives-a-restart`. The implementation decisions moved to ADR-0085 (its section of decisions relocated from this spec) and the testing detail to those tasks.
 
 ## Out of Scope
 
