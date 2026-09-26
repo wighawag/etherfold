@@ -263,9 +263,11 @@ function oneDatabase(): RemoteSQL {
  * A deployment that folded under one processor, was STOPPED, and is running again
  * over the same database with an edited one.
  *
- * The restarted process holds exactly ONE fold, the new one: the previous
- * processor's code is not in this build and a fold for it is unbuildable, which
- * is the shape every assertion below is about.
+ * The previous processor's code is not in this build. Since ADR-0092 `run` still
+ * folds it, instantiated at `open` from the bytes stored beside its generation, so
+ * the restarted process holds both; the shape where it holds NO fold for the
+ * incumbent is pinned at the container seam
+ * (`packages/core/test/aSuccessorIsPromotedOverAnIncumbentNoFoldHereHolds.test.ts`).
  */
 async function aRestartWithAChangedProcessor(
 	extra?: Partial<Options>,

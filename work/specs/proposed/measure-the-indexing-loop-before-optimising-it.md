@@ -13,7 +13,7 @@ Etherfold is believed to be bottlenecked on log fetching. Nobody has measured it
 
 Reading the code gives a different and narrower description, but not a number. Nothing overlaps anything: a cycle is `eth_chainId`, `eth_blockNumber`, `eth_getLogs`, enrichment, `eth_chainId` again, strictly in sequence; the fold then loops blocks doing one `batch()` round trip each for a median of 7 mutations; and roughly three quarters of handler reads miss the per-block staging area (16,871 of 66,113 on the real stratagems capture). Which of those dominates a backfill is unknown, and they suggest opposite remedies.
 
-There is no benchmark in the repo. `work/notes/observations/` holds 26 signals and not one is about performance, so there is nothing to regress against and no way to defend a change.
+There is no benchmark in the repo, and no observation note has ever been about performance, so there is nothing to regress against and no way to defend a change.
 
 Optimising in this state means guessing which half to fix, and shipping seam changes (`work/specs/proposed/the-fold-packs-blocks-into-round-trips.md`) whose payoff is unquantified.
 

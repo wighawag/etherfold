@@ -2379,7 +2379,7 @@ export class ReceivingIndexer<
 	 * holds exactly one fold, the new one, and a fold for the incumbent is unbuildable
 	 * by construction, because the old processor's code is not in the build. So the
 	 * trigger could not be EVALUATED on the very shape the upgrade story is about, and
-	 * the pointer never moved (`work/notes/observations/the-promotion-trigger-cannot-be-evaluated-with-no-held-incumbent.md`).
+	 * the pointer never moved (`packages/core/test/aSuccessorIsPromotedOverAnIncumbentNoFoldHereHolds.test.ts` pins the fix).
 	 * It is now the same rule the rest of this runtime follows (module JSDoc, rule 1;
 	 * `promote`'s docstring): a generation ANSWERS with no engine, so it can be
 	 * MEASURED with no engine.

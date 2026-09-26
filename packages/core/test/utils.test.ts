@@ -83,8 +83,8 @@ describe('getFromBlock', () => {
 // source can say anything about whenever the fold was within `finality` of it --
 // and a stored stream begins where its first batch was accepted from, so the
 // keeper honestly answered `does-not-reach-back` and a follower could not
-// advance at all (`work/notes/observations/
-// a-rebuild-cannot-start-within-finality-of-a-streams-start-block.md`).
+// advance at all (an observation note recorded this until the tests below carried
+// it, and was then retired).
 //
 // The floor is now `defaultFromBlock`, which is the SAME number the untouched
 // `latestBlock === 0` branch already returned, so the two branches agree about
