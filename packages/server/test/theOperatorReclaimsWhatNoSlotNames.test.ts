@@ -258,6 +258,28 @@ describe('an operator SEES whether each generation can fold here, where the host
 		expect(generations.every((one) => one.frozen === undefined)).toBe(true);
 	});
 
+	it('keeps folding the incumbent a promotion onto ANOTHER stream superseded, whose stream still accepts a push', async () => {
+		const {indexer, garbage} = deployment;
+
+		// this host is PUSH-FED (no `fetchesItsOwnStreams`): another process fetches its streams,
+		// so the promotion onto the reconfigured source's stream stopped nothing here
+		const first = indexer.held().find((fold) => fold.record.processor === garbage.processor);
+		expect(first?.streamDigest).toBe(garbage.stream);
+		expect((await indexer.liveIngestions()).map((one) => one.streamDigest)).toContain(garbage.stream);
+
+		const receiver = (await indexer.liveIngestions()).find((one) => one.streamDigest === garbage.stream)!;
+		const before = await receiver.expectedFromBlock();
+		await receiver.receive({
+			context: receiver.context,
+			fromBlock: before,
+			toBlock: START_BLOCK + 20,
+			latestBlock: START_BLOCK + 20,
+			logs: [transfer(START_BLOCK + 15, '0xa115', BOB, 3n, 0, CONTRACT)],
+		});
+		expect(await receiver.expectedFromBlock()).toBeGreaterThan(before);
+		expect(await emissionRows(deployment.db, garbage.stream)).toBe(2);
+	});
+
 	it('WIDENS the listing and changes nothing else: a host that cannot say gets no such field', async () => {
 		const {indexer, db} = deployment;
 		const withoutFolding = createServer<TestEnv>({

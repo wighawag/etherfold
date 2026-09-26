@@ -3,6 +3,7 @@ import {
 	resolveStreamConfig,
 	type Abi,
 	type EventProcessor,
+	type FetchedStream,
 	type GenerationId,
 	type IndexingSource,
 	type ReceivingIndexer,
@@ -14,6 +15,7 @@ import {
 	runFetcherLoop,
 	sleep,
 	type CycleReport,
+	type CycleRunner,
 	type EnvRecord,
 	type FetcherHost,
 	type RunSummary,
@@ -35,6 +37,7 @@ import {
 	requireArrivedBundle,
 	streamConfigFor,
 } from './folding.js';
+import {StreamFetchers} from './fetchers.js';
 import {arrivalQueue, reconfigurerFor} from './reconfigure.js';
 import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
 import {uploaderFor} from './upload.js';
@@ -56,6 +59,7 @@ export {
 	type FoldingAssembly,
 	type WaitingFoldingAssembly,
 } from './folding.js';
+export {StreamFetchers} from './fetchers.js';
 export {arrivalQueue, reconfigurerFor, type ArrivalQueue, type ReconfigureContext} from './reconfigure.js';
 export {uploaderFor, type ConfiguredSource, type UploadContext} from './upload.js';
 export {
@@ -195,8 +199,20 @@ export type PreparedIndexing<
 	 * back holds exactly that one.
 	 */
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>;
-	/** The sending half, plus the policy for reading what a cycle did. */
+	/**
+	 * The sending half, plus the policy for reading what a cycle did: the OLDEST fetcher
+	 * this process runs (`StreamFetchers.primary`), which is the only one a deployment
+	 * that has not received new contracts has. Read per ask: after a promotion onto
+	 * another stream it is that stream's.
+	 */
 	host: FetcherHost<ABI>;
+	/**
+	 * EVERY FETCHER THIS PROCESS RUNS, one per stream it fetches (`StreamFetchers`): the
+	 * canonical generation's, and beside it the stream of a successor that arrived with
+	 * new contracts, each appending through that stream's ONE writer (ADR-0087). What the
+	 * drive loop runs as one cycle.
+	 */
+	fetchers: StreamFetchers<ABI>;
 	/** The store the OPENING fold folds into: its own table namespace (ADR-0053). */
 	store: WritableStateStore;
 	/**
@@ -426,17 +442,26 @@ export async function prepareIndexing<
 			// re-run `build` are both starts with a configured processor over the same slots, so
 			// both are guarded, as `index` is (`indexCommand.ts`).
 			confirmReplacingSuccessorAtStart: startGuardFor(resolved.override, deps.startGuard),
+			// A STORED GENERATION FOLDS THE CONTRACTS ITS OWN BUNDLE CARRIES where this
+			// deployment's source came from its processor module: that is the node an upload
+			// carrying NEW contracts registers a successor on a new stream for, so after a
+			// restart it can go on fetching that stream (mid-catch-up) or the one the canonical
+			// generation was promoted onto. A source the operator configured overrides it.
+			...(resolved.source.from === 'processor-module' ? {sourceCarriedByBundle: {provider}} : {}),
+			// THIS PROCESS FETCHES EVERY STREAM IT FOLDS (`StreamFetchers` below), so a promotion
+			// onto another stream stops folding the incumbent and lets its fetcher stop. `index`,
+			// which is push-fed, does not say this and keeps the incumbent folding.
+			fetchesItsOwnStreams: true,
 		},
 	);
 
-	const host = fetcherHostOver<ABI, ProcessResultType>(
-		source,
-		resolved,
-		env,
-		providedStreamConfig,
-		provider,
-		container,
+	// ONE FETCHER PER STREAM the container fetches, started now for the stream it came up
+	// fetching (and for a pending successor's on another stream, instantiated at `open`),
+	// and kept in step with its folds before every cycle from then on (`StreamFetchers`).
+	const fetchers = new StreamFetchers<ABI>(container, (fetched) =>
+		fetcherHostOver<ABI, ProcessResultType>(fetched, resolved, env, providedStreamConfig, provider, container),
 	);
+	await fetchers.reconcile();
 
 	// ONE LINE for every arrival this process answers -- the re-read and the upload --
 	// so no two of them decide "is this identity already held" against one registry at
@@ -451,7 +476,10 @@ export async function prepareIndexing<
 		processor,
 		streamWriter,
 		container,
-		host,
+		get host(): FetcherHost<ABI> {
+			return fetchers.primary ?? noFetcher();
+		},
+		fetchers,
 		store,
 		stateOf,
 		db,
@@ -489,22 +517,31 @@ export async function prepareIndexing<
 		),
 		// ...and it is not WAITING: it was configured with what it folds and what it fetches
 		waiting: () => undefined,
-		index: () => driveCycles(command, host, container, deps),
+		index: () => driveCycles(command, fetchers, container, deps),
 	};
 }
 
 /**
- * THE ONE FETCHER a chain-following command builds, over the source it fetches.
+ * The fetcher of a configured deployment that fetches no stream: unreachable, since it
+ * holds its configured fold from `open`, and refused rather than answered with nothing.
+ */
+function noFetcher(): never {
+	throw new Error(`this deployment fetches no stream, so it has no fetcher: no fold it holds reads one`);
+}
+
+/**
+ * THE FETCHER OF ONE STREAM a chain-following command fetches, over that stream's source.
  *
- * Built at start on a configured deployment, and on a `run` started with NOTHING
- * configured (ADR-0093) at the moment its container first names a source -- from the
- * canonical generation it instantiated at `open`, or from its first upload. Either way it
- * is built ONCE, over ONE source, which is what a `run` has always fetched: a later
- * upload carrying different contracts is a successor on a new stream, exactly as on a
- * deployment whose source came from its processor module.
+ * Built by `StreamFetchers` for every stream the container fetches: at start for the
+ * stream a configured deployment comes up fetching, on a `run` started with NOTHING
+ * configured (ADR-0093) at the moment its container first names one, and, beside those,
+ * for the NEW stream of a successor that arrived with different contracts (an upload
+ * that adds an event), so it catches up while the incumbent's fetcher goes on running.
+ * Every one of them pushes into the same in-process target, which routes each batch to
+ * the ONE writer of the stream it names (ADR-0087).
  */
 function fetcherHostOver<ABI extends Abi, ProcessResultType>(
-	source: IndexingSource<ABI>,
+	fetched: Pick<FetchedStream<ABI>, 'source' | 'config'>,
 	resolved: RunConfig<ABI> | BuildConfig<ABI>,
 	env: EnvRecord,
 	providedStreamConfig: ReturnType<typeof streamConfigFor>,
@@ -513,9 +550,11 @@ function fetcherHostOver<ABI extends Abi, ProcessResultType>(
 ): FetcherHost<ABI> {
 	return createFetcherHost<ABI>(
 		resolveFetcherHostConfig<ABI>(env, {
-			source,
+			source: fetched.source,
 			nodeUrl: resolved.nodeUrl,
-			stream: providedStreamConfig,
+			// the config the stream's WRITER was provided with, which is what its wire context
+			// hashes: a fetcher asserting any other would be refused by the writer it feeds
+			stream: fetched.config ?? providedStreamConfig,
 			...(resolved.rps === undefined ? {} : {requestsPerSecond: resolved.rps}),
 		}),
 		{
@@ -586,16 +625,16 @@ function notYet(what: string): never {
  * and no source of its own (`openWaitingFolding`), and NO FETCHER until there is
  * something to fetch.
  *
- * ## How the fetcher comes to exist after start
+ * ## How the fetchers come to exist after start
  *
- * A configured `run` builds its one fetcher over the source it resolved at start. This
- * one has none, and a placeholder source would fetch something nobody chose, so the
- * fetcher is built LATE, by the drive loop (`index`), at the first moment the container
- * names what this deployment fetches (`ReceivingIndexer.fetchedSource`): at `open`, where
- * the registry's canonical generation could be instantiated from its stored bundle, or at
- * the first upload the container registers. From then on it is the fetcher a configured
- * `run` has, over the same wire, and `driveCycles` drives it exactly as it drives that
- * one.
+ * A configured `run` starts fetching the stream it resolved at start. This one has none,
+ * and a placeholder source would fetch something nobody chose, so its fetchers are built
+ * LATE, by the drive loop (`index`), at the first moment the container names a stream
+ * this deployment fetches (`ReceivingIndexer.fetchedStreams`): at `open`, where the
+ * registry's canonical generation (and a pending successor) could be instantiated from
+ * its stored bundle, or at the first upload the container registers. From then on they
+ * are the fetchers a configured `run` has, one per stream, over the same wire, and
+ * `driveCycles` drives them exactly as it drives those (`StreamFetchers`).
  *
  * Until then `index` WAITS -- on a wake an upload rings, and on `WAITING_POLL_MS` for
  * any other arrival -- and `/status` says so (`waiting`).
@@ -622,21 +661,23 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 		provider,
 	});
 
-	/** The one fetcher, once there is a source; see the JSDoc for when. */
-	let host: FetcherHost<ABI> | undefined;
-	const startFetchingIfTold = (): FetcherHost<ABI> | undefined => {
-		if (host) return host;
-		const source = container.fetchedSource;
-		if (!source) return undefined;
-		host = fetcherHostOver<ABI, ProcessResultType>(source, resolved, env, providedStreamConfig, provider, container);
-		logger.info(
-			`run: this node was started with nothing configured and now knows what to fetch, so it starts fetching ` +
-				`(ADR-0093)`,
-		);
-		return host;
+	/** One fetcher per stream the container fetches, NONE until something names one; see the JSDoc for when. */
+	const fetchers = new StreamFetchers<ABI>(container, (fetched) =>
+		fetcherHostOver<ABI, ProcessResultType>(fetched, resolved, env, providedStreamConfig, provider, container),
+	);
+	const startFetchingIfTold = async (): Promise<boolean> => {
+		const before = fetchers.size;
+		await fetchers.reconcile();
+		if (before === 0 && fetchers.size > 0) {
+			logger.info(
+				`run: this node was started with nothing configured and now knows what to fetch, so it starts fetching ` +
+					`(ADR-0093)`,
+			);
+		}
+		return fetchers.size > 0;
 	};
 	// the canonical generation instantiated at `open` may have told it already
-	startFetchingIfTold();
+	await startFetchingIfTold();
 
 	/** Rung by an upload the container registered, so the wait ends at once rather than on the next look. */
 	let wake: () => void = () => {};
@@ -669,8 +710,9 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 		},
 		container,
 		get host(): FetcherHost<ABI> {
-			return host ?? notYet('fetcher');
+			return fetchers.primary ?? notYet('fetcher');
 		},
+		fetchers,
 		get store(): WritableStateStore {
 			return container.state;
 		},
@@ -694,12 +736,12 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 			wake();
 			return report;
 		},
-		waiting: () => (host ? undefined : waitingFor(resolved.indexer)),
+		waiting: () => (fetchers.size > 0 ? undefined : waitingFor(resolved.indexer)),
 		index: async () => {
 			const wait = deps.sleep ?? sleep;
 			// WAITING, until something names what to fetch or the process is asked to stop:
 			// a wait that fetches nothing and folds nothing, and says so on `/status`.
-			while (!startFetchingIfTold()) {
+			while (!(await startFetchingIfTold())) {
 				if (deps.signal?.aborted) return {cycles: 0, pushed: 0, stoppedBecause: 'stopped'};
 				await Promise.race([
 					new Promise<void>((resolve) => {
@@ -708,7 +750,7 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 					wait(WAITING_POLL_MS, deps.signal),
 				]);
 			}
-			return driveCycles(command, startFetchingIfTold() as FetcherHost<ABI>, container, deps);
+			return driveCycles(command, fetchers, container, deps);
 		},
 	};
 }
@@ -827,7 +869,7 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
  */
 async function driveCycles<ABI extends Abi, ProcessResultType>(
 	command: ChainFollowingCommand,
-	host: FetcherHost<ABI>,
+	host: CycleRunner,
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 	deps: IndexingDependencies,
 ): Promise<RunSummary> {

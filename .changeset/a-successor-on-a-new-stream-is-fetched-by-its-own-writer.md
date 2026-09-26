@@ -1,0 +1,14 @@
+---
+'etherfold': minor
+'@etherfold/core': minor
+'@etherfold/fetcher-host': minor
+---
+
+**An upload that adds an event completes: its new stream is fetched beside the live version, it catches up, and it takes over** (ADR-0087's and ADR-0093's amendments of 2026-09-26). An upload carrying different contracts used to register a successor on its new stream that nothing ever fetched, so it never caught up and was never promoted.
+
+- **`etherfold run` and `build` fetch every stream a generation they fold reads**, each with its own fetcher, appending through that stream's one writer. The incumbent's stream goes on being fetched and answering while the successor's is fetched from its start block; under `on-catch-up` the successor is promoted once it has caught up. The fetchers are kept in step with the folds before every cycle (new `StreamFetchers`, exported, and `PreparedIndexing.fetchers` / `RunningIndexer.fetchers`); `host` is now the OLDEST fetcher running.
+- **On `run` and `build`, a promotion onto a generation on another stream stops folding the incumbent**, however it arrived, so the old stream's fetcher stops once nothing here reads it (no more chain calls for it). This applies only where the host says it fetches its own streams (new `ReceivingIndexerOptions.fetchesItsOwnStreams`, which `run` and `build` pass): a push-fed receiver (`index`, the server's hosts) is unchanged, and its incumbent goes on folding and accepting pushes. A replaced new-stream successor stops being fetched the same way. The incumbent is retained as `predecessor`; a revert onto it is the freeze a revert across a filter change always was.
+- **At `open` the canonical generation and the pending successor are instantiated on whatever stream each is on**, so a restart mid-catch-up goes on fetching the successor's stream and promotes it. A pending successor on a new stream is reported `held`, no longer `stream-not-fetched`, which now means only a generation a move would freeze.
+- **`@etherfold/core`: new `ReceivingIndexer.fetchedStreams()`** (and the `FetchedStream` type): one entry per stream a registered generation held here folds, with the source a fetcher fetches it over and its one writer. On a container started with nothing configured, `fetchedSource` now follows the pointer: a promotion onto another stream makes that generation's source the one it names.
+- **A node whose source came from its processor module instantiates a stored generation over the contracts its own bundle carries**, as a node started with nothing configured always did, so a restart with the processor it was started with keeps folding a new-stream generation an upload registered. A source the operator configured still overrides.
+- **`@etherfold/fetcher-host`: `runFetcherLoop` takes any `CycleRunner`** (new type: `runCycle` plus `delayFor`) rather than a `FetcherHost` alone, so one loop can drive several fetchers as one cycle.

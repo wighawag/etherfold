@@ -609,6 +609,29 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 			ProcessResultType,
 			WritableStateStore
 		>['confirmReplacingSuccessorAtStart'];
+		/**
+		 * WHERE A STORED GENERATION'S SOURCE COMES FROM when it is instantiated from its
+		 * bundle: PRESENT on a deployment whose source came from its PROCESSOR MODULE, so a
+		 * stored bundle is folded over the contracts IT carries, resolved through this chain,
+		 * exactly as a node started with nothing configured resolves them
+		 * (`openWaitingFolding`). That is what lets such a node fold, after a restart, a
+		 * generation an upload registered on a NEW stream (an added event): the successor
+		 * still catching up, or the canonical generation it was promoted to.
+		 *
+		 * ABSENT where the operator CONFIGURED the source (`--deployments`,
+		 * `INDEXING_SOURCE`), which overrides a module's own contract data on every path
+		 * (ADR-0093): a stored generation is then instantiated over the configured source,
+		 * and one registered on another stream stays frozen, as a filter change's always was.
+		 */
+		sourceCarriedByBundle?: {provider: EIP1193ProviderWithoutEvents};
+		/**
+		 * WHETHER THIS PROCESS FETCHES ITS OWN STREAMS (`ReceivingIndexerOptions.fetchesItsOwnStreams`):
+		 * `true` from `run` and `build`, which hold one fetcher per stream the container lists,
+		 * so a promotion onto another stream stops folding the incumbent and its fetcher stops.
+		 * ABSENT from `index`, which is PUSH-FED: the incumbent keeps folding and its stream
+		 * keeps accepting pushes from the fetcher that is another process.
+		 */
+		fetchesItsOwnStreams?: boolean;
 	},
 ): Promise<FoldingAssembly<ABI, ProcessResultType>> {
 	const [server, parts] = await Promise.all([
@@ -646,10 +669,20 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 				identity: outcome.identity,
 				bundle,
 			});
-			return resumed.generation;
+			const carried = context.sourceCarriedByBundle;
+			if (!carried) return resumed.generation;
+			// ...over the contracts the stored bundle CARRIES, where this deployment's own
+			// source came from its processor module rather than from the operator
+			const source = await openIndexingSource<ABI, ProcessResultType>(
+				{from: 'processor-module'},
+				outcome.processorModule,
+				carried.provider,
+			);
+			return {...resumed.generation, source};
 		},
 		generation: parts.generation,
 		source: context.source,
+		...(context.fetchesItsOwnStreams === true ? {fetchesItsOwnStreams: true} : {}),
 		...(context.confirmReplacingSuccessorAtStart === undefined
 			? {}
 			: {confirmReplacingSuccessorAtStart: context.confirmReplacingSuccessorAtStart}),
@@ -719,7 +752,8 @@ export type WaitingFoldingAssembly<ABI extends Abi, ProcessResultType = unknown>
  *    `open`, exactly as an upgrading restart instantiates it (ADR-0092), and the source
  *    it folds is the one THAT BUNDLE CARRIES, resolved through the route a processor
  *    module supplies its contracts by (`resolveSource`) -- which is what the container
- *    then fetches (`ReceivingIndexer.fetchedSource`);
+ *    then fetches (`ReceivingIndexer.fetchedSource`), as it fetches the stream of a
+ *    pending successor instantiated beside it (`ReceivingIndexer.fetchedStreams`);
  *  - a canonical generation it CANNOT instantiate is logged and served frozen, and the
  *    deployment starts anyway, as a restart already does;
  *  - with no canonical generation at all it holds nothing, fetches nothing, and waits.
@@ -778,6 +812,8 @@ export async function openWaitingFolding<ABI extends Abi, ProcessResultType>(
 			});
 			return {...resumed.generation, source};
 		},
+		// ...and it is only ever a `run`, which fetches every stream it folds itself
+		fetchesItsOwnStreams: true,
 	});
 
 	return {container, db, stateOf: stateFor, foldParts};
@@ -814,6 +850,8 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 			ProcessResultType,
 			WritableStateStore
 		>['confirmReplacingSuccessorAtStart'];
+		/** `true` where this process fetches its own streams (`run`, `build`); absent where it is push-fed (`index`). */
+		fetchesItsOwnStreams?: boolean;
 	},
 ): Promise<ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>> {
 	const {stateFor} = seams;
@@ -876,6 +914,10 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		...(seams.confirmReplacingSuccessorAtStart === undefined
 			? {}
 			: {confirmReplacingSuccessorAtStart: seams.confirmReplacingSuccessorAtStart}),
+		// WHO FETCHES THIS DEPLOYMENT'S STREAMS, which decides what a promotion onto another
+		// stream does to the incumbent (ADR-0087's amendment of 2026-09-26): this process
+		// (`run`, `build`), or another one pushing to it (`index`, where it is absent).
+		...(seams.fetchesItsOwnStreams === true ? {fetchesItsOwnStreams: true} : {}),
 	});
 }
 

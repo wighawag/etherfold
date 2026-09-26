@@ -47,4 +47,4 @@ export {
 } from './config.js';
 export {createFetcherHost, FetcherHost, isRetryable, type CycleReport, type FetcherHostDependencies} from './host.js';
 export {createJSONRPCProvider} from './provider.js';
-export {runFetcherLoop, sleep, type LoopOptions, type RunSummary, type Sleep} from './schedule.js';
+export {runFetcherLoop, sleep, type CycleRunner, type LoopOptions, type RunSummary, type Sleep} from './schedule.js';
