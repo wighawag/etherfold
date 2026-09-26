@@ -1,4 +1,10 @@
-import {generationDigestOf, type Abi, type EventProcessor, type ReceivingIndexer, type StreamWriter} from '@etherfold/core';
+import {
+	generationDigestOf,
+	type Abi,
+	type EventProcessor,
+	type ReceivingIndexer,
+	type StreamWriter,
+} from '@etherfold/core';
 import type {FetcherHost, RunSummary} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
