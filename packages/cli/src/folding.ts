@@ -599,9 +599,10 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 */
 		arrived: ArrivedBundle;
 		/**
-		 * WHETHER THIS START MAY REPLACE A DIFFERENT PENDING SUCCESSOR, where the command
-		 * guards its start (`startGuardFor`, ADR-0084's amendment of 2026-09-26). Absent: it
-		 * replaces without asking, as `build` and `index` do.
+		 * WHETHER THIS START MAY REPLACE A DIFFERENT PENDING SUCCESSOR (`startGuardFor`,
+		 * ADR-0084's amendment of 2026-09-26). Every command that starts with a configured
+		 * processor -- `run`, `build`, `index` -- passes one. Absent: the container replaces
+		 * without asking, which is what an embedder that passes nothing gets.
 		 */
 		confirmReplacingSuccessorAtStart?: ReceivingIndexerOptions<
 			ABI,
@@ -870,8 +871,8 @@ async function openContainerOver<ABI extends Abi, ProcessResultType>(
 		// names and fetches whatever its first fold carries.
 		...(seams.generation === undefined ? {} : {generation: seams.generation}),
 		...(seams.source === undefined ? {} : {source: seams.source}),
-		// WHO IS ASKED before this START replaces a different pending successor, where the
-		// command guards its start at all (ADR-0084's amendment of 2026-09-26).
+		// WHO IS ASKED before this START replaces a different pending successor (ADR-0084's
+		// amendment of 2026-09-26).
 		...(seams.confirmReplacingSuccessorAtStart === undefined
 			? {}
 			: {confirmReplacingSuccessorAtStart: seams.confirmReplacingSuccessorAtStart}),

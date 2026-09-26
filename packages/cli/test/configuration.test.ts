@@ -1075,24 +1075,29 @@ describe('all six rows of the table resolve', () => {
 // ---------------------------------------------------------------------------------------------------
 // `--override` (ADR-0084's and ADR-0093's amendments of 2026-09-26). What it DOES is
 // asserted end to end in `anUploadedProcessorSurvivesARestart.test.ts`; what is pinned
-// here is the input: `run` owns it, as a flag with no variable, and every other command
-// refuses it by name.
+// here is the input: every command that STARTS with a configured processor (`run`,
+// `build`, `index`) owns it, as a flag with no variable, and every other command refuses
+// it by name.
 // ---------------------------------------------------------------------------------------------------
 
 describe('an operator lets a START replace a pending successor', () => {
-	it('is a plain flag on `run`, off unless typed, with no environment variable', () => {
-		expect(resolveCommandConfig('run', FOLDING, {}).override).toBe(false);
-		expect(resolveCommandConfig('run', {...FOLDING, override: true}, {}).override).toBe(true);
+	it('is a plain flag on `run` and `build`, off unless typed, with no environment variable', () => {
+		for (const command of ['run', 'build'] as const) {
+			expect(resolveCommandConfig(command, FOLDING, {}).override).toBe(false);
+			expect(resolveCommandConfig(command, {...FOLDING, override: true}, {}).override).toBe(true);
+		}
 		expect(INPUTS.override.variable).toBeUndefined();
 	});
 
-	it('is owned by `run` alone, and refused by every other command with the reason', () => {
-		expect(OWNERSHIP.run.override).toBe('optional');
-		for (const command of ['build', 'fetch', 'index', 'serve', 'upload'] as const) {
+	it('is owned by every command that starts with a processor, and refused by the rest with the reason', () => {
+		for (const command of ['run', 'build', 'index'] as const) {
+			expect(OWNERSHIP[command].override).toBe('optional');
+		}
+		for (const command of ['fetch', 'serve', 'upload'] as const) {
 			expect(OWNERSHIP[command].override).toBe('refused');
 		}
-		expect(() => resolveCommandConfig('build', {...FOLDING, override: true}, {})).toThrow(
-			/--override is not accepted by `etherfold build`.*only `etherfold run` guards its START/s,
+		expect(() => resolveCommandConfig('serve', {db: ':memory:', override: true}, {})).toThrow(
+			/--override is not accepted by `etherfold serve`.*this command holds no processor/s,
 		);
 	});
 });

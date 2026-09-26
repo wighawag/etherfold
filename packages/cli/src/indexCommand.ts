@@ -25,6 +25,7 @@ import {
 	streamConfigFor,
 } from './folding.js';
 import {DEFAULT_PRUNE_BUDGET, DEFAULT_PRUNE_INTERVAL_SECONDS, pruneHeldMore} from './pruning.js';
+import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
 import type {IndexConfig, Options} from './types.js';
 
 const logger = logs('etherfold');
@@ -197,6 +198,11 @@ export type IndexDependencies = {
 	log?: (...args: unknown[]) => void;
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
+	/**
+	 * WHO THIS START ASKS before it replaces a different pending successor: whether
+	 * anybody can be asked, and how (`startGuardFor`). Defaults to the terminal.
+	 */
+	startGuard?: StartGuardDependencies;
 };
 
 /** An `index` process, from the outside: what it receives on, what it folds into, and how to stop it. */
@@ -339,6 +345,11 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 				// what the ARRIVAL read: the bundle, named by its hash (ADR-0086) and kept with
 				// the registration (ADR-0092)
 				arrived,
+				// A START MAY NOT SILENTLY REPLACE A DIFFERENT PENDING SUCCESSOR (ADR-0084's
+				// amendment of 2026-09-26), on this half as on `run`: an `index -p X` against a
+				// database holding an upload still catching up asks, is refused, or goes ahead
+				// under --override.
+				confirmReplacingSuccessorAtStart: startGuardFor(config.override, deps.startGuard),
 			},
 		);
 

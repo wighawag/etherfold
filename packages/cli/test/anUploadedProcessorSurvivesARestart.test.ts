@@ -8,11 +8,11 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {build, index, run, type RunningIndexer, type RunningReceiver} from '../src/index.js';
 import type {StartGuardDependencies} from '../src/startGuard.js';
 import type {Options} from '../src/types.js';
 import {uploadMain} from '../src/uploadCommand.js';
-import {ALICE, BOB, CAROL, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {ALICE, BOB, CAROL, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
 // ---------------------------------------------------------------------------------------------------
 // AN UPLOADED PROCESSOR SURVIVES A RESTART, including one still catching up
@@ -31,7 +31,9 @@ import {ALICE, BOB, CAROL, fakeChain, START_BLOCK, transfer, ZERO} from './utils
 //    incumbent's fold then stops (ADR-0092's amendment of 2026-09-26);
 //  - a restart with a `--processor` is an arrival like any other, and a START may not
 //    SILENTLY replace a different pending successor: interactive asks, non-interactive
-//    is refused unless `--override` (ADR-0084's and ADR-0093's amendments);
+//    is refused unless `--override` (ADR-0084's and ADR-0093's amendments). That holds
+//    for EVERY start with a configured processor -- `run`, a re-run `build` and an
+//    `index` receiver -- because all three open the same container over the same slots;
 //  - a re-read and an upload still replace a pending successor without a question.
 //
 // The bundles: `nfts.bundle.js` credits a token to its recipient, `nfts-edited.bundle.js`
@@ -61,10 +63,13 @@ const LATEST_TIP = START_BLOCK + 150;
 
 const scratch: string[] = [];
 let running: RunningIndexer | undefined;
+let receiving: RunningReceiver | undefined;
 
 afterEach(async () => {
 	await running?.stop().catch(() => undefined);
 	running = undefined;
+	await receiving?.stop().catch(() => undefined);
+	receiving = undefined;
 	for (const dir of scratch.splice(0)) {
 		await rm(dir, {recursive: true, force: true}).catch(() => undefined);
 	}
@@ -524,4 +529,88 @@ describe('the deliberate arrivals on a RUNNING node still replace a pending succ
 
 		expect(asked).toEqual([]);
 	});
+});
+
+describe('a re-run `build` and an `index` receiver are STARTS too, guarded the same way', () => {
+	/** `etherfold build` over `db`: a one-shot to the tip, never the terminal. */
+	async function aBuildOver(db: RemoteSQL, processor: string, extra: Options = {}): Promise<void> {
+		await build(
+			{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', indexer: INDEXER, processor, ...extra},
+			{
+				provider: fakeChain().serve(LOGS, TIP).provider,
+				createDB: () => db,
+				env: {MAX_BLOCKS_PER_FETCH: '20'},
+				startGuard: {interactive: false},
+			},
+		);
+	}
+
+	/** `etherfold index` over `db`, on an explicit source, never the terminal. */
+	async function anIndexOver(db: RemoteSQL, processor: string, extra: Options = {}): Promise<RunningReceiver> {
+		process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+		receiving = await index(
+			{store: 'sqlite', db: ':memory:', port: '0', processor, ...extra},
+			{
+				createDB: () => db,
+				handleSignals: false,
+				log: () => {},
+				env: {INDEXING_SOURCE: JSON.stringify(SOURCE), INGEST_TOKEN: 'a-shared-secret', INDEXER_NAME: INDEXER},
+				rebuildIntervalSeconds: 0,
+				pruneIntervalSeconds: 0,
+				startGuard: {interactive: false},
+			},
+		);
+		return receiving;
+	}
+
+	/** Read the registry back through a `run` with nothing configured, which changes nothing in it. */
+	async function whatTheRegistryHolds(
+		db: RemoteSQL,
+	): Promise<{listing: Listing; storedFor: (bundle: string) => Promise<boolean>}> {
+		const after = await aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		const listing = await listingOf(after);
+		return {
+			listing,
+			storedFor: async (bundle) => bundleStoredFor(db, processorArtifactIdentity(await bytesOf(bundle))),
+		};
+	}
+
+	for (const [command, start] of [
+		['build', (db: RemoteSQL, processor: string, extra?: Options) => aBuildOver(db, processor, extra)],
+		[
+			'index',
+			async (db: RemoteSQL, processor: string, extra?: Options) => {
+				await anIndexOver(db, processor, extra);
+				await receiving?.stop();
+				receiving = undefined;
+			},
+		],
+	] as const) {
+		it(`\`${command}\` is REFUSED by name when nobody can be asked, with the registry, slots and bytes unchanged`, async () => {
+			const {db, incumbent, successor} = await aNodeStoppedMidUpgrade();
+			const third = await aThirdBundle();
+
+			await expect(start(db, third)).rejects.toThrow(new RegExp(`${successor}[\\s\\S]*REFUSED[\\s\\S]*--override`));
+			receiving = undefined;
+
+			const {listing, storedFor} = await whatTheRegistryHolds(db);
+			expect(listing.slots?.canonical?.digest).toBe(incumbent);
+			expect(listing.slots?.successor?.digest).toBe(successor);
+			expect(listing.generations.map((entry) => entry.digest).sort()).toEqual([incumbent, successor].sort());
+			expect(await storedFor(EDITED_BUNDLE)).toBe(true);
+			expect(await storedFor(third)).toBe(false);
+		});
+
+		it(`\`${command}\` replaces it -- row, state and bytes -- under \`--override\``, async () => {
+			const {db, successor} = await aNodeStoppedMidUpgrade();
+			const third = await aThirdBundle();
+
+			await start(db, third, {override: true});
+
+			const {listing, storedFor} = await whatTheRegistryHolds(db);
+			expect(listing.generations.map((entry) => entry.digest)).not.toContain(successor);
+			expect(await storedFor(EDITED_BUNDLE)).toBe(false);
+			expect(await storedFor(third)).toBe(true);
+		});
+	}
 });

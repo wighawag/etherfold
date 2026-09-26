@@ -363,7 +363,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'refused',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
-		override: 'refused',
+		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -405,7 +405,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		ingestToken: 'required',
 		promotion: 'refused',
 		dropOnPromotion: 'refused',
-		override: 'refused',
+		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -643,26 +643,28 @@ const UPLOAD_DOES_NOT_PROMOTE =
 	'`run` (--promotion / PROMOTION_POLICY): an upload registers a successor, and that policy moves the pointer.';
 
 // ---------------------------------------------------------------------------------------------------
-// WHY ONLY `run` TAKES --override
+// WHICH COMMANDS TAKE --override
 // ---------------------------------------------------------------------------------------------------
 // `--override` lets a START replace a DIFFERENT pending successor (ADR-0084's and
-// ADR-0093's amendments of 2026-09-26). `run` is the command that GUARDS its start
-// that way, because it is the one an upload reaches: a pending successor there is
-// often a deploy somebody sent to the running node, and a restart that silently
-// deleted it would make an upload a session rather than a deployment. The other
-// commands do not guard their start, so the flag would permit nothing there and is
-// refused rather than accepted and ignored. Turning one of those refusals into an
-// optional input later is additive (ADR-0048).
+// ADR-0093's amendments of 2026-09-26). EVERY command that starts with a configured
+// `--processor` over a registry guards its start that way -- `run`, `build` and
+// `index` -- because all three open the same container over the same slots
+// (`openFolding`), and a pending successor is work in progress however it arrived:
+// an `index -p X` or a `build -p X` against a database holding an upload still
+// catching up would otherwise delete it silently. `fetch` and `serve` hold no
+// processor, register nothing and so replace nothing: the flag would permit nothing
+// there, and is refused rather than accepted and ignored.
 // ---------------------------------------------------------------------------------------------------
 
-const ONLY_RUN_GUARDS_ITS_START =
-	'only `etherfold run` guards its START against replacing a different pending successor, because it is the ' +
-	'command an upload reaches (ADR-0093); this command replaces one at start-up as it always has, so --override ' +
-	'would permit nothing here.';
+const NO_PROCESSOR_TO_START =
+	'--override lets a START with a configured --processor replace a different pending successor, and this ' +
+	'command holds no processor, so it registers nothing and replaces nothing. The commands that take it are ' +
+	'`run`, `build` and `index`.';
 
 const OVERRIDE_IS_THE_NODES =
 	'an upload is already a deliberate act on a running node and replaces a pending successor without being asked. ' +
-	'--override is `etherfold run`\u2019s: it lets a node\u2019s START replace one.';
+	'--override belongs to the commands that START with a configured --processor (`run`, `build`, `index`): it ' +
+	'lets such a start replace one.';
 
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
 	run: {
@@ -681,7 +683,6 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_COMBINED,
 		promotion: NEVER_PROMOTES_BUILD,
 		dropOnPromotion: NEVER_PROMOTES_BUILD,
-		override: ONLY_RUN_GUARDS_ITS_START,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 	},
@@ -696,7 +697,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		autoSetup: NOT_SERVING_FETCH,
 		promotion: NEVER_PROMOTES_FETCH,
 		dropOnPromotion: NEVER_PROMOTES_FETCH,
-		override: ONLY_RUN_GUARDS_ITS_START,
+		override: NO_PROCESSOR_TO_START,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 	},
@@ -706,7 +707,6 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestEndpoint: INDEX_RECEIVES,
 		promotion: NEVER_PROMOTES_INDEX,
 		dropOnPromotion: NEVER_PROMOTES_INDEX,
-		override: ONLY_RUN_GUARDS_ITS_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
@@ -723,7 +723,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_SERVE,
 		promotion: NEVER_PROMOTES_SERVE,
 		dropOnPromotion: NEVER_PROMOTES_SERVE,
-		override: ONLY_RUN_GUARDS_ITS_START,
+		override: NO_PROCESSOR_TO_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
@@ -1302,6 +1302,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// the ARTIFACT carries the name its stream is stored under, so a `run`
 					// continuing it and a feed served over it find the same rows
 					indexer: resolveIndexerName(options, env),
+					// a re-run `build` against a database holding a DIFFERENT pending successor is a
+					// START like `run`'s, guarded the same way (ADR-0084's amendment of 2026-09-26)
+					override: given('override', options, env) !== undefined,
 				};
 			}
 			case 'fetch': {
@@ -1340,6 +1343,9 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					destination: resolveStoreTarget('index', options, env),
 					pruneIntervalSeconds: parsePruneInterval(given('pruneInterval', options, env)),
 					serving: resolveServing(options, env),
+					// a receiver's START registers its configured processor exactly as `run`'s does,
+					// so it is guarded the same way (ADR-0084's amendment of 2026-09-26)
+					override: given('override', options, env) !== undefined,
 					wire: {
 						kind: 'receiving',
 						indexer: requireIndexerName('index', options, env),

@@ -417,8 +417,9 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 *
 	 * ONLY THE START is asked. `add` -- a re-read, an upload -- is already a deliberate
 	 * act on a running deployment and replaces a pending successor as it always has.
-	 * ABSENT means a start replaces without asking, which is what a host that has no one
-	 * to ask (a test world, a one-shot) does.
+	 * ABSENT means a start replaces without asking, which is what a host that passes
+	 * nothing (a test world, an embedder) gets. Every CLI command that starts with a
+	 * configured processor passes one, the one-shot `build` included.
 	 */
 	confirmReplacingSuccessorAtStart?: (replacement: SuccessorReplacementAtStart) => Promise<void> | void;
 };

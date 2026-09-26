@@ -6,15 +6,16 @@ const logger = logs('etherfold');
 // ---------------------------------------------------------------------------------------------------
 // A START MAY NOT SILENTLY REPLACE A DIFFERENT PENDING SUCCESSOR
 // ---------------------------------------------------------------------------------------------------
-// ADR-0084's and ADR-0093's amendments of 2026-09-26. A `run` started with a
-// `--processor` that differs from the canonical generation's registers it as the new
+// ADR-0084's and ADR-0093's amendments of 2026-09-26. A START with a configured
+// `--processor` (`run`, `build` or `index`: all three open the same container over
+// the same slots) that differs from the canonical generation's registers it as the new
 // `successor`, and that slot holds ONE: registering into it DELETES what it held --
 // row, state and stored bytes. A pending successor is work in progress, often an
 // upload somebody sent to the running node, and for such a node the stored bytes are
 // the only copy of its code. So where a start would replace a DIFFERENT pending
 // successor, the container asks BEFORE anything is registered
-// (`ReceivingIndexerOptions.confirmReplacingSuccessorAtStart`), and this is `run`'s
-// answer:
+// (`ReceivingIndexerOptions.confirmReplacingSuccessorAtStart`), and this is the
+// CLI's answer, the same for all three:
 //
 //  - `--override` given: the start goes ahead, and says what it replaced;
 //  - an INTERACTIVE start (stdin is a TTY): it ASKS, naming both generations, and
@@ -43,7 +44,7 @@ function named(id: GenerationId): string {
 }
 
 /**
- * `run`'s answer to a start that would replace a different pending successor: go
+ * The CLI's answer to a start that would replace a different pending successor: go
  * ahead under `--override`, ask where somebody can answer, refuse by name otherwise.
  */
 export function startGuardFor(
