@@ -96,16 +96,20 @@ async function aNodeOver(
 	chain: ReturnType<typeof fakeChain>,
 	env: Record<string, string> = {},
 	sleep: RunDependencies['sleep'] = aMoment,
+	options: Partial<Options> = {},
 ): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-	running = await node(NODE, {
-		provider: chain.provider,
-		createDB: () => db,
-		sleep,
-		handleSignals: false,
-		log: () => {},
-		env: {MAX_BLOCKS_PER_FETCH: '20', ...env},
-	});
+	running = await node(
+		{...NODE, ...options},
+		{
+			provider: chain.provider,
+			createDB: () => db,
+			sleep,
+			handleSignals: false,
+			log: () => {},
+			env: {MAX_BLOCKS_PER_FETCH: '20', ...env},
+		},
+	);
 	return running;
 }
 
@@ -463,9 +467,10 @@ describe('a node takes an upload carrying NEW contracts', () => {
 // bytes on its row, and folded by nothing in this process. Two uploads and a promotion
 // make it (and a restart, so that nothing in the process folds it).
 //
-// This case used to run a RE-READ of the same identity beside the upload and compare
-// what each left behind; the re-read endpoint is deleted (ADR-0094), so the upload is
-// the only arrival left and the case pins what IT does, stated so a change is seen.
+// It used to pin that the upload left the generation in `predecessor` while this process
+// started FOLDING it: a rollback that did not roll back, and an engine for a generation
+// nobody reads. ADR-0094 (the maintainer's decision of 2026-09-26) RE-ARMS it instead:
+// it MOVES into `successor`, and the ordinary promotion takes it from there.
 // ---------------------------------------------------------------------------------------------------
 
 /**
@@ -473,7 +478,9 @@ describe('a node takes an upload carrying NEW contracts', () => {
  * generation as an unheld predecessor: two uploads and a promotion, then a restart, so
  * that nothing in the process folds it.
  */
-async function aNodeWithAnUnheldPredecessor(): Promise<{indexer: RunningIndexer; predecessor: string}> {
+async function aNodeWithAnUnheldPredecessor(
+	restartedWith: Partial<Options> = {},
+): Promise<{indexer: RunningIndexer; predecessor: string}> {
 	const db = oneDatabase();
 	const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
 	expect((await upload(first, await bytesOf(BUNDLE))).status).toBe(200);
@@ -489,7 +496,7 @@ async function aNodeWithAnUnheldPredecessor(): Promise<{indexer: RunningIndexer;
 	);
 	await stop();
 
-	const indexer = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
+	const indexer = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {}, aMoment, restartedWith);
 	const listing = await listingOf(indexer);
 	expect(listing.slots?.predecessor?.digest).toBe(predecessor);
 	// the precondition: nothing in this process folds it
@@ -498,24 +505,89 @@ async function aNodeWithAnUnheldPredecessor(): Promise<{indexer: RunningIndexer;
 }
 
 describe('uploading the bytes of the `predecessor`', () => {
-	it('names that generation, and leaves the registry, slots and folds as pinned below', async () => {
+	it('RE-ARMS it as successor, and the ordinary promotion rolls the node back onto it', async () => {
 		const original = await bytesOf(BUNDLE);
 
 		// THE UPLOAD: the predecessor's own bytes, sent, to a `node` holding it unheld
 		const byUpload = await aNodeWithAnUnheldPredecessor();
+		const rolledBackFrom = await canonicalOf(byUpload.indexer);
 		const uploaded = await upload(byUpload.indexer, original);
 		const settledUpload = await settled(byUpload.indexer);
 
 		expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(200);
 		expect(uploaded.body.generation?.digest).toBe(byUpload.predecessor);
 		expect(uploaded.body.arrival).toBe('upload');
-		// WHAT that behaviour IS today, stated so a change to it is seen: the registry
-		// RESOLVES the identity to the record it already has, which stays `predecessor`
-		// (a slot already naming it is not re-armed), and this process now FOLDS it
 		expect(uploaded.body.outcome).toBe('registered');
-		const predecessor = settledUpload.generations.find((entry) => entry.digest === byUpload.predecessor);
-		expect(predecessor).toMatchObject({canonical: false, slot: 'predecessor', folding: 'held'});
+		// it MOVED into `successor` (never named by two slots), was already level with the
+		// canonical generation (the same stream, folded to the tip before), and `on-catch-up`
+		// promoted it: the generation it replaced is what `predecessor` names now
+		expect(settledUpload.slots?.canonical?.digest).toBe(byUpload.predecessor);
+		expect(settledUpload.slots?.predecessor?.digest).toBe(rolledBackFrom);
+		expect(settledUpload.slots?.successor).toBeUndefined();
 		expect(settledUpload.generations).toHaveLength(2);
+		expect((await feedOf(byUpload.indexer, LOGS.length)).generation).toBe(byUpload.predecessor);
+		// ...and NO ENGINE runs for the generation `predecessor` names
+		expect(settledUpload.held).toEqual([byUpload.predecessor]);
+		expect(settledUpload.generations.find((entry) => entry.digest === rolledBackFrom)).toMatchObject({
+			canonical: false,
+			slot: 'predecessor',
+			folding: 'instantiable',
+		});
+	});
+
+	it('re-arms it where this process still FOLDS it, building no second fold', async () => {
+		// the same process that promoted over it: a same-stream promotion keeps the
+		// superseded fold it built, so the predecessor is still HELD here
+		const {indexer} = await aNodeServing();
+		const predecessor = generationDigestOf(indexer.container.generation);
+		await waitFor('the first upload folded to the tip', async () => {
+			return (await indexer.container.registry.readStateCursor(indexer.container.generation)) === TIP;
+		});
+		expect((await upload(indexer, await bytesOf(EDITED_BUNDLE))).status).toBe(200);
+		await waitFor(
+			'the edited successor was promoted',
+			async () => (await canonicalOf(indexer)) !== undefined && (await canonicalOf(indexer)) !== predecessor,
+		);
+		const edited = (await canonicalOf(indexer)) as string;
+		expect((await listingOf(indexer)).slots?.predecessor?.digest).toBe(predecessor);
+
+		const uploaded = await upload(indexer, await bytesOf(BUNDLE));
+		const after = await settled(indexer);
+
+		// `registered`, and NOT `unchanged`: being folded here is not being where it was asked to go
+		expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(200);
+		expect(uploaded.body).toMatchObject({outcome: 'registered', generation: {digest: predecessor}});
+		expect(after.slots?.canonical?.digest).toBe(predecessor);
+		expect(after.slots?.predecessor?.digest).toBe(edited);
+		// ONE fold for it, never two over the same state
+		expect(after.held.filter((digest) => digest === predecessor)).toHaveLength(1);
+	});
+
+	it('waits in `successor` under `manual`, folded, and is promoted only when asked', async () => {
+		const {indexer, predecessor} = await aNodeWithAnUnheldPredecessor({promotion: 'manual'});
+		const rolledBackFrom = (await canonicalOf(indexer)) as string;
+
+		const uploaded = await upload(indexer, await bytesOf(BUNDLE));
+		const after = await settled(indexer);
+
+		expect(uploaded.body.outcome).toBe('registered');
+		expect(after.slots?.canonical?.digest).toBe(rolledBackFrom);
+		expect(after.slots?.successor?.digest).toBe(predecessor);
+		expect(after.slots?.predecessor).toBeUndefined();
+		expect(after.held).toContain(predecessor);
+
+		// `manual` means only when ASKED
+		const target = (await listingOf(indexer)).generations.find((entry) => entry.digest === predecessor)!;
+		const moved = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
+			method: 'POST',
+			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json'},
+			body: JSON.stringify({stream: target.stream, processor: target.processor}),
+		});
+		expect(moved.status).toBe(200);
+		const promoted = await settled(indexer);
+		expect(promoted.slots?.canonical?.digest).toBe(predecessor);
+		expect(promoted.slots?.predecessor?.digest).toBe(rolledBackFrom);
+		expect(promoted.held).toEqual([predecessor]);
 	});
 });
 

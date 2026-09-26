@@ -787,3 +787,209 @@ describe('a re-run `build` and an `index` receiver are STARTS too, guarded the s
 		expect((await store.getCurrent<{owner: string}>('nft', TOKEN))?.owner).toBe(BOB.toLowerCase());
 	});
 });
+
+// ---------------------------------------------------------------------------------------------------
+// AN ARRIVAL OF THE PREDECESSOR RE-ARMS IT AS SUCCESSOR (ADR-0094)
+// ---------------------------------------------------------------------------------------------------
+// Sending the previous version to a `node` (`etherfold upload`), or starting `run` with
+// it again (`-p`), is a ROLLBACK through the same catch-up-and-promote path every deploy
+// takes: the generation `predecessor` names MOVES into `successor`, catches up from where
+// its own state stood, and is promoted by the policy; what it replaced becomes
+// `predecessor`, and nothing folds that one.
+// ---------------------------------------------------------------------------------------------------
+
+/** MOVE THE POINTER because an operator asked: the verb `manual` waits for. */
+async function promote(indexer: RunningIndexer, digest: string): Promise<number> {
+	const res = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
+		method: 'POST',
+		headers: {Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json'},
+		body: JSON.stringify(await identityOf(indexer, digest)),
+	});
+	return res.status;
+}
+
+/**
+ * A `node` whose first upload (`nfts.bundle.js`) folded to the tip and whose SECOND
+ * (`nfts-edited.bundle.js`) caught up and was PROMOTED over it, so `predecessor` names the
+ * first. Stopped.
+ */
+async function aNodeUpgradedByUpload(): Promise<{db: RemoteSQL; v1: string; v2: string}> {
+	const db = oneDatabase();
+	const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
+	expect((await uploadWith(first, BUNDLE)).code).toBe(0);
+	const v1 = (await digestOf(first, BUNDLE)) as string;
+	await waitFor('the first upload folded to the tip', async () => (await positionOf(first, v1)) === TIP);
+	expect((await uploadWith(first, EDITED_BUNDLE)).code).toBe(0);
+	const v2 = (await digestOf(first, EDITED_BUNDLE)) as string;
+	await waitFor('the second upload was promoted', async () => (await listingOf(first)).slots?.canonical?.digest === v2);
+	expect((await listingOf(first)).slots?.predecessor?.digest).toBe(v1);
+	await stop();
+	return {db, v1, v2};
+}
+
+/** A `run -p v1` that `run -p v2` restarted and promoted over, so `predecessor` names `v1`. Stopped. */
+async function aRunUpgradedByRestart(): Promise<{db: RemoteSQL; v1: string; v2: string}> {
+	const db = oneDatabase();
+	const first = await aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, processor: BUNDLE});
+	const v1 = (await digestOf(first, BUNDLE)) as string;
+	await waitFor('v1 folded to the tip', async () => (await positionOf(first, v1)) === TIP);
+	await stop();
+	const second = await aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, processor: EDITED_BUNDLE});
+	const v2 = (await digestOf(second, EDITED_BUNDLE)) as string;
+	await waitFor('v2 was promoted', async () => (await listingOf(second)).slots?.canonical?.digest === v2);
+	expect((await listingOf(second)).slots?.predecessor?.digest).toBe(v1);
+	await stop();
+	return {db, v1, v2};
+}
+
+/** What a rollback onto `v1` leaves: `v1` canonical, `v2` the predecessor, nothing pending, and only `v1` folded. */
+async function expectRolledBack(indexer: RunningIndexer, v1: string, v2: string): Promise<void> {
+	const listing = await listingOf(indexer);
+	expect(listing.slots?.canonical?.digest).toBe(v1);
+	expect(listing.slots?.predecessor?.digest).toBe(v2);
+	expect(listing.slots?.successor).toBeUndefined();
+	expect(listing.generations.map((entry) => entry.digest).sort()).toEqual([v1, v2].sort());
+	// NO ENGINE runs for the generation `predecessor` names
+	expect(foldedHere(indexer)).toEqual([(await identityOf(indexer, v1)).processor]);
+}
+
+describe('`etherfold upload` of the PREDECESSOR`s bundle rolls a `node` back onto it', () => {
+	it('moves it into `successor`, where it catches up from where it stood, and the next process promotes it', async () => {
+		const {db, v1, v2} = await aNodeUpgradedByUpload();
+		// the chain moved on while nothing ran, so the restarted canonical `v2` folds past
+		// where `v1` stood, and a re-armed `v1` has something to catch up
+		const wait = aParkableWait();
+		const restarted = await aNodeOver(db, fakeChain().serve(LATER, LATER_TIP), NOTHING, {sleep: wait.sleep});
+		await waitFor('v2 folded the later block', async () => (await positionOf(restarted, v2)) === LATER_TIP);
+		expect(foldedHere(restarted)).toEqual([(await identityOf(restarted, v2)).processor]);
+		expect(await positionOf(restarted, v1)).toBe(TIP);
+
+		// PARKED, so the re-arm is read before the catch-up can promote it
+		wait.state.parked = true;
+		await waitFor('the drive loop parked', async () => wait.state.parkedNow);
+		const sent = await uploadWith(restarted, BUNDLE);
+
+		expect(sent.code, sent.err).toBe(0);
+		expect(sent.out).toMatch(/\bregistered\b/);
+		expect(sent.out).toContain(v1);
+		const armed = await listingOf(restarted);
+		expect(armed.slots?.successor?.digest).toBe(v1);
+		expect(armed.slots?.predecessor).toBeUndefined();
+		expect(armed.slots?.canonical?.digest).toBe(v2);
+		await stop();
+
+		// ...and the next process takes it the rest of the way, as it would any successor
+		const again = await aNodeOver(db, fakeChain().serve(LATER, LATER_TIP));
+		await waitFor('v1 was promoted', async () => (await listingOf(again)).slots?.canonical?.digest === v1);
+		expect(await positionOf(again, v1)).toBe(LATER_TIP);
+		await expectRolledBack(again, v1, v2);
+	});
+
+	it('promotes it in the running process, with nobody asking', async () => {
+		const {db, v1, v2} = await aNodeUpgradedByUpload();
+		const restarted = await aNodeOver(db, fakeChain().serve(LATER, LATER_TIP));
+
+		expect((await uploadWith(restarted, BUNDLE)).code).toBe(0);
+
+		await waitFor('v1 was promoted', async () => (await listingOf(restarted)).slots?.canonical?.digest === v1);
+		await waitFor('v1 caught up', async () => (await positionOf(restarted, v1)) === LATER_TIP);
+		await expectRolledBack(restarted, v1, v2);
+	});
+
+	it('waits in `successor` under `manual`, folded and caught up, and is promoted only when asked', async () => {
+		const {db, v1, v2} = await aNodeUpgradedByUpload();
+		const restarted = await aNodeOver(db, fakeChain().serve(LATER, LATER_TIP), {...NOTHING, promotion: 'manual'});
+
+		expect((await uploadWith(restarted, BUNDLE)).code).toBe(0);
+		await waitFor('v1 caught up', async () => (await positionOf(restarted, v1)) === LATER_TIP);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		const waiting = await listingOf(restarted);
+		expect(waiting.slots?.canonical?.digest).toBe(v2);
+		expect(waiting.slots?.successor?.digest).toBe(v1);
+		expect(waiting.slots?.predecessor).toBeUndefined();
+		expect(foldedHere(restarted)).toContain((await identityOf(restarted, v1)).processor);
+
+		expect(await promote(restarted, v1)).toBe(200);
+		await expectRolledBack(restarted, v1, v2);
+	});
+});
+
+describe('a `run` whose `-p` names the PREDECESSOR re-arms it: a rollback by configuration (ADR-0094)', () => {
+	for (const [how, upgraded] of [
+		['after a `run -p v2` restart promoted v2', aRunUpgradedByRestart],
+		['after an upload to a `node` over the same database promoted v2', aNodeUpgradedByUpload],
+	] as const) {
+		it(`re-arms v1 and promotes it back, asking nothing, ${how}`, async () => {
+			const {db, v1, v2} = await upgraded();
+			const asked: string[] = [];
+
+			const restarted = await aRunOver(
+				db,
+				fakeChain().serve(LATER, LATER_TIP),
+				{...NOTHING, processor: BUNDLE},
+				{startGuard: {interactive: true, confirm: async (question) => (asked.push(question), false)}},
+			);
+
+			// nothing was pending, so there was nothing to ask
+			expect(asked).toEqual([]);
+			await waitFor('v1 was promoted', async () => (await listingOf(restarted)).slots?.canonical?.digest === v1);
+			await waitFor('v1 caught up', async () => (await positionOf(restarted, v1)) === LATER_TIP);
+			await expectRolledBack(restarted, v1, v2);
+		});
+	}
+
+	it('waits in `successor` under `manual`', async () => {
+		const {db, v1, v2} = await aRunUpgradedByRestart();
+
+		const restarted = await aRunOver(db, fakeChain().serve(LOGS, TIP), {
+			...NOTHING,
+			processor: BUNDLE,
+			promotion: 'manual',
+		});
+
+		const listing = await listingOf(restarted);
+		expect(listing.slots?.canonical?.digest).toBe(v2);
+		expect(listing.slots?.successor?.digest).toBe(v1);
+		expect(listing.slots?.predecessor).toBeUndefined();
+	});
+
+	it('is guarded by the start guard where a DIFFERENT generation is pending: refused by name, with nothing changed', async () => {
+		const {db, v1, v2} = await aNodeUpgradedByUpload();
+		const third = await aThirdBundle();
+		const pending = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		expect((await uploadWith(pending, third)).code).toBe(0);
+		const v3 = (await digestOf(pending, third)) as string;
+		await stop();
+
+		await expect(aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, processor: BUNDLE})).rejects.toThrow(
+			new RegExp(`${v3}[\\s\\S]*REFUSED[\\s\\S]*--override to let this start replace it`),
+		);
+		running = undefined;
+
+		const after = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		const listing = await listingOf(after);
+		expect(listing.slots?.canonical?.digest).toBe(v2);
+		expect(listing.slots?.successor?.digest).toBe(v3);
+		expect(listing.slots?.predecessor?.digest).toBe(v1);
+		expect(await bundleStoredFor(db, processorArtifactIdentity(await bytesOf(third)))).toBe(true);
+	});
+
+	it('replaces the different pending generation under `--override`, and rolls back onto v1', async () => {
+		const {db, v1, v2} = await aNodeUpgradedByUpload();
+		const third = await aThirdBundle();
+		const pending = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		expect((await uploadWith(pending, third)).code).toBe(0);
+		await stop();
+
+		const restarted = await aRunOver(db, fakeChain().serve(LOGS, TIP), {
+			...NOTHING,
+			processor: BUNDLE,
+			override: true,
+		});
+
+		await waitFor('v1 was promoted', async () => (await listingOf(restarted)).slots?.canonical?.digest === v1);
+		await expectRolledBack(restarted, v1, v2);
+		expect(await bundleStoredFor(db, processorArtifactIdentity(await bytesOf(third)))).toBe(false);
+	});
+});

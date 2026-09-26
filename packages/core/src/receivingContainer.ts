@@ -421,8 +421,9 @@ export type ReceivingIndexerOptions<ABI extends Abi, ProcessResultType = unknown
 	 * Resolving lets the start go ahead; THROWING refuses it, and `open` rethrows that
 	 * error with the registry, the slots, the state and the bytes untouched.
 	 *
-	 * It is not called where nothing would be deleted: an empty `successor` slot, a
-	 * configured generation that IS the pending successor, or one `predecessor` names.
+	 * It is not called where nothing would be deleted: an empty `successor` slot (so a
+	 * start naming the predecessor with nothing pending re-arms it unasked, ADR-0094), or
+	 * a configured generation that IS the pending successor.
 	 *
 	 * ONLY THE START is asked. `add` -- an upload, a hot update -- is already a deliberate
 	 * act on a running deployment and replaces a pending successor as it always has.
@@ -1129,16 +1130,18 @@ export class ReceivingIndexer<
 	 * question's: `add` refuses it by its own rule. Then, with a canonical generation and
 	 * a `successor` both named, it is decided by which slot names the arriving generation:
 	 *
-	 *  - NONE: it is a `replace`, `displacedBySuccessor`'s first clause read off the slots.
-	 *    Only the question is asked here; `add` performs the replacement, as it does for
-	 *    every registration.
+	 *  - NONE, or `predecessor`: it is a `replace`, `displacedBySuccessor`'s first clause
+	 *    read off the slots. A configured fold naming the predecessor is RE-ARMED into
+	 *    `successor` by `add` (ADR-0094: a rollback by configuration), so it takes that
+	 *    slot exactly as a new generation would. Only the question is asked here; `add`
+	 *    performs the replacement, as it does for every registration. With nothing
+	 *    pending there is nothing to ask, and the re-arm goes ahead unasked.
 	 *  - `canonical`: it is a `discard` (ADR-0094's third consequence: configuration is the
 	 *    truth on a configured command). Asked, then performed HERE (`discardThePendingSuccessor`),
 	 *    because `add` registers nothing for a generation already canonical and so
 	 *    displaces nothing.
 	 *  - `successor`: the configured fold is the pending successor itself, and nothing
 	 *    changes.
-	 *  - `predecessor`: unchanged here (`an-arrival-of-the-predecessor-re-arms-it-as-successor`).
 	 */
 	private async confirmTheStartMayReplace(spec: ReceivedGenerationSpec<ABI, ProcessResultType, State>): Promise<void> {
 		const confirm = this.options.confirmReplacingSuccessorAtStart;
@@ -1152,7 +1155,7 @@ export class ReceivingIndexer<
 		const pending = slots.successor;
 		if (!pending || !slots.canonical) return;
 		const holding = slotHolding(slots, arriving);
-		if (holding === undefined) {
+		if (holding === undefined || holding === 'predecessor') {
 			await confirm?.({kind: 'replace', pending, arriving});
 			return;
 		}
@@ -1768,6 +1771,21 @@ export class ReceivingIndexer<
 			refuseFoldWithNoStream(context.stream);
 		}
 
+		// A GENERATION THIS PROCESS ALREADY FOLDS IS NOT BUILT TWICE: a second fold over one
+		// generation's state would be two engines writing it. Before the factories, so nothing
+		// is opened for it either. The arrival still REGISTERS, which is what re-arms a held
+		// predecessor (ADR-0094), and the policy still speaks, exactly as the chain-facing
+		// twin resolves one (`Indexer.holdGeneration`).
+		const alreadyHeld =
+			spec.processorIdentity === undefined
+				? undefined
+				: this.folds.find((fold) =>
+						sameGeneration(fold.record, {stream: context.stream, processor: spec.processorIdentity as string}),
+					);
+		if (alreadyHeld) {
+			return (await this.registerHeld(alreadyHeld)) as HeldFold<ABI, ProcessResultType, S>;
+		}
+
 		// STATE FIRST, then the fold over it (ADR-0043). The identity is the ARRIVAL's
 		// (ADR-0086), read ONCE here -- after the factories, which is what lets an arrival
 		// with no bytes derive one from the object it just built -- and handed DOWN to the
@@ -1799,9 +1817,11 @@ export class ReceivingIndexer<
 		await this.replaceTheSuccessor(wanted, registeredBefore, slotsBefore);
 		// INTO THE `successor` SLOT, which holds AT MOST ONE. The registry decides what
 		// that means for this identity: the first generation of an empty registry takes
-		// `canonical` instead, and a generation some slot ALREADY names stays where it is
-		// -- so a restart on the canonical processor stays canonical, and one on the
-		// generation a revert returned to is not re-armed by the act of starting up.
+		// `canonical` instead, a generation `canonical` or `successor` ALREADY names stays
+		// where it is -- so a restart on the canonical processor stays canonical -- and one
+		// `predecessor` names is RE-ARMED: it MOVES into `successor` and the policy then
+		// promotes it like any successor (ADR-0094: an upload or a configured start naming
+		// it is a rollback, through the same catch-up-and-promote path every deploy takes).
 		//
 		// ...and WITH ITS BUNDLE, in the same commit as the record (ADR-0092). This is the
 		// ONE place this container registers a generation, so it is the one place its code
@@ -1823,6 +1843,34 @@ export class ReceivingIndexer<
 		this.noteCanonical(canonicalOnAdd ? record : canonicalBefore);
 		await this.applyPolicyTo(fold as HeldFold<ABI, ProcessResultType, unknown>);
 		return fold;
+	}
+
+	/**
+	 * AN ARRIVAL OF A GENERATION THIS PROCESS ALREADY FOLDS: registered again into
+	 * `successor`, with no second fold built.
+	 *
+	 * The registry decides what that means, by the same rules as any registration: a
+	 * generation `canonical` or `successor` names stays where it is (nothing changes), and
+	 * one `predecessor` names is RE-ARMED into `successor` (ADR-0094) -- the case a
+	 * same-stream promotion leaves, where the superseded fold this process built goes on
+	 * being held. What `successor` held is replaced first, as by any arrival. The policy
+	 * then speaks about the fold it already holds.
+	 */
+	private async registerHeld(
+		held: HeldFold<ABI, ProcessResultType, unknown>,
+	): Promise<HeldFold<ABI, ProcessResultType, unknown>> {
+		const registeredBefore = await this.registry.list();
+		const slotsBefore = await this.registry.slots();
+		this.noteCanonical(slotsBefore.canonical);
+		await this.replaceTheSuccessor(held.record, registeredBefore, slotsBefore);
+		await this.registry.create(held.record, {slot: 'successor'});
+		namedLogger.info(
+			`the fold {stream: ${held.record.stream}, processor: ${held.record.processor}} is already held by this ` +
+				`process, so no second fold was built over its state; it was registered again, which re-arms it as ` +
+				`\`successor\` where \`predecessor\` named it (ADR-0094).`,
+		);
+		await this.applyPolicyTo(held);
+		return held;
 	}
 
 	/**
@@ -2245,9 +2293,14 @@ export class ReceivingIndexer<
 	 *   operator deliberately reverted away from -- undoing a revert by restarting
 	 *   (ADR-0046). It is MEASURED rather than argued: drop this clause and a restart
 	 *   after a revert under `immediate` moves the pointer straight back
-	 *   (`packages/cli/test/aRestartFinishesTheUpgrade.test.ts`). The registry keeps
-	 *   such a generation where it is (`create`, rule 2), so it never enters
-	 *   `successor` and is armed under no policy value.
+	 *   (`packages/cli/test/aRestartFinishesTheUpgrade.test.ts`, on `node`). A generation
+	 *   `predecessor` names is armed under no policy value WHILE it is there. What moves
+	 *   it is an ARRIVAL naming it (an upload, or a configured start whose `-p` names it):
+	 *   the registry RE-ARMS it into `successor` (`create`, rule 3, ADR-0094), and from
+	 *   then it is a successor and this clause no longer names it. On a configured `run`
+	 *   that includes a restart with an unchanged `-p` after a revert: configuration is
+	 *   the truth there (ADR-0094), so a revert that should outlive a restart is made by
+	 *   changing `-p` too.
 	 * - **What `canonical` names, which is INTENT plus defence in depth.** This is the
 	 *   hazard `immediate` posed at `open` -- promoting whatever the host happened to
 	 *   be built with -- and it is worth saying that the pointer would not actually

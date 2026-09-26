@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # `run` is CONFIGURED and never receives code; a new command, `node`, receives uploads and is never configured with code
 
 A combined deployment can learn what to run from two places: its CONFIGURATION (`-p`, `--deployments`, `INDEXING_SOURCE`) and its REGISTRY, fed by uploads (ADR-0085's amendment of 2026-09-22, ADR-0092). While one process accepted both, every interaction between them needed a rule, and each rule needed another: a configured source that an upload must match, a start that may not silently replace an uploaded successor (`--override`), and finally a restart with an unchanged `-p v1` that would silently roll back a `v2` uploaded and promoted since, because a configured processor is an arrival. The last one has no good answer, because the same `-p v1` means "run v1" before any upload and "this configuration was never updated" after one. We decide that **each command has exactly ONE source of truth**:

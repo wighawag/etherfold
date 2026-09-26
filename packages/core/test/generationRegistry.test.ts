@@ -333,20 +333,69 @@ describe('a generation is held by a durable named SLOT', () => {
 		expect(await registry.list()).toEqual([incumbent, first, second]);
 	});
 
-	it('leaves a generation some slot ALREADY names exactly where it is', async () => {
+	it('leaves a generation `canonical` or `successor` ALREADY names exactly where it is', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+
+		// a restart registering the canonical generation, or the pending successor itself:
+		// it RESOLVES to the one record it already is, and nothing moves
+		expect(await registry.create(idOf(STREAM_A, PROC_A), {slot: 'successor'})).toEqual(incumbent);
+		expect(await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'})).toEqual(successor);
+
+		expect(await registry.list()).toEqual([incumbent, successor]);
+		expect(await registry.slots()).toEqual({canonical: incumbent, successor});
+	});
+
+	it('RE-ARMS what `predecessor` names: an arrival of it MOVES it into `successor`, and `predecessor` is emptied', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+		await registry.moveCanonicalTo(successor);
+		expect(await registry.slots()).toEqual({canonical: successor, predecessor: incumbent});
+
+		// a ROLLBACK by arrival (ADR-0094): the bytes of the generation the pointer came
+		// off, sent again or configured again. It RESOLVES to the one record it already is
+		// (no second row, no new bytes), and that record MOVES: one generation is never
+		// named by two slots, so it leaves `predecessor` in the same commit it takes
+		// `successor`. The pointer does NOT move: promoting it is the policy's.
+		expect(await registry.create(idOf(STREAM_A, PROC_A), {slot: 'successor'})).toEqual(incumbent);
+
+		expect(await registry.list()).toEqual([incumbent, successor]);
+		expect(await registry.slots()).toEqual({canonical: successor, successor: incumbent});
+
+		// ...and the ordinary promotion then makes what it replaces the predecessor
+		await registry.moveCanonicalTo(incumbent);
+		expect(await registry.slots()).toEqual({canonical: incumbent, predecessor: successor});
+	});
+
+	it('re-arms the predecessor over a DIFFERENT pending successor by taking the slot, which holds one', async () => {
+		const world = memoryPort();
+		const registry = await openGenerationRegistry(world.port, CAPS);
+		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
+		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
+		await registry.moveCanonicalTo(successor);
+		const pending = await registry.create(idOf(STREAM_B, PROC_B), {slot: 'successor'});
+		expect(await registry.slots()).toEqual({canonical: successor, successor: pending, predecessor: incumbent});
+
+		await registry.create(idOf(STREAM_A, PROC_A), {slot: 'successor'});
+
+		// the pending one is left named by NO slot, which is what makes it collectable; the
+		// caller drops it (`displacedBySuccessor`), exactly as any replaced successor
+		expect(await registry.slots()).toEqual({canonical: successor, successor: incumbent});
+		expect(await registry.list()).toEqual([incumbent, successor, pending]);
+	});
+
+	it('does not re-arm the predecessor on a registration that names no slot', async () => {
 		const world = memoryPort();
 		const registry = await openGenerationRegistry(world.port, CAPS);
 		const incumbent = await registry.create(idOf(STREAM_A, PROC_A));
 		const successor = await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'});
 		await registry.moveCanonicalTo(successor);
 
-		// a restart registering the generation a revert returned FROM, or to: it RESOLVES
-		// to the one record it already is, and is not re-armed as a pending successor by
-		// the act of starting up
-		expect(await registry.create(idOf(STREAM_A, PROC_A), {slot: 'successor'})).toEqual(incumbent);
-		expect(await registry.create(idOf(STREAM_A, PROC_B), {slot: 'successor'})).toEqual(successor);
-
-		expect(await registry.list()).toEqual([incumbent, successor]);
+		expect(await registry.create(idOf(STREAM_A, PROC_A))).toEqual(incumbent);
 		expect(await registry.slots()).toEqual({canonical: successor, predecessor: incumbent});
 	});
 
@@ -788,7 +837,21 @@ describe('WHAT A REGISTRATION INTO `successor` DISPLACES, and the one axis the t
 		}
 	});
 
-	it('displaces NOTHING when the registry has no canonical generation or a slot already names the arrival', () => {
+	it('displaces the pending successor when the arrival is what `predecessor` names, since it takes that slot', () => {
+		// a RE-ARM (ADR-0094): the arriving generation moves out of `predecessor` into
+		// `successor`, so whatever `successor` held is replaced exactly as by any arrival
+		const slots = {canonical: CANONICAL, predecessor: NO_FOLD_HERE, successor: PENDING};
+		for (const unheldIsCollectable of [true, false]) {
+			expect(
+				displacedBySuccessor(idOf(NO_FOLD_HERE.stream, NO_FOLD_HERE.processor), RECORDS, slots, {
+					heldHere,
+					unheldIsCollectable,
+				}).map((record) => record.processor),
+			).toEqual(['pending']);
+		}
+	});
+
+	it('displaces NOTHING when the registry has no canonical generation, or `canonical` or `successor` already names the arrival', () => {
 		for (const unheldIsCollectable of [true, false]) {
 			// the first registration takes `canonical` and supersedes nobody...
 			expect(displacedBySuccessor(ARRIVING, RECORDS, {}, {heldHere, unheldIsCollectable})).toEqual([]);
@@ -799,6 +862,15 @@ describe('WHAT A REGISTRATION INTO `successor` DISPLACES, and the one axis the t
 					idOf(CANONICAL.stream, CANONICAL.processor),
 					RECORDS,
 					{canonical: CANONICAL},
+					{heldHere, unheldIsCollectable},
+				),
+			).toEqual([]);
+			// ...and the pending successor arriving again takes nobody's place either
+			expect(
+				displacedBySuccessor(
+					idOf(PENDING.stream, PENDING.processor),
+					RECORDS,
+					{canonical: CANONICAL, successor: PENDING},
 					{heldHere, unheldIsCollectable},
 				),
 			).toEqual([]);

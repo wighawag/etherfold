@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {node, run, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
@@ -35,8 +35,14 @@ import {ALICE, BOB, CONTRACT, fakeChain, START_BLOCK, transfer, ZERO} from './ut
 //                          has caught the incumbent up;
 //   the revert HOLDS       a restart after a deliberate revert does NOT
 //                          re-promote what was reverted away from, under any
-//                          policy value -- the generation `predecessor` names is
-//                          never armed, however it arrives.
+//                          policy value, unless its CONFIGURATION names it: the
+//                          generation `predecessor` names is never armed while it
+//                          is there. A `node` (nothing configured) and a `run`
+//                          whose `-p` names the reverted-TO generation keep the
+//                          revert; a `run` restarted with an unchanged `-p` names
+//                          the reverted-FROM generation, and configuration is the
+//                          truth on `run` (ADR-0094), so it is RE-ARMED and
+//                          promoted like any arrival.
 // ---------------------------------------------------------------------------------------------------
 
 const INDEXER = 'nfts';
@@ -372,7 +378,8 @@ describe('a restart with a changed processor FINISHES the upgrade', () => {
 });
 
 describe('a REVERT survives a restart: what was reverted away from is never re-promoted', () => {
-	it('holds the pointer where the operator put it, under the default', async () => {
+	/** A `run` upgraded by restart, whose operator then moved the pointer BACK, and stopped. */
+	async function aRevertedDeployment(): Promise<{db: RemoteSQL; path: string; incumbent: string; successor: string}> {
 		const {db, path, indexer, incumbent, successor} = await aRestartWithAChangedProcessor();
 		await waitUntilCanonical(indexer, successor);
 
@@ -383,37 +390,68 @@ describe('a REVERT survives a restart: what was reverted away from is never re-p
 		expect(await promote(indexer, incumbent)).toBe(200);
 		expect(await canonicalOf(indexer)).toBe(incumbent);
 		await stop();
+		return {db, path, incumbent, successor};
+	}
 
-		// ...and then the deployment is restarted on the SAME bytes the operator
-		// reverted away from, which is what a redeploy of the unchanged build does.
-		// `predecessor` names that generation, so the registration leaves it exactly
-		// where it is and nothing arms it.
+	/** The same database, restarted as a `node`: nothing configured, so nothing arrives (ADR-0094). */
+	async function aNodeOver(db: RemoteSQL, extra?: Partial<Options>): Promise<RunningIndexer> {
+		process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+		const {processor: _none, ...rest} = optionsFor('', extra);
+		running = await node(rest, {
+			provider: fakeChain().serve(LOGS, TIP).provider,
+			createDB: () => db,
+			sleep: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			},
+			handleSignals: false,
+			log: () => {},
+			env: {MAX_BLOCKS_PER_FETCH: '20'},
+		});
+		return running;
+	}
+
+	for (const promotion of [undefined, 'immediate'] as const) {
+		const under = promotion ?? 'the default';
+		it(`holds the pointer where the operator put it on a \`node\` restart, under ${under}`, async () => {
+			const {db, incumbent, successor} = await aRevertedDeployment();
+
+			// `predecessor` names the reverted-FROM generation, and nothing ARRIVES to move
+			// it: a `node` is configured with no code, so the most eager policy there is has
+			// nothing in `successor` to promote.
+			const restarted = await aNodeOver(db, promotion ? {promotion} : {});
+			await new Promise((resolve) => setTimeout(resolve, 100));
+
+			expect(await canonicalOf(restarted)).toBe(incumbent);
+			expect((await feedOf(restarted)).generation).toBe(incumbent);
+			expect((await listingOf(restarted)).slots?.predecessor?.digest).toBe(successor);
+		});
+
+		it(`holds it on a \`run\` whose \`-p\` names the reverted-TO generation, under ${under}`, async () => {
+			const {db, path, incumbent, successor} = await aRevertedDeployment();
+			// the revert made durable in configuration: the path carries the reverted-TO bytes again
+			await writeFile(path, processorBundleSource({credit: 'to'}), 'utf-8');
+
+			const restarted = await aRunOver(db, path, promotion ? {promotion} : {});
+			await new Promise((resolve) => setTimeout(resolve, 100));
+
+			expect(await canonicalOf(restarted)).toBe(incumbent);
+			expect((await listingOf(restarted)).generations.map((entry) => entry.digest).sort()).toEqual(
+				[incumbent, successor].sort(),
+			);
+			expect((await listingOf(restarted)).slots?.predecessor?.digest).toBe(successor);
+		});
+	}
+
+	it('is rolled FORWARD by a `run` restarted with an unchanged `-p`: configuration is the truth on `run` (ADR-0094)', async () => {
+		const {db, path, incumbent, successor} = await aRevertedDeployment();
+
+		// the SAME bytes the operator reverted away from, which is what a redeploy of the
+		// unchanged build does. Its `-p` names what `predecessor` holds, which is an
+		// ARRIVAL of it: re-armed into `successor`, level, and promoted like any successor.
+		// A revert on `run` that should outlive a restart is made by changing `-p` too.
 		const restarted = await aRunOver(db, path);
-		await new Promise((resolve) => setTimeout(resolve, 100));
 
-		expect(await canonicalOf(restarted)).toBe(incumbent);
-		expect((await feedOf(restarted)).generation).toBe(incumbent);
-		expect((await listingOf(restarted)).generations.map((entry) => entry.digest).sort()).toEqual(
-			[incumbent, successor].sort(),
-		);
-	});
-
-	it('holds it under `immediate` too, which is the value with the most to say', async () => {
-		const {db, path, indexer, incumbent, successor} = await aRestartWithAChangedProcessor();
-		await waitUntilCanonical(indexer, successor);
-		expect(await promote(indexer, incumbent)).toBe(200);
-		await stop();
-
-		// the restart comes up holding the reverted-FROM fold and the most eager policy
-		// there is. It promotes what `successor` names and that slot holds nothing: a
-		// generation `predecessor` names is not a pending successor, whatever value is
-		// configured.
-		const restarted = await aRunOver(db, path, {promotion: 'immediate'});
-		await new Promise((resolve) => setTimeout(resolve, 100));
-
-		expect(await canonicalOf(restarted)).toBe(incumbent);
-		expect((await listingOf(restarted)).generations.map((entry) => entry.digest).sort()).toEqual(
-			[incumbent, successor].sort(),
-		);
+		await waitUntilCanonical(restarted, successor);
+		expect((await listingOf(restarted)).slots?.predecessor?.digest).toBe(incumbent);
 	});
 });
