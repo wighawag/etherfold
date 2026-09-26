@@ -255,6 +255,12 @@ describe('`node` over a database a `run` wrote folds what the registry holds', (
 			folding: 'frozen',
 			frozen: {reason: 'stream-not-fetched', message: expect.any(String)},
 		});
+		// ...in words that describe THIS situation: a source the bundle does not carry, not a
+		// revert (none happened) and not a stream this idle node claims to be fetching
+		const message = status.cursor.canonical?.frozen?.message as string;
+		expect(message).toMatch(/registered on the stream .* resolve to the stream .* not available here/s);
+		expect(message).not.toMatch(/revert/i);
+		expect(message).not.toMatch(/it fetches/);
 		expect((await listingOf(receiving)).generations.find((entry) => entry.digest === canonical.digest)?.folding).toBe(
 			'frozen',
 		);

@@ -2047,15 +2047,33 @@ export class ReceivingIndexer<
 		const fetched = this.heldStreams();
 		const fetchesAnother = occasion === 'move' && fetched.size > 0 && !fetched.has(record.stream);
 		if (context.stream !== record.stream || fetchesAnother) {
-			// A FILTER CHANGE's generation, not broken code: its stream is not one this
-			// deployment fetches, so the move goes ahead and it answers reads frozen, as a
-			// revert across a filter change always did (ADR-0057).
-			const fetching = fetched.size > 0 ? [...fetched].join(', ') : context.stream;
+			// Not broken code: its stream is not one this deployment folds, so it answers
+			// reads frozen (ADR-0057). Two situations reach here, and the words tell them
+			// apart because an operator acts on the message. At a MOVE it is a revert across a
+			// filter change. At OPEN no revert happened: the stored bundle folds a different
+			// stream than the one its generation was registered on, typically a `node`
+			// opening a database a `run` wrote with a source the bundle does not carry
+			// (`--deployments` / `INDEXING_SOURCE`, ADR-0094).
+			if (occasion === 'move') {
+				const fetching = fetched.size > 0 ? [...fetched].join(', ') : context.stream;
+				return {
+					fold: undefined,
+					frozen:
+						`its stream ${record.stream} is not one this deployment fetches (it fetches ${fetching}), ` +
+						`so its code was loaded and nothing folds it: a revert across a filter change is a freeze`,
+				};
+			}
+			const from = spec.source
+				? 'the contracts its stored bundle carries'
+				: 'the source this deployment was configured with';
 			return {
 				fold: undefined,
 				frozen:
-					`its stream ${record.stream} is not one this deployment fetches (it fetches ${fetching}), so its ` +
-					`code was loaded and nothing folds it: a revert across a filter change is a freeze`,
+					`it was registered on the stream ${record.stream}, but ${from} resolve to the stream ${context.stream}, ` +
+					`so its code was loaded and nothing folds it: it was indexed over a source that is not available ` +
+					`here (for example a \`--deployments\` or \`INDEXING_SOURCE\` given to the \`run\` that wrote it, which ` +
+					`its bundle does not carry). Its state still answers reads; a \`run\` given the source it was indexed over folds it ` +
+					`again, and on a \`node\` the next upload takes over.`,
 			};
 		}
 		let state: State;
