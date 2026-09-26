@@ -1,0 +1,21 @@
+layout {
+	pane split_direction="vertical" {
+		pane name="local chain (anvil)" command="pnpm" {
+			args "chain"
+		}
+		pane name="deploy the contract" command="pnpm" {
+			args "deploy:contract"
+		}
+	}
+	pane split_direction="vertical" {
+		pane name="etherfold node" command="pnpm" {
+			args "indexer"
+		}
+		pane name="watch, build and upload" command="pnpm" {
+			args "dev"
+		}
+	}
+	pane name="shell: pnpm activity, curl localhost:2000/status" command="bash" {
+		args "-c" "${SHELL-bash}"
+	}
+}

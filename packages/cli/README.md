@@ -130,6 +130,8 @@ ADMIN_TOKEN=dev etherfold upload ./dist/processor.bundle.js --to http://localhos
 
 `--promotion immediate` makes each upload answer at once, before it has caught up, which is what you want while iterating on a handler; leave it at the default for anything users read.
 
+`examples/node-dev-loop` is this loop, runnable: a local chain (anvil), a contract, a `node`, and `as-soon -w src` rebuilding and uploading on every save, with a walk through editing a handler, adding an event, restarting and rolling back.
+
 ## `etherfold build` -- one shot, to the tip, then exit
 
 ```sh
