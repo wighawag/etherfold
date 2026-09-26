@@ -5,6 +5,12 @@ blockedBy: []
 covers: []
 ---
 
+> **DRIFT CORRECTION, 2026-09-26 (conductor, Gate 3 on PR #204).** The first build is good and is KEPT; this re-drive continues from its branch. Everything else in it passed Gate 3. It was blocked for ONE reason: the new rule "a promotion onto ANOTHER stream stops folding the incumbent, however it arrived" was put in `ReceivingIndexer` for EVERY host, so it also changed hosts that do not fetch: the split `index` and the server package's receiving hosts, fed by an external fetcher's pushes. There the incumbent's stream now stops accepting pushes after such a promotion (`packages/server/test/theOperatorReclaimsWhatNoSlotNames.test.ts` had to change from all three `held` to `frozen`/`no-instantiator` for the first). This task said the split deployment is unchanged, and ADR-0087's amendment says it is "untouched"; both must be true. Fix exactly this:
+>
+> 1. Stop folding a cross-stream incumbent at promotion ONLY on a host that fetches its own streams (the CLI's `run`, and `build` if it applies), via an explicit option the host passes to the container. A push-fed receiver (`index`, the server's hosts) keeps today's retention: the incumbent goes on folding and its stream goes on accepting pushes.
+> 2. Restore `theOperatorReclaimsWhatNoSlotNames.test.ts` to its original assertions (all three `held`). Add one assertion that a push-fed receiver keeps folding a cross-stream incumbent after a promotion and its stream still accepts a push.
+> 3. Make ADR-0087's and ADR-0093's amendments, the CLI README and CONTEXT.md say exactly where the rule applies.
+
 ## What to build
 
 The maintainer decided on 2026-09-26 that an upload carrying DIFFERENT contracts (a new event a new handler needs, an upgraded contract with new events) is a legitimate change and registers a `successor` on its new stream rather than being refused (ADR-0085's relocated decisions, ADR-0093). It registers. It then never advances: a `run` builds ONE fetcher over ONE source (the configured one, or with nothing configured `ReceivingIndexer.fetchedSource`, the first fold's source, set once), so nothing appends to the successor's stream, it cannot catch up and is never promoted. A restart does not help, because the fetched source is again the canonical generation's. This is the observation `an-upload-on-a-new-stream-is-never-fetched-by-a-running-node`, and it means The Graph-style "add an event" deploy does not complete.
