@@ -618,6 +618,7 @@ function valueFor(input: ConfigInput): Options {
 	// a plain BOOLEAN flag: commander materialises `true` only where it was typed, so
 	// a string here would read as "not given" and the refusal would never be reached
 	if (input === 'dropOnPromotion') return {dropOnPromotion: true};
+	if (input === 'override') return {override: true};
 	const key = input === 'source' ? 'deployments' : input;
 	return {[key]: 'x'} as Options;
 }
@@ -1066,5 +1067,32 @@ describe('all six rows of the table resolve', () => {
 				},
 			),
 		).not.toHaveProperty('destination');
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// WHETHER A START MAY REPLACE A DIFFERENT PENDING SUCCESSOR, as a configuration input
+// ---------------------------------------------------------------------------------------------------
+// `--override` (ADR-0084's and ADR-0093's amendments of 2026-09-26). What it DOES is
+// asserted end to end in `anUploadedProcessorSurvivesARestart.test.ts`; what is pinned
+// here is the input: `run` owns it, as a flag with no variable, and every other command
+// refuses it by name.
+// ---------------------------------------------------------------------------------------------------
+
+describe('an operator lets a START replace a pending successor', () => {
+	it('is a plain flag on `run`, off unless typed, with no environment variable', () => {
+		expect(resolveCommandConfig('run', FOLDING, {}).override).toBe(false);
+		expect(resolveCommandConfig('run', {...FOLDING, override: true}, {}).override).toBe(true);
+		expect(INPUTS.override.variable).toBeUndefined();
+	});
+
+	it('is owned by `run` alone, and refused by every other command with the reason', () => {
+		expect(OWNERSHIP.run.override).toBe('optional');
+		for (const command of ['build', 'fetch', 'index', 'serve', 'upload'] as const) {
+			expect(OWNERSHIP[command].override).toBe('refused');
+		}
+		expect(() => resolveCommandConfig('build', {...FOLDING, override: true}, {})).toThrow(
+			/--override is not accepted by `etherfold build`.*only `etherfold run` guards its START/s,
+		);
 	});
 });

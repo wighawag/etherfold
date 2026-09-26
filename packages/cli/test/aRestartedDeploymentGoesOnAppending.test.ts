@@ -528,9 +528,11 @@ describe('the STREAM survives the restart-and-replace, end to end', () => {
 		);
 		await stop();
 
-		// the SECOND restart, whose successor REPLACES the one the slot holds
+		// the SECOND restart, whose successor REPLACES the one the slot holds. A START may not
+		// do that silently (ADR-0084's amendment of 2026-09-26), so this one says it means to,
+		// exactly as a pipeline that redeploys per commit does in its deploy configuration
 		await writeFile(path, processorBundleSource({credit: 'to', marker: 'a third fold'}), 'utf-8');
-		const third = await aRunOver(db, path, [...HISTORY, ...AFTER_THE_RESTART], SECOND_TIP, manual);
+		const third = await aRunOver(db, path, [...HISTORY, ...AFTER_THE_RESTART], SECOND_TIP, {...manual, override: true});
 		await settle(third.chain);
 
 		// the slot's previous occupant really did go, records and all
