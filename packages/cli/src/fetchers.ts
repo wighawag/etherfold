@@ -7,8 +7,8 @@ const logger = logs('etherfold');
 // ---------------------------------------------------------------------------------------------------
 // ONE FETCHER PER STREAM THIS DEPLOYMENT FETCHES, kept in step with the folds it holds
 // ---------------------------------------------------------------------------------------------------
-// A `run` used to build ONE fetcher over ONE source: the configured one, or, with nothing
-// configured, the source its first fold carried (ADR-0093). So an upload carrying
+// A deployment used to build ONE fetcher over ONE source: the configured one, or, on a
+// node configured with none, the source its first fold carried (ADR-0093). So an upload carrying
 // DIFFERENT contracts (the ordinary "add an event" deploy) registered a successor on a
 // new stream that nothing appended to: it never caught up and was never promoted.
 //
@@ -95,7 +95,7 @@ export class StreamFetchers<ABI extends Abi> implements CycleRunner {
 		}
 	}
 
-	/** How many streams are being fetched: zero only on a `run` still WAITING for a processor (ADR-0093). */
+	/** How many streams are being fetched: zero only on a `node` still WAITING for a processor (ADR-0093). */
 	get size(): number {
 		return this.hosts.size;
 	}

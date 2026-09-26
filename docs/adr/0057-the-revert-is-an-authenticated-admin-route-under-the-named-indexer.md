@@ -4,6 +4,8 @@
 
 > **AMENDED 2026-09-26 (ADR-0085): the command set is no longer pinned at five verbs; it grew a sixth, `upload`.** The revert is still an HTTP route and not a verb, for the reason that was always the load-bearing one. Read the last amendment.
 
+> **AMENDED 2026-09-26 (ADR-0094): the command set is SEVEN, with `node` a sixth deployment intent and `upload` its client.** Nothing about the revert changes. Read the final amendment.
+
 Moving the **canonical pointer** BACK is the operator's undo for a bad upgrade, and it needed an AFFORDANCE. It is `POST /{indexer}/admin/canonical-generation` on the indexer-server, guarded by a NEW `ADMIN_TOKEN` that fails closed when unset, and it moves the pointer to any REGISTERED generation whether or not this host holds a FOLD for it.
 
 **HTTP, because it is the only affordance that exists on every deployment shape.** On Cloudflare there is no CLI at all -- a Worker is reachable only over HTTP -- so a flag on a command cannot serve a serverless deployment, and a library call with no operator surface does not deliver the story anywhere. The command set is pinned at five verbs with no default command (`one-command-runs-the-whole-pipeline`), so a sixth is unavailable, and hanging `--revert` on `run` would conflate a long-running fold with a one-shot control action. `/admin/setup` already exists, so `/admin` is an ESTABLISHED namespace rather than a new class of surface; what is new is the `/{indexer}` prefix on it, because a pointer belongs to ONE named indexer while `setup` migrates the fixed tables and knows no name. The CLI inherits the route by hosting the same app, so there is one implementation and not one per runtime.
@@ -49,3 +51,8 @@ It does NOT re-open the revert question, because the pinned verb set was never t
 
 The credential is the same one on both sides: `upload` presents `ADMIN_TOKEN`, the name this guard checks, and never `INGEST_TOKEN`, for this ADR's reasons.
 
+## Amendment, 2026-09-26 (ADR-0094): seven commands, and the upload route is `node`'s
+
+The previous amendment counted `upload` as the sixth verb beside five deployment intents, and said it addresses "a running node". ADR-0094 added a sixth INTENT, **`etherfold node`**: `run`'s chain, store and database with NO processor and NO source, receiving its code only by upload. So the set is SEVEN: six deployment intents (`run`, `node`, `build`, `fetch`, `index`, `serve`) and one client (`upload`), and the node `upload` addresses is a `node`, the one command that serves `POST /{indexer}/admin/upload`; a configured `run` answers it `501 upload-not-held`.
+
+`node` is a deployment intent like the five, a way to run a process, which is why it is a command rather than a route and does not touch this ADR's argument: the revert, the re-read and the reclaim stay admin routes for the reachability reason above, and the pointer move is served on a `node` exactly as on `run`, behind the same `ADMIN_TOKEN`.

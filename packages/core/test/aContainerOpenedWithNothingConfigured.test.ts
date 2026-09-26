@@ -9,9 +9,10 @@ import {abi, anIncumbentThatHasFolded, CONTRACT, FINALITY, SOURCE, world} from '
 // ---------------------------------------------------------------------------------------------------
 // A CONTAINER OPENED WITH NOTHING CONFIGURED, at the container seam (ADR-0093)
 // ---------------------------------------------------------------------------------------------------
-// A `run` node may be started with no processor and no source, and waits for its
-// first upload. The end-to-end claim is asserted over a real deployment in
-// `packages/cli/test/aRunNodeWithNothingConfiguredWaits.test.ts`; what is asserted
+// An `etherfold node` is started with no processor and no source, and waits for its
+// first upload (ADR-0094; ADR-0093 made it a mode of `run` first). The end-to-end claim
+// is asserted over a real deployment in
+// `packages/cli/test/aNodeWaitsForItsFirstUpload.test.ts`; what is asserted
 // HERE is the container's half, with synthetic bytes:
 //
 //  - it OPENS with no fold of its own and no source, and nothing stands in for

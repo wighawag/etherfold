@@ -2,6 +2,8 @@
 
 > **AMENDED 2026-09-22: the pushed route is UN-DEFERRED, and the amendment at the end says what it now includes.** The decision below stands; what changed is WHEN to build the upload and what surrounds it.
 
+> **AMENDED 2026-09-26 (ADR-0094): the upload route MOVED from `etherfold run` to a new command, `etherfold node`, and the contract match is DELETED with the configured source it matched against.** Read the last amendment; two bullets of the relocated decisions and the route's "served by `etherfold run`" are superseded by it.
+
 A processor is code, so `an-endpoint-triggers-a-reconfigure-in-a-running-process` made the reconfigure endpoint a RE-READ rather than a receive: it re-resolves the configuration, re-imports the module from the filesystem behind a cache-busting URL query, and registers whatever generation that names. We propose to record that a processor may ALSO be pushed to a running deployment as a pre-bundled, content-addressed ARTIFACT, instantiated without touching the filesystem, with the hash of the received bytes serving as the processor's `version`.
 
 ## Why the re-read shape is not the end of the story
@@ -86,3 +88,14 @@ The spec `a-processor-artifact-is-pushed-to-a-running-deployment` made these dec
 - **The body** is the bundle's raw octets, declared **`Content-Type: text/javascript`**, the one registered type for an ES module (RFC 9239). Only the media type is matched, case-insensitively; parameters such as `charset` are ignored, because the identity is the hash of the octets and nothing decodes them. Anything else answers `415 upload-wrong-content-type`.
 - **The bound** is **16 MiB** (`MAX_UPLOAD_BYTES`, exported by `@etherfold/server`), inclusive. A declared `Content-Length` over it is refused before a byte is read, and an undeclared body is abandoned the moment it crosses it: `413 upload-too-large`. A constant rather than an input: generous for a minified processor carrying viem, small enough that one upload cannot exhaust the process, and no deployment has asked for another value.
 - **The answers** are the shared three-outcome report with `arrival: 'upload'`, on the re-read's status codes so a sender maps outcome to status once: `200` for `registered` and `unchanged`, `409 upload-failed` for `failed` (not self-contained, throws on evaluation, carries no processor or no contracts, a mismatch with a configured source, a cap). The `401` is the admin guard's own. The `413` and `415` bodies also carry `arrival: 'upload'` and `outcome: 'failed'`.
+
+## Amendment, 2026-09-26 (ADR-0094): the route is `node`'s, and nothing is left for a contract match to match
+
+ADR-0094 gave each combined command ONE source of truth: `run` is CONFIGURED and receives no code, and **`etherfold node`**, configured with NO processor and NO source, receives code only by upload. That makes three statements above false, and they are superseded here rather than edited:
+
+- **"served by `etherfold run` (the combined shape) and by nothing else"** (the route as built): the route is served by `etherfold node` and by nothing else. A configured `run` answers it as every host that does not receive code does, `501 upload-not-held`, whose message now names `node`.
+- **"Everything that can refuse happens before anything is registered: self-containment, evaluation and the contract match"** (the relocated decisions): still true of everything that remains, which is self-containment, evaluation, a module that carries no processor or no contracts, and a cap. The contract match is not among them any more.
+- **"The contract match applies only to a source the OPERATOR configured"** (the relocated decisions), and with it the 2026-09-22 amendment's reason for carrying contracts ("so that the node can check the two MATCH"): a `node` never has a configured source, so the match has no subject, and the branch that implemented it is DELETED (`upload.ts`), together with its refusal. An upload still CARRIES ITS OWN CONTRACTS, always, because they are what the `node` indexes: one carrying different contracts from the incumbent is a successor on a new stream, as it already was on a node whose source came from its processor module. The `409 upload-failed` list of the route as built loses "a mismatch with a configured source" for the same reason.
+
+Everything else stands: the credential, the identity, the bound, the content type, the answers, and `etherfold upload` as the sender, which now addresses a `node`.
+

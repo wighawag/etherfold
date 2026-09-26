@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {build, index, run, type RunningIndexer, type RunningReceiver} from '../src/index.js';
+import {build, index, node, run, type RunningIndexer, type RunningReceiver} from '../src/index.js';
 import type {StartGuardDependencies} from '../src/startGuard.js';
 import type {Options} from '../src/types.js';
 import {uploadMain} from '../src/uploadCommand.js';
@@ -18,23 +18,31 @@ import {ALICE, BOB, CAROL, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from 
 // AN UPLOADED PROCESSOR SURVIVES A RESTART, including one still catching up
 // ---------------------------------------------------------------------------------------------------
 // Story 10 of `a-processor-artifact-is-pushed-to-a-running-deployment`: an upload is a
-// DEPLOYMENT and not a session. Asserted END TO END against a real `run` and the real
-// `etherfold upload`, over the committed REAL bundles (`fixtures/processor-bundle/`),
-// in the shape `anUpgradingRestartKeepsTheIncumbentFolding.test.ts` stands up: a node
-// is STOPPED and run again over the same database, and the restarted process has
-// never been handed the uploaded bytes -- the only copy is on the registry row.
+// DEPLOYMENT and not a session. Asserted END TO END against a real `etherfold node` and
+// the real `etherfold upload`, over the committed REAL bundles
+// (`fixtures/processor-bundle/`), in the shape
+// `anUpgradingRestartKeepsTheIncumbentFolding.test.ts` stands up: a node is STOPPED and
+// run again over the same database, and the restarted process has never been handed the
+// uploaded bytes -- the only copy is on the registry row.
+//
+// The uploads used to go to a `run` started with nothing configured; since ADR-0094 that
+// is `node`, and the cases moved to it. The `run -p` starts below are now `run` over a
+// database a `node` wrote (ADR-0094's one database opened by both commands), under
+// today's rules for a configured start.
 //
 //  - an upload that is CANONICAL is instantiated from its stored bytes and goes on
 //    folding (ADR-0092, ADR-0093);
 //  - an upload that was still CATCHING UP (the `successor`) is instantiated too,
 //    catches up, and is promoted under `on-catch-up` with nobody asking; the
 //    incumbent's fold then stops (ADR-0092's amendment of 2026-09-26);
-//  - a restart with a `--processor` is an arrival like any other, and a START may not
-//    SILENTLY replace a different pending successor: interactive asks, non-interactive
-//    is refused unless `--override` (ADR-0084's and ADR-0093's amendments). That holds
-//    for EVERY start with a configured processor -- `run`, a re-run `build` and an
-//    `index` receiver -- because all three open the same container over the same slots;
-//  - a re-read and an upload still replace a pending successor without a question.
+//  - a `run` started with a `--processor` over that database is an arrival like any
+//    other, and a START may not SILENTLY replace a different pending successor:
+//    interactive asks, non-interactive is refused unless `--override` (ADR-0084's and
+//    ADR-0093's amendments). That holds for EVERY start with a configured processor --
+//    `run`, a re-run `build` and an `index` receiver -- because all three open the same
+//    container over the same slots;
+//  - an upload (on `node`) and a re-read (on `run`) still replace a pending successor
+//    without a question.
 //
 // The bundles: `nfts.bundle.js` credits a token to its recipient, `nfts-edited.bundle.js`
 // to its sender, so which fold answered is readable from the answer. A THIRD processor
@@ -100,7 +108,7 @@ async function aProcessorPath(from: string): Promise<string> {
 	return path;
 }
 
-/** NOTHING CONFIGURED: no processor and no source (ADR-0093). */
+/** A `node`: the chain, the store and the database, and no processor and no source (ADR-0094). */
 const NOTHING: Options = {nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER};
 
 /**
@@ -124,15 +132,37 @@ function aParkableWait() {
 	return {state, sleep};
 }
 
-/** START a `run` over `db`, which may already hold generations: a restart, when it does. */
-async function aRunOver(
+type StartExtras = {sleep?: ReturnType<typeof aParkableWait>['sleep']; startGuard?: StartGuardDependencies};
+
+/** START a `node` over `db`, which may already hold generations: a restart, when it does. */
+async function aNodeOver(
 	db: RemoteSQL,
 	chain: ReturnType<typeof fakeChain>,
 	options: Options = NOTHING,
-	extra: {sleep?: ReturnType<typeof aParkableWait>['sleep']; startGuard?: StartGuardDependencies} = {},
+	extra: StartExtras = {},
+): Promise<RunningIndexer> {
+	return aStartOf(node, db, chain, options, extra);
+}
+
+/** START a configured `run` over `db`, which may hold what a `node` wrote there (ADR-0094). */
+async function aRunOver(
+	db: RemoteSQL,
+	chain: ReturnType<typeof fakeChain>,
+	options: Options & {processor: string},
+	extra: StartExtras = {},
+): Promise<RunningIndexer> {
+	return aStartOf(run, db, chain, options, extra);
+}
+
+async function aStartOf(
+	start: typeof run,
+	db: RemoteSQL,
+	chain: ReturnType<typeof fakeChain>,
+	options: Options,
+	extra: StartExtras,
 ): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-	running = await run(
+	running = await start(
 		{...NOTHING, ...options},
 		{
 			provider: chain.provider,
@@ -230,14 +260,13 @@ async function bundleStoredFor(db: RemoteSQL, processor: string): Promise<boolea
 }
 
 /**
- * A node started with NOTHING configured, whose first upload folded to the tip and
- * became canonical, and whose SECOND upload was still catching up when it stopped:
+ * A `node`, whose first upload folded to the tip and became canonical, and whose SECOND upload was still catching up when it stopped:
  * `successor` names it, with its bytes stored, and it has folded nothing.
  */
 async function aNodeStoppedMidUpgrade(): Promise<{db: RemoteSQL; incumbent: string; successor: string}> {
 	const db = oneDatabase();
 	const wait = aParkableWait();
-	const first = await aRunOver(db, fakeChain().serve(LOGS, TIP), NOTHING, {sleep: wait.sleep});
+	const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP), NOTHING, {sleep: wait.sleep});
 	expect((await uploadWith(first, BUNDLE)).code).toBe(0);
 	const incumbent = (await digestOf(first, BUNDLE)) as string;
 	await waitFor('the first upload folded to the tip', async () => (await positionOf(first, incumbent)) === TIP);
@@ -259,18 +288,18 @@ async function aNodeStoppedMidUpgrade(): Promise<{db: RemoteSQL; incumbent: stri
 
 // ---------------------------------------------------------------------------------------------------
 
-describe('an upload that is CANONICAL survives a restart with nothing configured', () => {
+describe('an upload that is CANONICAL survives a restart of the `node`', () => {
 	it('is instantiated from its stored bytes, and its cursor advances', async () => {
 		const db = oneDatabase();
-		const first = await aRunOver(db, fakeChain().serve(LOGS, TIP));
+		const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
 		const sent = await uploadWith(first, BUNDLE);
 		expect(sent.code, sent.err).toBe(0);
 		const uploaded = (await digestOf(first, BUNDLE)) as string;
 		await waitFor('the upload folded to the tip', async () => (await positionOf(first, uploaded)) === TIP);
 		await stop();
 
-		// the chain moves on while nothing runs, and the node comes back with NOTHING configured
-		const restarted = await aRunOver(db, fakeChain().serve(LATER, LATER_TIP));
+		// the chain moves on while nothing runs, and the node comes back, configured with no code
+		const restarted = await aNodeOver(db, fakeChain().serve(LATER, LATER_TIP));
 
 		expect((await listingOf(restarted)).slots?.canonical?.digest).toBe(uploaded);
 		expect(foldedHere(restarted)).toEqual([processorArtifactIdentity(await bytesOf(BUNDLE))]);
@@ -286,7 +315,7 @@ describe('an upload still CATCHING UP survives a restart, and the upgrade finish
 		const {db, incumbent, successor} = await aNodeStoppedMidUpgrade();
 
 		// `manual`, so what is held can be read without racing the promotion
-		const restarted = await aRunOver(db, fakeChain().serve(LATER, LATER_TIP), {...NOTHING, promotion: 'manual'});
+		const restarted = await aNodeOver(db, fakeChain().serve(LATER, LATER_TIP), {...NOTHING, promotion: 'manual'});
 
 		expect(foldedHere(restarted).sort()).toEqual(
 			[(await identityOf(restarted, incumbent)).processor, (await identityOf(restarted, successor)).processor].sort(),
@@ -304,7 +333,7 @@ describe('an upload still CATCHING UP survives a restart, and the upgrade finish
 		const {db, incumbent, successor} = await aNodeStoppedMidUpgrade();
 		const chain = fakeChain().serve(LATER, LATER_TIP);
 
-		const restarted = await aRunOver(db, chain);
+		const restarted = await aNodeOver(db, chain);
 
 		await waitFor(
 			'the successor was promoted',
@@ -326,16 +355,16 @@ describe('an upload still CATCHING UP survives a restart, and the upgrade finish
 
 		// ...and a restart after it does NOT instantiate the predecessor: nobody reads it
 		await stop();
-		const again = await aRunOver(db, fakeChain().serve(LATEST, LATEST_TIP));
+		const again = await aNodeOver(db, fakeChain().serve(LATEST, LATEST_TIP));
 		expect(foldedHere(again)).toEqual([(await identityOf(again, successor)).processor]);
 		expect((await listingOf(again)).slots?.predecessor?.digest).toBe(incumbent);
 	});
 });
 
-describe('a restart with `--processor` is an arrival like any other', () => {
+describe('a `run` with `--processor` over a database a `node` wrote is an arrival like any other', () => {
 	it('registers a DIFFERENT processor as the successor, where nothing is pending', async () => {
 		const db = oneDatabase();
-		const first = await aRunOver(db, fakeChain().serve(LOGS, TIP));
+		const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
 		expect((await uploadWith(first, BUNDLE)).code).toBe(0);
 		const uploaded = (await digestOf(first, BUNDLE)) as string;
 		await stop();
@@ -401,7 +430,7 @@ describe('a START may not SILENTLY replace a different pending successor that ar
 		running = undefined;
 
 		// the registry is exactly as it was: the upload is still pending, bytes and all
-		const after = await aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		const after = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
 		const listing = await listingOf(after);
 		expect(listing.slots?.canonical?.digest).toBe(incumbent);
 		expect(listing.slots?.successor?.digest).toBe(successor);
@@ -458,7 +487,7 @@ describe('a START may not SILENTLY replace a different pending successor that ar
 		expect(asked[0]).toContain(successor);
 		expect(asked[0]).toContain(processorArtifactIdentity(await bytesOf(third)));
 
-		const after = await aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		const after = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
 		expect((await listingOf(after)).slots?.successor?.digest).toBe(successor);
 	});
 
@@ -480,7 +509,28 @@ describe('a START may not SILENTLY replace a different pending successor that ar
 });
 
 describe('the deliberate arrivals on a RUNNING node still replace a pending successor without a question', () => {
-	it('an upload and a re-read each replace it, and nobody is asked', async () => {
+	it('an upload to a `node` replaces it, and nobody is asked', async () => {
+		const db = oneDatabase();
+		const indexer = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		expect((await uploadWith(indexer, BUNDLE)).code).toBe(0);
+
+		// an upload takes the empty slot...
+		expect((await uploadWith(indexer, EDITED_BUNDLE)).code).toBe(0);
+		const edited = (await digestOf(indexer, EDITED_BUNDLE)) as string;
+		expect((await listingOf(indexer)).slots?.successor?.digest).toBe(edited);
+
+		// ...a second upload REPLACES it
+		const third = await aThirdBundle();
+		const uploaded = await uploadWith(indexer, third);
+		expect(uploaded.code, uploaded.err).toBe(0);
+		expect(uploaded.out).toMatch(/\bregistered\b/);
+		const thirdDigest = (await digestOf(indexer, third)) as string;
+		const listing = await listingOf(indexer);
+		expect(listing.slots?.successor?.digest).toBe(thirdDigest);
+		expect(listing.generations.map((entry) => entry.digest)).not.toContain(edited);
+	});
+
+	it('a re-read on a configured `run` replaces it, and nobody is asked', async () => {
 		const db = oneDatabase();
 		const path = await aProcessorPath(BUNDLE);
 		const asked: string[] = [];
@@ -498,32 +548,27 @@ describe('the deliberate arrivals on a RUNNING node still replace a pending succ
 				},
 			},
 		);
+		const reread = async (): Promise<Record<string, unknown>> => {
+			const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
+				method: 'POST',
+				headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
+			});
+			const body = (await res.json()) as Record<string, unknown>;
+			expect(res.status, JSON.stringify(body)).toBe(200);
+			return body;
+		};
 
-		// an upload takes the empty slot...
-		expect((await uploadWith(indexer, EDITED_BUNDLE)).code).toBe(0);
-		const edited = (await digestOf(indexer, EDITED_BUNDLE)) as string;
-		expect((await listingOf(indexer)).slots?.successor?.digest).toBe(edited);
-
-		// ...a second upload REPLACES it
+		// a RE-READ of the configured path, now holding a third bundle, takes the empty slot...
 		const third = await aThirdBundle();
-		const uploaded = await uploadWith(indexer, third);
-		expect(uploaded.code, uploaded.err).toBe(0);
-		expect(uploaded.out).toMatch(/\bregistered\b/);
+		await copyFile(third, path);
+		expect(await reread()).toMatchObject({arrival: 're-read', outcome: 'registered'});
 		const thirdDigest = (await digestOf(indexer, third)) as string;
-		let listing = await listingOf(indexer);
-		expect(listing.slots?.successor?.digest).toBe(thirdDigest);
-		expect(listing.generations.map((entry) => entry.digest)).not.toContain(edited);
+		expect((await listingOf(indexer)).slots?.successor?.digest).toBe(thirdDigest);
 
-		// ...and a RE-READ of the configured path, now holding the edited bundle, replaces that
+		// ...and a re-read of the path, now holding the edited bundle, REPLACES that
 		await copyFile(EDITED_BUNDLE, path);
-		const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
-			method: 'POST',
-			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`},
-		});
-		const body = (await res.json()) as Record<string, unknown>;
-		expect(res.status, JSON.stringify(body)).toBe(200);
-		expect(body).toMatchObject({arrival: 're-read', outcome: 'registered'});
-		listing = await listingOf(indexer);
+		expect(await reread()).toMatchObject({arrival: 're-read', outcome: 'registered'});
+		const listing = await listingOf(indexer);
 		expect(listing.slots?.successor?.digest).toBe(await digestOf(indexer, EDITED_BUNDLE));
 		expect(listing.generations.map((entry) => entry.digest)).not.toContain(thirdDigest);
 
@@ -563,11 +608,11 @@ describe('a re-run `build` and an `index` receiver are STARTS too, guarded the s
 		return receiving;
 	}
 
-	/** Read the registry back through a `run` with nothing configured, which changes nothing in it. */
+	/** Read the registry back through a `node`, which changes nothing in it. */
 	async function whatTheRegistryHolds(
 		db: RemoteSQL,
 	): Promise<{listing: Listing; storedFor: (bundle: string) => Promise<boolean>}> {
-		const after = await aRunOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
+		const after = await aNodeOver(db, fakeChain().serve(LOGS, TIP), {...NOTHING, promotion: 'manual'});
 		const listing = await listingOf(after);
 		return {
 			listing,

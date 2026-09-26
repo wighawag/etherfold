@@ -199,9 +199,6 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 			const resolved = resolveCommandConfig<'run', ABI>('run', held.options, held.env) as RunConfig<ABI>;
 			const refusal = refuseAMovedDeployment(resolved, held);
 			if (refusal) return refusal;
-			// A NODE STARTED WITH NOTHING CONFIGURED has no path to re-read (ADR-0093): its
-			// processors ARRIVE, as bytes, and the upload is the arrival that carries them.
-			if (resolved.processor === undefined) return nothingToReRead();
 			const processorPath = resolved.processor;
 			// A RE-READ meets the same refusal a start-up does, in the same words: a rebuild
 			// that emitted an entry point instead of a bundle is reported as `failed` with the
@@ -300,22 +297,6 @@ export function reconfigurerFor<ABI extends Abi, ProcessResultType>(
 	};
 
 	return () => queue(reread);
-}
-
-/**
- * The re-read of a node that was given NO processor path: there is nothing on a disk
- * for it to re-read (ADR-0093), so it answers `failed` with the arrival that does apply,
- * and the deployment is exactly as it was.
- */
-function nothingToReRead(): ReconfigureReport {
-	return {
-		arrival: 're-read',
-		outcome: 'failed',
-		message:
-			`this node was started with NO processor (ADR-0093), so there is no --processor path for it to re-read and ` +
-			`nothing was registered. Its processors ARRIVE as bytes: send a built bundle with \`etherfold upload\` ` +
-			`(POST /{indexer}/admin/upload).`,
-	};
 }
 
 /** Whether two generation identities are the same one. */

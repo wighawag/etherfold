@@ -5,7 +5,7 @@ import {INPUTS, OWNERSHIP, type ConfigInput} from './config.js';
 import {fetchMain} from './fetch.js';
 import {main} from './index.js';
 import {indexMain} from './indexCommand.js';
-import {runMain} from './run.js';
+import {nodeMain, runMain} from './run.js';
 import {serve} from './serve.js';
 import type {CommandName, Options} from './types.js';
 import {uploadMain} from './uploadCommand.js';
@@ -25,6 +25,11 @@ export type ProgramDependencies = {
 	build?: (options: Options) => void;
 	/** Runs the follower. Defaults to `runMain`, which keeps going until a signal and resolves the exit code. */
 	run?: (options: Options) => void | Promise<void>;
+	/**
+	 * Runs the node that RECEIVES uploads. Defaults to `nodeMain`, which keeps going until a
+	 * signal and resolves the exit code the way `runMain` does.
+	 */
+	node?: (options: Options) => void | Promise<void>;
 	/** Runs the chain-facing half. Defaults to `fetchMain`, which also hooks the log sink to the console. */
 	fetch?: (options: Options) => void | Promise<void>;
 	/** Runs the receiving half. Defaults to `indexMain`, which keeps receiving until a signal and resolves the exit code. */
@@ -70,13 +75,15 @@ function registerInputs(command: Command, name: CommandName): void {
 }
 
 /**
- * The command surface: five deployment intents, each of them meaning one thing,
+ * The command surface: six deployment intents, each of them meaning one thing,
  * plus `upload`, the one command that runs no deployment and is a CLIENT of one.
  *
  * `CONTEXT.md` ("The COMMAND SET names deployment intents, not components")
- * is the authority for the set, and all five now ship: **`run`** follows the
+ * is the authority for the set, and all six ship: **`run`** follows the
  * chain, folds AND answers queries without terminating -- the milestone, and the
- * default thing to reach for; **`build`** is the same assembly stopping at the
+ * default thing to reach for -- folding exactly the processor its configuration
+ * names; **`node`** is the same process configured with NO processor and NO
+ * source, whose code arrives only by `etherfold upload` (ADR-0094); **`build`** is the same assembly stopping at the
  * tip; **`serve`** answers queries over a database written elsewhere; **`fetch`**
  * is the chain-facing half of a SPLIT deployment, which folds nothing, holds no
  * state and pushes to a receiver elsewhere -- the ONLY way to run a fetcher, now
@@ -86,8 +93,8 @@ function registerInputs(command: Command, name: CommandName): void {
  * because every row of the table already resolved through one resolver
  * (`OWNERSHIP` in `src/config.ts`).
  *
- * **`upload`** is the sixth, and it is a different KIND of command: it sends an
- * already-built bundle to a running `run`'s `POST /{indexer}/admin/upload` and
+ * **`upload`** is the seventh, and it is a different KIND of command: it sends an
+ * already-built bundle to a running `node`'s `POST /{indexer}/admin/upload` and
  * exits, so deploying a processor is one command, the same on a laptop and in CI
  * (ADR-0085). It is not a deployment intent and does not re-open the argument that
  * kept the revert an HTTP route rather than a verb (ADR-0057's 2026-09-26
@@ -102,7 +109,7 @@ function registerInputs(command: Command, name: CommandName): void {
  * argument that the rename should not ALSO cost users their argument order).
  * The name is changing anyway here, nothing is published, and under a set of
  * names chosen so a reader can tell what a process will do, a bare invocation
- * that silently means one of the five is exactly the ambiguity the set exists
+ * that silently means one of the six is exactly the ambiguity the set exists
  * to remove. So a bare `etherfold` prints help and every run names its intent.
  */
 export function createProgram(deps: ProgramDependencies = {}): Command {
@@ -132,13 +139,33 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 	const run = program
 		.command('run')
 		.description(
-			'follow the chain, fold a processor into a libSQL database, and answer queries over it. Started with no ' +
-				'processor and no source, it WAITS for its first `etherfold upload` (ADR-0093)',
+			'follow the chain, fold the processor its configuration names into a libSQL database, and answer queries ' +
+				'over it. It receives no code: a node whose processors arrive by `etherfold upload` is `etherfold node`',
 		)
-		.usage(`[-p <processor's path>] --store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545]`);
+		.usage(`-p <processor's path> --store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545]`);
 	registerInputs(run, 'run');
 	run.action(async (options: Options) => {
 		await runFollower(options);
+	});
+
+	const runNode =
+		deps.node ??
+		((options: Options) => {
+			// resolves the exit code exactly as `runMain` does, for the same reason
+			return nodeMain(options, {env});
+		});
+
+	const nodeCommand = program
+		.command('node')
+		.description(
+			'follow the chain, fold whatever processor is UPLOADED to it (`etherfold upload`) into a libSQL database, ' +
+				'and answer queries over it. It takes no processor and no source: it WAITS for its first upload, and ' +
+				'each upload carries its own contracts (ADR-0094)',
+		)
+		.usage('--store sqlite --db <libsql url> [--port 2000 -n http://localhost:8545 --indexer <name>]');
+	registerInputs(nodeCommand, 'node');
+	nodeCommand.action(async (options: Options) => {
+		await runNode(options);
 	});
 
 	const build = program
@@ -224,7 +251,7 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 	const uploadCommand = program
 		.command('upload')
 		.description(
-			'upload an already-built processor bundle to a running node (`etherfold run`), which registers it beside ' +
+			'upload an already-built processor bundle to a running node (`etherfold node`), which registers it beside ' +
 				'the generation answering reads: a client of a node rather than a way to run one. It never builds, and ' +
 				'exits non-zero on anything short of `registered` or `unchanged`',
 		)

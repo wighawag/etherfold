@@ -386,6 +386,6 @@ describe('a deployment that cannot receive a processor refuses HONESTLY', () => 
 		const body = (await refused.json()) as {error: string; indexer: string; message: string};
 		expect(body.error).toBe('upload-not-held');
 		expect(body.indexer).toBe(NAME);
-		expect(body.message).toMatch(/etherfold run/);
+		expect(body.message).toMatch(/The deployment that receives uploads is `etherfold node`/);
 	});
 });

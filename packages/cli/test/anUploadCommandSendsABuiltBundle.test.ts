@@ -1,5 +1,5 @@
 import {generationDigestOf} from '@etherfold/core';
-import {MAX_UPLOAD_BYTES} from '@etherfold/server';
+import {MAX_UPLOAD_BYTES, UPLOAD_CONTENT_TYPE} from '@etherfold/server';
 import {processorArtifactIdentity} from '@etherfold/utils';
 import {createClient} from '@libsql/client';
 import {readFile, rm, mkdtemp, writeFile} from 'node:fs/promises';
@@ -10,10 +10,10 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {node, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {uploadMain} from '../src/uploadCommand.js';
-import {ALICE, BOB, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {ALICE, BOB, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
 // ---------------------------------------------------------------------------------------------------
 // `etherfold upload` SENDS AN ALREADY-BUILT BUNDLE, AND ANYTHING SHORT OF A REGISTRATION FAILS THE PIPELINE
@@ -28,15 +28,15 @@ import {ALICE, BOB, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './util
 // -- the local self-containment check, each of the node's refusals, and a node that
 // cannot be reached at all -- with the reason printed where a pipeline log shows it.
 //
-// Asserted END TO END against a real `run`, stood up exactly as the route's own
-// suite stands one up (`aBundleIsUploadedToARunningNode.test.ts`), over the same
-// committed REAL bundles (`fixtures/processor-bundle/`).
+// Asserted END TO END against a real `etherfold node` (ADR-0094: the one command that
+// serves the upload route; this suite moved from `run` with it), stood up exactly as the
+// route's own suite stands one up (`aBundleIsUploadedToARunningNode.test.ts`), over the
+// same committed REAL bundles (`fixtures/processor-bundle/`).
 // ---------------------------------------------------------------------------------------------------
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/processor-bundle/', import.meta.url));
 const BUNDLE = join(FIXTURES, 'nfts.bundle.js');
 const EDITED_BUNDLE = join(FIXTURES, 'nfts-edited.bundle.js');
-const APPROVAL_BUNDLE = join(FIXTURES, 'nfts-with-approval.bundle.js');
 const NOT_SELF_CONTAINED = join(FIXTURES, 'not-self-contained.bundle.js');
 const THROWS_ON_EVALUATION = join(FIXTURES, 'throws-on-evaluation.bundle.js');
 
@@ -65,11 +65,15 @@ function oneDatabase(): RemoteSQL {
 	return new RemoteLibSQL(createClient({url: ':memory:'}));
 }
 
-/** A node folding `nfts.bundle.js` that has folded `LOGS` and is answering reads, guarded by `ADMIN_TOKEN`. */
-async function aNodeServing(env: Record<string, string> = {}): Promise<RunningIndexer> {
+/**
+ * A `node` whose first upload, `nfts.bundle.js`, has folded `LOGS` and is answering
+ * reads, guarded by `ADMIN_TOKEN`. That first upload goes straight to the route, so no
+ * case's count of the command's own requests includes it.
+ */
+async function aNodeServing(): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-	running = await run(
-		{processor: BUNDLE, nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
+	running = await node(
+		{nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER},
 		{
 			provider: fakeChain().serve(LOGS, TIP).provider,
 			createDB: oneDatabase,
@@ -78,9 +82,15 @@ async function aNodeServing(env: Record<string, string> = {}): Promise<RunningIn
 			},
 			handleSignals: false,
 			log: () => {},
-			env: {MAX_BLOCKS_PER_FETCH: '20', ...env},
+			env: {MAX_BLOCKS_PER_FETCH: '20'},
 		},
 	);
+	const first = await fetch(`${running.url}/${INDEXER}/admin/upload`, {
+		method: 'POST',
+		headers: {'Content-Type': UPLOAD_CONTENT_TYPE, Authorization: `Bearer ${ADMIN_TOKEN}`},
+		body: new Uint8Array(await readFile(BUNDLE)),
+	});
+	expect(first.status).toBe(200);
 	const deadline = Date.now() + 10_000;
 	for (;;) {
 		const res = await fetch(`${running.url}/${INDEXER}/feed`);
@@ -275,17 +285,6 @@ describe('every refusal by the node, and a node nobody answers, fail the pipelin
 		expect(ran.err).toContain('this bundle throws while it is evaluated');
 		expect(ran.err).toMatch(/arrival:\s*upload/);
 		expect(await digestsOf(indexer)).toEqual(before);
-	});
-
-	it('contracts that do not match the source the node was started with: `409`, naming both', async () => {
-		const indexer = await aNodeServing({INDEXING_SOURCE: JSON.stringify(SOURCE)});
-
-		const ran = await uploadWith(toNode(indexer, APPROVAL_BUNDLE), withCredential);
-
-		expect(ran.code).not.toBe(0);
-		expect(ran.err).toMatch(/\b409\b/);
-		expect(ran.err).toContain('Transfer, Approval');
-		expect(ran.err).toContain('INDEXING_SOURCE');
 	});
 
 	it('a node that cannot be reached: nothing answered, so nothing was deployed', async () => {

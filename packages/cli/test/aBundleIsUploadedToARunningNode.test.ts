@@ -9,24 +9,28 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunDependencies, type RunningIndexer} from '../src/index.js';
+import {node, run, type RunDependencies, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
-import {ALICE, BOB, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {ALICE, BOB, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
 // ---------------------------------------------------------------------------------------------------
 // A BUNDLE IS UPLOADED TO A RUNNING NODE, AND IS INDEXED BESIDE THE LIVE VERSION BEFORE IT SWITCHES
 // ---------------------------------------------------------------------------------------------------
 // The Graph's deploy experience on a Node deployment (ADR-0085's amendment of
-// 2026-09-22): the BYTES of an already-built bundle go to a running `run` over its
-// admin credential, and the node registers the generation they name as `successor`
-// beside the incumbent. From there it is existing machinery: the incumbent answers
-// every read, the successor catches up, and `on-catch-up` moves the pointer.
+// 2026-09-22): the BYTES of an already-built bundle go to a running `etherfold node`
+// over its admin credential, and the node registers the generation they name as
+// `successor` beside the incumbent. From there it is existing machinery: the incumbent
+// answers every read, the successor catches up, and `on-catch-up` moves the pointer.
 //
-// Asserted END TO END, against a real `run` stood up the way the re-read suite
-// stands one up (`anEndpointReconfiguresARunningRun.test.ts`), with the committed
-// REAL bundles (`fixtures/processor-bundle/`) for everything that must evaluate:
+// It was asserted against a `run` started with `-p`; the route MOVED to `node` with
+// ADR-0094, and so did this suite, assertions and all: the incumbent is now the node's
+// FIRST upload rather than its configured processor. A configured `run` serves no
+// upload route, which is asserted at the end.
 //
-//  - `nfts.bundle.js` is what the node starts with;
+// Asserted END TO END, against a real `node`, with the committed REAL bundles
+// (`fixtures/processor-bundle/`) for everything that must evaluate:
+//
+//  - `nfts.bundle.js` is the node's first upload, its incumbent;
 //  - `nfts-edited.bundle.js` is the same contracts with one handler line changed;
 //  - `nfts-with-approval.bundle.js` carries DIFFERENT contracts (an added event);
 //  - `not-self-contained.bundle.js` and `throws-on-evaluation.bundle.js` are the two
@@ -83,6 +87,9 @@ function optionsFor(processor: string): Options {
 	};
 }
 
+/** A `node`: the chain, the store, the database; no processor and no source (ADR-0094). */
+const NODE: Options = {nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER};
+
 /** ONE path a deployment is pointed at, whose bytes a redeploy replaces. */
 async function aProcessorPath(from: string): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), 'etherfold-upload-'));
@@ -92,15 +99,37 @@ async function aProcessorPath(from: string): Promise<string> {
 	return path;
 }
 
-/** START a `run` over `db`, which may already hold generations (a restart, when it does). */
+/** The drive loop's default wait in this suite: a millisecond, so a case runs fast. */
+const aMoment: NonNullable<RunDependencies['sleep']> = async () => {
+	await new Promise((resolve) => setTimeout(resolve, 1));
+};
+
+/** START a `node` over `db`, which may already hold generations (a restart, when it does). */
+async function aNodeOver(
+	db: RemoteSQL,
+	chain: ReturnType<typeof fakeChain>,
+	env: Record<string, string> = {},
+	sleep: RunDependencies['sleep'] = aMoment,
+): Promise<RunningIndexer> {
+	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+	running = await node(NODE, {
+		provider: chain.provider,
+		createDB: () => db,
+		sleep,
+		handleSignals: false,
+		log: () => {},
+		env: {MAX_BLOCKS_PER_FETCH: '20', ...env},
+	});
+	return running;
+}
+
+/** START a configured `run` over `db`: the re-read's half of the predecessor case, and the route it does not serve. */
 async function aRunOver(
 	db: RemoteSQL,
 	processorPath: string,
 	chain: ReturnType<typeof fakeChain>,
 	env: Record<string, string> = {},
-	sleep: RunDependencies['sleep'] = async () => {
-		await new Promise((resolve) => setTimeout(resolve, 1));
-	},
+	sleep: RunDependencies['sleep'] = aMoment,
 ): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	running = await run(optionsFor(processorPath), {
@@ -119,13 +148,15 @@ async function stop(): Promise<void> {
 	running = undefined;
 }
 
-/** A node folding `nfts.bundle.js` that has folded `LOGS` and is answering reads. */
+/** A node whose first upload, `nfts.bundle.js`, has folded `LOGS` and is answering reads. */
 async function aNodeServing(
 	env: Record<string, string> = {},
 	sleep?: RunDependencies['sleep'],
 ): Promise<{indexer: RunningIndexer; db: RemoteSQL}> {
 	const db = oneDatabase();
-	const indexer = await aRunOver(db, BUNDLE, fakeChain().serve(LOGS, TIP), env, sleep);
+	const indexer = await aNodeOver(db, fakeChain().serve(LOGS, TIP), env, sleep);
+	const first = await upload(indexer, await bytesOf(BUNDLE));
+	expect(first.status, JSON.stringify(first.body)).toBe(200);
 	await feedOf(indexer, LOGS.length);
 	return {indexer, db};
 }
@@ -416,30 +447,9 @@ describe('every refusal answers its own status and reason, and leaves the node E
 		expect(repaired.status, JSON.stringify(repaired.body)).toBe(200);
 		expect(repaired.body.outcome).toBe('registered');
 	});
-
-	it('refuses contracts that do not match a source the node was STARTED with, naming both', async () => {
-		const {indexer} = await aNodeServing({INDEXING_SOURCE: JSON.stringify(SOURCE)});
-		const before = await everythingHeld(indexer);
-
-		const refused = await upload(indexer, await bytesOf(APPROVAL_BUNDLE));
-
-		expect(refused.status, JSON.stringify(refused.body)).toBe(409);
-		expect(refused.body).toMatchObject({error: 'upload-failed', arrival: 'upload', outcome: 'failed'});
-		// BY NAME: what the upload carries, against what the node was configured with
-		expect(refused.body.message).toContain('Transfer, Approval');
-		expect(refused.body.message).toContain('INDEXING_SOURCE');
-		expect(await everythingHeld(indexer)).toEqual(before);
-
-		// ...while an upload carrying the SAME source is served on that same node: the
-		// match refuses a difference, not every upload
-		const matching = await upload(indexer, await bytesOf(EDITED_BUNDLE));
-		expect(matching.status, JSON.stringify(matching.body)).toBe(200);
-		expect(matching.body.outcome).toBe('registered');
-		expect(matching.body.generation?.stream).toBe(indexer.container.generation.stream);
-	});
 });
 
-describe('a node whose source came from its processor module takes an upload carrying NEW contracts', () => {
+describe('a node takes an upload carrying NEW contracts', () => {
 	it('registers it as a successor on its new stream, rather than refusing it', async () => {
 		// PARKED, so the registration is read before the new stream is fetched and the
 		// successor promoted: that it then catches up and takes over is
@@ -471,15 +481,21 @@ describe('a node whose source came from its processor module takes an upload car
 // ---------------------------------------------------------------------------------------------------
 // BYTES NAMING A GENERATION THAT IS REGISTERED BUT NOT HELD
 // ---------------------------------------------------------------------------------------------------
-// A rollback by upload: the node was upgraded by a RESTART with the edited bundle, the
-// successor was promoted, and the generation it superseded is now `predecessor` --
-// registered, its bytes on its row, and folded by nothing in this process. Uploading
-// its bytes must do exactly what a RE-READ of the same identity does, so the case runs
-// both, over two identical deployments, and compares what each left behind.
+// A rollback by upload: the node was upgraded onto the edited bundle, the successor was
+// promoted, and the generation it superseded is now `predecessor` -- registered, its
+// bytes on its row, and folded by nothing in this process. Uploading its bytes must do
+// exactly what a RE-READ of the same identity does, so the case runs both, over two
+// deployments that hold the same generations in the same slots, and compares what each
+// left behind.
+//
+// Since ADR-0094 the two arrivals live on two commands. The UPLOAD half is a `node`,
+// whose predecessor two uploads and a promotion make (and a restart, so that nothing in
+// the process folds it); the RE-READ half stays on a configured `run`, upgraded by a
+// restart with the edited bundle, until `the-re-read-endpoint-is-deleted` drops it.
 // ---------------------------------------------------------------------------------------------------
 
-/** A node upgraded by restart onto the edited bundle, holding `nfts.bundle.js`'s generation as an unheld predecessor. */
-async function aNodeWithAnUnheldPredecessor(): Promise<{
+/** A `run` upgraded by restart onto the edited bundle, holding `nfts.bundle.js`'s generation as an unheld predecessor. */
+async function aRunWithAnUnheldPredecessor(): Promise<{
 	indexer: RunningIndexer;
 	path: string;
 	predecessor: string;
@@ -507,18 +523,48 @@ async function aNodeWithAnUnheldPredecessor(): Promise<{
 	return {indexer, path, predecessor};
 }
 
+/**
+ * A `node` upgraded by UPLOAD onto the edited bundle, holding `nfts.bundle.js`'s
+ * generation as an unheld predecessor: two uploads and a promotion, then a restart, so
+ * that nothing in the process folds it.
+ */
+async function aNodeWithAnUnheldPredecessor(): Promise<{indexer: RunningIndexer; predecessor: string}> {
+	const db = oneDatabase();
+	const first = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
+	expect((await upload(first, await bytesOf(BUNDLE))).status).toBe(200);
+	await feedOf(first, LOGS.length);
+	const predecessor = generationDigestOf(first.container.generation);
+	await waitFor('the first upload folded to the tip', async () => {
+		return (await first.container.registry.readStateCursor(first.container.generation)) === TIP;
+	});
+	expect((await upload(first, await bytesOf(EDITED_BUNDLE))).status).toBe(200);
+	await waitFor(
+		'the edited successor was promoted',
+		async () => (await canonicalOf(first)) !== undefined && (await canonicalOf(first)) !== predecessor,
+	);
+	await stop();
+
+	const indexer = await aNodeOver(db, fakeChain().serve(LOGS, TIP));
+	const listing = await listingOf(indexer);
+	expect(listing.slots?.predecessor?.digest).toBe(predecessor);
+	// the precondition: nothing in this process folds it
+	expect(indexer.container.held().map((fold) => generationDigestOf(fold.record))).not.toContain(predecessor);
+	return {indexer, predecessor};
+}
+
 describe('uploading the bytes of the `predecessor` behaves exactly as a re-read of that identity', () => {
 	it('answers the same outcome for the same generation, and leaves the same registry, slots and folds', async () => {
 		const original = await bytesOf(BUNDLE);
 
-		// THE RE-READ: the original bundle is put back at the path, and the node re-reads it
-		const byReRead = await aNodeWithAnUnheldPredecessor();
+		// THE RE-READ, on a configured `run`: the original bundle is put back at the path, and
+		// the node re-reads it
+		const byReRead = await aRunWithAnUnheldPredecessor();
 		await copyFile(BUNDLE, byReRead.path);
 		const reread = await reconfigure(byReRead.indexer);
 		const settledReRead = await settled(byReRead.indexer);
 		await stop();
 
-		// THE UPLOAD: the same bytes, sent, to an identical deployment
+		// THE UPLOAD: the same bytes, sent, to a `node` holding the same generations in the same slots
 		const byUpload = await aNodeWithAnUnheldPredecessor();
 		expect(byUpload.predecessor).toBe(byReRead.predecessor);
 		const uploaded = await upload(byUpload.indexer, original);
@@ -556,3 +602,24 @@ async function settled(indexer: RunningIndexer): Promise<Awaited<ReturnType<type
 	}
 	return previous;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// A CONFIGURED `run` RECEIVES NO CODE (ADR-0094)
+// ---------------------------------------------------------------------------------------------------
+
+describe('a configured `run` does not serve the upload route', () => {
+	it('answers `501 upload-not-held`, naming `etherfold node`, and registers nothing', async () => {
+		const db = oneDatabase();
+		const indexer = await aRunOver(db, BUNDLE, fakeChain().serve(LOGS, TIP));
+		await feedOf(indexer, LOGS.length);
+		const before = await everythingHeld(indexer);
+
+		const refused = await upload(indexer, await bytesOf(EDITED_BUNDLE));
+
+		expect(refused.status, JSON.stringify(refused.body)).toBe(501);
+		expect(refused.body.error).toBe('upload-not-held');
+		expect(refused.body.message).toContain('etherfold node');
+		expect(await everythingHeld(indexer)).toEqual(before);
+		expect(await storedBundleOf(db, processorArtifactIdentity(await bytesOf(EDITED_BUNDLE)))).toBeUndefined();
+	});
+});

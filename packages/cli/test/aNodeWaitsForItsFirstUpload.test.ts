@@ -8,20 +8,22 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterEach, describe, expect, it} from 'vitest';
-import {run, type RunningIndexer} from '../src/index.js';
+import {node, type RunningIndexer} from '../src/index.js';
 import type {Options} from '../src/types.js';
 import {uploadMain} from '../src/uploadCommand.js';
-import {ALICE, BOB, CAROL, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {abi, ALICE, BOB, CAROL, CONTRACT, fakeChain, SOURCE, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 
 // ---------------------------------------------------------------------------------------------------
-// A `run` NODE STARTED WITH NOTHING CONFIGURED WAITS FOR ITS FIRST UPLOAD (ADR-0093)
+// `etherfold node` WAITS FOR ITS FIRST UPLOAD (ADR-0094, ADR-0093's waiting mode)
 // ---------------------------------------------------------------------------------------------------
 // The Graph's first half: a node is stood up ONCE, with no processor and no source,
-// and processors ARRIVE by deploy. Asserted END TO END against a real `run` and the
-// real `etherfold upload` command, over the committed REAL bundles
+// and processors ARRIVE by deploy. That used to be a MODE of `run` started with
+// nothing configured (ADR-0093); it is its own command now, `node`, and this suite
+// moved with it. Asserted END TO END against a real `node` and the real
+// `etherfold upload` command, over the committed REAL bundles
 // (`fixtures/processor-bundle/`):
 //
-//  - with nothing configured it SERVES, fetches nothing, answers reads with the
+//  - started with the chain, the store and the database only, it SERVES, fetches nothing, answers reads with the
 //    existing `503 no-canonical-generation` (ADR-0058) and says on `/status` that it
 //    is WAITING for a processor;
 //  - its first upload becomes its first generation and takes `canonical`, and the node
@@ -67,14 +69,15 @@ function oneDatabase(): RemoteSQL {
 /** NOTHING CONFIGURED: no processor and no source, only where to fold, where to answer and the chain. */
 const NOTHING: Options = {nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:', port: '0', indexer: INDEXER};
 
-/** START a `run` with nothing configured over `db`, which may already hold generations. */
+/** START a `node` over `db`, which may already hold generations. */
 async function aWaitingNodeOver(
 	db: RemoteSQL,
 	chain: ReturnType<typeof fakeChain>,
 	options: Partial<Options> = {},
+	env: Record<string, string> = {},
 ): Promise<RunningIndexer> {
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
-	running = await run(
+	running = await node(
 		{...NOTHING, ...options},
 		{
 			provider: chain.provider,
@@ -84,7 +87,7 @@ async function aWaitingNodeOver(
 			},
 			handleSignals: false,
 			log: () => {},
-			env: {MAX_BLOCKS_PER_FETCH: '20'},
+			env: {MAX_BLOCKS_PER_FETCH: '20', ...env},
 		},
 	);
 	return running;
@@ -155,7 +158,7 @@ const bytesOf = async (path: string): Promise<Uint8Array> => new Uint8Array(awai
 
 // ---------------------------------------------------------------------------------------------------
 
-describe('a `run` started with NOTHING configured waits, and says so', () => {
+describe('a `node` waits, and says so', () => {
 	it('starts, refuses reads with the no-canonical-generation 503, fetches nothing, and reports WAITING on /status', async () => {
 		const chain = fakeChain().serve(LOGS, TIP);
 		const indexer = await aWaitingNodeOver(oneDatabase(), chain);
@@ -179,8 +182,10 @@ describe('a `run` started with NOTHING configured waits, and says so', () => {
 		expect(indexer.container.held()).toEqual([]);
 		expect((await listingOf(indexer)).generations).toEqual([]);
 	});
+});
 
-	it('answers a RE-READ with `failed`, naming the upload: it has no processor path to re-read', async () => {
+describe('a `node` wires no re-read: it has no configuration of its code to re-read (ADR-0094)', () => {
+	it('answers `501 reconfigure-not-held`, as a host without that seam does, and registers nothing', async () => {
 		const indexer = await aWaitingNodeOver(oneDatabase(), fakeChain().serve(LOGS, TIP));
 
 		const res = await fetch(`${indexer.url}/${INDEXER}/admin/reconfigure`, {
@@ -189,9 +194,8 @@ describe('a `run` started with NOTHING configured waits, and says so', () => {
 		});
 		const body = (await res.json()) as Record<string, any>;
 
-		expect(res.status, JSON.stringify(body)).toBe(409);
-		expect(body).toMatchObject({arrival: 're-read', outcome: 'failed'});
-		expect(body.message).toMatch(/started with NO processor.*etherfold upload/s);
+		expect(res.status, JSON.stringify(body)).toBe(501);
+		expect(body.error).toBe('reconfigure-not-held');
 		expect((await listingOf(indexer)).generations).toEqual([]);
 	});
 });
@@ -263,7 +267,7 @@ describe('its first upload makes it index', () => {
 	});
 });
 
-describe('with nothing configured over a registry that already has a canonical generation', () => {
+describe('a `node` over a registry that already has a canonical generation', () => {
 	it('instantiates it from its stored bundle and folds the contracts THAT bundle carries', async () => {
 		const db = oneDatabase();
 		const first = await aWaitingNodeOver(db, fakeChain().serve(LOGS, TIP));
@@ -339,5 +343,85 @@ describe('with nothing configured over a registry that already has a canonical g
 		);
 		// ...and the node now knows what to fetch, so it fetches
 		await waitFor('the node started fetching', async () => chain.logRanges.length > 0);
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// WHAT `node` TAKES, AND WHAT IT DOES NOT READ (ADR-0094)
+// ---------------------------------------------------------------------------------------------------
+// Its FLAGS `-p` and `--deployments` are refused by the resolver (`configuration.test.ts`).
+// The ambient `INDEXING_SOURCE` is NOT refused and NOT read (ADR-0048): one host may run
+// `node` beside a configured command that owns the variable. So it is asserted here, end to
+// end, that a node whose environment names a DIFFERENT contract never fetches it.
+// ---------------------------------------------------------------------------------------------------
+
+/** A source naming a contract the uploaded bundles do not carry. */
+const ELSEWHERE = '0x00000000000000000000000000000000000000ee';
+
+describe('a `node` does not read INDEXING_SOURCE, which it does not own', () => {
+	it('starts and waits with it set, and fetches the contracts the UPLOAD carries, never the ones it names', async () => {
+		const chain = fakeChain().serve(LOGS, TIP);
+		const indexer = await aWaitingNodeOver(
+			oneDatabase(),
+			chain,
+			{},
+			{
+				INDEXING_SOURCE: JSON.stringify({
+					chainId: '1',
+					contracts: [{abi, address: ELSEWHERE, startBlock: START_BLOCK}],
+				}),
+			},
+		);
+
+		// not refused, and not used as a source: it WAITS, exactly as it would without it
+		expect((await statusOf(indexer)).cursor.waiting?.for).toBe('processor');
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(chain.logRanges).toEqual([]);
+
+		expect((await uploadWith(indexer, BUNDLE)).code).toBe(0);
+		await waitFor('the uploaded processor folded to the tip', async () => (await canonicalReachedOn(indexer)) === TIP);
+
+		const fetched = indexer.container.fetchedSource?.contracts as readonly {address: string}[];
+		expect(fetched.map((contract) => contract.address.toLowerCase())).toEqual([CONTRACT.toLowerCase()]);
+		const asked = chain.calls
+			.filter((call) => call.method === 'eth_getLogs')
+			.flatMap((call) => [call.params[0].address].flat())
+			.map((address: string) => address.toLowerCase());
+		expect(asked.length).toBeGreaterThan(0);
+		expect(asked).not.toContain(ELSEWHERE);
+	});
+});
+
+describe('a `node` honours --promotion', () => {
+	it('under `manual`, holds an upload that has CAUGHT UP until it is asked, then moves when asked', async () => {
+		const indexer = await aWaitingNodeOver(oneDatabase(), fakeChain().serve(LOGS, TIP), {promotion: 'manual'});
+		expect((await uploadWith(indexer, BUNDLE)).code).toBe(0);
+		await waitFor('the first upload folded to the tip', async () => (await canonicalReachedOn(indexer)) === TIP);
+		const first = (await listingOf(indexer)).generations[0]!;
+
+		expect((await uploadWith(indexer, EDITED_BUNDLE)).code).toBe(0);
+		const editedIdentity = processorArtifactIdentity(await bytesOf(EDITED_BUNDLE));
+		const edited = (await listingOf(indexer)).generations.find((entry) => entry.processor === editedIdentity)!;
+		await waitFor('the uploaded successor caught up', async () => {
+			return (
+				(await indexer.container.registry.readStateCursor({stream: edited.stream, processor: edited.processor})) === TIP
+			);
+		});
+		// CAUGHT UP, and still not canonical, cycle after cycle: nobody asked
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		let listing = await listingOf(indexer);
+		expect(listing.slots?.canonical?.digest).toBe(first.digest);
+		expect(listing.slots?.successor?.digest).toBe(edited.digest);
+		expect((await statusOf(indexer)).promotion).toMatchObject({policy: 'manual'});
+
+		// ...and the operator's promote moves it
+		const res = await fetch(`${indexer.url}/${INDEXER}/admin/canonical-generation`, {
+			method: 'POST',
+			headers: {Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json'},
+			body: JSON.stringify({stream: edited.stream, processor: edited.processor}),
+		});
+		expect(res.status, await res.clone().text()).toBe(200);
+		listing = await listingOf(indexer);
+		expect(listing.slots?.canonical?.digest).toBe(edited.digest);
 	});
 });

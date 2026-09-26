@@ -23,8 +23,8 @@ import type {
 // ---------------------------------------------------------------------------------------------------
 // ONE CONFIGURATION PATH FOR EVERY COMMAND (ADR-0048)
 // ---------------------------------------------------------------------------------------------------
-// Moving between the five deployment commands is a DEPLOYMENT change and never a
-// rewrite, and that is a property of this file. The sixth, `upload`, is a CLIENT of
+// Moving between the six deployment commands is a DEPLOYMENT change and never a
+// rewrite, and that is a property of this file. The seventh, `upload`, is a CLIENT of
 // a running deployment rather than a way to run one, and it takes its inputs here
 // too, under the same rules, for the same reason (ADR-0048's 2026-09-26 amendment). Every command reads the same inputs, under
 // the same flag and the same variable, through the same resolver, and refuses in
@@ -158,7 +158,7 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'a deployment names it, and the file at that path is read and named by the sha256 of its own bytes -- so ' +
 			'an edited handler is a different generation with nobody having to remember to say so (ADR-0086). A path ' +
 			'naming an entry point that still imports something is REFUSED, naming the command that bundles it. ' +
-			'`run` may be started with NEITHER a processor nor a source, and then waits for its first upload (ADR-0093)',
+			'`node` takes NONE: it receives its code only by `etherfold upload` (ADR-0094)',
 	},
 	source: {
 		flag: '-d, --deployments <folder>',
@@ -271,7 +271,8 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  *
  * | command | processor | source | node URL | destination | serving | indexer name | ingest wire |
  * | --- | --- | --- | --- | --- | --- | --- | --- |
- * | `run` | required, or absent WITH the source (waits) | required | required | store + database, required | port and host | optional, defaults | none |
+ * | `run` | required | optional (the module's own, else) | required | store + database, required | port and host | optional, defaults | none |
+ * | `node` | NOT ACCEPTED (uploaded) | NOT ACCEPTED (the upload carries it) | required | store + database, required | port and host | optional, defaults | none |
  * | `build` | required | required | required | store + database, required | none | optional, defaults | none |
  * | `fetch` | NOT ACCEPTED | required | required | NOT ACCEPTED | none | REQUIRED | endpoint + token, required |
  * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
@@ -279,10 +280,10 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * | `upload` | the BUNDLE, required | NOT ACCEPTED | NOT ACCEPTED | NOT ACCEPTED | none | REQUIRED | none; `--to` + `ADMIN_TOKEN`, required |
  *
  * `upload` is the one row that is not a deployment intent: it is a CLIENT of a
- * running `run`, sending an already-built bundle to its admin route and exiting
+ * running `node`, sending an already-built bundle to its admin route and exiting
  * (ADR-0085). Its two inputs no other command owns are the node it sends TO
  * (`--to` / `UPLOAD_TO`, never the chain's `-n` / `ETH_NODE_URI`) and the admin
- * credential it PRESENTS (`--admin-token` / `ADMIN_TOKEN`). The five deployment
+ * credential it PRESENTS (`--admin-token` / `ADMIN_TOKEN`). The six deployment
  * commands refuse both flags; the ones that SERVE the admin surface still read
  * `ADMIN_TOKEN` from their environment, in the HTTP layer, as they always have.
  *
@@ -294,21 +295,23 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * because a name a host was not built with must be a routing error rather than a
  * batch that landed somewhere plausible. Off the wire it is what every stored
  * EMISSION row is keyed on, so a FOLDING command needs one whether or not it
- * routes anything: `run` and `build` take it optionally and default it
+ * routes anything: `run`, `node` and `build` take it optionally and default it
  * (ADR-0052). `serve` still refuses it outright, because a read tier folds
  * nothing and registers nothing, and would have nothing to do with the value.
  *
  * Three of those rows are asymmetries rather than accidents, and all are load-bearing:
  *
- *  - **`run` may be started with NO processor and NO source, together** (ADR-0093,
- *    the one exception ADR-0048 makes, stated as a MODE rather than a default). Such a
- *    node folds whatever its registry's canonical generation names, or WAITS for its
- *    first upload and says so on `/status`. A source WITHOUT a processor is still
- *    refused, because contracts with nothing to fold them are a configuration error
- *    rather than an intent to wait; a processor without a source is valid, as ever.
- *    Every other command still requires what it required: `build` and `index` fold
- *    at once and have nothing to wait on, and the split `index` does not wait because
- *    its fetcher is another process an upload could not reach.
+ *  - **`node` takes NO processor and NO source, and `run` requires its processor**
+ *    (ADR-0094, which moved ADR-0048's one exception from `run` to a command of its
+ *    own). Each has ONE source of truth: `run` folds what its configuration names and
+ *    receives no code, `node` folds what its registry holds and receives code only by
+ *    `etherfold upload`, WAITING for its first one and saying so on `/status`. The
+ *    absence on `node` is the command's whole meaning rather than a default, so its
+ *    `-p` and `--deployments` FLAGS are refused by name, pointing at `upload`; the
+ *    ambient `INDEXING_SOURCE` is simply not read there (the rule below). `run` with
+ *    neither is refused, naming `node`. `build` and `index` still require what they
+ *    required, and the split `index` does not receive uploads because its fetcher is
+ *    another process an upload could not reach.
  *  - **`fetch` takes a SOURCE but no processor**, because the chain-facing half
  *    holds no processor by ADR-0003, and it owns no database, so `--store` and
  *    `--db` are REFUSED there rather than optional. A required store flag
@@ -325,8 +328,8 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  */
 export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput, Ownership>>>> = {
 	run: {
-		// OPTIONAL only together with the source (ADR-0093): see `resolveRunProcessor`
-		processor: 'optional',
+		// REQUIRED (ADR-0094): a deployment that receives its code by upload is `node`
+		processor: 'required',
 		source: 'optional',
 		nodeUrl: 'required',
 		rps: 'optional',
@@ -343,6 +346,31 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		promotion: 'optional',
 		dropOnPromotion: 'optional',
 		override: 'optional',
+		to: 'refused',
+		adminToken: 'refused',
+	},
+	node: {
+		// NOT ACCEPTED (ADR-0094): what it folds arrives by `etherfold upload`, and each
+		// upload carries its own contracts, so nothing on its command line competes with it
+		processor: 'refused',
+		source: 'refused',
+		nodeUrl: 'required',
+		rps: 'optional',
+		store: 'required',
+		db: 'required',
+		retention: 'optional',
+		pruneInterval: 'refused',
+		port: 'optional',
+		host: 'optional',
+		autoSetup: 'optional',
+		indexer: 'optional',
+		ingestEndpoint: 'refused',
+		ingestToken: 'refused',
+		// uploads register successors WHILE it runs, so when they take over is its to say
+		promotion: 'optional',
+		dropOnPromotion: 'optional',
+		// its starts replace nothing: it starts with no configured processor
+		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
 	},
@@ -539,10 +567,11 @@ const NOTHING_TO_PRUNE_SERVE =
 // The policy governs the move a CONTAINER makes ON ITS OWN when a successor is
 // added BESIDE a live fold (`generation/promotion.ts`, ADR-0046). So the question
 // a command has to answer to own this input is not "do I hold generations" but
-// "can a successor appear here while I am running", and today exactly one command
-// can say yes: `run` re-reads its own configuration on
-// `POST /{indexer}/admin/reconfigure` and advances the successor with a bounded
-// rebuild between fetch cycles.
+// "can a successor appear here while I am running", and today two commands can
+// say yes, both advancing the successor with a bounded rebuild between fetch
+// cycles: `node`, whose uploads (`POST /{indexer}/admin/upload`) register one
+// beside the live fold (ADR-0094), and `run`, which re-reads its own configuration
+// on `POST /{indexer}/admin/reconfigure`.
 //
 // The other three that hold state cannot, each for its own structural reason, so
 // the flag is REFUSED there rather than accepted and ignored -- which is the rule
@@ -565,13 +594,13 @@ const NEVER_PROMOTES_BUILD =
 	'can hold is the one its own configuration named at start-up -- a re-run over a database it already wrote, ' +
 	'with changed processor bytes -- and that one is folded and settled under the DEFAULT policy before the ' +
 	'process exits. Choosing a different value for it is a question about this command\u2019s inputs that ' +
-	'nothing has answered yet; `run` is the shape that takes the flag today, and it is also the shape that can ' +
-	'be RE-configured while it runs (POST /{indexer}/admin/reconfigure).';
+	'nothing has answered yet; `run` and `node` are the shapes that take the flag today, and `run` is also the ' +
+	'shape that can be RE-configured while it runs (POST /{indexer}/admin/reconfigure).';
 
 const NEVER_PROMOTES_FETCH =
 	'a fetcher holds no generations at all -- no processor, no state and no canonical pointer (ADR-0003) -- so ' +
 	'there is no pointer here for a policy to move. It belongs to whatever folds what this pushes: `index`, ' +
-	'or `run` in one process.';
+	'or `run` / `node` in one process.';
 
 // It says "takes no input" and no longer says "has nothing to act on", because the
 // second stopped being true when `index` gained the rebuild it schedules: a
@@ -585,11 +614,11 @@ const NEVER_PROMOTES_INDEX =
 	'no reconfigure route -- so the only one it can hold is what its own configuration named at start-up, and that ' +
 	'one is carried to level and promoted under the DEFAULT policy by the rebuild this command schedules. Choosing ' +
 	'a different value for a restart-registered successor is a question about this command\u2019s inputs that nothing ' +
-	'has answered yet; `run` is the shape that takes the flag today.';
+	'has answered yet; `run` and `node` are the shapes that take the flag today.';
 
 const NEVER_PROMOTES_SERVE =
 	'a read tier folds nothing and promotes nothing: it READS the canonical pointer that whatever wrote the ' +
-	'database moves. When that pointer moves is the writer\u2019s configuration, which is `run`.';
+	'database moves. When that pointer moves is the writer\u2019s configuration, which is `run` or `node`.';
 
 // ---------------------------------------------------------------------------------------------------
 // WHY THE SENDER'S TWO INPUTS ARE ITS OWN, and why it takes nothing else
@@ -615,8 +644,9 @@ const NO_ADMIN_SURFACE =
 
 const UPLOAD_CARRIES_ITS_CONTRACTS =
 	'an upload CARRIES ITS OWN CONTRACTS, inside the bundle, through the route a processor module supplies ' +
-	'them by (ADR-0085), and it is the NODE that checks them against a source its operator configured. A ' +
-	'source given here would be one nothing reads. To start a node on an explicit source, that is `run`.';
+	'them by (ADR-0085), and the `node` it is sent to indexes exactly those: it has no configured source to ' +
+	'hold them to (ADR-0094). A source given here would be one nothing reads. To index an explicit source ' +
+	'named by configuration, that is `etherfold run` with -p and --deployments.';
 
 const UPLOAD_IS_NOT_THE_CHAIN =
 	'-n / ETH_NODE_URI is the CHAIN\u2019s JSON-RPC endpoint on every command that takes it, and `upload` makes ' +
@@ -628,7 +658,7 @@ const UPLOAD_MAKES_NO_CHAIN_CALL =
 
 const UPLOAD_HOLDS_NO_STATE =
 	'`upload` holds no state and opens no database: it sends bytes to a running node, and the database, the ' +
-	'retention and the prune schedule are THAT node\u2019s configuration (its `run`).';
+	'retention and the prune schedule are THAT node\u2019s configuration (its `etherfold node`).';
 
 const UPLOAD_SERVES_NOTHING =
 	'`upload` is a client: it binds no port and serves nothing. The node it addresses is --to (UPLOAD_TO).';
@@ -640,7 +670,8 @@ const UPLOAD_IS_NOT_INGEST =
 
 const UPLOAD_DOES_NOT_PROMOTE =
 	'WHEN an uploaded generation takes over is the RECEIVING node\u2019s promotion policy, configured on its ' +
-	'`run` (--promotion / PROMOTION_POLICY): an upload registers a successor, and that policy moves the pointer.';
+	'`etherfold node` (--promotion / PROMOTION_POLICY): an upload registers a successor, and that policy moves ' +
+	'the pointer.';
 
 // ---------------------------------------------------------------------------------------------------
 // WHICH COMMANDS TAKE --override
@@ -662,15 +693,51 @@ const NO_PROCESSOR_TO_START =
 	'`run`, `build` and `index`.';
 
 const OVERRIDE_IS_THE_NODES =
-	'an upload is already a deliberate act on a running node and replaces a pending successor without being asked. ' +
-	'--override belongs to the commands that START with a configured --processor (`run`, `build`, `index`): it ' +
-	'lets such a start replace one.';
+	'an upload is already a deliberate act on a running `etherfold node` and replaces a pending successor there ' +
+	'without being asked. --override belongs to the commands that START with a configured --processor (`run`, ' +
+	'`build`, `index`): it lets such a start replace one.';
+
+// ---------------------------------------------------------------------------------------------------
+// WHY `node` TAKES NO CODE ON ITS COMMAND LINE (ADR-0094)
+// ---------------------------------------------------------------------------------------------------
+// `node` RECEIVES: its one source of truth is its registry, fed by `etherfold
+// upload`. A processor or a source on its command line would be a second one, and
+// every interaction between the two used to need a rule. So the FLAGS are refused,
+// each pointing at the upload; the ambient `INDEXING_SOURCE` is not read (the
+// module header's rule), so one host can run `node` beside a configured command.
+// ---------------------------------------------------------------------------------------------------
+
+const NODE_RECEIVES_ITS_PROCESSOR =
+	'`node` starts with NO processor: what it folds is what its registry holds, and code reaches it only by ' +
+	'`etherfold upload` (ADR-0094). Start it, then upload the bundle to it (`etherfold upload <bundle> --to ' +
+	'<this node> --indexer <name>`). To fold a processor named by configuration, that is `etherfold run -p`.';
+
+const NODE_HAS_NO_SOURCE =
+	'`node` has NO configured source: an upload CARRIES ITS OWN CONTRACTS, inside the bundle, and those are what ' +
+	'it indexes (ADR-0085, ADR-0094). Build the bundle against the contracts and upload it (`etherfold upload`). ' +
+	'To index a source named by configuration, that is `etherfold run` with -p and --deployments. INDEXING_SOURCE ' +
+	'in the environment is not read here rather than refused.';
+
+const NODE_REPLACES_NOTHING_AT_START =
+	'`node` starts with no configured processor, so its start registers nothing and replaces nothing; an upload ' +
+	'to it replaces a pending successor without being asked, because an upload is already a deliberate act. The ' +
+	'commands that take --override are `run`, `build` and `index`.';
 
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
 	run: {
 		pruneInterval: PRUNES_PER_CYCLE,
 		ingestEndpoint: NO_WIRE_COMBINED,
 		ingestToken: NO_WIRE_COMBINED,
+		to: NOT_A_SENDER,
+		adminToken: CHECKS_ADMIN_FROM_ENV,
+	},
+	node: {
+		processor: NODE_RECEIVES_ITS_PROCESSOR,
+		source: NODE_HAS_NO_SOURCE,
+		pruneInterval: PRUNES_PER_CYCLE,
+		ingestEndpoint: NO_WIRE_COMBINED,
+		ingestToken: NO_WIRE_COMBINED,
+		override: NODE_REPLACES_NOTHING_AT_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 	},
@@ -1269,7 +1336,7 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 				const source = resolveSourceOrigin<ABI>(options, env);
 				return {
 					command: 'run',
-					processor: resolveRunProcessor(options, env, source),
+					processor: requireRunProcessor(options, env),
 					source,
 					nodeUrl: requireNodeUrl('run', options, env),
 					...(rps === undefined ? {} : {rps}),
@@ -1280,14 +1347,31 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// read-only, and routes no BATCH by it, which is the use ADR-0036 forbids
 					// defaulting and the reason defaulting this one is allowed
 					indexer: resolveIndexerName(options, env),
-					// WHEN the pointer moves onto a successor this process registers while it
-					// runs -- the one command that can register one. ABSENT where the operator
-					// said nothing, so the default stays written in one place (see
-					// `resolvePromotion`).
+					// WHEN the pointer moves onto a successor this process holds while it runs.
+					// ABSENT where the operator said nothing, so the default stays written in one
+					// place (see `resolvePromotion`).
 					...(promotion === undefined ? {} : {promotion}),
 					// whether this START may replace a DIFFERENT pending successor without asking
 					// (ADR-0084's amendment of 2026-09-26). A flag and no variable: see `INPUTS`.
 					override: given('override', options, env) !== undefined,
+				};
+			}
+			case 'node': {
+				// NO processor and NO source, and neither is looked for (ADR-0094): the flags
+				// were refused above, and `INDEXING_SOURCE` is an ambient variable this command
+				// does not own, so it is not read at all
+				const rps = resolveRequestsPerSecond(options, env);
+				const promotion = resolvePromotion('node', options, env);
+				return {
+					command: 'node',
+					nodeUrl: requireNodeUrl('node', options, env),
+					...(rps === undefined ? {} : {rps}),
+					destination: resolveStoreTarget('node', options, env),
+					serving: resolveServing(options, env),
+					// defaulted as `run`'s is (ADR-0052): it routes no batch by name either
+					indexer: resolveIndexerName(options, env),
+					// WHEN an uploaded successor takes over: uploads register one while it runs
+					...(promotion === undefined ? {} : {promotion}),
 				};
 			}
 			case 'build': {
@@ -1403,35 +1487,23 @@ export function resolveIndexerName(options: Options, env: EnvRecord): string {
 }
 
 /**
- * `run`'s processor: the bundle it was given, or NOTHING, which is a mode (ADR-0093).
+ * `run`'s processor, which it REQUIRES (ADR-0094).
  *
- * `run` may be started with no processor AND no source, together, and then it waits for
- * its first upload. That is the one exception ADR-0048 makes to "a missing input is a
- * refusal", and it is not a default: nothing is filled in, and a node that folds nothing
- * says on `/status` that it is WAITING, which is the loud failure a defaulted input
- * would not have.
- *
- * So ONLY the pair may be absent. A SOURCE with no processor is REFUSED, naming both
- * ways out: contracts with nothing to fold them are a configuration error, not an intent
- * to wait, and the source an operator configured would otherwise be silently dropped
- * (a waiting node takes the contracts its first upload CARRIES).
+ * `run` is CONFIGURED: what it folds toward is exactly what `-p` names, and it
+ * receives no code. A deployment started with no processor, whose code arrives by
+ * `etherfold upload`, is a different command, `node`, so the refusal names it rather
+ * than naming only the flag: someone who started `run` bare is most likely reaching
+ * for the upload story, and ADR-0093's waiting `run` they may remember is that
+ * command now.
  */
-function resolveRunProcessor<ABI extends Abi>(
-	options: Options,
-	env: EnvRecord,
-	source: SourceOrigin<ABI>,
-): string | undefined {
+function requireRunProcessor(options: Options, env: EnvRecord): string {
 	const processor = given('processor', options, env);
 	if (processor !== undefined) return processor;
-	if (source.from === 'processor-module') return undefined;
-	const named =
-		source.from === 'deployments' ? `${INPUTS.source.flag.split(' <')[0]} ${source.folder}` : 'INDEXING_SOURCE';
 	throw new Error(
-		`${nameOf('processor')} is required by \`etherfold run\` when a source is given, and this one was given ` +
-			`${named} with no processor. Contracts with nothing to fold them are a configuration error rather than an ` +
-			`intent to wait (ADR-0093): either add ${nameOf('processor')}, the self-contained bundle that folds them, or ` +
-			`give NEITHER, and the node starts with nothing configured and waits for its first upload ` +
-			`(\`etherfold upload\`), which carries its own contracts. ${NO_VARIABLE}`,
+		`${nameOf('processor')} is required by \`etherfold run\`, which folds exactly what its configuration names ` +
+			`(ADR-0094): the self-contained bundle exporting "createProcessor", whose bytes name the generation it ` +
+			`registers (ADR-0086). To start a node with NO processor and no source, that waits for its code to be ` +
+			`uploaded (\`etherfold upload\`), that is \`etherfold node\`. ${NO_VARIABLE}`,
 	);
 }
 
@@ -1456,7 +1528,7 @@ function requireProcessor(command: CommandName, options: Options, env: EnvRecord
  * batch that lands somewhere plausible on the other.
  *
  * That is a rule about ROUTING and it does not reach a process that routes
- * nothing, which is why `run` and `build` resolve the same input through
+ * nothing, which is why `run`, `node` and `build` resolve the same input through
  * `resolveIndexerName` and may default it (ADR-0052). The two are separate
  * functions so that neither can be made to do the other's job by passing a
  * command name.
@@ -1472,7 +1544,7 @@ function requireIndexerName(command: CommandName, options: Options, env: EnvReco
 					'calls. It must be a name the receiving server was built with, or every push is refused with a 404'
 			: command === 'upload'
 				? 'the named indexer on the node that the bundle is for: the first segment of the route it is sent ' +
-					'to (/{indexer}/admin/upload). It is never defaulted here, although `run` defaults its own to ' +
+					'to (/{indexer}/admin/upload). It is never defaulted here, although `node` defaults its own to ' +
 					`'${DEFAULT_INDEXER_NAME}': a sender that defaulted it would deploy to the wrong indexer without a word`
 				: 'the named indexer this server hosts, which is the route segment a fetcher addresses it by. A host ' +
 					'answers only for the names it registers, so a push to any other is refused rather than defaulted',

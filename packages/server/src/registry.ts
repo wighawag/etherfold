@@ -297,13 +297,13 @@ export type IndexerRegistryEntry = {
 	 * The HOST computes the identity from those bytes (ADR-0086) -- nothing the
 	 * sender says about identity is read, and this seam carries nothing it could say
 	 * it with. It must REFUSE BEFORE REGISTERING exactly as `reconfigure` must
-	 * (self-containment, evaluation, the contract match), register through the same
+	 * (self-containment, evaluation, the contracts it carries), register through the same
 	 * path every registration of this deployment takes so the bytes are stored on the
 	 * generation's row (ADR-0092), and answer the shared three-outcome report with
 	 * `arrival: 'upload'`.
 	 *
 	 * OPTIONAL, and on its own: this package names no runtime and cannot turn bytes
-	 * into a fold, so it is answered by a host that can (`etherfold run`). Absent is a
+	 * into a fold, so it is answered by a host that can (`etherfold node`, ADR-0094). Absent is a
 	 * CAPABILITY statement and the admin surface answers it with a `501`.
 	 */
 	upload?(bundle: Uint8Array): Promise<ReconfigureReport>;

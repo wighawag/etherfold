@@ -22,8 +22,10 @@ const logger = logs('etherfold');
 //    goes ahead only on a yes;
 //  - otherwise: it is REFUSED by name, naming `--override`.
 //
-// Only the START is guarded. A re-read and an upload are already deliberate acts on
-// a running node and replace a pending successor as they always did.
+// Only the START is guarded. A re-read (on `run`) and an upload (on `node`, ADR-0094)
+// are already deliberate acts on a running node and replace a pending successor as
+// they always did. `node` itself is never guarded: it starts with no configured
+// processor, so its starts replace nothing.
 // ---------------------------------------------------------------------------------------------------
 
 /** What a test substitutes for the terminal. */
@@ -70,7 +72,8 @@ export function startGuardFor(
 			`${what}. A start may not do that silently, and nobody can be asked here (stdin is not a terminal), so it ` +
 				`is REFUSED and nothing was registered or deleted. Pass --override to let this start replace it (a ` +
 				`pipeline that redeploys per commit passes it once, in its deploy configuration), or start with the ` +
-				`pending successor's processor, or with none, to keep it.`,
+				`pending successor's processor to keep it -- or, to keep it with no processor configured at all, start ` +
+				`\`etherfold node\` over this database, which takes its code by upload and replaces nothing at start.`,
 		);
 	};
 }

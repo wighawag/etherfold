@@ -41,7 +41,7 @@ import {StreamFetchers} from './fetchers.js';
 import {arrivalQueue, reconfigurerFor} from './reconfigure.js';
 import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
 import {uploaderFor} from './upload.js';
-import type {BuildConfig, ConfigFor, Options, RunConfig} from './types.js';
+import type {BuildConfig, ConfigFor, NodeConfig, Options, RunConfig} from './types.js';
 
 export * from './config.js';
 export * from './types.js';
@@ -61,7 +61,7 @@ export {
 } from './folding.js';
 export {StreamFetchers} from './fetchers.js';
 export {arrivalQueue, reconfigurerFor, type ArrivalQueue, type ReconfigureContext} from './reconfigure.js';
-export {uploaderFor, type ConfiguredSource, type UploadContext} from './upload.js';
+export {uploaderFor, type UploadContext} from './upload.js';
 export {
 	describeUpload,
 	upload,
@@ -88,7 +88,7 @@ export {
 	type IndexDependencies,
 	type RunningReceiver,
 } from './indexCommand.js';
-export {run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
+export {node, nodeMain, run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
 import {newlyStalledFollowers, rebuildUntilLevel} from './followers.js';
 import {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete} from './pruning.js';
@@ -142,7 +142,8 @@ export type IndexingDependencies = {
 	env?: EnvRecord;
 	/**
 	 * WHO A `run` OR `build` START ASKS before it replaces a different pending successor: whether
-	 * anybody can be asked, and how (`startGuardFor`). Default to the terminal.
+	 * anybody can be asked, and how (`startGuardFor`). Default to the terminal. `node` never asks:
+	 * it starts with no configured processor, so its starts replace nothing (ADR-0094).
 	 */
 	startGuard?: StartGuardDependencies;
 };
@@ -150,12 +151,17 @@ export type IndexingDependencies = {
 /**
  * The commands this assembly serves: the ones that FOLLOW a chain and FOLD it.
  *
+ * `run` and `build` are CONFIGURED with what they fold; `node` is configured with
+ * none of it and folds what its registry holds and what is uploaded to it
+ * (ADR-0094), assembled by `prepareWaiting` over the same database, registry, stream
+ * ends and fetchers.
+ *
  * `index` folds too and is deliberately not here: it receives its batches over
  * the wire and makes no chain call, so it builds no provider and no
  * `LogFetcher`. It resolves through the same `resolveCommandConfig` and assembles
  * differently, which is the distinction the command table already draws.
  */
-export type ChainFollowingCommand = 'run' | 'build';
+export type ChainFollowingCommand = 'run' | 'node' | 'build';
 
 /** Everything the assembled pipeline is made of, so a caller can drive it and look at it. */
 export type PreparedIndexing<
@@ -172,10 +178,9 @@ export type PreparedIndexing<
 	 */
 	config: ConfigFor<C, ABI>;
 	/**
-	 * What this process fetches. On a `run` started with NOTHING configured it is the
-	 * source its first fold carried, and it is REFUSED until there is one (ADR-0093) --
-	 * as are `host` below, and `processor`, `store` and `streamWriter` until something
-	 * folds: see `waiting`.
+	 * What this process fetches. On a `node` it is the source its canonical fold carried,
+	 * and it is REFUSED until there is one (ADR-0093, ADR-0094) -- as are `host` below,
+	 * and `processor`, `store` and `streamWriter` until something folds: see `waiting`.
 	 */
 	source: IndexingSource<ABI>;
 	processor: EventProcessor<ABI, ProcessResultType>;
@@ -239,36 +244,34 @@ export type PreparedIndexing<
 	 * place that knew how to do that would be a second answer to what this process
 	 * folds.
 	 *
-	 * `run` is the shape that EXPOSES it, and `build` deliberately does not: a
-	 * one-shot has no HTTP surface to pull the trigger from, so it re-reads its
-	 * configuration exactly once, at start-up. That is NOT the same as holding one
-	 * generation -- a re-run `build` over a database it already wrote with changed
-	 * processor bytes registers a successor beside the canonical generation at that
-	 * single read, folds it, and settles the pointer onto it before exiting
-	 * (`driveCycles`). It is handed back for both because the assembly is shared
-	 * verbatim and a conditional field would be a type for a distinction the commands
-	 * already draw.
+	 * PRESENT on the CONFIGURED assembly (`run`, `build`) and ABSENT on `node`, which
+	 * has no configuration of its code to re-read (ADR-0094): its route answers what a
+	 * host without the seam answers. `run` is the shape that EXPOSES it, and `build`
+	 * deliberately does not: a one-shot has no HTTP surface to pull the trigger from,
+	 * so it re-reads its configuration exactly once, at start-up. That is NOT the same
+	 * as holding one generation -- a re-run `build` over a database it already wrote
+	 * with changed processor bytes registers a successor beside the canonical
+	 * generation at that single read, folds it, and settles the pointer onto it before
+	 * exiting (`driveCycles`).
 	 */
-	reconfigure(): Promise<ReconfigureReport>;
+	reconfigure?(): Promise<ReconfigureReport>;
 	/**
 	 * RECEIVE a processor bundle's BYTES and register the generation they name, beside
 	 * the incumbent -- what `POST /{indexer}/admin/upload` does on this process
 	 * (`upload.ts`).
 	 *
-	 * Built here for the reason `reconfigure` is: it registers into the same container,
-	 * through the same fold assembly, over the same database, and it waits in the SAME
-	 * line as the re-read so two arrivals never decide against one registry at once.
-	 * `run` is the shape that exposes it; `build` has no HTTP surface to receive on.
+	 * PRESENT on `node` alone (ADR-0094): `run` is CONFIGURED and receives no code, and
+	 * `build` has no HTTP surface to receive on. Where it is present no two uploads
+	 * decide "is this identity already held" against one registry at once (`arrivalQueue`).
 	 */
-	upload(bundle: Uint8Array): Promise<ReconfigureReport>;
+	upload?(bundle: Uint8Array): Promise<ReconfigureReport>;
 	/**
 	 * WHAT `/status` SAYS while this process is WAITING for a processor (ADR-0093), and
 	 * nothing when it is not.
 	 *
-	 * Only a `run` started with NOTHING configured ever waits, and only until something
-	 * names what it fetches: until then it has no fetcher, and `host` and `source` are
-	 * refused rather than answered with a placeholder. Every configured assembly answers
-	 * nothing here.
+	 * Only a `node` ever waits, and only until something names what it fetches: until
+	 * then it has no fetcher, and `host` and `source` are refused rather than answered
+	 * with a placeholder. Every configured assembly answers nothing here.
 	 */
 	waiting(): WaitingReport | undefined;
 	/**
@@ -327,36 +330,36 @@ export async function prepareIndexing<
 	// FIRST, and pure: a missing node URL, a missing database, a store nothing
 	// implements or a source this command cannot reach is refused here, before a
 	// module is imported, a database is opened or the chain is dialled.
-	const resolved: RunConfig<ABI> | BuildConfig<ABI> = resolveCommandConfig<ChainFollowingCommand, ABI>(
+	const configured: RunConfig<ABI> | NodeConfig | BuildConfig<ABI> = resolveCommandConfig<ChainFollowingCommand, ABI>(
 		command,
 		options,
 		env,
 	);
-	// ...and the one part of it that is a FILE rather than a string: a `--processor`
-	// path naming an unbundled entry point is refused HERE, with the build command an
-	// author needs, rather than from inside a loader once a database is open
-	// (ADR-0086, ADR-0048). Nothing has been imported or opened at this line.
-	if (resolved.processor !== undefined) {
-		await refuseUnbundledProcessor(command, resolved.processor, {substitutedArrival: deps.importModule !== undefined});
-	}
-
-	logger.info({nodeUrl: resolved.nodeUrl, store: resolved.destination.store, source: resolved.source.from});
 
 	// The CLI owns its provider construction (rate-limited JSON-RPC). The processor/source resolution
 	// logic is shared with the server via the helpers in @etherfold/utils.
 	const provider =
 		deps.provider ??
-		(new JSONRPCHTTPProvider(resolved.nodeUrl, {
-			requestsPerSecond: resolved.rps,
+		(new JSONRPCHTTPProvider(configured.nodeUrl, {
+			requestsPerSecond: configured.rps,
 		}) as unknown as EIP1193ProviderWithoutEvents);
 
-	// NOTHING CONFIGURED (ADR-0093): a `run` given neither a processor nor a source, which
-	// the resolver has already told apart from a source with no processor (refused). It
-	// is assembled over the SAME database, registry and stream ends, with no fold and no
-	// source of its own, and its fetcher comes to exist when a source does.
-	if (resolved.processor === undefined) {
-		return prepareWaiting<ABI, ProcessResultType, C>(command, options, deps, env, resolved as RunConfig<ABI>, provider);
+	// `node` (ADR-0094): configured with NO processor and NO source, which the resolver
+	// guarantees by refusing both flags. It is assembled over the SAME database, registry
+	// and stream ends, with no fold and no source of its own, and its fetcher comes to
+	// exist when a source does.
+	if (configured.command === 'node') {
+		logger.info({nodeUrl: configured.nodeUrl, store: configured.destination.store, source: 'uploaded'});
+		return prepareWaiting<ABI, ProcessResultType, C>(command, deps, env, configured, provider);
 	}
+	const resolved: RunConfig<ABI> | BuildConfig<ABI> = configured;
+	// ...and the one part of it that is a FILE rather than a string: a `--processor`
+	// path naming an unbundled entry point is refused HERE, with the build command an
+	// author needs, rather than from inside a loader once a database is open
+	// (ADR-0086, ADR-0048). Nothing has been imported or opened at this line.
+	await refuseUnbundledProcessor(command, resolved.processor, {substitutedArrival: deps.importModule !== undefined});
+
+	logger.info({nodeUrl: resolved.nodeUrl, store: resolved.destination.store, source: resolved.source.from});
 	const processorPath = resolved.processor;
 
 	// WHAT THE `--processor` PATH TURNS OUT TO BE. A path is still how a deployment
@@ -443,10 +446,11 @@ export async function prepareIndexing<
 			// both are guarded, as `index` is (`indexCommand.ts`).
 			confirmReplacingSuccessorAtStart: startGuardFor(resolved.override, deps.startGuard),
 			// A STORED GENERATION FOLDS THE CONTRACTS ITS OWN BUNDLE CARRIES where this
-			// deployment's source came from its processor module: that is the node an upload
-			// carrying NEW contracts registers a successor on a new stream for, so after a
-			// restart it can go on fetching that stream (mid-catch-up) or the one the canonical
-			// generation was promoted onto. A source the operator configured overrides it.
+			// deployment's source came from its processor module: a generation registered on
+			// a NEW stream -- by an earlier start with a processor carrying new contracts, or
+			// by an upload to a `node` that wrote this same database (ADR-0094) -- goes on being
+			// fetched on that stream (mid-catch-up) or on the one the canonical generation was
+			// promoted onto. A source the operator configured overrides it.
 			...(resolved.source.from === 'processor-module' ? {sourceCarriedByBundle: {provider}} : {}),
 			// THIS PROCESS FETCHES EVERY STREAM IT FOLDS (`StreamFetchers` below), so a promotion
 			// onto another stream stops folding the incumbent and lets its fetcher stop. `index`,
@@ -463,9 +467,9 @@ export async function prepareIndexing<
 	);
 	await fetchers.reconcile();
 
-	// ONE LINE for every arrival this process answers -- the re-read and the upload --
-	// so no two of them decide "is this identity already held" against one registry at
-	// the same time (`arrivalQueue`, `reconfigure.ts`).
+	// ONE LINE for every arrival this process answers, so no two re-reads decide "is this
+	// identity already held" against one registry at the same time (`arrivalQueue`,
+	// `reconfigure.ts`).
 	const arrivals = arrivalQueue();
 
 	return {
@@ -500,21 +504,7 @@ export async function prepareIndexing<
 			},
 			arrivals,
 		),
-		// THE UPLOAD, over the same container, database and destination, in the same line.
-		// The source the operator CONFIGURED is handed over only where there is one: that
-		// is the only source an upload is held to (`upload.ts`), and a source that came from
-		// the processor module is not one.
-		upload: uploaderFor<ABI, ProcessResultType>(
-			{
-				provider,
-				db,
-				destination: resolved.destination,
-				stream: providedStreamConfig,
-				container,
-				...(resolved.source.from === 'processor-module' ? {} : {configured: {origin: resolved.source, source}}),
-			},
-			arrivals,
-		),
+		// NO UPLOAD: a configured deployment receives no code (ADR-0094); that is `node`.
 		// ...and it is not WAITING: it was configured with what it folds and what it fetches
 		waiting: () => undefined,
 		index: () => driveCycles(command, fetchers, container, deps),
@@ -533,16 +523,15 @@ function noFetcher(): never {
  * THE FETCHER OF ONE STREAM a chain-following command fetches, over that stream's source.
  *
  * Built by `StreamFetchers` for every stream the container fetches: at start for the
- * stream a configured deployment comes up fetching, on a `run` started with NOTHING
- * configured (ADR-0093) at the moment its container first names one, and, beside those,
- * for the NEW stream of a successor that arrived with different contracts (an upload
- * that adds an event), so it catches up while the incumbent's fetcher goes on running.
+ * stream a configured deployment comes up fetching, on a `node` (ADR-0093, ADR-0094)
+ * at the moment its container first names one, and, beside those, for the NEW stream
+ * of a successor that arrived with different contracts (an upload that adds an event), so it catches up while the incumbent's fetcher goes on running.
  * Every one of them pushes into the same in-process target, which routes each batch to
  * the ONE writer of the stream it names (ADR-0087).
  */
 function fetcherHostOver<ABI extends Abi, ProcessResultType>(
 	fetched: Pick<FetchedStream<ABI>, 'source' | 'config'>,
-	resolved: RunConfig<ABI> | BuildConfig<ABI>,
+	resolved: RunConfig<ABI> | NodeConfig | BuildConfig<ABI>,
 	env: EnvRecord,
 	providedStreamConfig: ReturnType<typeof streamConfigFor>,
 	provider: EIP1193ProviderWithoutEvents,
@@ -584,8 +573,8 @@ function fetcherHostOver<ABI extends Abi, ProcessResultType>(
 }
 
 /**
- * How long a `run` started with NOTHING configured waits between two looks at whether it
- * has been told what to fetch, where nothing woke it sooner.
+ * How long a `node` waits between two looks at whether it has been told what to fetch,
+ * where nothing woke it sooner.
  *
  * An upload WAKES it at once; this is the bound for every other way a source can arrive
  * (an operator's promote onto a generation it can instantiate), so it is a ceiling on
@@ -594,14 +583,13 @@ function fetcherHostOver<ABI extends Abi, ProcessResultType>(
 export const WAITING_POLL_MS = 1_000;
 
 /**
- * THE WORDS `/status` CARRIES while a node started with nothing configured has no source
- * to fetch (ADR-0093).
+ * THE WORDS `/status` CARRIES while a `node` has no source to fetch (ADR-0093, ADR-0094).
  */
 function waitingFor(indexer: string): WaitingReport {
 	return {
 		for: 'processor',
 		message:
-			`this node was started with no processor and no source (ADR-0093), and nothing it holds names what to ` +
+			`this \`etherfold node\` takes no processor and no source (ADR-0094), and nothing it holds names what to ` +
 			`fetch: it fetches nothing and folds nothing new until a processor is uploaded to it (\`etherfold upload\`, ` +
 			`POST /${indexer}/admin/upload). Reads are answered by the canonical generation where its registry names one, ` +
 			`and refused until then.`,
@@ -609,21 +597,25 @@ function waitingFor(indexer: string): WaitingReport {
 }
 
 /**
- * The accessor of a thing a node started with NOTHING configured does not have yet,
- * refused with the reason rather than answered with a placeholder (ADR-0093).
+ * The accessor of a thing a `node` does not have yet, refused with the reason rather
+ * than answered with a placeholder (ADR-0093, ADR-0094).
  */
 function notYet(what: string): never {
 	throw new Error(
-		`this \`etherfold run\` was started with no processor and no source (ADR-0093) and has not been told what to ` +
-			`fetch yet, so it has no ${what}: it is WAITING for a processor to be uploaded.`,
+		`this \`etherfold node\` takes no processor and no source (ADR-0094) and has not been told what to fetch ` +
+			`yet, so it has no ${what}: it is WAITING for a processor to be uploaded.`,
 	);
 }
 
 /**
- * Assemble a `run` started with NOTHING configured (ADR-0093): the same database, the
- * same registry and the same stream ends a configured `run` has, a container with no fold
- * and no source of its own (`openWaitingFolding`), and NO FETCHER until there is
- * something to fetch.
+ * Assemble a `node` (ADR-0094; ADR-0093's waiting mode, as a command of its own): the
+ * same database, the same registry and the same stream ends a configured `run` has, a
+ * container with no fold and no source of its own (`openWaitingFolding`), and NO FETCHER
+ * until there is something to fetch.
+ *
+ * It serves the UPLOAD (`upload.ts`) and wires NO re-read: it has no configuration of
+ * its code to re-read, so `POST /{indexer}/admin/reconfigure` answers what a host
+ * without that seam answers.
  *
  * ## How the fetchers come to exist after start
  *
@@ -641,10 +633,9 @@ function notYet(what: string): never {
  */
 async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends ChainFollowingCommand>(
 	command: C,
-	options: Options,
 	deps: IndexingDependencies,
 	env: EnvRecord,
-	resolved: RunConfig<ABI>,
+	resolved: NodeConfig,
 	provider: EIP1193ProviderWithoutEvents,
 ): Promise<PreparedIndexing<ABI, ProcessResultType, C>> {
 	const providedStreamConfig = streamConfigFor(env);
@@ -670,8 +661,8 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 		await fetchers.reconcile();
 		if (before === 0 && fetchers.size > 0) {
 			logger.info(
-				`run: this node was started with nothing configured and now knows what to fetch, so it starts fetching ` +
-					`(ADR-0093)`,
+				`node: this node was started with no processor and now knows what to fetch, so it starts fetching ` +
+					`(ADR-0094)`,
 			);
 		}
 		return fetchers.size > 0;
@@ -689,9 +680,7 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 			destination: resolved.destination,
 			stream: providedStreamConfig,
 			container,
-			// NO `configured`: a node started with nothing configured has no source the
-			// OPERATOR chose, so an upload carrying different contracts is a successor on a
-			// new stream rather than a mismatch (`upload.ts`, ADR-0093)
+			// a `node` notes the entities each arrival declares (`WaitingFoldingAssembly`)
 			foldParts,
 		},
 		arrivals,
@@ -718,19 +707,7 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 		},
 		stateOf,
 		db,
-		reconfigure: reconfigurerFor<ABI, ProcessResultType>(
-			{
-				options,
-				env,
-				provider,
-				db,
-				dbUrl: resolved.destination.db,
-				indexer: resolved.indexer,
-				container,
-				...(deps.importModule ? {importModule: deps.importModule} : {}),
-			},
-			arrivals,
-		),
+		// NO `reconfigure`: nothing here names code a re-read could read again (ADR-0094)
 		upload: async (bundle) => {
 			const report = await receive(bundle);
 			wake();
