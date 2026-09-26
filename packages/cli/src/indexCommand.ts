@@ -324,7 +324,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 		// do. The ingest route below is a CALLER of `receive` and writes neither itself,
 		// so a process that both concludes and receives cannot double-count a revert
 		// (ADR-0050) or store a batch twice (ADR-0052).
-		const {container, processor, store, streamWriter} = await openFolding<ABI, ProcessResultType>(
+		const {container, processor, store, streamWriter, stateOf} = await openFolding<ABI, ProcessResultType>(
 			declared,
 			config.destination,
 			db,
@@ -433,7 +433,7 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// store, so it is the half that can say where the fold has got to. A read
 			// tier owns none and is given none. ONE entry per generation held, in the
 			// same field a host mid-upgrade fills with two.
-			getCursorReport: () => foldingStatusReport(container),
+			getCursorReport: () => foldingStatusReport(container, stateOf),
 		});
 
 		// RECLAIM WHAT THE RETENTION NO LONGER COVERS, on a clock, because this

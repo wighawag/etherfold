@@ -1179,16 +1179,35 @@ export class ReceivingIndexer<
 	 */
 	async folding(): Promise<GenerationFolding[]> {
 		const registered = await this.registry.list();
-		const fetched = streamDigestOf(this.options.source, resolveStreamConfig(this.options.stream));
+		const fetched = this.fetchedStream();
 		const reports: GenerationFolding[] = [];
 		for (const generation of registered) {
-			reports.push(await this.foldingOf(generation, fetched));
+			reports.push(await this.foldingIn(generation, fetched));
 		}
 		return reports;
 	}
 
+	/**
+	 * THE SAME ANSWER as `folding`, for ONE generation: held, instantiable, or frozen and
+	 * why.
+	 *
+	 * For a host that needs one generation's answer and not the whole listing's, which is
+	 * `/status` asking about the CANONICAL generation on every refresh: `folding` reads
+	 * the stored bytes of every registered generation not held here, and a page an
+	 * operator refreshes should pay for the one it reports. It is the same derivation,
+	 * not a second one, so the two surfaces cannot disagree about a generation.
+	 */
+	async foldingOf(generation: GenerationRecord): Promise<GenerationFolding> {
+		return this.foldingIn(generation, this.fetchedStream());
+	}
+
+	/** The stream this deployment FETCHES: what an instantiation here would fold. */
+	private fetchedStream(): string {
+		return streamDigestOf(this.options.source, resolveStreamConfig(this.options.stream));
+	}
+
 	/** One generation's answer for `folding`, the reasons in the order an operator would act on them. */
-	private async foldingOf(generation: GenerationRecord, fetched: string): Promise<GenerationFolding> {
+	private async foldingIn(generation: GenerationRecord, fetched: string): Promise<GenerationFolding> {
 		if (this.folds.some((fold) => sameGeneration(fold.record, generation))) {
 			return {generation, folding: 'held'};
 		}

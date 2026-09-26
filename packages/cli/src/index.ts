@@ -3,6 +3,7 @@ import {
 	resolveStreamConfig,
 	type Abi,
 	type EventProcessor,
+	type GenerationId,
 	type IndexingSource,
 	type ReceivingIndexer,
 	type StreamWriter,
@@ -18,7 +19,7 @@ import {
 	type RunSummary,
 	type Sleep,
 } from '@etherfold/fetcher-host';
-import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
+import type {EntityProcessor, StateStore, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport} from '@etherfold/server';
 import {openProcessorArrival} from '@etherfold/utils';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
@@ -172,6 +173,11 @@ export type PreparedIndexing<
 	host: FetcherHost<ABI>;
 	/** The store the OPENING fold folds into: its own table namespace (ADR-0053). */
 	store: WritableStateStore;
+	/**
+	 * ANY generation's state by identity, UNCLAIMED (`FoldingAssembly.stateOf`): what
+	 * `/status` reads a canonical generation's position from when nothing here folds it.
+	 */
+	stateOf(id: GenerationId): StateStore;
 	/**
 	 * The ONE libSQL handle this command built, which the store folds into.
 	 *
@@ -333,7 +339,7 @@ export async function prepareIndexing<
 	// stream is appended there too, before the fold (ADR-0052). So a combined
 	// process stores what it folded exactly as a receiver behind an HTTP route does,
 	// and the database `build` emits carries its stream.
-	const {container, store, processor, streamWriter} = await openFolding<ABI, ProcessResultType>(
+	const {container, store, processor, streamWriter, stateOf} = await openFolding<ABI, ProcessResultType>(
 		declared,
 		resolved.destination,
 		db,
@@ -402,6 +408,7 @@ export async function prepareIndexing<
 		container,
 		host,
 		store,
+		stateOf,
 		db,
 		reconfigure: reconfigurerFor<ABI, ProcessResultType>({
 			options,

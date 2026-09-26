@@ -39,7 +39,15 @@ export type {IndexerRegistryEntry, IndexerResolver, ReconfigureReport} from './r
  * in progress is distinguishable from an empty result on the page an operator
  * already watches.
  */
-export type {CursorReport, GenerationReport, ReportedGeneration, StatusCursor, StatusReport} from './cursor.js';
+export type {
+	CanonicalReport,
+	CursorReport,
+	GenerationReport,
+	ReportedCanonical,
+	ReportedGeneration,
+	StatusCursor,
+	StatusReport,
+} from './cursor.js';
 /**
  * THE `/status` FETCHER FIELD (ADR-0074): what the chain-facing half of this
  * deployment has learned about the node it reads, reported so an operator can

@@ -254,7 +254,7 @@ export async function run<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// ONE entry per generation held, which is one until something adds a
 			// successor and two while it catches up: the shape of `/status` does not
 			// depend on how many a deployment happens to hold.
-			getCursorReport: () => foldingStatusReport(prepared.container),
+			getCursorReport: () => foldingStatusReport(prepared.container, prepared.stateOf),
 			// The other half of the pipeline, on the same page: what the CHAIN-FACING half
 			// has learned about the node it reads (ADR-0074). `run` is the shape that can
 			// report it at all, because it is the one that holds both halves -- `index` and

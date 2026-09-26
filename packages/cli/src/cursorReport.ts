@@ -1,6 +1,6 @@
-import {generationDigestOf, sameGeneration, type GenerationId} from '@etherfold/core';
+import {generationDigestOf, sameGeneration, type GenerationFolding, type GenerationId} from '@etherfold/core';
 import {parseStoredCursor, SYNC_CURSOR_KEY, type StateStore} from '@etherfold/processor-entities';
-import type {GenerationReport, StatusReport} from '@etherfold/server';
+import type {CanonicalReport, GenerationReport, StatusReport} from '@etherfold/server';
 import {logs} from 'named-logs';
 
 const logger = logs('etherfold');
@@ -96,13 +96,14 @@ export type ReportedFold = {
 
 /**
  * WHAT THIS HOST CAN SAY ABOUT WHERE IT HAS GOT TO: the canonical generation's
- * cursor, and one entry per generation held.
+ * cursor, one entry per generation held, and the canonical generation named on its
+ * own whether or not it is held.
  *
- * The reporter `/status` is injected with (ADR-0047). It fills the envelope's two
+ * The reporter `/status` is injected with (ADR-0047). It fills the envelope's
  * slots from the SAME reads: every fold's cursor is read once, the canonical
- * one's answer is also the top-level `value`, and nothing is computed on demand
- * -- a reporter runs on every `/status`, so it stays one cursor read per
- * generation and the generation caps bound how many that is.
+ * one's answer is also the top-level `value` and the canonical report's, and
+ * nothing is computed on demand -- a reporter runs on every `/status`, so it stays
+ * one cursor read per generation and the generation caps bound how many that is.
  *
  * ## Why a fold that cannot be read is still an ENTRY
  *
@@ -117,19 +118,46 @@ export type ReportedFold = {
  * A read that FAILS is treated the same way and said out loud in the log,
  * deliberately: one generation's unreadable store must not cost an operator the
  * other entries, on the page they are looking at because something is wrong.
+ *
+ * ## Why the canonical generation is reported even when nothing here HOLDS it
+ *
+ * `generations` is what this host HOLDS, and it keeps that meaning (ADR-0047). A
+ * canonical generation nothing here folds -- stored code that could not be built,
+ * a revert across a filter change (ADR-0092) -- is therefore not in it, and before
+ * the `canonical` report the page then had no `value` and no word about why. So the
+ * canonical generation alone is read from its OWN state (`canonicalState`, built
+ * unclaimed over its namespace, ADR-0053) with no engine, and reported beside the
+ * list with the admin listing's `folding` answer for it. ONE extra read, and only
+ * when the canonical generation is not held; never one per registered generation.
  */
 export async function readStatusReport(held: {
 	/** Every fold this host holds, oldest first -- the order the registry lists them in. */
 	folds: readonly ReportedFold[];
 	/** WHICH generation answers reads, or nothing on a host that holds no pointer. */
 	canonical?: GenerationId;
+	/**
+	 * WHETHER the canonical generation can fold here, in the admin listing's words
+	 * (`ReceivingIndexer.foldingOf`, ADR-0092). Absent where the host cannot say, and
+	 * then the report says nothing about it rather than guessing.
+	 */
+	canonicalFolding?: GenerationFolding;
+	/**
+	 * The canonical generation's OWN state, to read its position from where no held
+	 * fold is it: its namespace, UNCLAIMED, so reading never takes the claim from a
+	 * writer. Consulted only when the canonical generation is not held.
+	 */
+	canonicalState?: StateStore;
 }): Promise<StatusReport> {
 	const generations: GenerationReport[] = [];
 	let value: StoreCursorReport | undefined;
+	let canonicalHeld = false;
 	for (const fold of held.folds) {
 		const canonical = !!held.canonical && sameGeneration(fold.generation, held.canonical);
 		const report = await progressOf(fold);
-		if (canonical) value = report;
+		if (canonical) {
+			value = report;
+			canonicalHeld = true;
+		}
 		generations.push({
 			generation: generationDigestOf(fold.generation),
 			canonical,
@@ -137,7 +165,38 @@ export async function readStatusReport(held: {
 			...(report === undefined ? {} : {value: report}),
 		});
 	}
-	return {...(value === undefined ? {} : {value}), generations};
+	// NOTHING HERE FOLDS IT: its position is still a row in its own namespace, read
+	// with no engine, exactly as the promotion trigger reads it (ADR-0084).
+	if (held.canonical && !canonicalHeld && held.canonicalState) {
+		value = await progressOf({generation: held.canonical, store: held.canonicalState});
+	}
+	return {
+		...(value === undefined ? {} : {value}),
+		generations,
+		...(held.canonical ? {canonical: canonicalReportOf(held.canonical, held.canonicalFolding, value)} : {}),
+	};
+}
+
+/**
+ * The canonical report: the digest, the `folding` answer in the admin listing's shape
+ * (`frozen` carries the reason only where it is frozen, so a caller branches on one
+ * string), and where it stands.
+ */
+function canonicalReportOf(
+	canonical: GenerationId,
+	folding: GenerationFolding | undefined,
+	value: StoreCursorReport | undefined,
+): CanonicalReport {
+	const answer = folding && sameGeneration(folding.generation, canonical) ? folding : undefined;
+	return {
+		generation: generationDigestOf(canonical),
+		...(answer === undefined
+			? {}
+			: answer.folding === 'frozen'
+				? {folding: 'frozen', frozen: {reason: answer.frozen.reason, message: answer.frozen.message}}
+				: {folding: answer.folding}),
+		...(value === undefined ? {} : {value}),
+	};
 }
 
 /** How far one fold has got, or nothing at all -- never a failure the page pays for. */

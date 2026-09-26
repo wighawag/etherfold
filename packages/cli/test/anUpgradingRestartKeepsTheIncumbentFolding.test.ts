@@ -252,6 +252,37 @@ describe('during an upgrading restart the incumbent goes on FOLDING', () => {
 		expect(await pointAt(indexer, successor)).toBe(200);
 		expect(foldedHere(indexer)).toEqual([(await identityOf(indexer, successor)).processor]);
 	});
+
+	it('reports the HELD incumbent on `/status` exactly as before, and names it canonical and held beside it', async () => {
+		// The no-regression half of `status-says-when-the-canonical-generation-is-frozen`:
+		// here the canonical generation IS folded, so everything `/status` said before is
+		// said the same way, and the added `canonical` report agrees with it.
+		const {indexer, incumbent, successor} = await aRestartWithAChangedProcessor({promotion: 'manual'});
+		await waitFor('the incumbent reported where it stands', async () => (await positionOf(indexer, incumbent)) === TIP);
+
+		const status = (await (await fetch(`${indexer.url}/status`)).json()) as {
+			cursor: {
+				reported: boolean;
+				value?: {lastToBlock: number};
+				generations?: Record<string, unknown>[];
+				canonical?: Record<string, unknown>;
+			};
+		};
+		const {cursor} = status;
+		// the per-generation list keeps ADR-0047's meaning: one entry per fold HELD, and
+		// each entry carries exactly the four keys it always did
+		expect(cursor.generations?.map((entry) => entry.generation).sort()).toEqual([incumbent, successor].sort());
+		for (const entry of cursor.generations ?? []) {
+			expect(Object.keys(entry).filter((key) => key !== 'value')).toEqual(['generation', 'canonical', 'follows']);
+		}
+		const held = cursor.generations?.find((entry) => entry.generation === incumbent);
+		expect(held).toMatchObject({canonical: true, follows: true});
+		// the top-level value is the canonical fold's, as it was
+		expect(cursor.reported).toBe(true);
+		expect(cursor.value).toEqual(held?.value);
+		// ...and the canonical report says the same thing in the admin listing's words
+		expect(cursor.canonical).toEqual({generation: incumbent, folding: 'held', value: held?.value});
+	});
 });
 
 describe('the upgrade still FINISHES, against an incumbent that moves', () => {

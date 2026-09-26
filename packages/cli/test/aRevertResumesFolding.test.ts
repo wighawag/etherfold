@@ -316,33 +316,50 @@ describe('a stored bundle that cannot be instantiated REFUSES the revert, and ch
 	});
 });
 
+/**
+ * A FILTER CHANGE, then a revert across it: a deployment that folded one stream,
+ * restarted with the same code over a later start block (a NEW stream, which is all
+ * this process fetches), and has promoted the generation that folds it. The pointer
+ * has not moved back yet; the caller does that.
+ */
+async function aDeploymentAcrossAFilterChange(): Promise<{
+	db: RemoteSQL;
+	chain: ReturnType<typeof fakeChain>;
+	indexer: RunningIndexer;
+	old: string;
+	filtered: string;
+}> {
+	const db = oneDatabase();
+	const path = await aProcessorPath();
+	// the first deployment indexes from START_BLOCK, so it counts BOTH transfers
+	const first = await aRunOver(db, path, fakeChain().serve(LOGS, TIP), {
+		INDEXING_SOURCE: JSON.stringify(SOURCE),
+	});
+	await waitFor(
+		'the first deployment folded to the tip',
+		async () => (await positionOf(first, (await canonicalOf(first))!)) === TIP,
+	);
+	const old = (await canonicalOf(first)) as string;
+	await stop();
+
+	// THE FILTER CHANGE: the same code, a later start block, so a NEW STREAM that sees
+	// only the second transfer. Nothing in this process can fetch the old one.
+	const chain = fakeChain().serve(LOGS, TIP);
+	const later = {...SOURCE, contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK + 15}]};
+	const indexer = await aRunOver(db, path, chain, {INDEXING_SOURCE: JSON.stringify(later)});
+	const filtered = (await listingOf(indexer)).generations.map((entry) => entry.digest).find((one) => one !== old);
+	expect(filtered, 'the filter change registered no new generation').toBeDefined();
+	expect((await identityOf(indexer, filtered as string)).stream).not.toBe((await identityOf(indexer, old)).stream);
+	await waitFor('the filtered generation was promoted', async () => (await canonicalOf(indexer)) === filtered);
+	const store = await canonicalStoreIn(db, nftProcessor.entities, {indexer: INDEXER});
+	expect((await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value).toBe(1);
+
+	return {db, chain, indexer, old, filtered: filtered as string};
+}
+
 describe('a revert across a FILTER CHANGE moves the pointer and FREEZES, rather than being refused', () => {
 	it('answers from the old state, and the generation it left keeps folding its own stream', async () => {
-		const db = oneDatabase();
-		const path = await aProcessorPath();
-		// the first deployment indexes from START_BLOCK, so it counts BOTH transfers
-		const first = await aRunOver(db, path, fakeChain().serve(LOGS, TIP), {
-			INDEXING_SOURCE: JSON.stringify(SOURCE),
-		});
-		await waitFor(
-			'the first deployment folded to the tip',
-			async () => (await positionOf(first, (await canonicalOf(first))!)) === TIP,
-		);
-		const old = (await canonicalOf(first)) as string;
-		await stop();
-
-		// THE FILTER CHANGE: the same code, a later start block, so a NEW STREAM that sees
-		// only the second transfer. Nothing in this process can fetch the old one.
-		const chain = fakeChain().serve(LOGS, TIP);
-		const later = {...SOURCE, contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK + 15}]};
-		const indexer = await aRunOver(db, path, chain, {INDEXING_SOURCE: JSON.stringify(later)});
-		const filtered = (await listingOf(indexer)).generations.map((entry) => entry.digest).find((one) => one !== old);
-		expect(filtered, 'the filter change registered no new generation').toBeDefined();
-		expect((await identityOf(indexer, filtered as string)).stream).not.toBe((await identityOf(indexer, old)).stream);
-		await waitFor('the filtered generation was promoted', async () => (await canonicalOf(indexer)) === filtered);
-		const store = await canonicalStoreIn(db, nftProcessor.entities, {indexer: INDEXER});
-		expect((await store.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value).toBe(1);
-
+		const {db, chain, indexer, old, filtered} = await aDeploymentAcrossAFilterChange();
 		const reverted = await pointAt(indexer, old);
 
 		// NOT refused: the code is fine, its stream is simply not one this deployment fetches
@@ -364,5 +381,36 @@ describe('a revert across a FILTER CHANGE moves the pointer and FREEZES, rather 
 		expect(await positionOf(indexer, old)).toBe(TIP);
 		expect(await canonicalOf(indexer)).toBe(old);
 		expect(await ownerAnswered(db)).toBe(BOB.toLowerCase());
+	});
+
+	it('says so on `/status`: the frozen canonical generation, where it stands, and why nothing here folds it', async () => {
+		const {chain, indexer, old, filtered} = await aDeploymentAcrossAFilterChange();
+		expect((await pointAt(indexer, old)).status).toBe(200);
+		// the chain moves on, and the frozen generation does not
+		chain.serve(LATER, LATER_TIP);
+		await waitFor('the generation left behind advanced on its own stream', async () => {
+			const now = await positionOf(indexer, filtered);
+			return now !== undefined && now > TIP;
+		});
+
+		const res = await fetch(`${indexer.url}/status`);
+		expect(res.status).toBe(200);
+		const {cursor} = (await res.json()) as {
+			cursor: {
+				reported: boolean;
+				value?: {lastToBlock: number};
+				generations?: {generation: string; canonical: boolean}[];
+				canonical?: {generation: string; folding?: string; frozen?: {reason: string}; value?: unknown};
+			};
+		};
+		expect(cursor.canonical).toMatchObject({
+			generation: old,
+			folding: 'frozen',
+			frozen: {reason: 'stream-not-fetched'},
+			value: {lastToBlock: TIP},
+		});
+		expect(cursor.value).toEqual(cursor.canonical?.value);
+		// the held list is what this process FOLDS: the generation it left, no longer canonical
+		expect(cursor.generations?.map((entry) => [entry.generation, entry.canonical])).toEqual([[filtered, false]]);
 	});
 });
