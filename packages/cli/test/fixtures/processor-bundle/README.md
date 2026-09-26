@@ -6,13 +6,13 @@ They are committed rather than built during the test run for the reason `package
 
 ## The PAIR is the point
 
-The two bundles are the same file with ONE HANDLER LINE CHANGED (`source/nfts.ts` credits the `nft` row to `to`, `source/nftsEdited.ts` to `from`). Everything a DECLARED identity is computed from is identical between them: the same `version`, the same entity declarations, the same contract data. So `getVersionHash()` cannot tell them apart and the bundle hash can, which is the silent-wrong-state failure ADR-0086 exists to delete, asserted as a property rather than described.
+The two bundles are the same file with ONE HANDLER LINE CHANGED (`source/nfts.ts` credits the `nft` row to `to`, `source/nftsEdited.ts` to `from`). Everything a DECLARED identity is computed from is identical between them: the same entity declarations, the same contract data (and, when these were first built, the same declared `version`). So `getVersionHash()` cannot tell them apart and the bundle hash can, which is the silent-wrong-state failure ADR-0086 exists to delete, asserted as a property rather than described.
 
 `source/abi.ts` is a sibling module both entry points import, so each artifact is genuinely a BUNDLE with a closure flattened into it rather than a single file that happened to need nothing.
 
 ## A bundle carrying DIFFERENT contracts
 
-`nfts-with-approval.bundle.js` is a third real bundle, built from `source/nftsWithApproval.ts` with the command below. It carries no declared `version` because its source has none: the field is deleted (ADR-0086), and only the two older bundles predate that. It is `nfts.ts` plus an ERC-721 `Approval` event in its contract data and a handler that needs it: the ordinary "add an event" deploy. Its CONTRACT DATA is what differs from the pair above (both of which carry the same contracts), so the source it resolves to is a different STREAM (a new `topic0` in the fetch filter). The upload route's tests use it for the two sides of the contract match: a node started with an explicit source refuses it by name, and a node whose source came from its processor module registers it as a successor on its new stream (`test/aBundleIsUploadedToARunningNode.test.ts`).
+`nfts-with-approval.bundle.js` is a third real bundle, built from `source/nftsWithApproval.ts` with the command below. Like the pair above, it carries no declared `version` (ADR-0086). It is `nfts.ts` plus an ERC-721 `Approval` event in its contract data and a handler that needs it: the ordinary "add an event" deploy. Its CONTRACT DATA is what differs from the pair above (both of which carry the same contracts), so the source it resolves to is a different STREAM (a new `topic0` in the fetch filter). The upload route's tests use it for the two sides of the contract match: a node started with an explicit source refuses it by name, and a node whose source came from its processor module registers it as a successor on its new stream (`test/aBundleIsUploadedToARunningNode.test.ts`).
 
 ## Two small HAND-WRITTEN refusals
 
@@ -45,4 +45,4 @@ No test pins either hash. Identity is asserted as a PROPERTY (identical bytes, i
 
 ## What is in them
 
-`createProcessor`, which is what a host looks for, and `contractsDataPerChain`, which is what the CLI resolves its indexing source from -- so a deployment pointed at one of these needs no `--deployments` folder and exercises the ordinary source resolution on its way to a fold. The declared `version` is still there because the entity runtimes refuse a processor without one until the contract task deletes the field; it is not what identifies the artifact and it is deliberately the same in both.
+`createProcessor`, which is what a host looks for, and `contractsDataPerChain`, which is what the CLI resolves its indexing source from -- so a deployment pointed at one of these needs no `--deployments` folder and exercises the ordinary source resolution on its way to a fold. They carry no declared `version`: the field is deleted (ADR-0086), and the bundles were rebuilt from their sources with the command above on 2026-09-26 so the committed bytes are once again what that command produces.

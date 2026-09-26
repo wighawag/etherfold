@@ -27,7 +27,7 @@ export const app = createServer<MyEnv>({
 		beta: singleContextEntry(betaDB, myOtherStreamBuilder),
 	}),
 	// OPTIONAL: where this deployment's pipeline has got to, if it owns a store
-	getCursorReport: async (c) => ({lastToBlock: await myStore.howFar()}),
+	getCursorReport: async (c) => ({value: {lastToBlock: await myStore.howFar()}}),
 });
 ```
 

@@ -186,6 +186,27 @@ describe('dropping one generation state', () => {
 		expect(await incumbent.readCursor(LAST_SYNC)).toBe('incumbent@100');
 	});
 
+	it('removes entity tables a DIFFERENT declaration created under its namespace, which is how a host drops a generation it did not build', async () => {
+		// A host drops a generation's namespace through a store it builds NOW, whose
+		// entities are whatever processor that host holds, not necessarily the one that
+		// created the tables: a successor that arrived by upload and declared an extra
+		// entity, replaced or reclaimed later by a process configured with another.
+		const db = createTestDB();
+		const kept = new VersionedStateStore(db, [TOKEN, ACCOUNT], {tableNamespace: 'genA'});
+		const creator = new VersionedStateStore(db, [TOKEN, ACCOUNT], {tableNamespace: 'genB'});
+		await kept.migrate();
+		await creator.migrate();
+		await creator.applyBlock(block(100), [owns('1', '0xBob', 1)]);
+		const before = await namesIn(db);
+
+		await new VersionedStateStore(db, [TOKEN], {tableNamespace: 'genB'}).drop();
+
+		const after = await namesIn(db);
+		expect(after.filter((name) => name.includes('genB'))).toEqual([]);
+		// and nothing of the other namespace went with it
+		expect(after).toEqual(before.filter((name) => !name.includes('genB')));
+	});
+
 	it('is idempotent, and a dropped generation can be migrated back', async () => {
 		const {successor} = await twoGenerations();
 

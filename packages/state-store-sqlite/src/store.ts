@@ -35,7 +35,7 @@ import {
 	type SeamRecordKey,
 } from '@etherfold/state-store';
 import {ROWID, dropSchemaStatements, migrationStatements, tableNames, type TableNames} from './ddl.js';
-import {assertStorableEntityNames} from './identifiers.js';
+import {assertStorableEntityNames, quoted} from './identifiers.js';
 import {
 	AS_OF_PREDICATE,
 	CURRENT_PREDICATE,
@@ -273,7 +273,10 @@ export class VersionedStateStore implements StateStoreBackend {
 	 */
 	async drop(): Promise<void> {
 		await this.releaseBeforeDropping();
-		const statements = dropSchemaStatements(this.entities.values(), this.names);
+		const statements = [
+			...dropSchemaStatements(this.entities.values(), this.names),
+			...(await this.undeclaredEntityTableDrops()),
+		];
 		logger.info(`dropping the state of ${this.names.namespace ?? 'the unnamespaced generation'}`);
 		for (const batch of planBatches(
 			statements.map((statement) => [statement]),
@@ -281,6 +284,40 @@ export class VersionedStateStore implements StateStoreBackend {
 		)) {
 			await this.db.batch(this.prepare(batch));
 		}
+	}
+
+	/**
+	 * The entity tables under this store's namespace that its OWN declarations do not
+	 * name, as `DROP` statements: what `drop` must also remove to retire a generation
+	 * whose tables were created by a DIFFERENT declaration.
+	 *
+	 * A host drops a generation through a store it builds NOW, over the entities of the
+	 * processor it holds, and that is not necessarily the processor that created the
+	 * namespace: a successor that arrived by upload declaring an extra entity is replaced
+	 * or reclaimed by a process configured with another, and the registry row (with the
+	 * bundle that could have said which entities) is gone before the drop runs. Dropping
+	 * only the declared tables left the others behind for ever.
+	 *
+	 * The namespace makes the set exact rather than a guess: a namespace has no
+	 * underscore (`assertStorableTableNamespace`), so an entity table of THIS namespace
+	 * is exactly a table named `<namespace>_...`, and no other namespace's table can
+	 * start that way. Derived indexes go with their tables, as `dropSchemaStatements`
+	 * already relies on. With NO namespace there is no prefix to tell this store's
+	 * tables from anything else in the database, so nothing is added.
+	 */
+	private async undeclaredEntityTableDrops(): Promise<ReturnType<typeof dropSchemaStatements>> {
+		const namespace = this.names.namespace;
+		if (namespace === undefined) return [];
+		const prefix = `${namespace}_`;
+		const declared = new Set([...this.entities.values()].map((entity) => this.names.entity(entity.name)));
+		const found = await this.db
+			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, ?1) = ?2`)
+			.bind(prefix.length, prefix)
+			.all<{name: string}>();
+		return found.results
+			.map((row) => quoted(row.name))
+			.filter((quotedName) => !declared.has(quotedName))
+			.map((quotedName) => ({sql: `DROP TABLE IF EXISTS ${quotedName}`, args: []}));
 	}
 
 	/**

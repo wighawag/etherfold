@@ -695,12 +695,12 @@ export type WaitingFoldingAssembly<ABI extends Abi, ProcessResultType = unknown>
 	 * HOW THIS DEPLOYMENT BUILDS THE FOLD PARTS OF A PROCESSOR THAT ARRIVES: `foldPartsFor`,
 	 * noting the entities that processor declares.
 	 *
-	 * A configured deployment drops and reads any generation's namespace through the
-	 * entities of the processor it was CONFIGURED with (`openFolding`). A waiting one was
-	 * configured with none, so it uses every entity a processor that arrived in this
-	 * process declared -- a `DROP` is `IF EXISTS`, so naming more tables than a namespace
-	 * holds is harmless where naming fewer would leave some behind. An arrival that builds
-	 * its parts any other way would leave its tables out of that set.
+	 * A configured deployment reads any generation's namespace through the entities of
+	 * the processor it was CONFIGURED with (`openFolding`). A waiting one was configured
+	 * with none, so it uses every entity a processor that arrived in this process
+	 * declared. A DROP no longer depends on that set: the store also drops every entity
+	 * table it finds under the namespace (`VersionedStateStore.drop`), so a generation
+	 * whose tables another declaration created is still removed whole.
 	 */
 	foldParts: typeof foldPartsFor;
 };
