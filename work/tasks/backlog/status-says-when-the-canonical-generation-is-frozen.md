@@ -5,6 +5,15 @@ blockedBy: []
 covers: []
 ---
 
+> **DRIFT CORRECTION, 2026-09-26 (conductor, Gate 3 on PR #195).** The first build is good and is KEPT; this re-drive continues from its branch. It was blocked for ONE reason: it added a third slot (`canonical`) to the `/status` report and left durable text still saying there are two. Fix exactly these, and nothing else:
+>
+> 1. `packages/server/src/cursor.ts`, the JSDoc on `StatusReport`: it opens "TWO SLOTS, filled independently" and describes only `value` and `generations`. Make it describe all three, including `canonical`. Check the `StatusCursor` JSDoc below it ("the two slots fail independently") the same way.
+> 2. `CONTEXT.md`, the "QUERY LAYER is deferred" entry: "a reporter hands over the envelope's two slots explicitly (`StatusReport`: `value` ... and `generations` ...)". Add the `canonical` slot (what it is, that it is reported held or not, the `folding` vocabulary shared with the admin listing), so the glossary matches ADR-0047's 2026-09-26 amendment.
+> 3. `packages/server/README.md`, the `/status` paragraph: "a reporter returns two named slots" followed by "A third slot". Make it say three.
+> 4. The observation this build filed, `server-readme-still-says-a-revert-needs-no-fold`: correct the claim it names in `packages/server/README.md` ("Moving the pointer is the whole of promotion...": a target with no fold is NOT always answered with no engine since ADR-0092; say what the admin JSDoc now says), then DELETE that observation.
+>
+> Before finishing, grep `docs/adr/`, `CONTEXT.md` and every `packages/*/README.md` for any other sentence the `canonical` slot makes false.
+
 ## What to build
 
 A Node deployment can now serve a canonical generation that nothing in the process folds: its stored code could not be built at `open`, a revert crossed a filter change, or the host injects no `instantiateGeneration`. The admin listing (`GET /{indexer}/admin/canonical-generation`) reports that since `a-generation-says-whether-it-can-run-here`, as `folding: frozen` with a reason. The PUBLIC `/status` does not. It builds its entries from the folds this process HOLDS (`foldingStatusReport` over `container.held()`) and takes its top-level `value` from the held canonical fold. So when the canonical generation is not held, `/status` has no `value`, no canonical entry, and no word about why. An operator watching the page cannot tell "frozen" from "stalled" from "quiet chain".
