@@ -455,7 +455,7 @@ describe('what a `node` says when it starts', () => {
 		const res = await fetch(`${running!.url}/${INDEXER}/admin/upload`, {
 			method: 'POST',
 			headers: {'Content-Type': 'text/javascript', Authorization: `Bearer ${ADMIN_TOKEN}`},
-			body: await bytesOf(BUNDLE),
+			body: new Uint8Array(await bytesOf(BUNDLE)),
 		});
 		expect(res.status).toBe(401);
 	});
