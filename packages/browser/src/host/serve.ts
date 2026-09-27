@@ -42,6 +42,21 @@ import {cursorsOf, pacingAfterCycle} from './pacing.js';
 import type {HostGeneration, HostHotUpdate, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
 import {HostSettingsConflictError, hostSettingsOf, settleHostSettings, type HostSettings} from './settings.js';
+import {sameProgress} from './envelope.js';
+import {openStateMovedChannel, type StateMovedAcrossTabs} from '../stateMovedAcrossTabs.js';
+import {
+	electionFor,
+	openReader,
+	readerContextOf,
+	readerProgress,
+	standForElection,
+	tabElectionName,
+	type Candidacy,
+	type ReaderState,
+	type TabElection,
+	type TabElectionRole,
+	type TabElectionState,
+} from '../tabElection.js';
 
 const namedLogger = logs('@etherfold/browser');
 
@@ -134,6 +149,23 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 		 * port -- and one that says `waiting` for ever. See `utils/claim.ts`.
 		 */
 		claimWithinSeconds?: number;
+		/**
+		 * ONE TAB INDEXES AND THE OTHERS READ (ADR-0097): the name of the Web Lock this
+		 * app's hosts elect their indexing host with. ON only together with the spec's
+		 * reader factory (`openState`) and where the worker has `navigator.locks`;
+		 * otherwise this host behaves exactly as it did without it.
+		 *
+		 * The lock is taken HERE, inside the worker that indexes, so the browser
+		 * releases it when that worker (or the tab that owns it) dies, crash included.
+		 * A host that finds it held is a READER: it answers reads from `openState`'s
+		 * store, forwards the leader's state-moved signal and reports the leader's
+		 * progress (`HostProgress.election`), and queues. When the lock is released it
+		 * builds its generation through `createState`, claims, and indexes forward from
+		 * the stored cursor. A SharedWorker host takes the same lock through the same
+		 * code, uncontended by its own tabs, which is what lets it and dedicated-worker
+		 * hosts of one app share one election.
+		 */
+		tabElection?: TabElection;
 	};
 
 /**
@@ -358,7 +390,119 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	}
 	/** The shared case body, attached below once the backing it serves exists. */
 	let served: {publish(): void; stop(): void} | undefined;
-	const publish = () => served?.publish();
+	const publish = () => {
+		served?.publish();
+		// THE LEADER PUBLISHES; it is not polled (ADR-0097). Only a host that holds the
+		// lock and a container says where the fold is, and a repeat is not posted.
+		if (electionChannel && container && role === 'writer') {
+			const report = progress();
+			if (!publishedAsLeader || !sameProgress(publishedAsLeader, report)) {
+				publishedAsLeader = report;
+				electionChannel.publishProgress(report);
+			}
+		}
+	};
+
+	// -------------------------------------------------------------------------
+	// THE TAB ELECTION (ADR-0097). All of it is inert where `election` is undefined.
+	// -------------------------------------------------------------------------
+	const election = electionFor(entry.tabElection, entry.openState !== undefined);
+	let candidacy: Candidacy | undefined;
+	let electionChannel: StateMovedAcrossTabs | undefined;
+	/** Which seat this host holds, once it has stood. */
+	let role: TabElectionRole | undefined;
+	let tookOver = false;
+	/** The reader this host is built from while another host holds the lock. */
+	let reading: ReaderState<ProcessResultType> | undefined;
+	let leaderProgress: HostProgress | undefined;
+	let publishedAsLeader: HostProgress | undefined;
+	let stopFollowing: (() => void) | undefined;
+	let seatTaken: Promise<void> | undefined;
+	/** This host holds the lock (always, where there is no election). */
+	let electedAlready = election === undefined;
+	let announceElected: (() => void) | undefined;
+	let refuseElected: ((error: unknown) => void) | undefined;
+	const elected = new Promise<void>((resolve, reject) => {
+		announceElected = resolve;
+		refuseElected = reject;
+	});
+	elected.catch(() => undefined);
+	if (electedAlready) announceElected?.();
+	let announceReader: ((store: StateStore) => void) | undefined;
+	let refuseReader: ((error: unknown) => void) | undefined;
+	const readerReady = new Promise<StateStore>((resolve, reject) => {
+		announceReader = resolve;
+		refuseReader = reject;
+	});
+	readerReady.catch(() => undefined);
+
+	function electionState(): TabElectionState | undefined {
+		return election && role ? {name: election.name, role, tookOver} : undefined;
+	}
+
+	/**
+	 * STAND, ONCE: ask for the lock; a host that finds it free leads from the start
+	 * and goes on exactly as a host with no election, one that finds it held is built
+	 * from the reader factory and follows the leader until the lock is released to it.
+	 */
+	function takeSeat(): Promise<void> {
+		seatTaken ??= (async () => {
+			const standing = election!;
+			electionChannel = openStateMovedChannel(tabElectionName(standing));
+			candidacy = standForElection(standing, () => becomeWriter(true));
+			if (await candidacy.atOnce) {
+				becomeWriter(false);
+				return;
+			}
+			if (disposed || electedAlready) return;
+			role = 'reader';
+			publish();
+			const seat = await openReader(spec.openState!, readerContextOf(spec.source, spec.config), spec.processorBundle);
+			reading = seat;
+			announceReader?.(seat.store);
+			if (electedAlready || disposed) return;
+			const detachMoved = electionChannel.onStateMoved((moved) => {
+				for (const handler of [...stateMovedHandlers]) handler(moved);
+			});
+			const detachProgress = electionChannel.onProgress((heard) => {
+				leaderProgress = heard;
+				publish();
+			});
+			stopFollowing = () => {
+				detachMoved();
+				detachProgress();
+				leaderProgress = undefined;
+			};
+			publish();
+		})();
+		return seatTaken;
+	}
+
+	/** THE LOCK IS THIS HOST'S: stop following, and let the driver build the writer. */
+	function becomeWriter(took: boolean): void {
+		if (electedAlready || disposed) return;
+		electedAlready = true;
+		role = 'writer';
+		tookOver = took;
+		stopFollowing?.();
+		stopFollowing = undefined;
+		announceElected?.();
+		for (const wake of [...waitingForSettings]) wake();
+		if (took) namedLogger.info(`this host TOOK OVER as the indexing host of election "${election!.name}"`);
+		publish();
+	}
+
+	/** Wait for the lock, unless a stop or a dispose comes first. */
+	function untilElectedOrStopped(): Promise<void> {
+		if (electedAlready) return Promise.resolve();
+		return new Promise<void>((resolve) => {
+			const wake = () => {
+				waitingForSettings.delete(wake);
+				resolve();
+			};
+			waitingForSettings.add(wake);
+		});
+	}
 
 	let container: Indexer<ABI, ProcessResultType> | undefined;
 	let lastSync: LastSync<ABI> | undefined;
@@ -517,7 +661,13 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	}
 
 	function progress(): HostProgress {
+		const seat = electionState();
+		if (seat && role === 'reader' && !container) {
+			// A READER reports the LEADER's figures under its own name (ADR-0097).
+			return readerProgress({host: access.host, scope, indexing}, leaderProgress, seat);
+		}
 		return {
+			...(seat ? {election: seat} : {}),
 			host: access.host,
 			scope,
 			indexing,
@@ -562,6 +712,12 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * the writable handle and nothing here can reach the mutating half.
 	 */
 	async function storeForReads(): Promise<StateStore> {
+		if (election && !container) {
+			// A READER answers from the shared store it opened for reading (ADR-0097),
+			// until this host holds a container of its own.
+			const store = await Promise.race([readerReady, firstState.then(() => undefined)]);
+			if (store && !container) return store;
+		}
 		await firstState;
 		const canonical = container?.canonical.record;
 		const state = canonical && statesByGeneration.get(generationKey(canonical));
@@ -614,6 +770,9 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			// before the host has what it folds with; it waits, as a read waits for the
 			// first store, and a host disposed first rejects it.
 			await settled;
+			// A READER builds no container: only the host holding the election's lock
+			// claims and folds (ADR-0097). Always already true with no election.
+			await elected;
 			start = createPublishedStart<ABI>(spec, {
 				publication(state) {
 					publication = state;
@@ -677,6 +836,8 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		// holds one handler on its fold and not one per client.
 		detachFromContainer = opened.onStateMoved((moved) => {
 			for (const handler of [...stateMovedHandlers]) handler(moved);
+			// THE LEADER TELLS THE READERS (ADR-0097): the value the fold published, unchanged.
+			electionChannel?.publish(moved);
 		});
 		opened.onPromoted = () => {
 			promotions++;
@@ -746,6 +907,12 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			// the wait, so neither hangs on a host no tab has connected to.
 			await untilSettledOrStopped();
 			if (disposed || stopRequested) return;
+			if (election) {
+				// ONE TAB INDEXES (ADR-0097): stand, and read until the lock is this host's.
+				await takeSeat();
+				await untilElectedOrStopped();
+				if (disposed || stopRequested) return;
+			}
 			const opened = await openContainer();
 			if (disposed || stopRequested) return;
 
@@ -787,6 +954,9 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			// stopped the host, rather than left hanging.
 			refuseFirstState?.(error);
 			namedLogger.error(`the indexer host STOPPED: nothing waiting can fix what it was refused`, error);
+			// A host that stopped indexing gives the election's lock back, so another tab's
+			// host can index rather than every tab waiting behind one that cannot.
+			candidacy?.resign();
 		} finally {
 			indexing = false;
 			driving = undefined;
@@ -1110,6 +1280,14 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			indexing = false;
 			refuseFirstState?.(new Error(`this indexer host was disposed, so it holds no store to read from.`));
 			refuseSettled?.(new Error(`this indexer host was disposed before a tab handed it a provider and a source.`));
+			refuseElected?.(new Error(`this indexer host was disposed before it held the tab election's lock.`));
+			refuseReader?.(new Error(`this indexer host was disposed, so it holds no store to read from.`));
+			// The lock is given back at once, so a reader tab takes over now rather than
+			// when this worker is finally collected.
+			candidacy?.resign();
+			stopFollowing?.();
+			stopFollowing = undefined;
+			electionChannel?.close();
 			// The provider a TAB handed over is this host's to let go of: requests still
 			// waiting on it reject rather than hang. One the entry built is the entry's.
 			tabProvider?.close();

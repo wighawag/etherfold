@@ -85,7 +85,22 @@ export * from './host/index.js';
  * `createProgressReadable(tabs)` in every tab. ONE channel for both, because a
  * reader tab needs one ear open and not two.
  */
-export * from './stateMovedAcrossTabs.js';
+export {
+	STATE_MOVED_CHANNEL_PROTOCOL,
+	openStateMovedAcrossTabs,
+	stateMovedChannelName,
+	type CrossTabStateStorage,
+	type StateMovedAcrossTabs,
+} from './stateMovedAcrossTabs.js';
+
+export {
+	TAB_ELECTION_PROTOCOL,
+	tabElectionName,
+	type ReaderState,
+	type TabElection,
+	type TabElectionRole,
+	type TabElectionState,
+} from './tabElection.js';
 
 export {simple_hash} from '@etherfold/core';
 /**

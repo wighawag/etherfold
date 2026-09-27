@@ -101,6 +101,11 @@
  *   only place a `Worker.terminate()` means anything -- and what it asserts on is
  *   the RANGES the replacement asked the node for, because a host that re-indexed
  *   from the start block lands on exactly the same rows as one that resumed.
+ * - `election-main-open` / `election-worker-open` / `election-report` /
+ *   `election-worker-kill`: the TAB ELECTION (ADR-0097), in `election.ts`. They run
+ *   here because the claim is about the engine's own `navigator.locks` being
+ *   released when a tab closes or a worker is killed, which no mock can stand in
+ *   for: one tab of N fetches, the others read, and a remaining tab takes over.
  * - `write` / `read` phases: reload continuity across a REAL page reload, which
  *   is the thing no node test can show. The `read` phase runs in a page that has
  *   never seen the `write` phase's objects; the only thing that crossed is
@@ -134,6 +139,7 @@ import {
 	type StateMovedWatch,
 } from './hostingShapes.js';
 import {foldOnThisThread, readEntities, readWritableStore, runReadSurfaceCases} from './readWorkload.js';
+import {electionMainOpenCase, electionReportCase, electionWorkerKillCase, electionWorkerOpenCase} from './election.js';
 import {
 	BRANCH_A_LATER,
 	BRANCH_A_LATER_TIP,
@@ -2385,6 +2391,18 @@ const cut: CodeUnderTest = {
 						break;
 					case 'shared-unsupported':
 						results = await sharedUnsupportedCase();
+						break;
+					case 'election-main-open':
+						results = await electionMainOpenCase(ctx.params);
+						break;
+					case 'election-worker-open':
+						results = await electionWorkerOpenCase(ctx.params);
+						break;
+					case 'election-report':
+						results = await electionReportCase();
+						break;
+					case 'election-worker-kill':
+						results = await electionWorkerKillCase();
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

@@ -20,8 +20,8 @@
  * `new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})`
  * and its bundler builds the same thing from the same source.
  */
-import {EntityEventProcessor, type EntityStateView} from '@etherfold/processor-entities';
-import {openForWriting, type WritableStateStore} from '@etherfold/state-store';
+import {EntityEventProcessor, EntityStateView} from '@etherfold/processor-entities';
+import {openForReading, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {createBrowserStateStore, hostIndexerInThisWorker} from '../src/index.js';
 import {FINALITY, fakeChain, processor, SOURCE, type TestABI} from './workload.js';
 
@@ -118,6 +118,13 @@ const holdAbove = Number(new URL(self.location.href).searchParams.get('holdAbove
  * default, which is what the host defaults to anyway.
  */
 const claimWithinSeconds = Number(new URL(self.location.href).searchParams.get('claimWithin') ?? '10');
+
+/**
+ * THE TAB ELECTION this worker's host stands in (ADR-0097), or none. With a name,
+ * the host is also handed the reader factory, which is the other half of the
+ * opt-in: a host that finds the lock held reads this database and fetches nothing.
+ */
+const election = new URL(self.location.href).searchParams.get('election');
 
 const reports = new URL(self.location.href).searchParams.has('report');
 const report = (message: Record<string, unknown>) => {
@@ -225,6 +232,17 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 		return announcingWrites(writable);
 	},
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
+	...(election
+		? {
+				tabElection: {name: election},
+				openState: async (context: {stream: string}) => {
+					const store = openForReading(
+						await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)}),
+					);
+					return {store, state: new EntityStateView(store)};
+				},
+			}
+		: {}),
 	provider: gatedProvider,
 	source: SOURCE,
 	config: {

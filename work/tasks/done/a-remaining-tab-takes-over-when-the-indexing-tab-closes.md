@@ -40,3 +40,17 @@ The writer claim stays the correctness guarantee underneath: if two tabs both wr
 > FIRST, check this task against current reality: if the reader factory or an election already exists, adjust or route to needs-attention naming it.
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **The lock is taken by the host, wherever it runs.** For worker hosts that means inside the worker, so the browser releases it when the worker is killed or its tab dies. Alternative: the tab takes it for its worker; rejected because the lock would outlive a worker the port restarts. Touches `serve.ts` and `IndexerState.ts`; recorded in ADR-0097.
+- **A SharedWorker host takes the same lock through the same code.** Its own tabs never contend for it, and this puts it in one election with dedicated-worker hosts of the same app. Alternative: skip the lock for SharedWorker; rejected as a second code path. Recorded in ADR-0097.
+- **The reader factory returns `{store, state}`**, not a store alone and not a role argument on `createState`. The main-thread hook needs a read handle for `state`, and `createState` returns a claimed writable store, so reusing it would break "a reader cannot write" by type. New exported type `ReaderState`.
+- **The reader's context is `{stream: streamDigestOf(source, resolveStreamConfig(config.stream))}`**, the same way the container computes it, so reader and writer open the same storage.
+- **Leader messages travel on a channel named from the election, using the existing cross-tab adapter.** I split out an internal `openStateMovedChannel(channelName)` and switched `index.ts` from `export *` to named re-exports so it stays unexported. The public export list of that module is unchanged.
+- **What a reader reports on its port.** It shows its own `host`/`scope`, the leader's `phase` and block figures, and `election`. The leader's `failure`, `publication`, `streamSeed` and `hotUpdate` are not carried over because they describe the leader's host. Before any report arrives the phase is `waiting`. `sameProgress` now also compares `election.role` and `election.tookOver`.
+- **A main-thread reader drives nothing.** `startAutoIndexing()` returns `true` and is remembered, so the loop starts on takeover. `indexMore()` and its siblings return `undefined`, the same answer a demoted tab gives. `syncing.lastSync` stays empty, so `checkTxInclusion` answers `unknown`/`not-synced`.
+- **A worker-host reader waits for the takeover on reconfigure and hot update**, because both build generations and building one claims. Its driver waits for the lock the same way it waits for a tab's provider.
+- **`tookOver` means the host waited behind a held lock.** It is measured by asking with `ifAvailable` first, and is not inferred from having heard a leader.
+- **Hosts that stop writing give the lock back:** a demoted main-thread tab, a worker host whose driver stopped on a failure, and any disposed host. Alternative: keep holding it, as a demotion leaves everything else today; rejected because it would block every takeover. Changes demotion's side effects (ADR-0078 context); recorded in ADR-0097.
+- **Running without `navigator.locks` is logged once at info level, not refused**, because the election is an optimisation (D3).

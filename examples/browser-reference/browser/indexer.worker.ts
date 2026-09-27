@@ -1,5 +1,5 @@
 import {createBrowserStateStore, hostIndexerInThisWorker, keepStreamOnIndexedDB} from '@etherfold/browser';
-import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
+import {EntityStateView, fromEntityProcessor, openForReading, openForWriting} from '@etherfold/processor-entities';
 import {tokenProcessor} from '../src/processor.js';
 
 /**
@@ -50,6 +50,27 @@ const host = hostIndexerInThisWorker({
 			{signal},
 		),
 	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
+	// =====================================================================
+	// ONE TAB INDEXES, THE OTHERS READ (ADR-0097)
+	// =====================================================================
+	// With the app open in several tabs, every tab's worker would otherwise fetch
+	// the whole chain and all but one would then be refused by the writer claim.
+	// The election is ONE Web Lock per app, named here and taken inside this
+	// worker: the worker that holds it indexes, and the browser releases it when
+	// that worker (or its tab) goes away, crash included.
+	//
+	// A worker that finds the lock held is built from `openState` instead: the SAME
+	// database as `createState`, opened for READING, with no claim and no fetch. It
+	// answers its tab's reads from the store the leader writes, reports the leader's
+	// progress (`progress.election.role === 'reader'`), and takes over when the lock
+	// is released, through `createState` and from the stored cursor.
+	tabElection: {name: 'etherfold-browser-reference'},
+	openState: async (context) => {
+		const store = openForReading(
+			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `reference-${context.stream}`}),
+		);
+		return {store, state: new EntityStateView(store)};
+	},
 	// =====================================================================
 	// THE STREAM KEEPER: the logs, kept, so a new fold need not fetch them again
 	// =====================================================================

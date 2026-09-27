@@ -455,7 +455,34 @@ indexer.syncing.subscribe(($syncing) => {
 
 **Getting the write duty back is a fresh start, deliberately.** A store that lost is never re-claimed ([ADR-0077](../../adr/0077-the-storage-seam-splits-at-the-interface-and-the-claim-is-taken-by-constructing-a-writer.md)), so indexing again is `dispose()` and a fresh `init()` over a store built fresh — which re-reads everything, which is what makes the recovered writer correct.
 
-**And you can ask for it.** `indexer.demoteToReader('lease-lost')` is the same code path, for an app that elects one indexing tab itself and wants the others to read. Note that it is not the opposite of `promote()`: that moves the canonical pointer between generations, this drops the write duty over the storage they all fold into ([ADR-0078](../../adr/0078-a-demotion-lives-where-the-store-does-and-an-advance-that-answers-nothing-is-how-a-driver-learns.md)).
+### One tab indexes and the others read: opt into the tab election
+
+Demotion keeps two tabs correct; it does not stop them both FETCHING, and on a rate-limited provider that is the expensive half. So give your host a **tab election** and a **reader factory**, and only one tab indexes ([ADR-0097](../../adr/0097-one-tab-indexes-by-a-web-lock-the-app-names-and-the-others-are-built-as-readers.md)):
+
+```ts
+hostIndexerInThisWorker({
+	createState: async (context, {signal}) =>
+		openForWriting(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}), {signal}),
+	createProcessor: (state) => fromEntityProcessor(processor)(state),
+	// ONE Web Lock per APP, named by you: tabs giving the same name elect one indexing tab
+	tabElection: {name: 'my-app'},
+	// the SAME database, opened for READING, and the read handle over it: no claim, no fetch
+	openState: async (context) => {
+		const store = openForReading(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}));
+		return {store, state: new EntityStateView(store)};
+	},
+});
+```
+
+On the main thread the same two things go to `createIndexerState`: `openState` beside `createState` in the spec, and `{tabElection: {name}}` in its options.
+
+**The first tab leads; every other tab is a reader.** A reader claims nothing and fetches nothing: its reads answer the store the leader writes, its `onStateMoved` fires when the leader's fold moves, and its progress is the leader's, so "syncing, 400 blocks behind" renders in every tab. `progress.election` (on a port) and `syncing.election` (on the hook) say which seat a tab holds: `{name, role: 'reader' | 'writer', tookOver}`.
+
+**Closing, or crashing, the indexing tab hands the work over.** The lock is released by the browser when the tab or its worker goes away, with no heartbeat or timeout, and the next tab becomes the writer on its own: it builds its generation through `createState`, claims, and indexes forward from the stored cursor. `tookOver` then reads `true`. On the main thread, a reader remembers `startAutoIndexing()` and starts the loop when it takes over; until then its advances answer `undefined`.
+
+**It is an optimisation, never a correctness mechanism.** Without `navigator.locks`, or without both the name and `openState`, a host behaves exactly as before. Two tabs that both believe they lead are still settled by the writer claim, and the loser demotes as described above. A backgrounded leader keeps the lock while the browser throttles it, which makes it slow rather than wrong; letting a foreground tab take the lease is not built yet.
+
+**And you can ask for it.** `indexer.demoteToReader('lease-lost')` is the same code path, for an app that elects one indexing tab itself and wants the others to read. A tab demoted this way (or by a refused write) gives the election's lock back, so a reader can take over. Note that it is not the opposite of `promote()`: that moves the canonical pointer between generations, this drops the write duty over the storage they all fold into ([ADR-0078](../../adr/0078-a-demotion-lives-where-the-store-does-and-an-advance-that-answers-nothing-is-how-a-driver-learns.md)).
 
 ## How your app learns the state moved
 

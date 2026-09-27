@@ -237,7 +237,7 @@ describe('the same demotion, asked for by a caller', () => {
 
 		// nothing has been refused here: this tab was TOLD it no longer holds the
 		// write duty, which is what a lost Web Locks lease is
-		// (`work/specs/proposed/one-tab-indexes-and-the-others-read.md`).
+		// (`work/specs/tasked/one-tab-indexes-and-the-others-read.md`).
 		const demotion = indexer.demoteToReader('lease-lost');
 		expect(demotion.reason).toBe('lease-lost');
 		expect(indexer.syncing.$state.demotion?.reason).toBe('lease-lost');
