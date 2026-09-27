@@ -1,5 +1,84 @@
 # ethereum-indexer-browser
 
+## 0.10.0
+
+### Minor Changes
+
+- 8ee56e6: One tab indexes and the others read, and a remaining tab takes over when the indexing tab closes (ADR-0097).
+
+  An opt-in tab election over ONE Web Lock per app. Give a host `tabElection: {name}` (an option of `createIndexerState`, or a field of a worker host's entry) AND a reader factory beside `createState`, `BrowserGenerationSpec.openState(context, bundle?)`, returning `{store, state}`: the same storage opened with `openForReading`, and the read handle over it. The host that finds the lock free indexes exactly as before. A host that finds it held is built from `openState`: it claims nothing and fetches nothing, answers reads from the shared store, follows the leader's state-moved signal and reports the leader's progress over a `BroadcastChannel` named from the election. When the browser releases the lock (the leader's tab or worker closed, crashed or was killed), the next host takes over through `createState`, claims, and indexes forward from the stored cursor. A worker host takes the lock inside the worker; a SharedWorker host takes it too, uncontended.
+
+  The seat is reported as `HostProgress.election` and `SyncingState.election` (`{name, role: 'reader' | 'writer', tookOver}`). On the main thread a reader remembers `startAutoIndexing()` until it takes over, and its advances answer `undefined`. A demoted tab gives the lock back. Without both the name and `openState`, or without `navigator.locks`, nothing changes. New exports: `TabElection`, `TabElectionRole`, `TabElectionState`, `ReaderState`, `tabElectionName`, `TAB_ELECTION_PROTOCOL`.
+
+- 2e0c4a2: A returning tab catches up within a time budget, or starts from the published snapshot (ADR-0096).
+
+  `@etherfold/browser`: a tab that already holds local state and whose `publication` names a snapshot for its generation further along than that state catches up from its own cursor, and SWITCHES to the snapshot mid-run when the node refuses the catch-up as an archive refusal (`ArchiveRefusedError`), or when the rest of the catch-up is estimated (from the blocks its advances covered and the time they took) to take longer than the new `catchUpWithinSeconds` option: seconds, default `DEFAULT_CATCH_UP_WITHIN_SECONDS` (30), or `'always'` to catch up however long it takes and switch only on the refusal. The switch builds the generation again and hands `createState` the snapshot with the new `PublicationSnapshot.replaceLocal: true`, so the app's own `openAndBootstrap` wipes and installs; it is reported on `syncing.publication` as the new `switched` outcome (`reason: 'archive-refused' | 'over-budget'`, `at`, `left`, and for `over-budget` `estimateSeconds` and `budgetSeconds`). With no usable snapshot, or local state already at or ahead of it, nothing changes. `createState` must forward `published.replaceLocal` to `openAndBootstrap` for the switch to install. `SnapshotSwitchReason` is exported. A negative or non-finite `catchUpWithinSeconds` is refused at construction.
+
+  `@etherfold/processor-entities`: `BootstrapOptions.replaceLocal` lets `openAndBootstrap` install over a store that has already synced (it still keeps one at or ahead of every candidate); without it a synced store is kept without a request, as before.
+
+- d0d90a9: A tab can run the processor bundle a build PUBLISHED, and its generation is named by the SHA-256 of those bytes (ADR-0086, ADR-0095).
+
+  `@etherfold/browser`: a generation spec takes `processorBundle: {url}`. The host (main thread, dedicated worker or SharedWorker) fetches the bytes once, hashes them exactly as `etherfold build` does, refuses them if they still import anything, and instantiates the processor FROM THOSE BYTES inside the host, before it builds the generation's state. The instantiated bundle is handed to `createProcessor` as a new third argument (`new EntityEventProcessor(state, bundle.processor)`), and the generation is registered under its identity. A spec naming both `processorBundle` and `processorIdentity` is refused: the bytes name themselves. `loadProcessorBundle(url)` is the same load as data, for an app that drives it itself. Refusals are distinct reasons (`unreachable`, `not-self-contained`, `unreadable-module`, `not-a-processor`, `forbidden-by-policy`), raised by a host as `ProcessorBundleRefusedError` before anything is claimed or folded: `init` rejects with it, and a worker host reports it as `phase: 'refused'` with the refusal's fields on `failure.details`. A Content-Security-Policy that forbids both `data:` and `blob:` modules is `forbidden-by-policy`, decided by probing each scheme with a trivial module so a policy refusal is never mistaken for damaged bytes, and it names the directive and policy from the `securitypolicyviolation` events where the context delivers them. The module arrival (HMR) is unchanged and keeps its module identity.
+
+  `@etherfold/core`: exports `processorArtifactIdentity`, `moduleReferencesOf`, `instantiateProcessor` and the `ProcessorModule` / `InstantiateProcessorOptions` types, the runtime-agnostic half of a processor artifact, so the identity a tab derives and the one the CLI publishes under are one function. The identity is computed with `viem`'s SHA-256 (no secure context needed); the output is unchanged.
+
+  `@etherfold/utils`: `processorArtifactIdentity`, `instantiateProcessor` and `ProcessorModule` are now re-exported from `@etherfold/core`, and `unresolvedImportsOf` is core's scan minus Node's builtins. No behaviour changes.
+
+- df8ede2: A tab can start from a PUBLICATION INDEX (`publication.json`, ADR-0095), the document `etherfold publish` and `build --publish` write.
+
+  `@etherfold/browser`: `createIndexerState` takes a `publication: {locations, seed?, fetch?}` option. At `init` the hook reads the first index any location serves (failing over on a location that does not answer or serves something that is not an index), and picks the STATE SNAPSHOT entry for the generation it builds, by its stream digest AND its processor identity. The entry is handed to `createState` as a new fourth argument (`published: {locations, processor, entry, index}`), which starts from it through the existing bootstrap: `openAndBootstrap(backend, published.locations, {processor: published.processor})`. The STREAM SEED the index lists for this stream is installed into `keepStream` only when `publication.seed` asks for it (`true`, or the install's own knobs); by default no seed is fetched. `publication.seed` beside the `seed` option is refused at `init`. What the lookup gave is published on a new `syncing.publication` field: `reading`, `found` (the index, the body, the block), or `refused` with a reason, `unreachable`, `unreadable-format`, `no-entry`, `stream-mismatch` (an entry for this processor over another stream only, named in `streams`; nothing beyond the index is fetched) or `no-processor-identity` (a module arrival, which has no identity before its state is built). A refusal never gates the boot: the tab indexes from the chain as it does with no snapshot. `readPublicationIndex`, `publishedSnapshotFor` and `publishedSeedLocationsFor` are the same lookup for an app that drives it itself.
+
+  `@etherfold/core`: exports the publication index document, `PublicationIndex`, `PublishedStateSnapshot`, `PublishedStreamSeed`, `PUBLICATION_INDEX_NAME`, `PUBLICATION_INDEX_FORMAT`, `isPublicationIndex`, and `publishedBodyLocation` (a body named relative to its index, including at a hostless, build-embedded path), so the producer and a tab read one definition.
+
+  `@etherfold/server`: the publication index types and constants are now re-exported from `@etherfold/core`, and `parsePublicationIndex` checks the document with core's `isPublicationIndex`. No behaviour changes.
+
+- 5b34979: A worker host takes a hot-updated processor, and folds it beside the live generation as the main thread does.
+
+  `IndexerHost` (what `hostIndexerInThisWorker`, `hostIndexerInThisSharedWorker` and `serveIndexerHost` return) has a new verb, `reconfigureFromHotUpdate(generation, processorConfig?)`, for the worker entry's own `import.meta.hot.accept` handler: under Vite a module worker receives HMR itself (measured, `work/notes/findings/a-module-worker-receives-hmr-under-vite.md`), so the edited module arrives where the fold runs. It is the main thread's `reconfigureFromHotUpdate` run against the host's container, serialised with a tab's `reconfigure`: the successor folds beside the canonical generation, which answers every read until the promotion policy moves the pointer, and it answers the same `ReconfigureReport` (`registered`, `unchanged`, `failed`). The processor is built inside the worker and named by the module arrival's derivation over what the worker instantiated (ADR-0086).
+
+  A tab learns the outcome over the port: `HostProgress.hotUpdate` is `{count, report}` (`HostHotUpdate`), the last hot update the host took and how many it has taken, pushed on the progress push; `sameProgress` compares the count, so a repeated verdict is still pushed. `IndexerHost` is now generic over the entry's `ABI`, `ProcessResultType` and `ProcessorConfig`, with `any` defaults so a bare `IndexerHost` still names every host. The main-thread hook, its free `reconfigureFromHotUpdate`, `processorBundle` and production builds are unchanged.
+
+- ad31b6c: A worker host takes its provider and its settings from the tab that connects (ADR-0082, amended).
+
+  `connectToIndexerHost(access, {provider, settings, onConnect})` hands the host what only the tab knows. `provider` crosses as a `MessagePort` speaking `@eip-1193/over-port` (now a dependency): a provider object (a wallet's) is served by the port on a fresh `MessageChannel`, a `MessagePort` already served elsewhere (a node in another worker, such as `webevm`) is transferred as is so requests go worker to worker, and a function returning such a port is called once per host so a restart can be handed one again. `settings` (`HostSettings`: `source`, `config`, `publication`, `catchUpWithinSeconds`, `seed`, `promotion`) is checked for cloneability on the tab, naming the field. Both are sent first on every host the port obtains, as a new `connect` case on the envelope; `MessageEndpoint.postMessage` takes an optional transfer list for it.
+
+  `HostedIndexerSpec.provider` and `.source` are now optional: a worker entry that leaves either out waits (`phase: 'waiting'`) until a tab hands them over, and one that holds both starts at once, as before. A value given by the entry and by a tab must agree, and a host that has started keeps the settings it started with, so a disagreement (including a provider sent to a host whose entry built one, or a setting the host started without) is refused as `HostSettingsConflictError` naming its `fields`, and nothing of that connect is applied. The tab learns the outcome through `onConnect` (once per host), and a refusal is logged either way. A main-thread host refuses `connect`: it takes its provider and settings from `init`.
+
+  A SharedWorker host pools the providers its tabs hand over, folds through the first attached tab's, and moves to another tab's when that tab goes away (its port throws on a post, or fires `close` where the engine fires one), retrying what was in flight. With no tab left it fails with the retryable `NoTabProviderError`, which the driver retries as it retries a provider that is down.
+
+- 02afdca: A worker-hosted tab starts from a publication, catches up within a budget or switches to the snapshot, and installs a stream seed, exactly as a main-thread one does (ADR-0082, ADR-0095, ADR-0096).
+
+  `HostedIndexerSpec` (what `hostIndexerInThisWorker` and `hostIndexerInThisSharedWorker` take) gains `publication`, `catchUpWithinSeconds`, `seed` and `keepStream`, under the names and with the behaviour of `createIndexerState`'s options: everything runs inside the host, from what the worker entry passes. What they did reaches the tab on two new optional `HostProgress` fields, `publication` (`PublicationState`: `found`, `refused` with its reason, or `switched`) and `streamSeed` (`StreamSeedState`), pushed like the rest of the progress; the main-thread host's port reports them too, from the same values as `syncing.publication` and `syncing.streamSeed`. A seed with no `keepStream`, a `seed` beside `publication.seed`, and a `catchUpWithinSeconds` that cannot mean a budget stop a worker host with `phase: 'refused'` and the failure, where the main thread raises. The publication lookup, the seed install and the returning-tab switch are now one implementation shared by every host, as is how a generation is built from its factories; `createIndexerState`'s behaviour is unchanged. The browser guide leads with the dedicated worker and documents the main thread as the alternative.
+
+### Patch Changes
+
+- 1cdd82d: A promotion tells readers the state moved, even at a quiet tip (ADR-0083, amended).
+
+  `@etherfold/core`: the state-moved signal gains a third case, `StateRepointed` (`{kind: 'repointed', coherence, generation}`), published AT ONCE whenever the canonical pointer moves (a promotion, a policy move, or a move back), by both `Indexer` and `ReceivingIndexer`. It carries the rotated coherence token and the generation that answers from here on, and no block and no entity set. Before this, a pointer move rotated the token and published nothing, so on a chain with no next block a reader that re-reads on `onStateMoved` kept rendering the retired generation while reads answered the new one. The rotation still happens first, before the pointer-moved callback and the state notification; the announcement is made once the read path has followed the pointer, so a reader re-reading the instant it is told is answered by the generation it names. A block after the move carries the same token, so a reader invalidates everything once. A move onto the generation already answering announces nothing. `StateMovedPublisher.rotateForPointerMove(reason)` rotates and returns the announcer, so a pointer move published under an unrotated token is unexpressible. A reader's two-line rule is unchanged; code that switches exhaustively on `kind` gains a case.
+
+  `@etherfold/browser`: the cross-tab channel carries the new case (its message guard accepted `applied` and `retracted` only). The port and the SharedWorker host already carried the value unchanged.
+
+  `@etherfold/state-moved-conformance`: the `the coherence token` chapter now asserts that a promotion is ANNOUNCED with no block to wait for (a rotated token and the new generation, and exactly those fields), and that the block after it carries the same token.
+
+  `@etherfold/server`: tests only; the SSE endpoint carries the new case unchanged.
+
+- d444e63: One tab letting go of a SharedWorker host no longer stops the fold for the tabs that stay.
+
+  `IndexerPort.close()` used to ask the host for quiet by posting `stopIndexing`, which a SharedWorker host, serving every tab from one driver, honoured for all of them. The port now posts a case of its own, `letGo`, answered `{quiesced}`. A host answers it by stopping (so a dedicated worker, and the main-thread wire, behave exactly as before, and a dedicated worker is still terminated only when it was quieted), but the shared shape decides first, being the one place that knows how many tabs are attached: a tab that is not the last is detached there (its provider leaves the pool, its push subscriptions are handed back to the host) and answered `quiesced: false`, and only the LAST tab's `letGo` reaches the host, so the fold is quieted before the browser ends the worker. A tab that attaches to that instance before the browser has ended it has the fold started again. An app's own `stopIndexing` still stops the host for every tab.
+
+- b13ac31: Documentation only: the README no longer calls `examples/browser-reference` the worked version of `updateProcessor` and `updateIndexer`. The reference now indexes in a dedicated worker (`hostIndexerInThisWorker` in its worker entry, `connectToIndexerHost` in the tab, with the wallet's provider handed over as a port and the source sent as settings), so it shows the port's counterparts: a redeploy is `reconfigure({source})`, which folds a new generation beside the live one, and an edited processor reloads the worker.
+- Updated dependencies [1cdd82d]
+- Updated dependencies [f4b9ea2]
+- Updated dependencies [0aefa50]
+- Updated dependencies [f7a8e75]
+- Updated dependencies [4b14b61]
+- Updated dependencies [d0d90a9]
+- Updated dependencies [df8ede2]
+- Updated dependencies [550ca50]
+  - @etherfold/core@0.10.0
+  - @etherfold/state-store@0.3.0
+  - @etherfold/state-store-indexeddb@0.2.1
+
 ## 0.9.1
 
 ### Patch Changes

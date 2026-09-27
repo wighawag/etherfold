@@ -1,5 +1,16 @@
 # @etherfold/fetcher-host
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [1cdd82d]
+- Updated dependencies [4b14b61]
+- Updated dependencies [d0d90a9]
+- Updated dependencies [df8ede2]
+- Updated dependencies [550ca50]
+  - @etherfold/core@0.10.0
+
 ## 0.2.1
 
 ### Patch Changes
