@@ -41,4 +41,4 @@ The CLI writes a `build` database out as the artifacts a browser app starts from
 
 ## Further Notes
 
-The idea `publishing-snapshots-of-versioned-state` framed this producer half and its questions; this spec is that idea with a concrete first user.
+The idea `publishing-snapshots-of-versioned-state` framed this producer half and its questions; this spec is that idea with a concrete first user. The idea is retired now that ADR-0095 answers it.

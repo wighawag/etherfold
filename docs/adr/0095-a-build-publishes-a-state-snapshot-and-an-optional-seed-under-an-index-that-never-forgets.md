@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A build publishes a state snapshot, and optionally a stream seed, under an index that never forgets a generation
 
 A browser app often cannot index from its contracts' start block, so it starts from a PUBLISHED artifact, and etherfold could consume two (a state snapshot, ADR-0028 and ADR-0040; a stream seed, ADR-0063 to ADR-0066) while nothing produced either from a real deployment. We decide that the CLI produces them from the libSQL database any command wrote (`etherfold publish`, and `etherfold build --publish` at the tip it stops at), in a new snapshot format, under a layout a plain static host can serve, and that a tab which wants to use them runs the very bundle that computed them. Decided with the maintainer on 2026-09-26, while writing the spec `a-build-publishes-what-a-browser-app-starts-from`; the first user is `port-stratagems-to-the-etherfold-packages`.
@@ -39,4 +35,4 @@ A snapshot is keyed to the identity of the fold that computed it, and `build` na
 
 ## Status
 
-`accepted, not yet implemented`: the tasks of `a-build-publishes-what-a-browser-app-starts-from` build it, and the last of them (`a-build-published-app-starts-from-its-own-publication`) removes this status line in the same change (`work/protocol/ADR-FORMAT.md`).
+Accepted and implemented. The producer is `producePublication` (`@etherfold/server`, `packages/server/src/publication.ts`) over the SQLite backend's `produceStateSnapshot` (`@etherfold/state-store-sqlite`), written to a directory by `etherfold publish` and by `etherfold build --publish` (`packages/cli/src/publishCommand.ts`). The tab's half is `@etherfold/browser`'s `processorBundle` option (`packages/browser/src/processorBundle.ts`) and its `publication` option (`packages/browser/src/publication.ts`); the index document is `@etherfold/core`'s `PublicationIndex`. The whole path, from `build --publish` to a tab starting from its own entry, is asserted end to end in `packages/cli/test/aBuildPublishedAppStartsFromItsOwnPublication.test.ts`, and the browser guide (`docs/guide/indexing-in-a-browser-app/`) documents it.

@@ -113,7 +113,7 @@ spike vocabulary and do not let a spike become the implementation.
   and it must not be pre-empted by a spike that quietly ships.
 - **How an app BUILDS or hosts the artifact** (CI, hosting, signing). `captureStream` already
   produces one; the publishing pipeline is
-  `work/notes/ideas/publishing-snapshots-of-versioned-state.md`.
+  since decided by ADR-0095 (`docs/adr/0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md`).
 - **Snapshot verification**, to the extent it is already owned by
   `work/tasks/done/a-snapshot-a-client-cannot-read-is-refused-not-installed.md`. Story 3 decides
   what a STREAM seed needs; it does not re-decide the snapshot's.

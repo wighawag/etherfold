@@ -80,59 +80,121 @@ Read that as the floor on the wait rather than the wait itself. It measures the 
 
 **One half of this is measured and the other is an account, and they are worth keeping apart.** The cadence above is a measurement of a public git history, so take it as fact. That the **client** of that deployment then ran on the snapshot ALONE, with no stream underneath at all, is the maintainer's account of how one deployment was built and behaved: no measurement here shows it, and that deployment ran on this library's predecessor, so read it for the shape of a deployment and not for an API. It is a good reason to believe the mode is viable in production, offered as testimony rather than as data.
 
-### Wiring it
+### Publishing it: `etherfold build --publish`
+
+The snapshot comes from the same CLI that folds your chain, so there is no producer of your own to write. A scheduled job runs one command:
+
+```sh
+etherfold build -p ./dist/processor.bundle.js -d ./deployments -n "$ETH_NODE_URI" \
+  --store sqlite --db file:./etherfold.db \
+  --publish ./web/static/indexed-states
+```
+
+It folds the chain to the tip into its database, then writes that database's canonical generation out into `./web/static/indexed-states`, which any static host serves as it is: a git repository, a bucket, your app's own `static/` folder. `etherfold publish --db file:./etherfold.db --out <dir>` is the same step on its own, over a database any folding command wrote. Both are documented, flag by flag, in [the CLI's README](https://github.com/wighawag/etherfold/blob/main/packages/cli/README.md#etherfold-publish----write-a-database-out-as-what-a-browser-app-starts-from), and the reasons are [ADR-0095](../../adr/0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md). What lands in the directory:
+
+- **A state snapshot of the canonical generation**, as `state-<sha256>.ndjson.gz`, sized by your STATE and never by the stream: an app with a small state over a long history downloads what it displays. It is cut at `tip - finality`, below the reorg window, so a tab that starts from it can absorb a reorg; you do not choose the cut. `--history <blocks>` (or `all`) also carries that many blocks of changes below the cut, so the tab can read as of, and revert to, any block from the snapshot's floor up; the default, `none`, carries the live rows alone.
+- **A publication index, `publication.json`**, naming the latest snapshot PER GENERATION: your stream (contracts plus stream config) and your processor (the SHA-256 of the bundle bytes, ADR-0086). A republication replaces only its own generation's entry, and nothing a publication wrote is ever deleted, so users still running an OLD build of your app find the last snapshot of their own processor and index forward from it rather than being stranded. The bodies are named by their content hash and never change, so a CDN may cache them for ever, and the index is written last, so no reader sees it name a body that is not there yet.
+- **With `--seed`, a stream seed** of the stream it folds (the next section), keyed in the index by stream. Off by default, because under a layout that never deletes, an hourly job would otherwise store a full copy of a long stream on every run.
+
+Two things have to match between the job and the app, and the index is keyed on both: **the source** (the job's `--deployments` and the `source` your app passes to `init`) and **the finality** (the job's `STREAM_FINALITY` and your app's `config.stream.finality`). They hash into the stream digest the entry is looked up by, so a publisher running other contracts or another finality is refused by name (below) rather than installed and then discarded.
+
+### Wiring it: the publication index, and the bundle it was computed by
+
+A snapshot is keyed to the processor that computed it, and the publisher's processor is named by the hash of its bundle's bytes. So the tab runs **the very bundle the job folded with**, published beside your app, fetched and hashed by the tab itself (`processorBundle`): its identity then matches the publisher's by construction, and an app that shipped a different bundle than the job folded is told so by name. A tab running the module your bundler compiled has a different identity from the same code as a bundle, and no build step may hand it the bundle's hash instead ([ADR-0095](../../adr/0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md)).
 
 ```ts
-import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
-import {fromEntityProcessor, openAndBootstrap, openForWriting} from '@etherfold/processor-entities';
+import {createBrowserStateStore, createIndexerState, type InstantiatedProcessorBundle} from '@etherfold/browser';
+import {
+	EntityEventProcessor,
+	openAndBootstrap,
+	openForWriting,
+	type EntityProcessor,
+} from '@etherfold/processor-entities';
 
-// Locations in priority order, freshest first: a rolling remote your build
-// NAMES, then the copy EMBEDDED in this build at a relative path. That last one
-// needs no host and no TLS relationship, arrives in the same bytes as the code,
-// and is what makes the app start when the snapshot host is unreachable or gone.
-const SNAPSHOT_LOCATIONS = [SNAPSHOT_URI, '/indexed-states/token/state.json'];
+// Locations in priority order: a rolling remote your build NAMES, then the copy
+// EMBEDDED in this build at a relative path, which needs no host and is what
+// makes the app start when the remote is unreachable or gone.
+const PUBLICATION = [PUBLICATION_URI, '/indexed-states/publication.json'];
 
-const indexer = createIndexerState({
-	// Seed the FOLD. Open snapshot-aware FIRST (that is what recovers a floor an
-	// earlier run recorded), then bootstrap only if this tab has never synced.
-	createState: async (context: GenerationContext, {signal}) => {
-		const {store, outcome} = await openAndBootstrap(
-			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `app-${CHAIN.id}-${context.stream}`}),
-			SNAPSHOT_LOCATIONS,
-			// WHICH FOLD this snapshot has to have been computed under. An identity is
-			// derived from what a processor IS and never declared by its author
-			// (ADR-0086), so this is the value the PUBLISHER's deployment registered --
-			// the hash of the bundle it folded with -- named by your build beside the
-			// snapshot locations above.
-			{processor: SNAPSHOT_PROCESSOR_IDENTITY, finalityDepth: 12},
-		);
-		// A refusal is DATA rather than a throw, so render it instead of leaving an
-		// unexplained empty app: {status: 'bootstrapped', at, from} | {status: 'kept-local',
-		// at} | {status: 'not-bootstrapped', reason}.
-		showSeedingStatus(outcome);
-		// CLAIMED on the way out, because `createState` hands back a store this
-		// generation may WRITE into and folding is writing (ADR-0077). The signal
-		// bounds the CLAIM alone, not the download above, which has its own timeouts.
-		return openForWriting(store, {signal});
+const indexer = createIndexerState(
+	{
+		// The published bundle: the tab fetches it, names this generation by the
+		// SHA-256 of the bytes, and instantiates the processor FROM those bytes.
+		processorBundle: {url: '/processor.bundle.js'},
+		// `published` is the snapshot the index names for THIS generation, when it
+		// names one: exactly the two arguments the existing bootstrap takes. Open
+		// through `openAndBootstrap` either way: it opens snapshot-aware first (which
+		// is what recovers a floor an earlier run recorded) and downloads nothing
+		// when this tab has already synced.
+		createState: async (context, {signal}, bundle, published) => {
+			const {store, outcome} = await openAndBootstrap(
+				await createBrowserStateStore(definitionOf(bundle).entities, {
+					databaseName: `app-${CHAIN.id}-${context.stream}`,
+				}),
+				published?.locations ?? [],
+				{processor: published?.processor ?? 'none', finalityDepth: 12},
+			);
+			// A refusal is DATA rather than a throw: {status: 'bootstrapped', at, from} |
+			// {status: 'kept-local', at} | {status: 'not-bootstrapped', reason}.
+			showSeedingStatus(outcome);
+			// CLAIMED on the way out (ADR-0077). The signal bounds the CLAIM alone, not
+			// the download above, which has its own timeouts.
+			return openForWriting(store, {signal});
+		},
+		createProcessor: (state, _context, bundle) => new EntityEventProcessor(state, definitionOf(bundle)),
 	},
-	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
-});
-// There is no second argument, and that ABSENCE is the whole of the mode:
-// `keepStream` is how a stream keeper would arrive, the save answers `'skipped'`
-// without one, and nothing is stored or read under `['stream', ...]`.
+	// No `keepStream`, and that ABSENCE is the whole of the snapshot-only mode:
+	// nothing is stored or read under `['stream', ...]`.
+	{publication: {locations: PUBLICATION}},
+);
+
+// The bundle's processor is the authoring object its bytes made, typed by nothing
+// at compile time, so name the type you built it from.
+function definitionOf(bundle?: InstantiatedProcessorBundle) {
+	return bundle!.processor as EntityProcessor<typeof abi>;
+}
 
 await indexer.init({provider, source, config: {stream: {finality: 12}}});
 ```
 
-From there it is an ordinary indexer: it starts at the cursor the snapshot carried, re-reads that cursor's finality window without applying anything twice, and indexes forward.
+From there it is an ordinary indexer: it starts at the cursor the snapshot carried, re-reads that cursor's finality window without applying anything twice, and indexes forward. By default the tab downloads the index and the one snapshot its generation can use, and nothing else, even when the index lists a seed.
+
+**What the lookup gave is on `syncing.publication`**, and none of it stops your app: without a snapshot the tab indexes from the chain as it would with none at all. `found` names the snapshot `createState` was handed; `refused` says why there was none:
+
+| reason | what it means |
+| --- | --- |
+| `stream-mismatch` | the index has entries for your processor, but only over another stream: the job's contracts or finality differ from your app's. `streams` names them. Nothing beyond the index is downloaded |
+| `no-entry` | nothing was published for your processor: the job has not run with this bundle yet |
+| `no-processor-identity` | the generation had no identity before its state was built: it runs a MODULE, not a `processorBundle` |
+| `unreachable` / `unreadable-format` | no location answered, or what answered is not an index this build reads (an app or a publisher out of date) |
+
+**A refused bundle is the other outcome to handle.** A bundle that cannot run (not self-contained, bytes that do not load, a Content-Security-Policy that forbids instantiating from bytes) raises `ProcessorBundleRefusedError` from `init` naming the reason, and folds nothing.
+
+The lower-level form is still there, and it is what the hook composes: `openAndBootstrap(backend, locations, {processor, finalityDepth})` with the body's URL and the identity of the processor this tab actually runs. Reach for it when you publish some other way; the index is what saves you from naming, per build, which body goes with which processor.
+
+It is asserted end to end by [`packages/cli/test/aBuildPublishedAppStartsFromItsOwnPublication.test.ts`](https://github.com/wighawag/etherfold/blob/main/packages/cli/test/aBuildPublishedAppStartsFromItsOwnPublication.test.ts): `build --publish` over a fixture chain, and a tab running the same bundle file that starts from it, lands on the state of a tab that indexed the chain itself, absorbs a reorg, downloads a body that does not grow with the stream, re-folds a processor-only change from the seed, reverts inside published history, and keeps an old build on its own entry.
 
 **The locations are yours, and so is the risk.** The library fetches where it is pointed and judges nothing: there is no allowlist and no origin check, because a client cannot be offered a snapshot from somewhere it was not pointed at ([ADR-0066](../../adr/0066-a-rolling-seed-is-trusted-by-the-host-its-build-names-not-by-a-hash-the-build-cannot-know.md)). So the host your build names has to be trusted the way your build pipeline is trusted, and an app that lets a URL query parameter override it (as the reference deployment's `?snapshot=` does) is accepting a state source anyone with a link can choose. Nothing downstream catches that: what is checked is the processor identity, the envelope format and the reorg window, while the rows themselves are taken on trust, and a snapshot that quietly leaves some out is structurally perfect. Detecting that needs the historical logs the node will not serve ([ADR-0065](../../adr/0065-a-stream-seed-is-trusted-by-a-build-pin-and-checked-for-coherence-because-omission-cannot-be-detected.md), whose omission residue ADR-0066 leaves standing).
 
-**Pass `finalityDepth`, and publish below the tip.** A snapshot taken within the reorg window of the tip its producer had seen cannot absorb a reorg reaching under its own block, since it carries no history there. That has two halves and you own both: the publisher takes the snapshot at least the finality depth behind the tip, and the client passes `finalityDepth` so a snapshot that was not is refused as `not-bootstrapped` / `inside-reorg-window` instead of installed. Omit it and the check never runs. Give it the same finality your indexer runs with.
+**Pass `finalityDepth`.** A snapshot taken within the reorg window of the tip its producer had seen cannot absorb a reorg reaching under its own block, since it carries no history there. That has two halves: the publisher takes the snapshot at least the finality depth behind the tip, which `etherfold publish` does for you (it cuts at `tip - finality`), and the client passes `finalityDepth` so a snapshot that was not is refused as `not-bootstrapped` / `inside-reorg-window` instead of installed. Omit it and the check never runs. Give it the same finality your indexer runs with, which is the one the job publishes under.
 
 ## Installing a published stream seed, and rendering what it did
 
 The other published artifact: a **stream seed** puts the raw stream UNDER your state, so a later processor-only change re-folds locally instead of waiting for a republished snapshot. It is a separate decision from the snapshot above and composes with it (the snapshot seeds the fold, the seed seeds the stream), and it needs a stream keeper, which the snapshot-only mode deliberately does not have.
+
+**It is published by the same job, when asked.** `etherfold build --publish <dir> --seed` (or `etherfold publish --seed`) writes the stream the canonical generation folds, cut at the snapshot's block and compacted to the final chain, as `seed-<sha256>.json.gz`, lists it in `publication.json` keyed by stream, and PRINTS its `contentHash` for a release to pin. It needs no node: the source identity it carries is the one the fold recorded.
+
+**A tab starting from the index installs it with one more field**, `publication: {locations, seed: true}`, plus the `keepStream` any seed needs:
+
+```ts
+const indexer = createIndexerState(
+	{processorBundle, createState, createProcessor},
+	{keepStream: keepStreamOnIndexedDB('token'), publication: {locations: PUBLICATION, seed: true}},
+);
+```
+
+The seed listed for your stream is then installed before the generation loads, and it is what makes a processor-only change cheap: a tab running a NEW bundle, for which no snapshot has been published yet (`no-entry`), re-folds the installed stream locally and only asks the chain for the blocks above the seed. Seeds are per stream, not per processor, so an old build on the same stream takes the newest seed too. The `seed` option below is the same install for a seed published anywhere else; a boot installs ONE seed, so the two are refused together at `init`.
+
 
 ### The wiring, which has two shapes and one behaviour
 

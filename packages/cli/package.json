@@ -43,10 +43,12 @@
 		"remote-sql": "^0.0.7"
 	},
 	"devDependencies": {
+		"@etherfold/browser": "workspace:*",
 		"@libsql/client": "^0.17.3",
 		"@types/fs-extra": "^11.0.4",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
+		"fake-indexeddb": "^6.2.5",
 		"fs-extra": "^11.3.5",
 		"remote-sql-libsql": "^0.0.7",
 		"tsx": "^4.21.0",
