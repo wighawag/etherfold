@@ -84,13 +84,30 @@ The consequence for whoever builds this: the producer PRINTS a hash a build can 
 - exactly ONE `blockHash` per `blockNumber`, since two would be an unreconciled reorg;
 - no duplicate `(blockHash, logIndex)`;
 - every event inside the coverage the artifact claims;
-- retractions COHERENT (see below).
+- NO retraction at all (see below; this was once "retractions COHERENT").
 
 The committed capture satisfies every one of these (0 retractions, 1,042 blocks each with a single hash, 0 out-of-order pairs), which is worth stating because a check no real artifact passes is a check that will be disabled.
 
 **Capture depth**: the coverage must end at least `finality` blocks below the chain head the producer observed. This is the stream analogue of the snapshot path's `inside-reorg-window` refusal and it is the check most easily missed, because the thing it catches leaves no trace: a capture taken close to the tip can record a branch that later lost, and it will contain NO retraction and be perfectly coherent while simply describing a chain that did not happen. It needs no node, because the provenance carries both numbers (the committed capture reaches 23,400,000 with a head of 50,968,313 at capture, so 27.5M blocks of margin).
 
-### Retractions: COHERENCE, not absence
+### Retractions: COHERENCE, not absence -- CHANGED 2026-09-27: a seed carries NO retraction
+
+> **The decision below is REVERSED, and the rule is now absence, for every producer kind.** A seed
+> carrying any `removed: true` event is refused as `incoherent`, whether it declares `capture` or
+> `stored-stream`, and the ordering and duplicate rules are stated over every event. Two things
+> changed the answer. First, the allowance was UNREACHABLE for the one case it was written for: the
+> same coherence pass refuses a block number carrying two block hashes, and the ordinary reorg in a
+> stored stream is exactly that (the losing branch's application, its retraction, and the winning
+> branch's replacement at the same height), so every stored stream holding a reorg produced a seed
+> this check refused anyway. Second, the only producer of a `stored-stream` seed (`publish --seed`,
+> [ADR-0095](./0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md),
+> "The stream seed is opt-in, at both ends") COMPACTS every matched apply/retract pair before it
+> writes, because everything in a seed is at or below a cut `finality` under the observed head and
+> therefore final. That makes a seed a function of the CHAIN, so two producers of one chain and cut
+> publish the same bytes under the same pinnable content hash; a verbatim stored stream would carry
+> one producer's reorg history and break that. So no producer emits a retraction, and none should.
+> The producer declaration stays in the envelope as PROVENANCE and no longer changes what is
+> admitted. The original reasoning is kept below for the record.
 
 `captureStream` fetches canonical historical ranges, so it cannot produce a retraction, and it is tempting to refuse any `removed: true` outright. Rejected, because it would forbid a legitimate artifact this project will plausibly want: a seed derived from a SERVER's stored stream, whose `_emissions` table is append-only INCLUDING retractions (ADR-0006) and which `storedEmissionStream` already serves. Folding an apply/retract pair is correct behaviour, not damage (ADR-0042: a replay honours the verdicts the stream carries).
 
@@ -125,7 +142,7 @@ Because every mandatory check precedes the first write, there is no partially-in
 
 ## Consequences
 
-- **The artifact must declare its PRODUCER**, not merely its provenance free-form, because the retraction rule is stated against that declaration.
+- **The artifact declares its PRODUCER** (`capture` / `stored-stream`) as a typed field. It was required because the retraction rule was stated against it; since the 2026-09-27 change above no admission rule reads it, and it is kept as typed provenance.
 - **The artifact's shape gains an integrity hash** per document (and per chunk in the chunked form), which the wire-shape finding deliberately left room for.
 - **A client needs the resolved `finality` it runs under** to apply the capture-depth check, which it already has (it is in the stream config the digest covers).
 - **A `handleUnparsedEvent` processor is not made safe by this ADR**; it is made safe by ADR-0064 refusing a wider seed. The two rules are separate and both are load-bearing.

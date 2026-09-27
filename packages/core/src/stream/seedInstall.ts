@@ -133,8 +133,8 @@ export type NotInstalledReason =
 	/**
 	 * The seed contradicts ITSELF: its events are out of order, one block number
 	 * carries two hashes, a `(blockHash, logIndex)` repeats, an event sits outside
-	 * the coverage it claims, a retraction has no application before it or
-	 * contradicts the declared producer, or its digest label is not what its own
+	 * the coverage it claims, it carries a retraction (a seed is the compacted
+	 * final chain, whatever producer it declares), or its digest label is not what its own
 	 * fields produce (ADR-0065).
 	 *
 	 * ONE reason for all of them, because they are one question -- is this document
@@ -656,34 +656,33 @@ function genesisDiffers<ABI extends Abi>(declared: string | undefined, source: I
  *
  * O(n) in time and in memory, deliberately, because a seed is downloaded before
  * it is checked and a check costing more than the parse would be paid on every
- * start. Two maps carry the whole of it: one block hash per block number, and
- * the state of each `(blockHash, logIndex)`.
+ * start. Two structures carry the whole of it: one block hash per block number,
+ * and the set of `(blockHash, logIndex)` coordinates already seen.
  *
- * ## Why the ordering rules are stated over APPLICATIONS
+ * ## A seed carries NO retraction, whatever producer it declares
  *
- * A RETRACTION repeats a coordinate by definition: it is an append-only fact
- * about an event already in the stream, which a replay HONOURS (ADR-0042,
- * ADR-0006). Read literally over every event, "strictly increasing
- * `(blockNumber, logIndex)`" and "no duplicate `(blockHash, logIndex)`" would
- * ban the very artifact ADR-0065 refuses to ban -- a seed derived from a
- * server's append-only emission stream. So those two rules are asserted over the
- * applications, and a retraction is held to its own rule instead: it must be
- * preceded by an application of the same coordinate that is still standing, and
- * the artifact's DECLARED producer must admit one at all. A seed that says it
- * came from a `capture` and carries a retraction contradicts its own provenance,
- * which is sharper than a blanket ban and leaves the stored-stream artifact
- * buildable.
+ * A seed is the COMPACTED final chain: every event in it is at or below a cut
+ * `finality` under the observed head, so no retraction of it can still arrive,
+ * and the one producer of a `stored-stream` seed drops every matched
+ * apply/retract pair before it writes (ADR-0095). That is also what makes a seed
+ * a function of the CHAIN, so two producers publish the same bytes under the same
+ * pinnable content hash (ADR-0065). So any `removed: true` event is refused.
  *
- * The block-hash rule and the coverage rule apply to EVERY event, retractions
- * included: a retraction carries the hash of what it retracts, so it introduces
- * no second hash, and an event outside the claimed coverage is outside it
- * whichever way it arrived.
+ * This used to be an allowance: a `stored-stream` seed could carry a retraction
+ * preceded by a standing application of the same coordinate, so a server's
+ * append-only stream could be seeded verbatim. It was unreachable, since the
+ * reorg that produces a retraction also puts the replacement at the same height
+ * under another block hash, which the rule below refuses; ADR-0065 records the
+ * change. The producer kind is kept as PROVENANCE and no longer changes what is
+ * admitted.
+ *
+ * With no retraction to repeat a coordinate, the ordering rule and the duplicate
+ * rule are stated over EVERY event, like the block-hash rule and the coverage
+ * rule.
  */
 function incoherenceOf(seed: StreamSeed): string | undefined {
-	const admitsRetractions = seed.producer.kind === 'stored-stream';
 	const hashAtBlock = new Map<number, string>();
-	/** `(blockHash, logIndex)` -> is the event STANDING (applied and not retracted). */
-	const standing = new Map<string, boolean>();
+	const seen = new Set<string>();
 	let previousBlock = -1;
 	let previousLogIndex = -1;
 
@@ -718,22 +717,15 @@ function incoherenceOf(seed: StreamSeed): string | undefined {
 			return `block ${event.blockNumber} carries two block hashes (${known} and ${event.blockHash})`;
 		}
 
-		const coordinate = `${event.blockHash}:${event.logIndex}`;
 		if (event.removed) {
-			if (!admitsRetractions) {
-				return `a retraction at ${at}, from an artifact declaring the producer kind '${seed.producer.kind}', which fetches canonical historical ranges and cannot produce one`;
-			}
-			if (standing.get(coordinate) !== true) {
-				return `a retraction at ${at} with no standing application of the same (blockHash, logIndex) before it`;
-			}
-			standing.set(coordinate, false);
-			continue;
+			return `a retraction at ${at}: a seed is the compacted final chain and carries no retraction, whatever producer it declares ('${seed.producer.kind}' here)`;
 		}
 
-		if (standing.has(coordinate)) {
+		const coordinate = `${event.blockHash}:${event.logIndex}`;
+		if (seen.has(coordinate)) {
 			return `a duplicate (blockHash, logIndex) at ${at}`;
 		}
-		standing.set(coordinate, true);
+		seen.add(coordinate);
 
 		if (
 			event.blockNumber < previousBlock ||

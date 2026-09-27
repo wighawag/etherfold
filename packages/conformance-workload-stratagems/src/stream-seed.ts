@@ -58,7 +58,7 @@ export type StreamSeedInputs = {
 	 * REFUSED when they disagree.
 	 */
 	streamConfig: ProvidedStreamConfig;
-	/** What produced the events, typed, because the retraction rule is stated against it (ADR-0065). */
+	/** What produced the events, typed, as provenance: no admission rule reads it (ADR-0065, as amended). */
 	producer: StreamSeedProducer;
 	/** The chain head the producer OBSERVED, which the capture-depth check reads. */
 	chainHeadAtCapture: number;
