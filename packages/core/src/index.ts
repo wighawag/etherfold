@@ -199,6 +199,17 @@ export * from './stream/fixture.js';
  */
 export * from './stream/seed.js';
 /**
+ * THE PROCESSOR ARTIFACT's runtime-agnostic half: the identity of some bytes, the
+ * modules they still name, and what a module must carry to be a processor.
+ *
+ * Here rather than in a runtime's glue package because TWO runtimes turn bytes
+ * into a fold -- Node (`@etherfold/utils`) and a browser tab running a published
+ * bundle (`@etherfold/browser`, ADR-0095) -- and a snapshot published by one is
+ * keyed to the identity the other must derive, so there is exactly one
+ * definition of it.
+ */
+export * from './processorArtifact.js';
+/**
  * THE INSTALL: fetch a published seed, CHECK it, and write it through the keeper
  * seam.
  *

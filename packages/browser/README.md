@@ -165,6 +165,23 @@ indexer.syncing.subscribe(($syncing) => showProgress($syncing.lastSync?.syncPerc
 await indexer.startAutoIndexing(); // or call indexMoreAndCatchupIfNeeded() on each new head
 ```
 
+**Run the PUBLISHED bundle in production.** A snapshot a build publishes is keyed to the identity of the fold that computed it, which `etherfold build` names by the SHA-256 of the bundle file ([ADR-0095](https://github.com/wighawag/etherfold/blob/main/docs/adr/0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md)). So a deployed tab runs THAT file: give the spec `processorBundle: {url}` and the host (on this thread or inside the worker) fetches the bytes once, hashes them, refuses them if they still import anything, instantiates the processor from those very bytes and registers the generation under their hash. Both factories are handed the instantiated bundle as their third argument, so the store can be declared from the entities the bundle itself declares. Do not pass a `processorIdentity` beside it (that is refused): a hash supplied next to code the tab did not hash is the lie ADR-0086 removes. Keep the module arrival above for development, where hot updates need it.
+
+```ts
+// what bytes fetched at run time contain is not something a type checker saw
+const processorOf = (bundle?: InstantiatedProcessorBundle) => bundle!.processor as EntityProcessor<MyAbi>;
+
+const indexer = createIndexerState({
+	// the bundle has arrived before either factory runs, so both are handed it
+	createState: async (context, {signal}, bundle) =>
+		openForWriting(await createBrowserStateStore(processorOf(bundle).entities, {databaseName: 'my-app'}), {signal}),
+	createProcessor: (store, _context, bundle) => fromEntityProcessor(processorOf(bundle))(store),
+	processorBundle: {url: '/processor.bundle.js'},
+});
+```
+
+A bundle that cannot run is REFUSED before any store is claimed, with a `ProcessorBundleRefusedError` whose `reason` says why: `unreachable`, `not-self-contained`, `unreadable-module`, `not-a-processor`, or `forbidden-by-policy` when the Content-Security-Policy that applies (a worker's is its own script response's) allows neither `data:` nor `blob:` modules, which is decided by probing each scheme so a policy is never mistaken for damaged bytes. `init` rejects with it; a worker host reports it as `phase: 'refused'` with the refusal's fields on `failure.details`. `loadProcessorBundle(url)` is the same load, answered as data, for an app that drives it itself.
+
 `indexMore`, `indexToLatest` and `indexMoreAndCatchupIfNeeded` are the manual forms; calling one of them on every `newHeads` message is better than a timer. `.withHooks(react)` turns the three observables into React hooks (`useState`, `useSyncing`, `useStatus`); the stores are otherwise plain `subscribe` + `$state`, so Svelte and a hand-rolled loop both work.
 
 Those three observables are the one thing that does NOT cross a port, deliberately: reproducing a same-thread reactive triple across a boundary is either polling or duplicated state in every tab, so a hosted indexer pushes progress instead and an app builds its own wrapper over the signal.

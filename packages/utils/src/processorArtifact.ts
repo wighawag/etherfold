@@ -1,7 +1,15 @@
-import {createHash} from 'node:crypto';
 import {isBuiltin} from 'node:module';
-import type {Abi} from '@etherfold/core';
-import {instantiateProcessor, type ProcessorModule} from './processorSetup.js';
+import {instantiateProcessor, moduleReferencesOf, processorArtifactIdentity, type Abi} from '@etherfold/core';
+import type {ProcessorModule} from './processorSetup.js';
+
+/**
+ * Re-exported from `@etherfold/core`, where the ONE definition lives: a browser tab
+ * running a published bundle derives the same name over the same octets
+ * (ADR-0095), and two implementations of one contract are two chances to
+ * disagree. What this used to say about hashing through `node:crypto` is moot
+ * now that there is one function for every runtime.
+ */
+export {processorArtifactIdentity};
 
 /**
  * A PROCESSOR ARTIFACT: a self-contained ESM bundle, plus the identity derived
@@ -33,57 +41,17 @@ import {instantiateProcessor, type ProcessorModule} from './processorSetup.js';
  * and later a pushed artifact. They instantiate by importing a `data:` URL,
  * which needs no filesystem and no temporary file.
  *
- * A BROWSER is NOT served here, and that is a decision rather than an omission.
- * A tab is handed a processor OBJECT its own bundler loaded (`IndexerState` takes
- * `processor:`, never bytes), so there are no bytes in a tab for this to load;
- * and where a tab does hold bytes -- a retained artifact -- `data:` and `blob:`
- * imports are refused by every realistic Content-Security-Policy, measured
- * across three engines (`work/notes/findings/a-tab-instantiates-retained-bytes-only-through-a-same-origin-url.md`).
- * A browser path is therefore a service worker serving a same-origin URL, which
- * is a component `@etherfold/browser` does not have and a decision that is not
- * this unit's to make. Which is also why this module lives in the node-side glue
- * package rather than in `@etherfold/core`.
+ * A BROWSER is served by its OWN arrival, `loadProcessorBundle` in
+ * `@etherfold/browser` (ADR-0095): a tab running a PUBLISHED bundle fetches those
+ * bytes and instantiates from them, subject to the page's Content-Security-Policy,
+ * which a strict one refuses and which that arrival reports as a refusal naming
+ * the policy (`work/notes/findings/a-tab-instantiates-retained-bytes-only-through-a-same-origin-url.md`).
+ * What the two arrivals SHARE -- the identity over the octets, the scan for what a
+ * bundle still names, and the module-shape rule -- is in `@etherfold/core`, so
+ * the name a tab derives is the name `etherfold build` published under by
+ * construction. What is Node's alone stays here: builtins that resolve, and a
+ * `data:` URL built with `Buffer`.
  */
-
-/**
- * THE IDENTITY OF SOME BYTES: `sha256:<64 lowercase hex>` over the bundle's
- * octets.
- *
- * ## The byte domain, which is the whole of the contract
- *
- * The octets as they are, and nothing derived from them: not a decoded string,
- * not a re-serialisation, not the base64 the loader happens to wrap them in on
- * the way to a `data:` URL. It takes a `Uint8Array` for that reason -- a caller
- * handing over text would have had to encode it, and two ends encoding
- * differently is an identity that disagrees with itself.
- *
- * ## Why the algorithm travels in front of the digits
- *
- * The same reason `streamSeedContentHash` renders it this way, and the
- * convention is reused rather than re-decided: this value is PASTED into
- * builds, logs and generation records, where it long outlives the session that
- * produced it, and a bare hex string cannot say which function produced it.
- * `sha256:` is the prefix an OCI image digest uses and it splits on one
- * character.
- *
- * ## Why `node:crypto` here where the seed path uses viem's
- *
- * Same algorithm, same octets, identical output; only the source of the
- * primitive differs. The seed path is in `@etherfold/core`, which a browser
- * bundles, so it needs a synchronous hash that is already a dependency there.
- * This package is node-side by definition (it reads the filesystem elsewhere),
- * so the runtime's own hash costs no dependency at all.
- *
- * Note what it deliberately is NOT: a MINIFIED bundle is required for this to
- * be stable across machines, because un-minified esbuild output carries a
- * per-module path banner and therefore the building machine's directory layout.
- * That rule belongs to the documentation of the build command; what belongs here
- * is that this function hashes exactly what it is given and makes no attempt to
- * normalise it.
- */
-export function processorArtifactIdentity(bundle: Uint8Array): string {
-	return `sha256:${createHash('sha256').update(bundle).digest('hex')}`;
-}
 
 /**
  * There is deliberately NO function here asking whether a string LOOKS like an
@@ -101,42 +69,6 @@ export function processorArtifactIdentity(bundle: Uint8Array): string {
  * like: it validates a value a BUILD pasted in, against the artifact it is about
  * to fetch, and nothing pins a processor identity.
  */
-
-/**
- * The MODULE REFERENCES a bundle still carries: the three STATEMENT forms that
- * can hold one, plus the dynamic CALL.
- *
- * Deliberately narrow rather than a parser, and the two halves of the
- * alternation are deliberately not equally strict.
- *
- * **A STATEMENT** must sit where a statement can start -- at the beginning of the
- * input, or after a `;`, a `}` or a line break, which is how every bundler
- * separates top-level statements -- and is then `import`/`export`, an optional
- * CLAUSE (identifiers, `{}`, `*`, `,` and whitespace: a character class that
- * cannot cross a `=`, a `;` or a parenthesis, so `export const x = 1` and
- * `export function f()` are not candidates), `from`, and a quoted specifier. A
- * specifier straight after the keyword (`import "x"`) is the clause-less case.
- *
- * **A CALL** (`import("x")`) can appear anywhere an expression can, so it takes
- * a loose boundary: the start of the input, or anything that is not an
- * identifier character, a `.` or a quote -- which is what keeps `import.meta`, a
- * property called `myimport` and the common quoted-source case out.
- *
- * The asymmetry is chosen on WHICH WAY each one fails. A missed STATEMENT costs
- * a less precise refusal and nothing else, because Node refuses to LINK such a
- * module anyway, so the loader still refuses the artifact and merely says
- * `unreadable-module` instead of naming the specifier. A missed CALL would admit
- * an artifact that fails at the first event it folds, which is the failure this
- * check exists to bring forward -- so that half stays loose, and its price is
- * that a bundle embedding `import("...")` inside a string literal can be
- * reported for an import that is not one.
- *
- * The clause is BOUNDED (rather than `*`) on purpose: a minified bundle is
- * frequently one line of several megabytes, and an unbounded run over it is how
- * a scan becomes the slowest thing in a start-up.
- */
-const MODULE_REFERENCE =
-	/(?:(?:^|[;}\r\n])\s*(?:import|export)\s*(?:[\w$*,{}\s]{0,512}?from\s*)?|(?:^|[^\w$.'"`])import\s*\(\s*)(['"])([^'"\n]*?)\1/g;
 
 /**
  * WHAT A BUNDLE STILL EXPECTS SOMEBODY ELSE TO RESOLVE, in the order it carries
@@ -171,7 +103,7 @@ const MODULE_REFERENCE =
  * ## The limits, honestly
  *
  * It reads TEXT and is not a parser, so what it can get wrong is bounded by
- * where each half of `MODULE_REFERENCE` is strict -- read it, because the
+ * where each half of core's `MODULE_REFERENCE` is strict -- read it, because the
  * asymmetry is the argument. A bundle embedding JavaScript source in a string
  * literal can be reported for an import that is not one: the safe direction,
  * since a refusal names the specifier and the author can see exactly what was
@@ -185,16 +117,10 @@ const MODULE_REFERENCE =
  * case, which Node would happily evaluate -- to refuse at all.
  */
 export function unresolvedImportsOf(bundle: Uint8Array): readonly string[] {
-	const text = new TextDecoder().decode(bundle);
-	const unresolved: string[] = [];
-	for (const match of text.matchAll(MODULE_REFERENCE)) {
-		const specifier = match[2];
-		if (specifier.length === 0 || isBuiltin(specifier) || unresolved.includes(specifier)) {
-			continue;
-		}
-		unresolved.push(specifier);
-	}
-	return unresolved;
+	// The SCAN is core's (`moduleReferencesOf`), shared with the browser's bundle
+	// arrival so the two runtimes cannot disagree about what a bundle still names.
+	// What is Node's alone is the filter: a builtin resolves here, and nowhere else.
+	return moduleReferencesOf(bundle).filter((specifier) => !isBuiltin(specifier));
 }
 
 /**

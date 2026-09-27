@@ -274,10 +274,17 @@ describe('the hash is WIDE, SYNCHRONOUS, and rendered FIXED-LENGTH', () => {
 		// addresses, which is what this guard exists to prevent. It uses the SAME
 		// primitive deliberately, because a second one would be a second thing a
 		// producer and a loader must agree on.
+		//
+		// `processorArtifact.ts` is the fourth, admitted on the same test: it names a
+		// processor BUNDLE by its octets (`processorArtifactIdentity`, ADR-0086), the
+		// one value `etherfold build` publishes under and a tab running the published
+		// bundle derives (ADR-0095). Bytes in, nothing truncated, no keyspace
+		// addressed by it -- and the same primitive, for the same reason.
 		const root = fileURLToPath(new URL('../src/', import.meta.url));
 		const hashing = filesUnder(root).filter((file) => /\bsha256\b/.test(readFileSync(file, 'utf-8')));
 		expect(hashing.map((file) => file.slice(root.length))).toEqual([
 			'generation/identity.ts',
+			'processorArtifact.ts',
 			'stream/identity.ts',
 			'stream/seed.ts',
 		]);

@@ -25,6 +25,7 @@ import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
 import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerState.js';
 import {moduleProcessorIdentity} from '../moduleIdentity.js';
+import {arriveFromBundle, refuseAnIdentityBesideABundle} from '../processorBundle.js';
 import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
 import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
 import {executionScopeName, type HostAccess} from './endpoint.js';
@@ -723,11 +724,21 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 	//
 	// The caller's own `spec` is NEVER written to: it is the application's object and
 	// may be reused for the next generation this host builds.
+	refuseAnIdentityBesideABundle(spec);
+	const processorBundle = spec.processorBundle;
 	const generationSpec = {
-		createState: (context: GenerationContext) =>
-			withClaimPatience(spec.claimWithinSeconds, (patience) => spec.createState(context, patience)),
+		createState: async (context: GenerationContext) => {
+			// THE BUNDLE ARRIVES FIRST, inside this worker and before any state is built:
+			// a refused bundle (`ProcessorBundleRefusedError`) claims no store, folds
+			// nothing, and reaches the tab as this host's `failure`.
+			const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
+			return withClaimPatience(spec.claimWithinSeconds, (patience) => spec.createState(context, patience, bundle));
+		},
 		createProcessor: async (state: unknown, context: GenerationContext) => {
-			const built = await spec.createProcessor(state as WritableStateStore, context);
+			// The SAME arrival the state waited on, so the bytes this fold runs are the
+			// bytes the identity below was computed over.
+			const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
+			const built = await spec.createProcessor(state as WritableStateStore, context, bundle);
 			if (built.configure && spec.processorConfig) {
 				built.configure(spec.processorConfig);
 			}
@@ -737,7 +748,8 @@ function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
 			// (`moduleProcessorIdentity`, ADR-0086). The same expression `createIndexerState`
 			// uses, because the three hosting shapes run ONE implementation and an app must
 			// not be named differently for having moved its fold off the UI thread.
-			generationSpec.processorIdentity ??= spec.processorIdentity ?? moduleProcessorIdentity(built);
+			// A BUNDLE names its fold by its own bytes (ADR-0095), and nothing else may.
+			generationSpec.processorIdentity ??= bundle?.identity ?? spec.processorIdentity ?? moduleProcessorIdentity(built);
 			// Recorded HERE and not in `createState`, because this is the first moment
 			// both halves of a generation's identity exist: the stream is known up
 			// front, the fold's half only once the processor is built.
