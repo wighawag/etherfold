@@ -2,23 +2,16 @@
 title: 'Port stratagems and its snapshot job off the deprecated ethereum-indexer packages'
 slug: port-stratagems-to-the-etherfold-packages
 humanOnly: true
-needsAnswers: true
 blockedBy: []
 covers: []
 ---
 
-<!-- open-questions -->
-<!--
-  TRANSIENT BLOCK: stripped by the apply rung on full resolution.
--->
+## Answered (2026-09-26, by the maintainer)
 
-## Open questions
+1. **Port, not retire.** Stratagems stays as a real consumer of the published packages: it serves as an example and as a test of them.
+2. **Only `alpha1` matters.** `alpha1test` and `composablelabs` are already commented out of the snapshot job and are not ported.
+3. **The static state file is replaced by what the CLI publishes**, which is a feature etherfold does not have yet: `build` folds into libSQL, and nothing writes that database out as the state snapshot and stream seed a browser app starts from. That producer is the proposed spec `a-build-publishes-what-a-browser-app-starts-from`, and this task waits for it (see Blocked by). Whether a deployed `web/` must keep reading the old files is moot: `web/` is ported with the job and reads the new artifacts.
 
-1. **Port, or retire?** `wighawag/stratagems` has had no commit since 2024-12-18. Is it still worth porting, or should its hourly snapshot job (`stratagems-snapshots`, `index-and-serve.yml`, cron `55 * * * *`) be stopped and both repositories left pinned to the last `ethereum-indexer*` releases, which still install (a deprecation only warns)? If retired, this task becomes "turn off the cron and say so in both READMEs".
-2. **Which `alpha1` deployments still matter?** The snapshot job indexes `alpha1` live and has `alpha1test` and `composablelabs` commented out. A port only has to reproduce the snapshots someone still reads.
-3. **What replaces the static state file?** `web/` bootstraps from `web/static/indexed-states/`, the `<chain>-<hash>-state.json` / `-lastSync.json` files the old `ei -f` wrote from the retired JS-object path. `etherfold build` folds into SQLite rather than writing that file, so the port needs a decision: a published snapshot of versioned state (see the idea `publishing-snapshots-of-versioned-state` and the stream-seed path), a served read tier, or folding in the tab from the chain. And does an already-deployed `web/` build have to keep reading the old files? `@etherfold/processor-entities` state is entity rows, so an old client cannot read a new snapshot; if a deployed client must keep working, the port has to ship `web/` and the snapshot job together.
-
-<!-- /open-questions -->
 
 ## What to build
 
@@ -36,19 +29,18 @@ Move the two consumers we own off the seven `ethereum-indexer*` names, which wer
 
 ## Acceptance criteria
 
-- [ ] The open questions above are answered, and the answer to 1 decides which of the criteria below apply.
 - [ ] `stratagems` resolves no `ethereum-indexer*` package (its lockfile names none), and builds and passes its CI.
 - [ ] The stratagems processor is an `EntityProcessor`, and folding the same history produces the same answers the JS-object processor gave for the questions `web/` asks (checked against a snapshot the old job published).
-- [ ] `stratagems-snapshots` runs `etherfold`, not `ei`, and its scheduled workflow succeeds with no deprecation warning in its install step.
-- [ ] Whatever reads the snapshots (question 3) reads the new format, or the old format is kept and the reason is written down.
+- [ ] `stratagems-snapshots` indexes `alpha1` only, runs `etherfold` (not `ei`), and publishes with the producer the spec above delivers, and its scheduled workflow succeeds with no deprecation warning in its install step.
+- [ ] `web/` starts from the published state snapshot (and, if the spec delivers it, installs the stream seed) through `@etherfold/browser`'s existing options, and lands on the same state as a tab that indexed `alpha1` itself.
 
 ## Blocked by
 
-- None: `publish-etherfold-and-deprecate-old-names` is done and every `@etherfold/*` package is on npm.
+- The producer from the proposed spec `a-build-publishes-what-a-browser-app-starts-from`. It is not tasked yet, so it cannot be named in `blockedBy`; once its tasks exist, list the one that ships the command there. Everything else is ready: `publish-etherfold-and-deprecate-old-names` is done and every `@etherfold/*` package is on npm.
 
 ## Prompt
 
-> The work happens in `wighawag/stratagems` and `wighawag/stratagems-snapshots`, not in etherfold, which is why this task is `humanOnly`: an etherfold runner cannot build in those repositories. Resolve the open questions with the maintainer first; if the answer to question 1 is "retire", do only that.
+> The work happens in `wighawag/stratagems` and `wighawag/stratagems-snapshots`, not in etherfold, which is why this task is `humanOnly`: an etherfold runner cannot build in those repositories. The maintainer's answers are recorded above: port, `alpha1` only, and publish with the CLI's producer rather than a static state file.
 >
 > FIRST, check this task against current reality: the imports and the workflow were read on 2026-09-26 and either repository may have moved since. Re-derive which `ethereum-indexer*` packages each one resolves (`grep` the `package.json` files and the lockfile) before planning anything.
 >
