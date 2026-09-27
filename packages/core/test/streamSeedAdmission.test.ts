@@ -417,38 +417,39 @@ describe('structural coherence: each rule with its own failing artifact', () => 
 		await refuses('incoherent', eventsWith([makeLog(100, '0xs100', 0), makeLog(COVERAGE.toBlock + 1, '0xabove')]));
 	});
 
-	it('refuses a RETRACTION that contradicts the declared producer', async () => {
-		// A `capture` fetches canonical historical ranges and cannot produce one, so a
-		// seed that says `capture` and carries a `removed` event contradicts its own
-		// provenance. That is sharper than a blanket ban -- and the ban is what the
-		// next case exists to prove was not written.
-		const applied = makeLog(100, '0xs100', 0);
-		await refuses('incoherent', eventsWith([applied, {...applied, removed: true}]));
-	});
-
-	it('refuses a retraction with NO application of the same coordinate before it', async () => {
-		const orphan = {...makeLog(100, '0xs100', 0), removed: true};
-		await refuses(
-			'incoherent',
-			seedFor(CLIENT_SOURCE, STREAM_CONFIG, {eventStream: [orphan], producerKind: 'stored-stream'}),
-		);
-	});
-
-	it('ADMITS a legitimate retraction from a producer that admits one', async () => {
-		// A seed derived from a server's append-only emission stream legitimately
-		// carries apply/retract pairs (ADR-0006), and folding one is correct behaviour
-		// rather than damage: a replay HONOURS the verdicts the stream carries
-		// (ADR-0042). A blanket ban on `removed` would forbid this artifact, which is
-		// why the rule is stated against the DECLARATION instead.
-		const applied = makeLog(102, '0xs102', 0);
-		const seed = seedFor(CLIENT_SOURCE, STREAM_CONFIG, {
-			producerKind: 'stored-stream',
-			eventStream: [makeLog(100, '0xs100', 0), applied, {...applied, removed: true}],
+	// A seed is the COMPACTED final chain, so it carries NO retraction, whatever
+	// producer it declares (ADR-0065, as amended). The declaration used to decide
+	// this: a `stored-stream` seed was allowed a matched apply/retract pair so a
+	// server's append-only stream could be seeded verbatim. That allowance was
+	// unreachable (the reorg that produces a retraction also puts two block hashes
+	// at one height), and the one producer of a `stored-stream` seed compacts the
+	// pairs away (ADR-0095), so every producer kind is asserted to refuse here.
+	for (const producerKind of ['capture', 'stored-stream'] as const) {
+		it(`refuses a MATCHED apply/retract pair from a '${producerKind}' seed`, async () => {
+			// the exact artifact the old rule ADMITTED for `stored-stream`: an application
+			// still standing, then its retraction, one block hash per height
+			const applied = makeLog(102, '0xs102', 0);
+			await refuses(
+				'incoherent',
+				seedFor(CLIENT_SOURCE, STREAM_CONFIG, {
+					producerKind,
+					eventStream: [makeLog(100, '0xs100', 0), applied, {...applied, removed: true}],
+				}),
+			);
 		});
 
-		const {outcome} = await offer(seed);
+		it(`refuses a retraction with no application before it from a '${producerKind}' seed`, async () => {
+			const orphan = {...makeLog(100, '0xs100', 0), removed: true};
+			await refuses('incoherent', seedFor(CLIENT_SOURCE, STREAM_CONFIG, {eventStream: [orphan], producerKind}));
+		});
+	}
 
-		expect(outcome).toMatchObject({status: 'installed', events: 3});
+	it('admits a retraction-free `stored-stream` seed: the producer kind is provenance, not a different rule', async () => {
+		const {outcome} = await offer(
+			seedFor(CLIENT_SOURCE, STREAM_CONFIG, {eventStream: EVENTS, producerKind: 'stored-stream'}),
+		);
+
+		expect(outcome).toMatchObject({status: 'installed', events: EVENTS.length});
 	});
 
 	it('admits the ordinary coherent capture, so the rules are not vacuously refusing everything', async () => {

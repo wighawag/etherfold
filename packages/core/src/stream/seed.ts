@@ -30,34 +30,30 @@ import type {ContextIdentifier, StoredLogEvent, UsedStreamConfig} from '../types
 export const STREAM_SEED_FORMAT = 1;
 
 /**
- * WHAT KIND of thing produced a seed's events, which is a rule and not a label.
+ * WHAT KIND of thing produced a seed's events: PROVENANCE, and no longer a rule.
  *
- * ADR-0065 states the retraction rule against this declaration rather than
- * banning retractions outright: `captureStream` fetches canonical historical
- * ranges and so cannot produce one, while a seed derived from a SERVER's stored
- * emission stream legitimately carries apply/retract pairs (that table is
- * append-only, retractions included, ADR-0006). So a seed that says `capture`
- * and carries a `removed` event contradicts its own declaration and is refused
- * on that, which is sharper than a blanket ban and leaves the stored-stream
- * artifact buildable.
- *
- * The check itself belongs to the loader's admission pass; what lives here is
- * the field it is stated against.
+ * `capture` is `captureStream` fetching canonical historical ranges;
+ * `stored-stream` is a server's stored emission stream (`publish --seed`), read
+ * back and COMPACTED so every matched apply/retract pair is dropped (ADR-0095).
+ * Either way a seed is the compacted final chain and carries NO retraction, and
+ * the loader's admission pass refuses one whatever this says (ADR-0065, as
+ * amended). It once decided that: a `stored-stream` seed was allowed a matched
+ * pair so the append-only stream could be seeded verbatim, an allowance the same
+ * pass made unreachable by refusing two block hashes at one height.
  */
 export type StreamSeedProducerKind = 'capture' | 'stored-stream';
 
 /**
  * A TYPED declaration of what produced a seed.
  *
- * Typed, and not a free-form provenance bag, because a rule is stated against it
- * (above) and because the retraction refusal cannot be written against a key
- * that may or may not be there. `StreamFixtureProvenance` is deliberately the
- * opposite -- free-form beyond four fields, since what makes a CAPTURE
- * trustworthy is domain-specific -- and a seed is the one document where this
- * particular fact is load-bearing rather than informative.
+ * Typed, and not a free-form provenance bag, so a reader can rely on which
+ * mechanism produced the events without probing for a key that may or may not be
+ * there. `StreamFixtureProvenance` is deliberately the opposite -- free-form
+ * beyond four fields, since what makes a CAPTURE trustworthy is domain-specific.
+ * No admission rule reads it any more (see `StreamSeedProducerKind`).
  */
 export type StreamSeedProducer = {
-	/** Which mechanism produced the events, and therefore which retraction rule applies. */
+	/** Which mechanism produced the events. Provenance: it does not change what the loader admits. */
 	kind: StreamSeedProducerKind;
 	/** What ran, in enough detail that a reader can go and look at it. */
 	name: string;
@@ -147,7 +143,7 @@ export type StreamSeedCoverage = {
  */
 export type StreamSeed = {
 	format: typeof STREAM_SEED_FORMAT;
-	/** What produced it, typed, because the retraction rule is stated against it (ADR-0065). */
+	/** What produced it, typed, as provenance: no admission rule reads it (ADR-0065, as amended). */
 	producer: StreamSeedProducer;
 	/**
 	 * The chain head the producer OBSERVED when it took the events.

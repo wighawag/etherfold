@@ -37,3 +37,19 @@ So:
 > FIRST, check this task against current reality: if a producer that emits retractions into a seed exists after all, do not remove the allowance; route to needs-attention naming it.
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **I also fixed two stale comments outside `seed.ts` and `seedInstall.ts`.**
+  - **What I chose:** I reworded two phrases in the `CONTEXT.md` **seeding** entry that described the producer declaration as "what the retraction rule is stated against" and listed "retraction coherence against the declared producer". I also reworded one field comment in `packages/conformance-workload-stratagems/src/stream-seed.ts`.
+  - **Why:** all three restated the rule this task removes.
+  - **Alternative considered:** leave them for a separate sweep. That would have left the glossary contradicting ADR-0065.
+  - **What it touches:** comments and glossary text only. The conformance package is private, so it needs no changeset.
+- **I dropped the special message for an unmatched retraction.**
+  - **What I chose:** there is now one log message for every retraction, and it names the declared producer kind.
+  - **Why:** "no standing application before it" no longer means anything once all retractions are refused.
+  - **Alternative considered:** keep separate messages. There is nothing left to tell them apart.
+  - **What it touches:** the wording of the log line only. The outcome is still `incoherent`.
+- **No new ADR.**
+  - **What I chose:** I amended ADR-0065 in place, as the task asked.
+  - **Why:** ADR-0095 already records the compaction this change rests on.
