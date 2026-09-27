@@ -12,7 +12,6 @@ import {
 	createSnapshot,
 	EntityEventProcessor,
 	openAndBootstrap,
-	snapshotHead,
 	SYNC_CURSOR_KEY,
 	type SnapshotLocation,
 } from '../src/index.js';
@@ -47,9 +46,13 @@ function rowsAt(owner: string): Mutation[] {
 	];
 }
 
-function published(at: number, over: {processor?: string; latestBlock?: number; owner?: string} = {}): StateSnapshot {
+function published(
+	at: number,
+	over: {processor?: string; latestBlock?: number; owner?: string} = {},
+): Promise<StateSnapshot> {
 	return createSnapshot<TestABI>({
 		takenAt: {number: at, hash: `0x${at.toString(16)}`, timestamp: timestampOf(at)},
+		entities: processor.entities,
 		rows: rowsAt(over.owner ?? '0xalice'),
 		lastSync: lastSync({
 			lastToBlock: at,
@@ -64,11 +67,13 @@ function published(at: number, over: {processor?: string; latestBlock?: number; 
 /**
  * A network made of a map: a URL either has a body or throws.
  *
- * It also RECORDS what was asked for, which is how "the losing mirror was never
- * downloaded" and "an unreachable mirror was skipped" become assertions rather
- * than hopes.
+ * A route is served the way a static host serves it: a `StateSnapshot`'s DOCUMENT
+ * (gzipped bytes) at a body URL, anything else as JSON (a separately published
+ * head, or a document this build cannot read). It also RECORDS what was asked
+ * for, which is how "the losing mirror was never downloaded" and "an unreachable
+ * mirror was skipped" become assertions rather than hopes.
  */
-function network(routes: Record<string, unknown | Error>) {
+function network(routes: Record<string, unknown>) {
 	const asked: string[] = [];
 	const fetch = (async (input: string | URL | Request) => {
 		const url = String(input);
@@ -76,9 +81,14 @@ function network(routes: Record<string, unknown | Error>) {
 		const route = routes[url];
 		if (route === undefined) throw new Error(`404 ${url}`);
 		if (route instanceof Error) throw route;
-		return {json: async () => route} as Response;
+		if (isSnapshot(route)) return new Response(route.document);
+		return new Response(JSON.stringify(route));
 	}) as unknown as typeof globalThis.fetch;
 	return {fetch, asked};
+}
+
+function isSnapshot(value: unknown): value is StateSnapshot {
+	return typeof value === 'object' && value !== null && 'document' in value && 'head' in value;
 }
 
 async function freshStore() {
@@ -88,7 +98,7 @@ async function freshStore() {
 describe('an indexer that starts from a snapshot', () => {
 	it('resumes from the cursor the snapshot carried, rather than from the start block', async () => {
 		const store = await freshStore();
-		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
+		await store.bootstrap((await published(SNAPSHOT_BLOCK)).document, {processor: 'proc-v1'});
 
 		// the CLAIM is what the ability to fold rests on (ADR-0077); `bootstrap` stays
 		// reachable on the snapshot-aware handle, which the claimed one wraps.
@@ -103,7 +113,7 @@ describe('an indexer that starts from a snapshot', () => {
 
 	it('keeps indexing on top of the rows it adopted, as one state', async () => {
 		const store = await freshStore();
-		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
+		await store.bootstrap((await published(SNAPSHOT_BLOCK)).document, {processor: 'proc-v1'});
 
 		// the CLAIM is what the ability to fold rests on (ADR-0077); `bootstrap` stays
 		// reachable on the snapshot-aware handle, which the claimed one wraps.
@@ -123,7 +133,7 @@ describe('an indexer that starts from a snapshot', () => {
 		const store = await freshStore();
 
 		await expect(
-			store.bootstrap(published(SNAPSHOT_BLOCK, {processor: 'proc-v2'}), {processor: 'proc-v1'}),
+			store.bootstrap((await published(SNAPSHOT_BLOCK, {processor: 'proc-v2'})).document, {processor: 'proc-v1'}),
 		).rejects.toThrow(/proc-v2[\s\S]*proc-v1|proc-v1[\s\S]*proc-v2/);
 	});
 });
@@ -131,7 +141,7 @@ describe('an indexer that starts from a snapshot', () => {
 describe('a reorg that reaches below the snapshot, through the runtime that would perform it', () => {
 	it('is refused loudly by the revert rather than half-performed', async () => {
 		const store = await freshStore();
-		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
+		await store.bootstrap((await published(SNAPSHOT_BLOCK)).document, {processor: 'proc-v1'});
 		// the CLAIM is what the ability to fold rests on (ADR-0077); `bootstrap` stays
 		// reachable on the snapshot-aware handle, which the claimed one wraps.
 		const runtime = new EntityEventProcessor(await openForWriting(store), processor);
@@ -153,7 +163,7 @@ describe('a reorg that reaches below the snapshot, through the runtime that woul
 
 	it('names the block asked for and the floor, so the message says what to do', async () => {
 		const store = await freshStore();
-		await store.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
+		await store.bootstrap((await published(SNAPSHOT_BLOCK)).document, {processor: 'proc-v1'});
 
 		const refusal = await store.revertTo(SNAPSHOT_BLOCK - 5).catch((error: unknown) => error);
 
@@ -168,7 +178,7 @@ describe.each(BACKENDS.filter((backend) => backend.durable))('the floor on $name
 	it('is still there when the store is reopened, so the second run is as honest as the first', async () => {
 		const first = await backend.open(processor.entities);
 		const aware = await openSnapshotAware(first);
-		await aware.bootstrap(published(SNAPSHOT_BLOCK), {processor: 'proc-v1'});
+		await aware.bootstrap((await published(SNAPSHOT_BLOCK)).document, {processor: 'proc-v1'});
 
 		// what a restart is for this backend: a new store object over the same
 		// storage. A floor held only in the previous handle would be gone.
@@ -189,9 +199,9 @@ describe('choosing between published locations', () => {
 	it('uses the one that has got furthest', async () => {
 		const store = await freshStore();
 		const {fetch} = network({
-			[A]: published(11_000),
-			[B]: published(13_000),
-			[C]: published(12_000),
+			[A]: await published(11_000),
+			[B]: await published(13_000),
+			[C]: await published(12_000),
 		});
 
 		const outcome = await bootstrapFromSnapshot(store, [A, B, C], {processor: 'proc-v1', fetch});
@@ -204,7 +214,7 @@ describe('choosing between published locations', () => {
 		const store = await freshStore();
 		const {fetch} = network({
 			[A]: new Error('connection reset'),
-			[B]: published(12_500),
+			[B]: await published(12_500),
 		});
 
 		const outcome = await bootstrapFromSnapshot(store, [A, B], {processor: 'proc-v1', fetch});
@@ -217,9 +227,9 @@ describe('choosing between published locations', () => {
 		// source says `// TODO more than 2`); this walks every remaining candidate.
 		const store = await freshStore();
 		const {fetch} = network({
-			[A]: snapshotHead(published(14_000)),
-			[B]: snapshotHead(published(13_000)),
-			[C]: published(12_000),
+			[A]: (await published(14_000)).head,
+			[B]: (await published(13_000)).head,
+			[C]: await published(12_000),
 			'https://a.example/body.json': new Error('gone'),
 			'https://b.example/body.json': new Error('gone'),
 		});
@@ -236,9 +246,9 @@ describe('choosing between published locations', () => {
 	it('reads only the HEAD of each mirror when one is published, and downloads only the winner', async () => {
 		const store = await freshStore();
 		const {fetch, asked} = network({
-			'https://a.example/head.json': snapshotHead(published(11_000)),
-			'https://b.example/head.json': snapshotHead(published(13_000)),
-			'https://b.example/state.json': published(13_000),
+			'https://a.example/head.json': (await published(11_000)).head,
+			'https://b.example/head.json': (await published(13_000)).head,
+			'https://b.example/state.json': await published(13_000),
 		});
 
 		const locations: SnapshotLocation[] = [
@@ -256,8 +266,8 @@ describe('choosing between published locations', () => {
 
 	it('keeps local state when local is already ahead, and downloads nothing', async () => {
 		const store = await freshStore();
-		await store.bootstrap(published(13_000), {processor: 'proc-v1'});
-		const {fetch, asked} = network({[A]: published(12_000)});
+		await store.bootstrap((await published(13_000)).document, {processor: 'proc-v1'});
+		const {fetch, asked} = network({[A]: await published(12_000)});
 
 		const outcome = await bootstrapFromSnapshot(store, [A], {processor: 'proc-v1', fetch});
 
@@ -269,7 +279,7 @@ describe('choosing between published locations', () => {
 
 	it('ignores a snapshot computed by another processor version rather than adopting it', async () => {
 		const store = await freshStore();
-		const {fetch} = network({[A]: published(13_000, {processor: 'proc-v2'})});
+		const {fetch} = network({[A]: await published(13_000, {processor: 'proc-v2'})});
 
 		const outcome = await bootstrapFromSnapshot(store, [A], {processor: 'proc-v1', fetch});
 
@@ -280,7 +290,7 @@ describe('choosing between published locations', () => {
 	it('declines a snapshot taken inside the reorg window, where a revert could not be undone', async () => {
 		const store = await freshStore();
 		// taken 10 blocks behind the tip its producer had seen, under a finality of 64
-		const {fetch} = network({[A]: published(13_000, {latestBlock: 13_010})});
+		const {fetch} = network({[A]: await published(13_000, {latestBlock: 13_010})});
 
 		const outcome = await bootstrapFromSnapshot(store, [A], {
 			processor: 'proc-v1',
@@ -293,7 +303,7 @@ describe('choosing between published locations', () => {
 
 	it('accepts one taken behind the finality depth', async () => {
 		const store = await freshStore();
-		const {fetch} = network({[A]: published(13_000, {latestBlock: 13_100})});
+		const {fetch} = network({[A]: await published(13_000, {latestBlock: 13_100})});
 
 		const outcome = await bootstrapFromSnapshot(store, [A], {
 			processor: 'proc-v1',
@@ -354,7 +364,7 @@ describe('choosing between published locations', () => {
 
 describe('the boot path', () => {
 	it('bootstraps a store that has never synced, and opens it snapshot-aware', async () => {
-		const {fetch} = network({'https://a.example/state.json': published(SNAPSHOT_BLOCK)});
+		const {fetch} = network({'https://a.example/state.json': await published(SNAPSHOT_BLOCK)});
 
 		const {store, outcome} = await openAndBootstrap(
 			await BACKENDS[0].open(processor.entities),
@@ -371,7 +381,7 @@ describe('the boot path', () => {
 		const inner = await BACKENDS[0].open(processor.entities);
 		await inner.migrate();
 		await inner.writeCursor(SYNC_CURSOR_KEY, JSON.stringify(lastSync({lastToBlock: 5})));
-		const {fetch, asked} = network({'https://a.example/state.json': published(SNAPSHOT_BLOCK)});
+		const {fetch, asked} = network({'https://a.example/state.json': await published(SNAPSHOT_BLOCK)});
 
 		const {outcome} = await openAndBootstrap(inner, 'https://a.example/state.json', {
 			processor: 'proc-v1',

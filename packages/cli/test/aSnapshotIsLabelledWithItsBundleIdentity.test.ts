@@ -119,25 +119,25 @@ async function aDeploymentPublishing(bundle: string): Promise<StateSnapshot> {
 
 	const canonical = await canonicalGenerationIn(db);
 	if (canonical === undefined) throw new Error(`this deployment registered no generation at all`);
-	const store = await canonicalStoreIn(db, (await theBundleAt(bundle)).processor.entities);
+	const entities = (await theBundleAt(bundle)).processor.entities;
+	const store = await canonicalStoreIn(db, entities);
 	const lastSync = deserializeLastSync<typeof abi>((await store.readCursor(SYNC_CURSOR_KEY)) ?? '');
 
-	const snapshot = createSnapshot<typeof abi>({
+	// AS BYTES, because that is what a mirror serves and what a client inflates: a
+	// format-2 document (ADR-0095). A snapshot that could only travel as an
+	// in-process object would be a publishing format in name only.
+	return createSnapshot<typeof abi>({
 		takenAt: {
 			number: lastSync.lastToBlock,
 			hash: `0xsnap${lastSync.lastToBlock.toString(16)}`,
 			timestamp: timestampOf(lastSync.lastToBlock),
 		},
+		entities,
 		rows: await liveRowsOf(store),
 		lastSync,
 		processor: canonical.processor,
 		savedAt: '2026-09-18T00:00:00.000Z',
 	});
-
-	// THROUGH JSON, because that is what a mirror serves and what a client parses.
-	// A snapshot that could only travel as an in-process object would be a
-	// publishing format in name only.
-	return JSON.parse(JSON.stringify(snapshot)) as StateSnapshot;
 }
 
 /**
@@ -179,7 +179,7 @@ async function aClientStore(app: {processor: EntityProcessor<typeof abi>}): Prom
 
 /** A mirror that serves one snapshot: the whole network a published artifact needs. */
 function mirror(snapshot: StateSnapshot) {
-	const fetch = (async () => ({json: async () => snapshot}) as Response) as unknown as typeof globalThis.fetch;
+	const fetch = (async () => new Response(snapshot.document)) as unknown as typeof globalThis.fetch;
 	return {url: 'https://mirror.example/state.json', fetch};
 }
 
@@ -187,7 +187,7 @@ describe('a snapshot published by a deployment running a bundle', () => {
 	it('is labelled with the identity of the bytes that fold, and nothing an author wrote', async () => {
 		const snapshot = await aDeploymentPublishing(BUNDLE);
 
-		expect(snapshot.processor).toBe(processorArtifactIdentity(new Uint8Array(readFileSync(BUNDLE))));
+		expect(snapshot.head.processor).toBe(processorArtifactIdentity(new Uint8Array(readFileSync(BUNDLE))));
 	});
 
 	it('IS a candidate for a client running that same bundle, which installs it and resumes there', async () => {
@@ -198,12 +198,12 @@ describe('a snapshot published by a deployment running a bundle', () => {
 
 		const outcome = await bootstrapFromSnapshot(store, remote.url, {processor: app.identity, fetch: remote.fetch});
 
-		expect(outcome).toMatchObject({status: 'bootstrapped', at: snapshot.takenAt.number});
+		expect(outcome).toMatchObject({status: 'bootstrapped', at: snapshot.head.takenAt.number});
 		// the rows the producer's fold computed are this client's state now
 		expect(await store.getCurrent('nft', {tokenID: TOKEN})).toMatchObject({owner: BOB.toLowerCase()});
 		expect(await store.getCurrent('counter', {name: 'transfers'})).toMatchObject({value: LOGS.length});
 		// ...and its history begins where the snapshot does, because it received nothing below that
-		expect(store.snapshotOrigin).toBe(snapshot.takenAt.number);
+		expect(store.snapshotOrigin).toBe(snapshot.head.takenAt.number);
 	});
 
 	it('leaves the client asking the chain from the snapshot rather than from the start block', async () => {
@@ -220,7 +220,7 @@ describe('a snapshot published by a deployment running a bundle', () => {
 		const client = new EntityEventProcessor(await openForWriting(store), app.processor);
 		const loaded = await client.load(SOURCE, {finality: FINALITY});
 
-		expect(loaded?.lastSync.lastToBlock).toBe(snapshot.takenAt.number);
+		expect(loaded?.lastSync.lastToBlock).toBe(snapshot.head.takenAt.number);
 		expect(await localPosition(store)).toBeGreaterThan(START_BLOCK);
 	});
 });
@@ -249,10 +249,12 @@ describe('a snapshot computed by ANOTHER fold', () => {
 		const other = await theBundleAt(EDITED_BUNDLE);
 		const store = await aClientStore(other);
 
-		const refusal = await store.bootstrap(snapshot, {processor: other.identity}).catch((error: unknown) => error);
+		const refusal = await store
+			.bootstrap(snapshot.document, {processor: other.identity})
+			.catch((error: unknown) => error);
 
 		expect(refusal).toBeInstanceOf(SnapshotProcessorMismatchError);
-		expect((refusal as SnapshotProcessorMismatchError).found).toBe(snapshot.processor);
+		expect((refusal as SnapshotProcessorMismatchError).found).toBe(snapshot.head.processor);
 		expect((refusal as SnapshotProcessorMismatchError).expected).toBe(other.identity);
 		expect(await store.getCurrent('nft', {tokenID: TOKEN})).toBeUndefined();
 	});

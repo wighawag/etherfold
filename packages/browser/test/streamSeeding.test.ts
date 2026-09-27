@@ -421,6 +421,7 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 		}));
 		return createSnapshot<TestABI>({
 			takenAt: {number: SNAPSHOT_TIP, hash: `0xsnap${SNAPSHOT_TIP.toString(16)}`, timestamp: timestampOf(SNAPSHOT_TIP)},
+			entities: definition.entities,
 			rows,
 			lastSync,
 			processor: APP_IDENTITY,
@@ -441,7 +442,7 @@ describe('a refusal reaches the surface as data, and the app starts anyway', () 
 		const name = freshName();
 		const mirror = {
 			url: 'https://mirror.example/state.json',
-			fetch: (async () => ({json: async () => snapshot}) as Response) as unknown as typeof globalThis.fetch,
+			fetch: (async () => new Response(snapshot.document)) as unknown as typeof globalThis.fetch,
 		};
 		const {store: bootstrapped, outcome} = await openAndBootstrap(
 			await createBrowserStateStore(definition.entities, {databaseName: name}),

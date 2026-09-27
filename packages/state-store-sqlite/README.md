@@ -63,6 +63,22 @@ The namespace goes INSIDE the reserved `_` prefix (`token` becomes `genA_token`,
 
 `_writer` is in the namespace too, and that is what scopes the **writer token**: every mutating statement this store emits is guarded on the token in its own `_writer` row, and the same batch reads the token back, because `remote-sql` reports no affected-row count and a read-back is therefore the only evidence a writer has (ADR-0054's mechanism, applied here by ADR-0075). A writer claims on its first write; a second writer's first write claims in turn, so the first one's next mutation matches zero rows everywhere and is reported as `StoreWriterChangedError` with nothing written. Two generations with different namespaces never contend, which is the concurrency the generation model requires; two stores on ONE namespace are one store, and the second writer takes it. `applyBlocks` is many batches, so the guard is per batch: a refusal mid-sequence leaves the batches that already committed applied and every later one unwritten. `drop` is DDL and cannot carry a predicate, so it compare-and-swaps the claim's RELEASE first and drops nothing if that fails. `migrate` never claims.
 
+## Producing a state snapshot
+
+A published state snapshot (ADR-0095) is produced from this backend's own read, never through the seam, which has no list-everything read by design (ADR-0021). `liveRowsAsOf(at)` answers every row live as of a block, entity by entity, a page at a time, through the same as-of predicate and retention refusal as `getAsOf`; `produceStateSnapshot(store, {at, processor, cursor})` writes those rows as a format-2 document (`encodeSnapshot`, `@etherfold/state-store`) and returns it with its head:
+
+```ts
+const generation = new VersionedStateStore(db, declarations, {tableNamespace: 'genA'});
+const {head, document} = await produceStateSnapshot(generation, {
+	at: cut, // the rows are taken AS OF this block
+	processor: identity, // the generation's processor (ADR-0086)
+	cursor: {key: 'lastSync', value: serializedLastSyncForTheCut},
+});
+// `document` is a stream of gzipped bytes; `head` is its first line
+```
+
+The snapshot's pointer is the HIGHEST RECORDED block at or below `at` (`getBlockAtOrBelow`), because only a recorded block has a hash and a timestamp; the rows as of it are the rows as of `at`. A cut below every recorded block is refused. The document is a pull stream, so neither the producer nor its consumer holds the state.
+
 ## Usage
 
 ```ts

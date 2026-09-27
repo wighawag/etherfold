@@ -41,6 +41,7 @@ import {
 	CURRENT_PREDICATE,
 	applyBlockStatements,
 	blockAtOrBeforeStatement,
+	blockAtOrBelowStatement,
 	blockByHashStatement,
 	blockByNumberStatement,
 	claimWriterStatement,
@@ -52,6 +53,7 @@ import {
 	latestBlockStatement,
 	listAsOfStatement,
 	listCurrentStatement,
+	liveRowsAsOfStatement,
 	prunableVersionsStatement,
 	readCursorStatement,
 	readSeamRecordStatement,
@@ -708,6 +710,18 @@ export class VersionedStateStore implements StateStoreBackend {
 	}
 
 	/**
+	 * The highest RECORDED block at or below a height, or `undefined` when none is.
+	 *
+	 * What a snapshot's pointer is when it is cut at a height that carries no logs
+	 * of ours (ADR-0095): the state as of the cut is the state as of this block,
+	 * and this is the block below the cut whose hash and timestamp are known.
+	 */
+	async getBlockAtOrBelow(number: number): Promise<RecordedBlock | undefined> {
+		assertHeightForLookup(number);
+		return (await this.select<RecordedBlock>(blockAtOrBelowStatement(number, this.names)))[0];
+	}
+
+	/**
 	 * The highest recorded block, or `undefined` before the first one is applied.
 	 *
 	 * This is the TIP a retention window is measured back from, and it is read
@@ -865,6 +879,43 @@ export class VersionedStateStore implements StateStoreBackend {
 		return result.results;
 	}
 
+	/**
+	 * EVERY row live as of a block, entity by entity, as the upserts that reproduce
+	 * them: the read a state snapshot is produced from (ADR-0095).
+	 *
+	 * It is this backend's own and deliberately NOT on the seam, which has no
+	 * list-everything read by design (ADR-0021): a handler runs once per event and
+	 * must never be able to express a scan, while a PUBLISHER runs once and needs
+	 * exactly one. It reads through the same as-of predicate, the same address
+	 * resolution and the same retention refusal as `getAsOf`, so a snapshot can
+	 * never carry rows the store would refuse to answer about.
+	 *
+	 * Paged (`liveRowsAsOfStatement`), so the rows arrive a page at a time and a
+	 * consumer that writes each one as it comes (the snapshot encoder) never holds
+	 * a whole entity. The version columns are storage and are stripped; a `blob`
+	 * comes back as a `Uint8Array`, which is what the seam's other backends hold.
+	 *
+	 * The pages are separate reads, so a writer REVERTING below `at` while this
+	 * runs would be seen part-way; read a block the fold has finalised (a publisher
+	 * cuts at `tip - finality`, ADR-0095), where nothing reverts.
+	 */
+	async *liveRowsAsOf(at: BlockAddress, options: {readonly pageSize?: number} = {}): AsyncGenerator<Mutation> {
+		const blockNumber = await this.resolveForRead(at);
+		await assertRetained(this.capabilities, blockNumber, () => this.tipBlockNumber());
+		const pageSize = Math.max(1, options.pageSize ?? LIVE_ROWS_PAGE);
+		for (const entity of this.entities.values()) {
+			let after = 0;
+			for (;;) {
+				const page = await this.select<Record<string, unknown>>(
+					liveRowsAsOfStatement(entity, blockNumber, after, pageSize, this.names),
+				);
+				for (const row of page) yield liveRow(entity, row);
+				if (page.length < pageSize) break;
+				after = page[page.length - 1][ROWID] as number;
+			}
+		}
+	}
+
 	/** A whole entity table as it is at the tip. */
 	async queryCurrent<T = Record<string, unknown>>(entity: string, options: QueryOptions = {}): Promise<T[]> {
 		const declaration = mustGet(this.entities, entity);
@@ -947,6 +998,25 @@ export class VersionedStateStore implements StateStoreBackend {
 	private prepare(statements: readonly Statement[]): SQLPreparedStatement[] {
 		return statements.map((statement) => this.db.prepare(statement.sql).bind(...statement.args));
 	}
+}
+
+/** How many rows one page of `liveRowsAsOf` reads. */
+const LIVE_ROWS_PAGE = 1_000;
+
+/** One stored version as the upsert that reproduces it: the declared columns only. */
+function liveRow(entity: NormalizedEntity, row: Record<string, unknown>): Mutation {
+	const id: Record<string, string> = {};
+	for (const column of entity.id) id[column] = String(row[column]);
+	const values: Record<string, unknown> = {};
+	for (const [field, type] of Object.entries(entity.fields)) {
+		const value = row[field] ?? null;
+		values[field] = type === 'blob' && value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+	}
+	return {type: 'upsert', entity: entity.name, id, values};
+}
+
+function assertHeightForLookup(number: number): void {
+	parseBlockAddress(number);
 }
 
 function filter(options: QueryOptions): string {

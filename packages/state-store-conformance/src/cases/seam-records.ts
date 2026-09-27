@@ -1,6 +1,6 @@
-import {ENTITY_SNAPSHOT_FORMAT, openSnapshotAware, SEAM_RECORD_KEYS, type SeamRecordKey} from '@etherfold/state-store';
+import {openSnapshotAware, SEAM_RECORD_KEYS, type SeamRecordKey} from '@etherfold/state-store';
 import {expect} from 'vitest';
-import {CONFORMANCE_ENTITIES, LADDER_BASE, block, cases, opened, owns} from '../fixtures.js';
+import {CONFORMANCE_ENTITIES, LADDER_BASE, block, cases, opened, owns, snapshotDocument} from '../fixtures.js';
 import type {ConformanceCase, StateStoreConformanceOptions, StateStoreFactory} from '../types.js';
 
 const GROUP = "the seam's own records";
@@ -114,16 +114,9 @@ export function seamRecordCases(factory: StateStoreFactory, options: StateStoreC
 			// own cursor under the marker's old name, and re-open as a later boot does.
 			const inner = await factory(CONFORMANCE_ENTITIES);
 			const store = await openSnapshotAware(inner);
-			await store.bootstrap(
-				{
-					format: ENTITY_SNAPSHOT_FORMAT,
-					processor: 'conformance-processor-v1',
-					savedAt: '2026-08-24T00:00:00.000Z',
-					takenAt: block(LADDER_BASE + 500),
-					rows: [owns('1', '0xalice', 7)],
-				},
-				{processor: 'conformance-processor-v1'},
-			);
+			await store.bootstrap(await snapshotDocument(LADDER_BASE + 500, {rows: [owns('1', '0xalice', 7)]}), {
+				processor: 'conformance-processor-v1',
+			});
 
 			await store.writeCursor('snapshotOrigin', 'the position this app happens to call that');
 

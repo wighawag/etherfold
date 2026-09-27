@@ -80,16 +80,18 @@ A client does not have to replay the chain from the start block. `openAndBootstr
 import {openAndBootstrap} from '@etherfold/processor-entities';
 
 const {store, outcome} = await openAndBootstrap(await createBrowserStateStore(processor.entities), [
-	'https://mirror-a.example/state.json',
-	{url: 'https://mirror-b.example/state.json', head: 'https://mirror-b.example/head.json'},
+	'https://mirror-a.example/state.ndjson.gz',
+	{url: 'https://mirror-b.example/state.ndjson.gz', head: 'https://mirror-b.example/head.json'},
 ], {processor: processorIdentity, finalityDepth: 64}); // the identity this fold's ARRIVAL derived
 ```
+
+A snapshot is a format-2 DOCUMENT (ADR-0095): gzipped, newline-delimited, its first line the small head a client selects on (the same JSON a location's optional `head` URL serves), then each entity's declaration once and the rows LIVE at a floor block as arrays in that column order, then any later blocks' changes. The winner is inflated and installed as it downloads, one block at a time, so the document is never held whole; a bare-URL mirror that loses is cancelled after its first line.
 
 The selection is the free-form path's, point for point (`keepStateOnIndexedDB(name, remote)` in `@etherfold/browser`): every location is asked how far it has got, the furthest wins, local state that is already ahead is KEPT, and an unreachable mirror is logged and skipped rather than fatal. Two differences on purpose: failover walks every remaining candidate rather than the winner plus one, and a snapshot computed by another processor identity is not a candidate at all.
 
 What has no free-form counterpart is the honesty, because a blob has no history to lie about. A snapshot carries only the rows that are LIVE at its block, so the store it lands in reports a retention window floored THERE rather than the `unbounded` a freshly migrated store would claim, refuses an as-of read below it with `BlockNotRetainedError`, and refuses a reorg reaching under it with `RevertBeyondSnapshotError` (declining a snapshot taken inside the reorg window is the other half, which is what `finalityDepth` above buys). That mechanism is at the seam, so every backend inherits it; ADR-0028 records why, and what a snapshot contains, with the measurement behind it in `docs/spikes/bootstrap-an-entity-store-from-a-snapshot/`.
 
-`createSnapshot` is the MINIMAL producer, for tests and for a host that already knows which ids it wrote. Publishing snapshots as a first-class artifact -- who produces one and when, format versioning, mirror layout, pruning old ones -- is a design of its own and is deliberately not here.
+`createSnapshot` is the MINIMAL producer, for tests and for a host that already knows which ids it wrote: it returns the snapshot's `head` and its `document` bytes. The producer that reads a whole state out of a database is the SQLite backend's own (`produceStateSnapshot` in `@etherfold/state-store-sqlite`), because the seam has no list-everything read (ADR-0021); what a build publishes and where is ADR-0095.
 
 ## Where the pieces live
 

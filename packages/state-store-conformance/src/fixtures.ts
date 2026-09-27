@@ -1,6 +1,8 @@
 import {
 	createMutationContext,
+	encodeSnapshot,
 	type BlockPointer,
+	type CursorWrite,
 	type EntityDeclaration,
 	type Mutation,
 	type StateStore,
@@ -203,6 +205,37 @@ export function block(
 
 export function owns(id: string, owner: string, transferCount: number): Mutation {
 	return {type: 'upsert', entity: 'token', id: {id}, values: {owner, transferCount}};
+}
+
+/**
+ * A format-2 snapshot DOCUMENT over `CONFORMANCE_ENTITIES`, as the bytes a mirror
+ * serves (ADR-0095): the rows live at `floor`, then any `later` blocks up to the
+ * cut. Built through the real encoder, so a backend installs what a publisher
+ * writes rather than a literal.
+ */
+export async function snapshotDocument(
+	floor: number,
+	options: {
+		readonly processor?: string;
+		readonly rows?: readonly Mutation[];
+		readonly cursor?: CursorWrite;
+		readonly later?: readonly {readonly block: BlockPointer; readonly mutations: readonly Mutation[]}[];
+	} = {},
+): Promise<Uint8Array> {
+	const later = options.later ?? [];
+	const cut = later.length > 0 ? later[later.length - 1].block : block(floor);
+	const document = encodeSnapshot(
+		{
+			processor: options.processor ?? 'conformance-processor-v1',
+			savedAt: '2026-08-24T00:00:00.000Z',
+			takenAt: cut,
+			floor,
+			cursor: options.cursor,
+		},
+		CONFORMANCE_ENTITIES,
+		[{block: block(floor), mutations: options.rows ?? []}, ...later],
+	);
+	return new Uint8Array(await new Response(document).arrayBuffer());
 }
 
 export function burn(id: string): Mutation {

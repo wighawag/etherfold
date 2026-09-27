@@ -156,7 +156,7 @@ async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<St
 
 	expect(lastSync.lastToBlock).toBe(SNAPSHOT_TIP);
 	expect(rows).toHaveLength(IN_SNAPSHOT);
-	return snapshotOf(lastSync, rows, PUBLISHER_OBSERVED_TIP);
+	return snapshotOf(definition, lastSync, rows, PUBLISHER_OBSERVED_TIP);
 }
 
 /**
@@ -170,13 +170,19 @@ async function publishSnapshot(definition: EntityProcessor<TestABI>): Promise<St
  * its own tip. A real publisher reads its rows as-of a block below the tip; this
  * fixture states the same relationship directly, which is what the check reads.
  */
-function snapshotOf(lastSync: LastSync<TestABI>, rows: Mutation[], observedTip: number): StateSnapshot {
+function snapshotOf(
+	definition: EntityProcessor<TestABI>,
+	lastSync: LastSync<TestABI>,
+	rows: Mutation[],
+	observedTip: number,
+): Promise<StateSnapshot> {
 	return createSnapshot<TestABI>({
 		takenAt: {
 			number: lastSync.lastToBlock,
 			hash: `0xsnap${lastSync.lastToBlock.toString(16)}`,
 			timestamp: timestampOf(lastSync.lastToBlock),
 		},
+		entities: definition.entities,
 		rows,
 		lastSync: {...lastSync, latestBlock: observedTip},
 		processor: APP_IDENTITY,
@@ -185,7 +191,7 @@ function snapshotOf(lastSync: LastSync<TestABI>, rows: Mutation[], observedTip: 
 
 /** A mirror that serves one snapshot. */
 function mirror(snapshot: StateSnapshot) {
-	const fetch = (async () => ({json: async () => snapshot}) as Response) as unknown as typeof globalThis.fetch;
+	const fetch = (async () => new Response(snapshot.document)) as unknown as typeof globalThis.fetch;
 	return {url: 'https://mirror.example/state.json', fetch};
 }
 
@@ -457,7 +463,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 		// the one thing that differs from `publishSnapshot`: this publisher reports the
 		// snapshot's OWN block as the tip it had seen, which is what indexing straight
 		// to the tip and publishing produces
-		const atTheTip = snapshotOf(lastSync, rows, SNAPSHOT_TIP);
+		const atTheTip = await snapshotOf(definition, lastSync, rows, SNAPSHOT_TIP);
 		const soloName = freshName();
 		const before = await streamKeyspace();
 
@@ -478,7 +484,7 @@ describe('the snapshot-only mode: a snapshot-seeded generation with NO stream ke
 
 		// the SAME publisher, one block deeper, is admitted: the refusal is about the
 		// depth and not about anything else in the document
-		const legal = snapshotOf(lastSync, rows, SNAPSHOT_TIP + FINALITY);
+		const legal = await snapshotOf(definition, lastSync, rows, SNAPSHOT_TIP + FINALITY);
 		const admittedName = freshName();
 		const admitted = await snapshotOnlyClient({
 			databaseName: admittedName,
