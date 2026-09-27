@@ -16,6 +16,7 @@ import {
 	normalizeEntities,
 	pruneBudget,
 	pruneRecord,
+	recordedPruneFloor,
 	resolveRetention,
 	retentionEnforcementOf,
 	retentionFloor,
@@ -46,6 +47,7 @@ import {
 	blockByNumberStatement,
 	claimWriterStatement,
 	clearCursorStatement,
+	deletesAtBlockStatement,
 	dropVersionsStatement,
 	heldWriterStatement,
 	idPredicate,
@@ -57,6 +59,8 @@ import {
 	prunableVersionsStatement,
 	readCursorStatement,
 	readSeamRecordStatement,
+	recordedBlocksBetweenStatement,
+	upsertsAtBlockStatement,
 	releaseWriterStatement,
 	revertToStatements,
 	clearSeamRecordStatement,
@@ -914,6 +918,89 @@ export class VersionedStateStore implements StateStoreBackend {
 				after = page[page.length - 1][ROWID] as number;
 			}
 		}
+	}
+
+	/**
+	 * What ONE recorded block CHANGED, entity by entity, as the mutations that
+	 * reproduce it when replayed through `applyBlock` on top of the state just below
+	 * it: the per-block history a state snapshot carries above its floor (ADR-0095).
+	 *
+	 * The block's NET change, read off the version ranges rather than kept anywhere:
+	 * an upsert for every id whose version opened at the block and is live at it, a
+	 * delete for every id whose version was closed at it with none opened in its
+	 * place. An id the block touched several times appears once, with its final
+	 * value, and an id it created and deleted does not appear at all.
+	 *
+	 * Backend-only for the reason `liveRowsAsOf` is: it is a scan of what a block
+	 * wrote, which the seam never exposes (ADR-0021). Paged, and refused where the
+	 * store does not retain the block, as every as-of read is.
+	 */
+	async *changesAt(at: number, options: {readonly pageSize?: number} = {}): AsyncGenerator<Mutation> {
+		assertHeightForLookup(at);
+		await assertRetained(this.capabilities, at, () => this.tipBlockNumber());
+		const pageSize = Math.max(1, options.pageSize ?? LIVE_ROWS_PAGE);
+		for (const entity of this.entities.values()) {
+			for (let after = 0; ; ) {
+				const page = await this.select<Record<string, unknown>>(
+					upsertsAtBlockStatement(entity, at, after, pageSize, this.names),
+				);
+				for (const row of page) yield liveRow(entity, row);
+				if (page.length < pageSize) break;
+				after = page[page.length - 1][ROWID] as number;
+			}
+			for (let after = 0; ; ) {
+				const page = await this.select<Record<string, unknown>>(
+					deletesAtBlockStatement(entity, at, after, pageSize, this.names),
+				);
+				for (const row of page) {
+					const id: Record<string, string> = {};
+					for (const column of entity.id) id[column] = String(row[column]);
+					yield {type: 'delete', entity: entity.name, id};
+				}
+				if (page.length < pageSize) break;
+				after = page[page.length - 1][ROWID] as number;
+			}
+		}
+	}
+
+	/**
+	 * The recorded blocks strictly above `after` and at most `upTo`, ascending, read
+	 * a page at a time: which blocks a snapshot carrying history replays.
+	 */
+	async *recordedBlocksBetween(
+		after: number,
+		upTo: number,
+		options: {readonly pageSize?: number} = {},
+	): AsyncGenerator<RecordedBlock> {
+		const pageSize = Math.max(1, options.pageSize ?? LIVE_ROWS_PAGE);
+		for (let from = after; ; ) {
+			const page = await this.select<RecordedBlock>(recordedBlocksBetweenStatement(from, upTo, pageSize, this.names));
+			yield* page;
+			if (page.length < pageSize) return;
+			from = page[page.length - 1].number;
+		}
+	}
+
+	/**
+	 * The oldest block this store's STORAGE can still answer an as-of read about,
+	 * or `undefined` when it reaches back to every block it recorded.
+	 *
+	 * Two floors, and the higher wins. The one THIS handle was configured with
+	 * (`retainedRange(...).from` of its retention, measured from the tip), and the
+	 * one a PRUNE pass last ran at, as recorded in the database itself
+	 * (`retentionEnforcement`). The second is what matters to a reader that did not
+	 * write the database: a publisher opens it with no retention of its own, and the
+	 * process that folded it may have pruned it (`--retention`), so versions closed
+	 * at or below that floor may be gone whatever this handle claims. A `revert-only`
+	 * store answers no historical read at all, and its reads refuse on their own.
+	 */
+	async retainedFrom(): Promise<number | undefined> {
+		const tip = await this.tipBlockNumber();
+		const configured = tip === undefined ? undefined : retentionFloor(this.provided, tip, this.finalityDepth);
+		const pruned = recordedPruneFloor(await this.readSeamRecord('retentionEnforcement'));
+		if (configured === undefined) return pruned;
+		if (pruned === undefined) return configured;
+		return Math.max(configured, pruned);
 	}
 
 	/** A whole entity table as it is at the tip. */

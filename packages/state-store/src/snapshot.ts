@@ -293,7 +293,8 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	 * the first block, which is read in full before the marker goes down. A document
 	 * that goes wrong LATER (a download cut short) leaves the marker and whatever
 	 * blocks had landed; for a `none` snapshot that is the marker over an empty store,
-	 * the recoverable case below.
+	 * the recoverable case below, and with history it is the marker over the floor and
+	 * some later blocks, which the next install replaces (below).
 	 *
 	 * ## The order, which is the interesting part
 	 *
@@ -314,6 +315,20 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	 * Same reasoning as the cursor being written last in a store with no
 	 * transaction to join: where atomicity is unavailable, the ORDER has to be
 	 * the safe one.
+	 *
+	 * ## An earlier install is replaced, never built on
+	 *
+	 * A snapshot that carries history is SEVERAL `applyBlock`s, so a download cut
+	 * short part-way leaves the marker, the floor and some later blocks, and no
+	 * cursor (it rides the last block). That store is not a complete install and is
+	 * not treated as one (`openAndBootstrap` finds no cursor and bootstraps again),
+	 * but replaying a document over it would offer blocks the store already holds,
+	 * which every backend refuses. So a store that already carries a snapshot origin
+	 * is WIPED first (`revertTo(-1)`, which drops the marker with the rows), once the
+	 * new document's head and floor have been checked. The same holds for a
+	 * complete earlier install a caller chose to replace with a more advanced one:
+	 * laying a floor's live rows over it would keep every row the newer snapshot no
+	 * longer has.
 	 */
 	async bootstrap(
 		snapshot: SnapshotDocument | SnapshotReader,
@@ -334,6 +349,10 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 			// declaration this store does not have, or a malformed floor, is refused.
 			let next = await blocks.next();
 			if (next.done) throw new Error(`a snapshot document ended before its floor block`);
+
+			// a store that already carries a snapshot origin holds a PREVIOUS install:
+			// replaced whole, never built on (see "An earlier install" above)
+			if (this.origin !== undefined) await this.revertTo(-1);
 
 			const marker: SnapshotOrigin = {format: SNAPSHOT_ORIGIN_FORMAT, block: head.floor};
 			await this.inner.writeSeamRecord('snapshotOrigin', JSON.stringify(marker));

@@ -174,12 +174,20 @@ export function retentionEnforcementOf(
 	if (retentionFloor(retention, 0, finalityDepth) === undefined) return {kind: 'no-floor'};
 
 	const floor = tip === undefined ? undefined : retentionFloor(retention, tip, finalityDepth);
-	const prunedTo = recordedFloor(recorded);
+	const prunedTo = recordedPruneFloor(recorded);
 	return prunedTo === undefined ? {kind: 'never-pruned', floor} : {kind: 'pruned', floor, prunedTo};
 }
 
-/** The floor of the last recorded pass, or `undefined` for absent, corrupt or foreign records. */
-function recordedFloor(recorded: string | undefined): number | undefined {
+/**
+ * The floor of the last recorded pass, or `undefined` for absent, corrupt or foreign records.
+ *
+ * Exported for the one reader that must know what STORAGE holds whatever the
+ * handle reading it was configured with: a snapshot producer opening a database
+ * another process pruned (`produceStateSnapshot`, `@etherfold/state-store-sqlite`).
+ * Versions closed at or below this block may be gone, so no as-of read below it
+ * can be trusted, whatever retention the reading handle claims.
+ */
+export function recordedPruneFloor(recorded: string | undefined): number | undefined {
 	if (recorded === undefined) return undefined;
 	let record: PruneRecord | undefined;
 	try {

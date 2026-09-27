@@ -2,11 +2,17 @@ import {
 	BlockNotRetainedError,
 	openSnapshotAware,
 	readSnapshot,
+	RevertBeyondSnapshotError,
 	type EntityDeclaration,
 	type Mutation,
 } from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
-import {produceStateSnapshot, VersionedStateStore} from '../src/index.js';
+import {
+	HistoryNotRetainedError,
+	produceStateSnapshot,
+	VersionedStateStore,
+	type SnapshotHistory,
+} from '../src/index.js';
 import {createTestDB} from './utils/db.js';
 import {ACCOUNT, TOKEN, block, burn, owns} from './utils/fixtures.js';
 
@@ -147,6 +153,178 @@ describe('producing a snapshot', () => {
 		const {store} = await folded();
 
 		await expect(produceStateSnapshot(store, {at: 99, processor: 'proc-v1'})).rejects.toThrow(/folded nothing/);
+	});
+});
+
+describe('a snapshot that carries the history it was asked for', () => {
+	/** Every block the fold recorded, and one height between each pair, around the cut. */
+	const HEIGHTS = [100, 102, 105, 107, 110, 115, 117];
+
+	async function blocksOf(document: ReadableStream<Uint8Array>) {
+		const reader = await readSnapshot(document);
+		const blocks = [];
+		for await (const read of reader.blocks()) blocks.push(read);
+		return {head: reader.head, blocks};
+	}
+
+	it('puts the floor at the cut for `none`, N blocks below it for a depth, and at the start for `all`', async () => {
+		const {store} = await folded();
+		const floorOf = async (history: SnapshotHistory) =>
+			(await produceStateSnapshot(store, {at: 117, processor: 'proc-v1', history})).head.floor;
+
+		expect(await floorOf('none')).toBe(110);
+		// 117 - 7 = 110, a recorded block
+		expect(await floorOf(7)).toBe(110);
+		// 117 - 10 = 107 carries no logs: the floor is the highest recorded block at or below it,
+		// whose rows ARE the rows as of 107, exactly as the cut's pointer is chosen (ADR-0095)
+		expect(await floorOf(10)).toBe(105);
+		// a depth reaching below the first block the generation recorded is clamped there
+		expect(await floorOf(1_000)).toBe(100);
+		expect(await floorOf('all')).toBe(100);
+		// a depth of 0 is `none`
+		expect(await floorOf(0)).toBe(110);
+	});
+
+	it('writes the rows live at the floor, then what every later block CHANGED, up to the cut', async () => {
+		const {store} = await folded();
+
+		const {head, blocks} = await blocksOf(
+			(await produceStateSnapshot(store, {at: 120, processor: 'p', history: 'all'})).document,
+		);
+
+		expect(head).toMatchObject({floor: 100, takenAt: block(120)});
+		expect(blocks).toEqual([
+			{block: block(100), mutations: await all(store.liveRowsAsOf(100)), last: false},
+			{
+				block: block(105),
+				mutations: [
+					{type: 'upsert', entity: 'token', id: {id: '1'}, values: {owner: '0xdave', transferCount: 2}},
+					{type: 'delete', entity: 'token', id: {id: '2'}},
+				],
+				last: false,
+			},
+			{
+				block: block(110),
+				mutations: [
+					{type: 'upsert', entity: 'token', id: {id: '4'}, values: {owner: '0xerin', transferCount: 1}},
+					{type: 'upsert', entity: 'sealed', id: {id: 's'}, values: {payload: new Uint8Array([1, 2, 255])}},
+				],
+				last: false,
+			},
+			{
+				block: block(120),
+				mutations: [{type: 'upsert', entity: 'token', id: {id: '1'}, values: {owner: '0xfrank', transferCount: 3}}],
+				last: true,
+			},
+		]);
+	});
+
+	it("writes a block's NET change when it touched one id several times", async () => {
+		const db = createTestDB();
+		const store = new VersionedStateStore(db, [TOKEN, ACCOUNT, SEALED]);
+		await store.migrate();
+		await store.applyBlock(block(10), [owns('1', '0xalice', 1), owns('2', '0xbob', 1)]);
+		await store.applyBlock(block(11), [
+			// written twice: the block's change is the LAST value
+			owns('1', '0xcarol', 2),
+			owns('1', '0xdave', 3),
+			// born and burned in the same block: no change at all
+			owns('9', '0xghost', 1),
+			burn('9'),
+			// rewritten then burned: a delete
+			owns('2', '0xerin', 2),
+			burn('2'),
+		]);
+
+		const {blocks} = await blocksOf((await produceStateSnapshot(store, {at: 11, processor: 'p', history: 1})).document);
+
+		expect(blocks[1]!.mutations).toEqual([
+			{type: 'upsert', entity: 'token', id: {id: '1'}, values: {owner: '0xdave', transferCount: 3}},
+			{type: 'delete', entity: 'token', id: {id: '2'}},
+		]);
+	});
+
+	for (const history of ['none', 10, 'all'] as const) {
+		it(`installs (history ${history}) into a store that answers as of every block from its floor as the source does`, async () => {
+			const {store: source} = await folded();
+			const {head, document} = await produceStateSnapshot(source, {
+				at: 117,
+				processor: 'proc-v1',
+				history,
+				cursor: {key: 'lastSync', value: 'at-117'},
+			});
+			const target = await openSnapshotAware(new VersionedStateStore(createTestDB(), [TOKEN, ACCOUNT, SEALED]));
+
+			await target.bootstrap(document, {processor: 'proc-v1'});
+
+			expect(target.snapshotOrigin).toBe(head.floor);
+			for (const at of HEIGHTS.filter((height) => height >= head.floor)) {
+				for (const id of ['1', '2', '3', '4']) {
+					expect(await target.getAsOf('token', {id}, at), `token ${id} as of ${at}`).toEqual(
+						await source.getAsOf('token', {id}, at).then(declared),
+					);
+				}
+			}
+			await expect(target.getAsOf('token', {id: '1'}, head.floor - 1)).rejects.toBeInstanceOf(BlockNotRetainedError);
+			expect(await target.readCursor('lastSync')).toBe('at-117');
+		});
+	}
+
+	it('lets the installed store revert inside its history and re-apply to the same state, and refuses under it', async () => {
+		const {store: source} = await folded();
+		const {document} = await produceStateSnapshot(source, {at: 120, processor: 'proc-v1', history: 'all'});
+		const inner = new VersionedStateStore(createTestDB(), [TOKEN, ACCOUNT, SEALED]);
+		const target = await openSnapshotAware(inner);
+		await target.bootstrap(document, {processor: 'proc-v1'});
+		const before = await all(inner.liveRowsAsOf(120));
+
+		await target.revertTo(104);
+		expect(await target.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
+		await target.applyBlock(block(105), [owns('1', '0xdave', 2), burn('2')]);
+		await target.applyBlock(block(110), [
+			owns('4', '0xerin', 1),
+			{type: 'upsert', entity: 'sealed', id: {id: 's'}, values: {payload: new Uint8Array([1, 2, 255])}},
+		]);
+		await target.applyBlock(block(120), [owns('1', '0xfrank', 3)]);
+
+		expect(await all(inner.liveRowsAsOf(120))).toEqual(before);
+		await expect(target.revertTo(99)).rejects.toBeInstanceOf(RevertBeyondSnapshotError);
+	});
+
+	it('refuses a depth reaching below what the database retains, naming both numbers, rather than shortening it', async () => {
+		const db = createTestDB();
+		const writer = new VersionedStateStore(db, [TOKEN], {retention: {blocks: 10}, finalityDepth: 5});
+		await writer.migrate();
+		await writer.applyBlock(block(100), [owns('1', '0xalice', 1)]);
+		await writer.applyBlock(block(110), [owns('1', '0xbob', 2)]);
+		await writer.applyBlock(block(130), [owns('1', '0xcarol', 3)]);
+		// the prune a `--retention 10` deployment schedules: versions closed at or below 120 are gone
+		expect((await writer.prune()).floor).toBe(120);
+		// ...and a publisher opens the SAME database with no retention of its own
+		const reader = new VersionedStateStore(db, [TOKEN]);
+
+		const refusal = await produceStateSnapshot(reader, {at: 130, processor: 'p', history: 15}).catch(
+			(error: unknown) => error,
+		);
+		expect(refusal).toBeInstanceOf(HistoryNotRetainedError);
+		expect(refusal).toMatchObject({requested: 115, retainedFrom: 120});
+		expect(String((refusal as Error).message)).toMatch(/115/);
+		expect(String((refusal as Error).message)).toMatch(/120/);
+		await expect(produceStateSnapshot(reader, {at: 130, processor: 'p', history: 'all'})).rejects.toBeInstanceOf(
+			HistoryNotRetainedError,
+		);
+
+		// within what it retains, the same database publishes
+		const {head} = await produceStateSnapshot(reader, {at: 130, processor: 'p', history: 10});
+		expect(head.floor).toBe(110);
+	});
+
+	it('refuses a depth that is not a whole number of blocks', async () => {
+		const {store} = await folded();
+
+		for (const history of [-1, 1.5, Number.NaN]) {
+			await expect(produceStateSnapshot(store, {at: 117, processor: 'p', history})).rejects.toThrow(/whole number/);
+		}
 	});
 });
 

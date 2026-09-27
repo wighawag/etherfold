@@ -114,9 +114,9 @@ export type PublishDependencies = {
  *
  * Throws on every refusal -- a configuration one, a `-p` that names no bundle, a
  * database with no canonical generation, one whose canonical generation folded
- * nothing up to the cut or is not the processor given with `-p`, an index in
- * `--out` it cannot read -- and every one of them is thrown BEFORE the first file
- * is written.
+ * nothing up to the cut or is not the processor given with `-p`, a `--history`
+ * reaching below what the database retains, an index in `--out` it cannot read --
+ * and every one of them is thrown BEFORE the first file is written.
  */
 export async function publish(options: Options, deps: PublishDependencies = {}): Promise<WrittenPublication> {
 	const env = deps.env ?? (process.env as EnvRecord);
@@ -142,6 +142,7 @@ export async function publish(options: Options, deps: PublishDependencies = {}):
 	const db = await openPublishedDatabase(config.destination.db, deps.createDB);
 	const produced = await server.producePublication(db, {
 		stream: streamConfigFor(env),
+		history: config.history,
 		...(expected === undefined ? {} : {expectedProcessor: expected.identity}),
 		...(deps.savedAt === undefined ? {} : {savedAt: deps.savedAt}),
 		// WHICH COLUMNS the generation's tables have is its processor's declaration, and
@@ -262,7 +263,7 @@ export function describePublication(written: WrittenPublication): string[] {
 		`indexer: ${produced.indexer}`,
 		`cut: ${produced.cut} (folded through ${produced.tip}, finality ${produced.finality})`,
 		`takenAt: ${produced.head.takenAt.number} (${produced.head.takenAt.hash})`,
-		`history: none (floor ${produced.head.floor})`,
+		`history: ${produced.history} (floor ${produced.head.floor})`,
 		...written.bodies.flatMap((body) => [
 			`body: ${join(written.out, body.name)}${body.written ? '' : ' (already there, left as it was)'}`,
 			`  contentHash: ${body.contentHash}`,

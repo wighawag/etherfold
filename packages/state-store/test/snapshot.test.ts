@@ -334,6 +334,44 @@ describe('a snapshot that carries history above its floor', () => {
 		await expect(store.getAsOf('token', {id: '1'}, TAKEN_AT - 1)).rejects.toBeInstanceOf(BlockNotRetainedError);
 		await expect(store.revertTo(TAKEN_AT - 1)).rejects.toBeInstanceOf(RevertBeyondSnapshotError);
 	});
+
+	it('replaces an install that was cut short part-way, on a handle reopened over it, rather than building on it', async () => {
+		const later = [
+			{block: block(TAKEN_AT + 3), mutations: [owns('1', '0xcarol', 4)]},
+			{block: block(TAKEN_AT + 5), mutations: [owns('3', '0xdave', 1)]},
+			{block: block(TAKEN_AT + 7), mutations: [{type: 'delete', entity: 'token', id: {id: '2'}} as Mutation]},
+		];
+		const whole = await snapshotAt(TAKEN_AT, {later});
+		// the same document, stopping where its LAST block would begin
+		const text = await new Response(
+			new Blob([whole as Uint8Array<ArrayBuffer>])
+				.stream()
+				.pipeThrough(new DecompressionStream('gzip')) as ReadableStream<Uint8Array>,
+		).text();
+		const lines = text.split('\n').filter((line) => line.length > 0);
+		const stopped = await handWritten(
+			lines
+				.slice(
+					0,
+					lines.findLastIndex((line) => line.startsWith('{"block":')),
+				)
+				.map((line) => JSON.parse(line)),
+		);
+		const inner = new MemoryStateStore([TOKEN, ACCOUNT]);
+		await expect((await openSnapshotAware(inner)).bootstrap(stopped)).rejects.toThrow(/cut/);
+		// the floor and the block above it landed (the one after that is only applied once
+		// the next block's opening line proves it complete), and no cursor
+		expect(await inner.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xcarol'});
+		expect(await inner.readCursor('lastSync')).toBeUndefined();
+
+		const store = await openSnapshotAware(inner);
+		await store.bootstrap(whole, {processor: 'proc-v1'});
+
+		expect(store.snapshotOrigin).toBe(TAKEN_AT);
+		expect(await store.getAsOf('token', {id: '1'}, TAKEN_AT)).toMatchObject({owner: '0xalice'});
+		expect(await store.getCurrent('token', {id: '2'})).toBeUndefined();
+		expect(await store.readCursor('lastSync')).toBe(`synced-through-${TAKEN_AT + 7}`);
+	});
 });
 
 describe('the retention a bootstrapped store reports', () => {

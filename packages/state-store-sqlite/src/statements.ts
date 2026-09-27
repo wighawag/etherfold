@@ -284,6 +284,76 @@ export function liveRowsAsOfStatement(
 }
 
 /**
+ * One PAGE of the recorded blocks strictly above `after` and at most `upTo`,
+ * ascending: the blocks a snapshot carrying history replays above its floor.
+ * Keyset-paged on the primary key, so each page is a seek.
+ */
+export function recordedBlocksBetweenStatement(
+	after: number,
+	upTo: number,
+	limit: number,
+	names: TableNames,
+): Statement {
+	return {
+		sql: `SELECT ${BLOCK_COLUMNS} FROM ${names.blocks} WHERE number > ? AND number <= ? ORDER BY number LIMIT ?`,
+		args: [after, upTo, limit],
+	};
+}
+
+/**
+ * One PAGE of what ONE block WROTE to one entity and kept: the versions opened
+ * AT the block that are still live at it, as the upserts of `changesAt`.
+ *
+ * A version opened and closed inside the same block (`_lower = _upper = N`) is
+ * an intermediate write the block itself overwrote or deleted, so it is excluded:
+ * the block's change is its NET effect, which is what replaying it through
+ * `applyBlock` must reproduce. Rides `<table>_lower`.
+ */
+export function upsertsAtBlockStatement(
+	entity: NormalizedEntity,
+	at: number,
+	afterRowid: number,
+	limit: number,
+	names: TableNames,
+): Statement {
+	return {
+		sql:
+			`SELECT * FROM ${names.entity(entity.name)} WHERE ${ROWID} > ? AND ${LOWER} = ? ` +
+			`AND (${UPPER} IS NULL OR ${UPPER} > ?) ORDER BY ${ROWID} LIMIT ?`,
+		args: [afterRowid, at, at, limit],
+	};
+}
+
+/**
+ * One PAGE of what ONE block DELETED from one entity: the ids whose version live
+ * just below the block was closed AT it, and which have no version live at it.
+ *
+ * The version closed at N and opened below N is the one that was live at `N - 1`
+ * (there is one live version per id), and without a version opened at N and live
+ * at it the id is absent from N on: a delete. With one, the block rewrote the id,
+ * and that is an upsert (`upsertsAtBlockStatement`). Rides `<table>_upper`, and the
+ * probe rides the history index `(id..., _lower)`.
+ */
+export function deletesAtBlockStatement(
+	entity: NormalizedEntity,
+	at: number,
+	afterRowid: number,
+	limit: number,
+	names: TableNames,
+): Statement {
+	const table = names.entity(entity.name);
+	const sameId = entity.id.map((column) => `later.${quoted(column)} = closed.${quoted(column)}`).join(' AND ');
+	return {
+		sql:
+			`SELECT closed.${ROWID} AS ${ROWID}, ${entity.id.map((column) => `closed.${quoted(column)}`).join(', ')} ` +
+			`FROM ${table} AS closed WHERE closed.${ROWID} > ? AND closed.${UPPER} = ? AND closed.${LOWER} < ? ` +
+			`AND NOT EXISTS (SELECT 1 FROM ${table} AS later WHERE ${sameId} AND later.${LOWER} = ? ` +
+			`AND (later.${UPPER} IS NULL OR later.${UPPER} > ?)) ORDER BY closed.${ROWID} LIMIT ?`,
+		args: [afterRowid, at, at, at, at, limit],
+	};
+}
+
+/**
  * The highest recorded block: the TIP a retention window is measured back from.
  *
  * It rides the primary key, so it is a one-row index probe rather than a scan.

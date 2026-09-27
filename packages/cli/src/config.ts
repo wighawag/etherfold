@@ -8,6 +8,7 @@ import {
 import {parseIndexingSource, type EnvRecord} from '@etherfold/fetcher-host';
 import type {RetentionSetting} from '@etherfold/processor-entities';
 import {readProcessorPath} from '@etherfold/utils';
+import type {SnapshotHistory} from '@etherfold/state-store-sqlite';
 import type {
 	CommandName,
 	ConfigFor,
@@ -76,7 +77,8 @@ export type ConfigInput =
 	| 'override'
 	| 'to'
 	| 'adminToken'
-	| 'out';
+	| 'out'
+	| 'history';
 
 /**
  * What ONE command does with ONE input.
@@ -273,6 +275,15 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'that are never overwritten, and the publication index (publication.json) naming the latest per generation. ' +
 			'Nothing an earlier publication wrote there is deleted, so point it at the same directory every time',
 	},
+	history: {
+		flag: '--history <all|blocks|none>',
+		describe:
+			'how much history the published state snapshot carries below its cut, in BLOCKS (ADR-0095): `none` (the ' +
+			'default) is the live rows at the cut and nothing else; a depth N puts its floor N blocks below the cut, ' +
+			'clamped at the first block the generation recorded; `all` puts it there. An app that installs it can read ' +
+			'as of, and revert to, any block from the floor up. A floor below what the database still retains (its ' +
+			'folding deployment\u2019s --retention pruned it) is REFUSED, naming both blocks, rather than shortened',
+	},
 };
 
 /**
@@ -287,7 +298,7 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
  * | `serve` | NOT ACCEPTED | none | NOT ACCEPTED | database, required | port and host | NOT ACCEPTED | none |
  * | `upload` | the BUNDLE, required | NOT ACCEPTED | NOT ACCEPTED | NOT ACCEPTED | none | REQUIRED | none; `--to` + `ADMIN_TOKEN`, required |
- * | `publish` | the BUNDLE it means to publish, optional | NOT ACCEPTED | NOT ACCEPTED | database, required; `--out`, required | none | NOT ACCEPTED (learned from the rows) | none |
+ * | `publish` | the BUNDLE it means to publish, optional | NOT ACCEPTED | NOT ACCEPTED | database, required; `--out`, required; `--history`, optional | none | NOT ACCEPTED (learned from the rows) | none |
  *
  * `publish` is the other row that is not a deployment intent (ADR-0095): it READS a
  * database any folding command wrote and writes its canonical generation out as the
@@ -365,6 +376,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
+		history: 'refused',
 	},
 	node: {
 		// NOT ACCEPTED (ADR-0094): what it folds arrives by `etherfold upload`, and each
@@ -391,6 +403,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
+		history: 'refused',
 	},
 	build: {
 		processor: 'required',
@@ -413,6 +426,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
+		history: 'refused',
 	},
 	fetch: {
 		processor: 'refused',
@@ -435,6 +449,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
+		history: 'refused',
 	},
 	index: {
 		processor: 'required',
@@ -457,6 +472,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
+		history: 'refused',
 	},
 	serve: {
 		processor: 'refused',
@@ -479,6 +495,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
+		history: 'refused',
 	},
 	upload: {
 		processor: 'required',
@@ -501,6 +518,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'required',
 		adminToken: 'required',
 		out: 'refused',
+		history: 'refused',
 	},
 	publish: {
 		// the bundle it is MEANT to publish, optional: given, a database whose canonical
@@ -526,6 +544,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'required',
+		history: 'optional',
 	},
 };
 
@@ -791,6 +810,11 @@ const NOT_A_PUBLISHER =
 	'nothing. To publish what a database holds as the state snapshot a browser app starts from, run ' +
 	'`etherfold publish --db <url> --out <dir>` over it (ADR-0095).';
 
+const NO_HISTORY_TO_PUBLISH =
+	'--history is how much history `etherfold publish` puts in the state snapshot it writes, and this command ' +
+	'publishes nothing. To publish a database with history, run `etherfold publish --db <url> --out <dir> ' +
+	'--history <all|blocks|none>` over it (ADR-0095).';
+
 const PUBLISH_HAS_NO_SOURCE =
 	'`publish` writes out what the database ALREADY holds: the canonical generation carries its own stream ' +
 	'digest, which is its source and stream config, and a source given here would be one nothing reads. The ' +
@@ -829,6 +853,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	node: {
 		processor: NODE_RECEIVES_ITS_PROCESSOR,
@@ -840,6 +865,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	build: {
 		pruneInterval: PRUNES_PER_CYCLE,
@@ -853,6 +879,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	fetch: {
 		processor: NO_PROCESSOR_FETCH,
@@ -869,6 +896,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	index: {
 		nodeUrl: NO_CHAIN_INDEX,
@@ -879,6 +907,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	serve: {
 		processor: NO_PROCESSOR_SERVE,
@@ -897,6 +926,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	upload: {
 		source: UPLOAD_CARRIES_ITS_CONTRACTS,
@@ -915,6 +945,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		dropOnPromotion: UPLOAD_DOES_NOT_PROMOTE,
 		override: OVERRIDE_IS_THE_NODES,
 		out: NOT_A_PUBLISHER,
+		history: NO_HISTORY_TO_PUBLISH,
 	},
 	publish: {
 		source: PUBLISH_HAS_NO_SOURCE,
@@ -1009,6 +1040,8 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			return options.adminToken;
 		case 'out':
 			return options.out;
+		case 'history':
+			return options.history;
 	}
 }
 
@@ -1593,6 +1626,7 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					command: 'publish',
 					destination: requirePublishedDatabase(options, env),
 					out: requirePublicationDirectory(options),
+					history: parseHistory(options.history),
 					...(processor === undefined ? {} : {processor}),
 				};
 			}
@@ -1634,6 +1668,27 @@ function requirePublicationDirectory(options: Options): string {
 		);
 	}
 	return out;
+}
+
+/**
+ * `--history` as the snapshot producer takes it: `none` when absent, which is
+ * ADR-0095's default, `all`, or a depth in BLOCKS (the one unit history has, as
+ * retention does: ADR-0019). Anything else is refused by name rather than read as
+ * the default, because a publication that quietly carried no history would be one
+ * an app relying on reverting into it discovers only at the reorg.
+ */
+export function parseHistory(value: string | undefined): SnapshotHistory {
+	const text = nonBlank(value)?.trim();
+	if (text === undefined || text === 'none') return 'none';
+	if (text === 'all') return 'all';
+	if (/^\d+$/.test(text)) {
+		const depth = Number(text);
+		if (Number.isSafeInteger(depth)) return depth;
+	}
+	throw new Error(
+		`--history ${JSON.stringify(value)} is not a history. It is \`none\` (the default: the live rows at the cut), ` +
+			`\`all\`, or a depth in BLOCKS below the cut, a whole number (e.g. --history 5000).`,
+	);
 }
 
 /**

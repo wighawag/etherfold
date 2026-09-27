@@ -1,5 +1,6 @@
 import type {Abi, IndexingSource, PromotionConfig} from '@etherfold/core';
 import type {RetentionSetting} from '@etherfold/processor-entities';
+import type {SnapshotHistory} from '@etherfold/state-store-sqlite';
 
 /**
  * The eight commands: the six deployment INTENTS, named for what a process DOES
@@ -92,6 +93,8 @@ export type Options = {
 	adminToken?: string;
 	/** `--out <dir>`: the directory `publish` writes a publication into. */
 	out?: string;
+	/** `--history <all|blocks|none>`: how much history `publish`'s state snapshot carries below its cut. */
+	history?: string;
 };
 
 /**
@@ -319,6 +322,11 @@ export type PublishConfig = {
 	 * both identities (a `build` whose final promotion failed leaves exactly that).
 	 */
 	readonly processor?: string;
+	/**
+	 * How much history the state snapshot carries below its cut (ADR-0095): `none`
+	 * when `--history` was not given, `all`, or a depth in blocks.
+	 */
+	readonly history: SnapshotHistory;
 };
 
 /** One row of the command table, resolved. */

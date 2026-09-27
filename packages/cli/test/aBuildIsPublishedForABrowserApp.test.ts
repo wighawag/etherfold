@@ -94,9 +94,20 @@ function logsAround(cutCarriesLogs: boolean): RawLog[] {
 }
 
 /** FOLD a chain into `db` with `etherfold build`, as a deployment configured with `bundle` does. */
-async function aBuild(db: RemoteSQL, chain: ReturnType<typeof fakeChain>, bundle = BUNDLE): Promise<void> {
+async function aBuild(
+	db: RemoteSQL,
+	chain: ReturnType<typeof fakeChain>,
+	bundle = BUNDLE,
+	extra: Options = {},
+): Promise<void> {
 	const deps: IndexingDependencies = {provider: chain.provider, createDB: () => db, sleep: async () => {}, env: ENV};
-	const options: Options = {processor: bundle, nodeUrl: 'http://localhost:0', store: 'sqlite', db: ':memory:'};
+	const options: Options = {
+		processor: bundle,
+		nodeUrl: 'http://localhost:0',
+		store: 'sqlite',
+		db: ':memory:',
+		...extra,
+	};
 	const prepared = await prepareIndexing('build', options, deps);
 	expect((await prepared.index()).stoppedBecause).toBe('stopped');
 }
@@ -321,6 +332,98 @@ describe('`etherfold publish` over a build database', () => {
 	});
 });
 
+describe('`etherfold publish --history`', () => {
+	/** The first block the build recorded: the transfer at `START_BLOCK + 10`. */
+	const FIRST = START_BLOCK + 10;
+
+	for (const {history, floor} of [
+		{history: undefined, floor: CUT - 3},
+		// CUT - 30 carries no logs: the floor is the highest recorded block below it
+		{history: '30', floor: START_BLOCK + 40},
+		{history: 'all', floor: FIRST},
+	]) {
+		it(`(${history ?? 'not given, so none'}) writes a body whose floor is ${floor - START_BLOCK} past the start, answering as of every block above it as the database does`, async () => {
+			const db = oneDatabase();
+			await aBuild(db, fakeChain().serve(logsAround(false), TIP));
+			const {out} = aWorkspace();
+
+			const written = await publishing(db, out, undefined, history === undefined ? {} : {history});
+
+			const entry = Object.values(theIndexIn(out).snapshots)[0]!;
+			expect(entry.floor).toBe(floor);
+			expect(written.produced.head.floor).toBe(floor);
+			const app = await theApp();
+			const client = await aClientFrom(out, entry.body, app);
+			const source = await canonicalStoreIn(db, app.processor.entities);
+			expect(client.snapshotOrigin).toBe(floor);
+			for (const at of [floor, floor + 1, START_BLOCK + 20, START_BLOCK + 40, CUT - 3, CUT].filter((b) => b >= floor)) {
+				expect(await everyRead((entity, id) => client.getAsOf(entity, id, at)), `as of ${at}`).toEqual(
+					await everyRead((entity, id) => source.getAsOf(entity, id, at)),
+				);
+			}
+			await expect(client.getAsOf('counter', {name: 'transfers'}, floor - 1)).rejects.toThrow();
+		});
+	}
+
+	it('says in its report what history it published', async () => {
+		const db = oneDatabase();
+		await aBuild(db, fakeChain().serve(logsAround(false), TIP));
+		const {out} = aWorkspace();
+		const lines: unknown[] = [];
+
+		await publishMain(
+			{db: ':memory:', out, history: 'all'},
+			{createDB: () => db, env: ENV, exit: () => {}, log: (...args) => lines.push(...args)},
+		);
+
+		expect(lines).toContain(`history: all (floor ${FIRST})`);
+	});
+
+	it('refuses a depth reaching below what the database retains, naming both blocks, and writes nothing', async () => {
+		const db = oneDatabase();
+		// `--retention 20`: the build prunes versions closed at or below (its tip - 20)
+		await aBuild(db, fakeChain().serve(logsAround(false), TIP), BUNDLE, {retention: '20'});
+		const {out} = aWorkspace();
+		const errors: unknown[] = [];
+		let code: number | undefined;
+
+		await publishMain(
+			{db: ':memory:', out, history: '30'},
+			{createDB: () => db, env: ENV, exit: (value) => (code = value), error: (...args) => errors.push(...args)},
+		);
+
+		expect(code).toBe(1);
+		const message = errors.join(' ');
+		// the depth reaches CUT - 30, and the build pruned at its last recorded block (TIP - 1) - 20
+		expect(message).toContain(`block ${CUT - 30}`);
+		expect(message).toContain(`block ${TIP - 1 - 20}`);
+		expect(existsSync(out)).toBe(false);
+
+		// within what it retains, the same database publishes: CUT - 5 is above the prune
+		// floor, and nothing changed between it and the recorded block the floor points at
+		const written = await publishing(db, out, undefined, {history: '5'});
+		expect(written.produced.head.floor).toBe(START_BLOCK + 40);
+	});
+
+	it('refuses a history that is not `all`, `none` or a whole number of blocks, by name', async () => {
+		const {out} = aWorkspace();
+
+		for (const history of ['-5', 'some', '1.5', '10 blocks']) {
+			await expect(publish({db: ':memory:', out, history}, {env: {}})).rejects.toThrow(/--history .* is not a history/);
+		}
+	});
+
+	it('is refused by every command that publishes nothing', async () => {
+		await expect(
+			prepareIndexing(
+				'build',
+				{processor: BUNDLE, nodeUrl: 'http://x', store: 'sqlite', db: ':memory:', history: 'all'},
+				{env: {}},
+			),
+		).rejects.toThrow(/--history is not accepted by `etherfold build`/);
+	});
+});
+
 describe('`etherfold publish` refuses, writing nothing', () => {
 	async function refused(db: RemoteSQL, out: string, extra: Options = {}): Promise<string> {
 		const errors: unknown[] = [];
@@ -405,9 +508,21 @@ describe('the command line', () => {
 		const program = createProgram({env: {}, publish: (options) => void received.push(options)});
 		program.exitOverride();
 
-		await program.parseAsync(['node', 'etherfold', 'publish', '--db', 'file:x.db', '--out', './site', '-p', 'b.js']);
+		await program.parseAsync([
+			'node',
+			'etherfold',
+			'publish',
+			'--db',
+			'file:x.db',
+			'--out',
+			'./site',
+			'-p',
+			'b.js',
+			'--history',
+			'5000',
+		]);
 
-		expect(received[0]).toMatchObject({db: 'file:x.db', out: './site', processor: 'b.js'});
+		expect(received[0]).toMatchObject({db: 'file:x.db', out: './site', processor: 'b.js', history: '5000'});
 		await expect(publish({db: 'file:x.db', out: './site', nodeUrl: 'http://x'}, {env: {}})).rejects.toThrow(
 			/--node-url \(ETH_NODE_URI\) is not accepted by `etherfold publish`/,
 		);
