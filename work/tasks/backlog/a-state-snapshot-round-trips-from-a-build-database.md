@@ -18,7 +18,7 @@ Format 1 is REMOVED, not kept beside it: it was never published (the comment on 
 ## Acceptance criteria
 
 - [ ] A database folded by a real entity processor, exported at a block and installed into a fresh store, answers every read exactly as the source database answers the same read AS OF that block (asserted over every declared entity, including a row deleted before the block, which must be absent).
-- [ ] The install streams: it never materialises the whole row set, asserted with a document larger than one chunk.
+- [ ] The install streams the DOCUMENT: it inflates and parses the body incrementally (gunzip and newline-delimited records read chunk by chunk), never holding the whole downloaded or decoded document, and holds at most ONE block's mutations at a time, asserted with a document larger than one chunk. The floor block goes through `applyBlock` as one atomic unit, so a `none` snapshot holds its live rows once while they are written; that is intended (ADR-0095: installing is replaying blocks through `applyBlock`, with no new install path per backend).
 - [ ] The installed store reports the snapshot's block as its floor and refuses a revert under it (ADR-0028), as format 1 did.
 - [ ] A snapshot computed by another processor is refused by name (`processor-mismatch` / `SnapshotProcessorMismatchError`), and a format-1 or unknown-format document is refused as `unreadable-format`.
 - [ ] Every backend that installs a snapshot today installs format 2 (the IndexedDB and SQLite stores and the patch store), each covered by its existing snapshot suite or the conformance suite.
