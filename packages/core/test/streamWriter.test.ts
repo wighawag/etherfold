@@ -3,6 +3,9 @@ import {StreamHoleError} from '../src/errors.js';
 import {StreamWriter, type StreamCursorRead, type StreamCursorSource} from '../src/stream/writer.js';
 import type {EmissionWrite} from '../src/emissionStream.js';
 import type {LogIngestion} from '../src/streamBuilder.js';
+import {sourceHashesOf} from '../src/internal/engine/eventRanges.js';
+import {resolveStreamConfig} from '../src/internal/engine/utils.js';
+import {streamDigestOfSourceHashes} from '../src/stream/identity.js';
 import {FINALITY, SOURCE, START_BLOCK, transfer, type TestABI} from './utils/receivingWorld.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -138,6 +141,29 @@ describe('an append that would punch a HOLE is refused', () => {
 		expect(stream.written).toHaveLength(1);
 		expect(stream.written[0]?.emissions).toEqual([]);
 		expect(stream.written[0]?.coverage).toMatchObject({lastToBlock: 520, latestBlock: 520});
+	});
+
+	it("records the stream's FULL source identity beside its coverage, which digests to the stream it is filed under", async () => {
+		// ADR-0095: a stream seed is built from the database alone, so the claim carries
+		// the per-event source hash entries a tab's digest check recomputes, and not the
+		// 32-bit wire context, which digests to no stream at all
+		const stream = aStreamAt(undefined);
+		const writer = aWriter(stream);
+
+		await writer.receive({
+			context: writer.context,
+			fromBlock: START_BLOCK,
+			toBlock: START_BLOCK + 10,
+			latestBlock: START_BLOCK + 10,
+			logs: [],
+		});
+
+		const coverage = stream.written[0]!.coverage;
+		expect(coverage.source).toEqual(sourceHashesOf(SOURCE));
+		expect(coverage.source).not.toEqual(writer.context.source);
+		expect(streamDigestOfSourceHashes(coverage.source, resolveStreamConfig({finality: FINALITY}))).toBe(
+			writer.streamDigest,
+		);
 	});
 });
 

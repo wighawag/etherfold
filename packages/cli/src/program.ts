@@ -301,9 +301,12 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 			'write the canonical generation of a database `build`, `run` or `index` wrote as the state snapshot a ' +
 				'browser app starts from: cut at `tip - finality`, under a body named by its content hash, and named by ' +
 				'the publication index (publication.json) in --out, which keeps the latest snapshot of EVERY generation ' +
-				'ever published there. It folds nothing and deletes nothing (ADR-0095)',
+				'ever published there; with --seed, also the stream seed of the stream it folds, keyed by stream. It folds ' +
+				'nothing and deletes nothing (ADR-0095)',
 		)
-		.usage('--db <libsql url> --out <dir> [-p <the bundle it is meant to publish>] [--history <all|blocks|none>]');
+		.usage(
+			'--db <libsql url> --out <dir> [-p <the bundle it is meant to publish>] [--history <all|blocks|none>] [--seed]',
+		);
 	registerInputs(publishCommand, 'publish');
 	// `-p` is the same INPUT as everywhere, and here it names what the publication must BE
 	const meant = publishCommand.options.find((option) => option.long === '--processor');

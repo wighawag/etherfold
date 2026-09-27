@@ -7,6 +7,9 @@ import type {ReorgDetection} from '../src/index.js';
 import type {EmissionWrite} from '../src/emissionStream.js';
 import type {EmittedLog, EventProcessor, IndexingSource, LastSync, LogEvent, WireBatch} from '../src/types.js';
 import {identityOf} from './utils/processorIdentity.js';
+import {sourceHashesOf} from '../src/internal/engine/eventRanges.js';
+import {resolveStreamConfig} from '../src/internal/engine/utils.js';
+import {streamDigestOfSourceHashes} from '../src/stream/identity.js';
 
 // ---------------------------------------------------------------------------
 // THE RECEIVING SIDE OF THE WIRE (ADR-0004)
@@ -531,7 +534,10 @@ describe('the stream is written before the state advances', () => {
 			{
 				stream: builder.streamDigest,
 				coverage: {
-					source: builder.context.source,
+					// the stream's FULL source identity (ADR-0095), not the 32-bit wire context:
+					// what a stream seed built from these rows alone carries, and what digests to
+					// the very `streamDigest` the rows are filed under
+					source: sourceHashesOf(SOURCE),
 					config: builder.context.config,
 					latestBlock: 105,
 					lastFromBlock: 100,
@@ -540,6 +546,10 @@ describe('the stream is written before the state advances', () => {
 				emissions: result.emissions,
 			},
 		]);
+		const {coverage} = writes.appended[0] as EmissionWrite;
+		expect(streamDigestOfSourceHashes(coverage.source, resolveStreamConfig({finality: FINALITY}))).toBe(
+			builder.streamDigest,
+		);
 	});
 
 	it('appends the RETRACTIONS with the applications, in one write per batch', async () => {

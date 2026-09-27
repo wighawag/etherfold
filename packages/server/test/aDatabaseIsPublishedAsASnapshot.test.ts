@@ -284,7 +284,7 @@ describe('the publication index', () => {
 		const existing = {
 			format: PUBLICATION_INDEX_FORMAT,
 			snapshots: {mine: entry(PROCESSOR, 'first'), theirs: entry(OTHER, 'old')},
-			seeds: {kept: true},
+			later: {kept: true},
 		} as PublicationIndex;
 
 		const merged = mergePublicationIndex(existing, {snapshots: {mine: entry(PROCESSOR, 'second')}});
@@ -292,7 +292,7 @@ describe('the publication index', () => {
 		expect(merged).toEqual({
 			format: PUBLICATION_INDEX_FORMAT,
 			snapshots: {mine: entry(PROCESSOR, 'second'), theirs: entry(OTHER, 'old')},
-			seeds: {kept: true},
+			later: {kept: true},
 		});
 	});
 

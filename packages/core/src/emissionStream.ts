@@ -35,7 +35,15 @@ import type {EmittedLog, SourceHashEntry} from './types.js';
  * context, and that half reads `source` and `config` alone.
  */
 export type StreamCoverage = {
-	/** The FETCH-filter half of the identity these logs were fetched under. */
+	/**
+	 * The FETCH-filter half of the identity these logs were fetched under: the
+	 * source's FULL hash entries (`sourceHashesOf`, each carrying its `streamHash`),
+	 * so `streamDigestOfSourceHashes(source, config)` is the very stream digest the
+	 * claim is filed under. Deliberately NOT the 32-bit wire context's one
+	 * whole-source entry, which digests to no stream at all: a STREAM SEED is built
+	 * from the database alone and carries this as its `context.source`, which a
+	 * tab's install recomputes the digest from (ADR-0095).
+	 */
 	source: SourceHashEntry[];
 	/** The stream CONFIG hash, the other half of what identifies a stream. */
 	config: string;

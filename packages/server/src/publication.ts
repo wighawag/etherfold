@@ -1,11 +1,21 @@
 import {
 	generationDigestOf,
+	storedStreamOf,
 	streamConfigHashOf,
+	streamDigestOfSourceHashes,
+	streamSeedContentHash,
+	streamSeedPayloadOf,
 	resolveStreamConfig,
+	STREAM_SEED_FORMAT,
 	type Abi,
 	type GenerationId,
 	type LastSync,
+	type LogEvent,
 	type ProvidedStreamConfig,
+	type StoredLogEvent,
+	type StreamSeed,
+	type StreamSeedCoverage,
+	type UsedStreamConfig,
 } from '@etherfold/core';
 import {
 	parseStoredCursor,
@@ -23,7 +33,9 @@ import {
 	type SnapshotHistory,
 } from '@etherfold/state-store-sqlite';
 import type {RemoteSQL} from 'remote-sql';
+import {readStreamCoverage} from './emissions.js';
 import {generationRegistryPortOnSQL, readHeldGenerations} from './generations.js';
+import {storedEmissionReplaySource} from './streamReader.js';
 
 // ---------------------------------------------------------------------------------------------------
 // WHAT A BUILD PUBLISHES, PRODUCED FROM THE DATABASE IT WROTE (ADR-0095)
@@ -32,7 +44,9 @@ import {generationRegistryPortOnSQL, readHeldGenerations} from './generations.js
 // from a PUBLISHED artifact. This module is the producer of one: given a database
 // any folding command wrote (`build`, `run`, `index`), it answers the STATE
 // SNAPSHOT of the canonical generation, as a format-2 body named by its content
-// hash, and the PUBLICATION INDEX entry that names it. It writes nothing: what
+// hash, and the PUBLICATION INDEX entry that names it; and, when asked
+// (`seed: true`), the STREAM SEED of the stream that generation folds, cut at the
+// same block, keyed in the index by stream digest. It writes nothing: what
 // comes back is bytes and entries, and where they go is the caller's (the CLI's
 // `etherfold publish` writes them to a directory, and a serving host can answer
 // the same value over HTTP).
@@ -105,17 +119,57 @@ export type PublishedStateSnapshot = {
 };
 
 /**
+ * ONE STREAM SEED a publication names: the latest one published for ONE STREAM,
+ * keyed in the index by that stream's digest.
+ *
+ * Keyed by stream and not by generation, because a seed belongs to a stream and
+ * not to a processor: an old build on the same stream still takes the newest seed
+ * (ADR-0095). The body is core's seed envelope (`StreamSeed`, ADR-0063 to
+ * ADR-0066), gzipped.
+ */
+export type PublishedStreamSeed = {
+	/** The stream digest the seed is for, as a client recomputes it (ADR-0064). Also its key. */
+	readonly stream: string;
+	/** The body's file name, relative to the index. Content-addressed, so it never changes. */
+	readonly body: string;
+	/**
+	 * `sha256:<hex>` over the DECOMPRESSED payload (ADR-0066): the value
+	 * `streamSeedContentHash` computes and an install's `expectedContentHash` pins.
+	 */
+	readonly contentHash: string;
+	/** How far the seed reaches: the stream's start block up to the cut the state snapshot was taken at. */
+	readonly coverage: StreamSeedCoverage;
+	/** How many stored events it carries. Informational: what a tab downloads is proportional to it. */
+	readonly events: number;
+	/** When it was produced. Informational, and NOT inside the body, so the body stays deterministic. */
+	readonly savedAt: string;
+};
+
+/**
  * THE PUBLICATION INDEX (`publication.json`): the latest state snapshot PER
- * GENERATION, keyed by `generationDigestOf`.
+ * GENERATION, keyed by `generationDigestOf`, and the latest stream seed PER
+ * STREAM, keyed by stream digest (absent until a publication was asked for one).
  *
  * Entries are never removed: an OLD build of an app runs the old processor and
  * finds the last snapshot of its own generation here, stale but valid (ADR-0095).
- * Keys this build does not know (a later task's stream seeds) are carried through
- * a republication untouched.
+ * Keys this build does not know are carried through a republication untouched.
  */
 export type PublicationIndex = {
 	readonly format: number;
 	readonly snapshots: Readonly<Record<string, PublishedStateSnapshot>>;
+	readonly seeds?: Readonly<Record<string, PublishedStreamSeed>>;
+};
+
+/** What a publication asked for a seed (`seed: true`) says about the one it produced. */
+export type ProducedStreamSeed = {
+	/** The stream digest, which a client recomputes and compares before installing (ADR-0064). */
+	readonly streamDigest: string;
+	/** The content hash a release PINS (ADR-0065, ADR-0066). */
+	readonly contentHash: string;
+	readonly coverage: StreamSeedCoverage;
+	readonly events: number;
+	/** The body's file name. */
+	readonly body: string;
 };
 
 /** One immutable body a publication writes: its content-addressed name and its bytes. */
@@ -142,10 +196,15 @@ export type ProducedPublication = {
 	readonly history: SnapshotHistory;
 	/** The snapshot's head: the first line of its body. */
 	readonly head: SnapshotHead;
+	/** The stream seed, when one was asked for (`seed: true`); its body is among `bodies`. */
+	readonly seed?: ProducedStreamSeed;
 	/** Every body to write. Write them BEFORE the index that names them. */
 	readonly bodies: readonly PublicationBody[];
-	/** The index entries this publication REPLACES (its own generation's) and adds. */
-	readonly entries: Pick<PublicationIndex, 'snapshots'>;
+	/**
+	 * The index entries this publication REPLACES (its own generation's snapshot and,
+	 * when a seed was asked for, its own stream's seed) and adds.
+	 */
+	readonly entries: Pick<PublicationIndex, 'snapshots' | 'seeds'>;
 };
 
 /** Why a publication was refused. Data, so a caller can branch; the message says it in words. */
@@ -165,7 +224,15 @@ export type PublicationRefusalReason =
 	/** An existing publication index cannot be read, so rewriting it would forget its entries. */
 	| 'unreadable-index'
 	/** The history asked for reaches below what the database retains: its versions there were pruned. */
-	| 'history-not-retained';
+	| 'history-not-retained'
+	/** A seed was asked for and the database stores no stream for the canonical generation that reaches the cut. */
+	| 'no-stored-stream'
+	/**
+	 * A seed was asked for and the database does not record the stream's full source
+	 * identity (the per-event hash entries a tab's digest check recomputes, ADR-0095),
+	 * or what it records does not digest to the canonical generation's stream.
+	 */
+	| 'no-stream-identity';
 
 /** A publication this producer will not make. Nothing was written when it is thrown. */
 export class PublicationRefusedError extends Error {
@@ -222,6 +289,21 @@ export type ProducePublicationOptions = {
 	 * rather than silently raised.
 	 */
 	readonly history?: SnapshotHistory;
+	/**
+	 * Whether to publish a STREAM SEED as well (ADR-0095): the stream the canonical
+	 * generation folds, as the database stores it (`_emissions`), cut at the same
+	 * block as the state snapshot. OFF by default, because under a never-delete
+	 * layout a scheduled job would otherwise store a full copy of a long stream on
+	 * every run. Asked for and impossible (nothing stored reaches the cut), it is
+	 * refused (`no-stored-stream`) rather than silently left out.
+	 */
+	readonly seed?: boolean;
+	/**
+	 * How many stored emissions one read of the stored stream asks for while the
+	 * seed is produced (the replay source's budget, ADR-0056). Defaults to 10,000; a
+	 * host whose backend caps the rows one request may read sets it lower.
+	 */
+	readonly seedReadBudget?: number;
 	readonly savedAt?: string;
 };
 
@@ -322,6 +404,21 @@ export async function producePublication(
 	const body: PublicationBody = {name: stateSnapshotBodyName(contentHash), contentHash, bytes};
 	const digest = generationDigestOf(generation);
 
+	const seeded =
+		options.seed === true
+			? await produceStreamSeed(db, {
+					indexer,
+					generation,
+					streamConfig,
+					tip,
+					cut,
+					readBudget: options.seedReadBudget ?? SEED_READ_BUDGET,
+					// the chain time of the block the rows are as of: when the events up to the
+					// cut were produced, and a value two publications of one cut agree on
+					producedAt: new Date(produced.head.takenAt.timestamp * 1000).toISOString(),
+				})
+			: undefined;
+
 	return {
 		indexer,
 		generation,
@@ -331,8 +428,23 @@ export async function producePublication(
 		cut,
 		history,
 		head: produced.head,
-		bodies: [body],
+		...(seeded === undefined ? {} : {seed: seeded.seed}),
+		bodies: seeded === undefined ? [body] : [body, seeded.body],
 		entries: {
+			...(seeded === undefined
+				? {}
+				: {
+						seeds: {
+							[seeded.seed.streamDigest]: {
+								stream: seeded.seed.streamDigest,
+								body: seeded.body.name,
+								contentHash: seeded.seed.contentHash,
+								coverage: seeded.seed.coverage,
+								events: seeded.seed.events,
+								savedAt: produced.head.savedAt,
+							},
+						},
+					}),
 			snapshots: {
 				[digest]: {
 					stream: generation.stream,
@@ -358,6 +470,204 @@ export function stateSnapshotBodyName(contentHash: string): string {
 }
 
 /**
+ * The file name of a stream seed body: derived from its content hash, as a state
+ * snapshot's is, and ending `.json.gz` because a seed is ONE gzipped JSON
+ * document (the reference artifact's convention).
+ */
+export function streamSeedBodyName(contentHash: string): string {
+	return `seed-${contentHash.replace(/^sha256:/, '')}.json.gz`;
+}
+
+/** How many stored emissions one read of the replay source asks for while a seed is produced. */
+const SEED_READ_BUDGET = 10_000;
+
+/**
+ * THE STREAM SEED OF THE CANONICAL GENERATION'S STREAM, cut at the state
+ * snapshot's cut (ADR-0095).
+ *
+ * The events are the stored stream (`_emissions`) read back through the SAME
+ * bounded replay source a rebuild folds (`storedEmissionReplaySource`), from the
+ * stream's own start block up to the cut, and reduced by core's one strip
+ * (`storedStreamOf`, ADR-0060). The envelope, digest and content hash are core's
+ * (`StreamSeed`, `streamDigestOfSourceHashes`, `streamSeedContentHash`), so what
+ * this writes is exactly what `installStreamSeed` reads and checks.
+ *
+ * ## What is carried, field by field
+ *
+ *  - `coverage`: the stream's `startBlock` (so a client reading from its source's
+ *    first block is reached back to) up to the CUT (above the last event, so the
+ *    quiet blocks up to it are not re-scanned; ADR-0063).
+ *  - `chainHeadAtCapture`: the block the generation folded through, which the cut
+ *    is `finality` below, so the install's capture-depth check holds by
+ *    construction (ADR-0065).
+ *  - `context`: the stream's full source hash entries, as the fold recorded them
+ *    beside its coverage claim (`StreamCoverage.source`), and the config hash
+ *    (checked against the generation's cursor), with the processor empty as every
+ *    stream context is. Installed verbatim, so a tab's load compares itself with
+ *    the publisher; the digest a client recomputes from it is ASSERTED here to be
+ *    the canonical generation's stream before anything is produced.
+ *  - `producer`: `stored-stream`, dated by `producedAt` (when the events were
+ *    produced, not when the file is written, so an unchanged cut republishes the
+ *    same bytes).
+ *
+ * ## The seed is the COMPACTED stream (ADR-0095)
+ *
+ * The stored stream is append-only and keeps a reorg's apply/retract pairs until
+ * pair-compaction reclaims them (ADR-0006). Everything in a seed is at or below
+ * the cut, so final: no retraction of it can still arrive, and every matched
+ * pair is dropped, leaving exactly the final chain. Answer-preserving by the
+ * argument compaction rests on, and it is what keeps the install's coherence
+ * check strict (the replacement branch of a reorg sits at the height of the one
+ * it replaced, and a seed carrying both is refused for two block hashes at one
+ * height). It also makes the seed a function of the CHAIN rather than of one
+ * producer's reorg history, so two producers of one chain and cut publish the
+ * same bytes under the same pinnable content hash (ADR-0065).
+ */
+async function produceStreamSeed(
+	db: RemoteSQL,
+	at: {
+		readonly indexer: string;
+		readonly generation: GenerationId;
+		readonly streamConfig: UsedStreamConfig;
+		readonly tip: number;
+		readonly cut: number;
+		readonly readBudget: number;
+		readonly producedAt: string;
+	},
+): Promise<{seed: ProducedStreamSeed; body: PublicationBody}> {
+	const {indexer, generation, streamConfig, tip, cut} = at;
+	const stream = generation.stream;
+	const coverage = await readStreamCoverage(db, {indexer, stream});
+	if (!coverage || coverage.lastToBlock < cut) {
+		throw new PublicationRefusedError(
+			'no-stored-stream',
+			`a stream seed was asked for, and this database stores ${
+				coverage
+					? `the stream ${stream} of the named indexer ${JSON.stringify(indexer)} only up to block ${coverage.lastToBlock}, below the cut ${cut}`
+					: `no stream ${stream} for the named indexer ${JSON.stringify(indexer)}`
+			}, so there is no stream to seed from. A seed is the stream the canonical generation folds as the database ` +
+				`stores it; publish without --seed to publish the state snapshot alone.`,
+		);
+	}
+	// The identity a client recomputes is the stream's own SOURCE HASH ENTRIES, which
+	// the fold records beside the coverage claim (`StreamCoverage.source`, ADR-0095),
+	// and not the generation cursor's context: that one is the 32-bit whole-source
+	// WIRE context (`wireContextOf`), which carries no per-event stream hashes and so
+	// digests to no stream a client can reach.
+	const sourceHashes = [...coverage.source];
+	if (sourceHashes.some((entry) => entry.streamHash === undefined)) {
+		throw new PublicationRefusedError(
+			'no-stream-identity',
+			`a stream seed was asked for, and this database does not record the full source identity of the stream ` +
+				`${stream} of the named indexer ${JSON.stringify(indexer)}: its coverage claim carries ` +
+				`${JSON.stringify(sourceHashes)}, with no per-event stream hashes, which a database folded before the ` +
+				`source identity was recorded (ADR-0095) holds. A seed's identity is recomputed by every tab from exactly ` +
+				`those entries, so none can be built from it. Fold the database again with this version, or publish ` +
+				`without --seed to publish the state snapshot alone.`,
+		);
+	}
+	const streamDigest = streamDigestOfSourceHashes(sourceHashes, streamConfig);
+	if (streamDigest !== stream) {
+		throw new PublicationRefusedError(
+			'no-stream-identity',
+			`the canonical generation is filed under the stream ${stream}, and the source identity its database records ` +
+				`digests to ${streamDigest}, so a seed of it would claim a stream identity no client of that generation ` +
+				`matches. Nothing was written.`,
+		);
+	}
+
+	const events = dropRetractedPairs(
+		await readStoredStreamUpTo(db, indexer, stream, coverage.startBlock, cut, at.readBudget),
+	);
+	const seed: StreamSeed = {
+		format: STREAM_SEED_FORMAT,
+		producer: {
+			kind: 'stored-stream',
+			name: `etherfold publish --seed (the stored stream of the named indexer ${JSON.stringify(indexer)})`,
+			at: at.producedAt,
+		},
+		chainHeadAtCapture: tip,
+		streamConfig,
+		streamDigest,
+		coverage: {fromBlock: coverage.startBlock, toBlock: cut},
+		context: {source: sourceHashes, config: streamConfigHashOf(streamConfig), processor: ''},
+		eventStream: events,
+	};
+
+	const payload = streamSeedPayloadOf(seed);
+	const contentHash = streamSeedContentHash(payload);
+	const name = streamSeedBodyName(contentHash);
+	return {
+		seed: {streamDigest, contentHash, coverage: seed.coverage, events: events.length, body: name},
+		body: {name, contentHash, bytes: await gzip(payload)},
+	};
+}
+
+/**
+ * Every stored emission of `[fromBlock, cut]`, in `seq` order, retractions
+ * included: the replay source's chunks, walked until one reaches the cut.
+ */
+async function readStoredStreamUpTo(
+	db: RemoteSQL,
+	indexer: string,
+	stream: string,
+	fromBlock: number,
+	cut: number,
+	budget: number,
+): Promise<StoredLogEvent[]> {
+	const source = storedEmissionReplaySource<Abi>(db, indexer);
+	const events: StoredLogEvent[] = [];
+	let from = fromBlock;
+	while (from <= cut) {
+		const read = await source.readChunk({stream, fromBlock: from, foldedThrough: from - 1, maxEmissions: budget});
+		if (read.status !== 'chunk') {
+			throw new PublicationRefusedError(
+				'no-stored-stream',
+				`the stored stream ${stream} could not be read from block ${from} (${read.status}${
+					'reason' in read ? `: ${read.reason}` : ''
+				}), so no seed of it was produced. Nothing was written.`,
+			);
+		}
+		const inRange = (read.eventStream as LogEvent<Abi>[]).filter((event) => event.blockNumber <= cut);
+		events.push(...storedStreamOf(inRange));
+		if (read.lastToBlock >= cut || !read.truncated) break;
+		from = read.lastToBlock + 1;
+	}
+	return events;
+}
+
+/**
+ * The stream with every application that a LATER retraction takes back removed,
+ * together with that retraction: what pair-compaction would leave (ADR-0006).
+ * A retraction with no application before it is kept, so a damaged stream is
+ * refused by the install rather than repaired here.
+ */
+function dropRetractedPairs(events: readonly StoredLogEvent[]): StoredLogEvent[] {
+	const dropped = new Set<number>();
+	const standing = new Map<string, number>();
+	events.forEach((event, position) => {
+		const coordinate = `${event.blockHash}:${event.logIndex}`;
+		if (!event.removed) {
+			standing.set(coordinate, position);
+			return;
+		}
+		const applied = standing.get(coordinate);
+		if (applied === undefined) return;
+		standing.delete(coordinate);
+		dropped.add(applied).add(position);
+	});
+	return events.filter((_, position) => !dropped.has(position));
+}
+
+/** The platform's gzip, over one payload. Platform-agnostic: `CompressionStream` is on every runtime this ships to. */
+async function gzip(payload: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+	const compressed = new Blob([payload as Uint8Array<ArrayBuffer>])
+		.stream()
+		.pipeThrough(new CompressionStream('gzip') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>);
+	return new Uint8Array(await new Response(compressed).arrayBuffer());
+}
+
+/**
  * READ AN EXISTING PUBLICATION INDEX, or refuse it.
  *
  * A document that is not an index of this format is REFUSED rather than replaced,
@@ -371,7 +681,7 @@ export function parsePublicationIndex(text: string): PublicationIndex {
 	} catch {
 		parsed = undefined;
 	}
-	const candidate = parsed as {format?: unknown; snapshots?: unknown} | undefined;
+	const candidate = parsed as {format?: unknown; snapshots?: unknown; seeds?: unknown} | undefined;
 	if (
 		!candidate ||
 		typeof candidate !== 'object' ||
@@ -379,7 +689,10 @@ export function parsePublicationIndex(text: string): PublicationIndex {
 		candidate.format !== PUBLICATION_INDEX_FORMAT ||
 		!candidate.snapshots ||
 		typeof candidate.snapshots !== 'object' ||
-		Array.isArray(candidate.snapshots)
+		Array.isArray(candidate.snapshots) ||
+		// absent until a publication asks for a seed; present, it is a map like `snapshots`
+		(candidate.seeds !== undefined &&
+			(!candidate.seeds || typeof candidate.seeds !== 'object' || Array.isArray(candidate.seeds)))
 	) {
 		throw new PublicationRefusedError(
 			'unreadable-index',
@@ -399,12 +712,15 @@ export function parsePublicationIndex(text: string): PublicationIndex {
  */
 export function mergePublicationIndex(
 	existing: PublicationIndex | undefined,
-	entries: Pick<PublicationIndex, 'snapshots'>,
+	entries: Pick<PublicationIndex, 'snapshots' | 'seeds'>,
 ): PublicationIndex {
+	const seeds =
+		existing?.seeds === undefined && entries.seeds === undefined ? undefined : {...existing?.seeds, ...entries.seeds};
 	return {
 		...existing,
 		format: PUBLICATION_INDEX_FORMAT,
 		snapshots: {...existing?.snapshots, ...entries.snapshots},
+		...(seeds === undefined ? {} : {seeds}),
 	};
 }
 

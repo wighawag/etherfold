@@ -40,3 +40,15 @@ Without `--seed`, nothing about the stream is written: the seed is opt-in becaus
 > FIRST, check this task against current reality: it is a launch snapshot written on 2026-09-26. Read ADR-0095 and the spec `a-build-publishes-what-a-browser-app-starts-from`, and check the tasks it is blocked by landed as it assumes. If a dependency landed differently or an ADR superseded an assumption, do not build on the stale premise: route to needs-attention with the discrepancy (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor). Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **The full source identity is stored in the existing coverage record (`_stream_coverage.source`), not the generation registry row.** The column was already typed `SourceHashEntry[]` and documented as "the fetch-filter half of the identity these logs were fetched under". A seed belongs to a stream, is keyed by stream digest, and the coverage record is stored per stream. So no schema change was needed, and only the value written differs. Alternative considered: a new column on the generation registry row (ADR-0092). I rejected it because it files a stream fact under a generation, and several generations fold one stream. What this touches: the only other reader of `coverage.source` is the server's stored-stream view (`streamReader.ts`), whose context feeds the stream half of `sourceInvalidationOf`. That check now does its per-event comparison instead of the legacy whole-source one. That is at least as accurate, and every suite passes. No ADR needed: ADR-0095 already records the decision.
+- **A database without the recorded identity is detected by coverage entries that have no `streamHash`.** That is exactly the wire-context shape older databases stored, and it is refused as a new reason, `no-stream-identity`. A digest that doesn't match the generation's stream is refused under the same reason. Alternative: reuse `no-stored-stream`. I didn't, because the stream is present, so that name would mislead. What this touches: the `PublicationRefusalReason` union in `@etherfold/server`.
+- **Compaction matches pairs by `(blockHash, logIndex)`.** A retraction with no earlier application is kept, so a damaged stream is refused by the install rather than silently repaired. Rows the fold rewound and re-applied on the same hash lose their first copy, so the output doesn't depend on one producer's reorg history.
+- **Carried over from the prior draft and kept:**
+  - Body name `seed-<hex>.json.gz`.
+  - Index map `seeds` keyed by stream digest.
+  - Replay read budget option `seedReadBudget`, default 10,000.
+  - The seed's `producer.at` is the chain time of the cut block, so republishing the same cut gives the same bytes.
+  - `chainHeadAtCapture` is the folded tip, which is `finality` above the cut.

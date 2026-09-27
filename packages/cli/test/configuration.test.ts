@@ -619,6 +619,7 @@ function valueFor(input: ConfigInput): Options {
 	// a string here would read as "not given" and the refusal would never be reached
 	if (input === 'dropOnPromotion') return {dropOnPromotion: true};
 	if (input === 'override') return {override: true};
+	if (input === 'seed') return {seed: true};
 	const key = input === 'source' ? 'deployments' : input;
 	return {[key]: 'x'} as Options;
 }
