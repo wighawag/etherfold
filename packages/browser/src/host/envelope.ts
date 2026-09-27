@@ -28,6 +28,8 @@ import type {
 	UsedPromotionConfig,
 } from '@etherfold/core';
 import type {EntityId, EntityIdPrefix, Listing, NormalizedEntity} from '@etherfold/state-store';
+import type {PublicationState} from '../publication.js';
+import type {StreamSeedState} from '../publishedStart.js';
 import type {PortError} from './errors.js';
 
 export type {PortError} from './errors.js';
@@ -207,6 +209,26 @@ export type HostProgress = {
 	 * indistinguishable from one that had not started.
 	 */
 	readonly failure?: PortError;
+	/**
+	 * WHAT THE PUBLICATION INDEX GAVE THIS HOST, or ABSENT where it was given no
+	 * `publication` (ADR-0095): `SyncingState.publication`, carried across.
+	 *
+	 * The same value in every hosting shape, so a tab reading the port renders the
+	 * lookup (`found`, or `refused` with why) and a returning tab's switch
+	 * (`switched`, ADR-0096) exactly as a tab reading the main thread's stores does.
+	 * Its own field and not `failure`, on the ground `SyncingState.publication` is
+	 * not `error`: no outcome here stops the host.
+	 */
+	readonly publication?: PublicationState;
+	/**
+	 * WHAT HAPPENED TO THE STREAM SEED this host was asked to install, or ABSENT
+	 * where none was asked for: `SyncingState.streamSeed`, carried across.
+	 *
+	 * A refusal is DATA and the host starts anyway (ADR-0064). An install that
+	 * THROWS leaves `installing` standing and stops the host, which reports it as
+	 * `failure`.
+	 */
+	readonly streamSeed?: StreamSeedState;
 };
 
 /**
@@ -735,7 +757,11 @@ export function sameProgress(a: HostProgress, b: HostProgress): boolean {
 		a.numBlocksProcessedSoFar === b.numBlocksProcessedSoFar &&
 		a.syncPercentage === b.syncPercentage &&
 		a.failure?.name === b.failure?.name &&
-		a.failure?.message === b.failure?.message
+		a.failure?.message === b.failure?.message &&
+		// Small plain values that change a handful of times per boot, so comparing
+		// their serialisations is exact and cheap.
+		JSON.stringify(a.publication) === JSON.stringify(b.publication) &&
+		JSON.stringify(a.streamSeed) === JSON.stringify(b.streamSeed)
 	);
 }
 

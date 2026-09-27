@@ -5,8 +5,6 @@ import type {
 	LastSync,
 	PromotionConfig,
 	ProvidedIndexerConfig,
-	EventProcessor,
-	GenerationContext,
 	StateMovedDetach,
 	StateMovedHandler,
 	TxInclusionQuery,
@@ -20,16 +18,23 @@ import {
 	openMemoryGenerationRegistry,
 	sameGeneration,
 } from '@etherfold/core';
+import type {GenerationRegistry} from '@etherfold/core';
 import {type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {logs} from 'named-logs';
-import type {BrowserGenerationSpec, EntityEventProcessorLike} from '../IndexerState.js';
-import {moduleProcessorIdentity} from '../moduleIdentity.js';
-import {arriveFromBundle, refuseAnIdentityBesideABundle} from '../processorBundle.js';
+import {generationSpecOf} from '../generationSpec.js';
+import type {BrowserGenerationSpec} from '../IndexerState.js';
+import type {PublicationState} from '../publication.js';
+import {
+	createPublishedStart,
+	type PublishedStart,
+	type PublishedStartOptions,
+	type SnapshotSwitchHost,
+	type StreamSeedState,
+} from '../publishedStart.js';
 import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
 import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
 import {executionScopeName, type HostAccess} from './endpoint.js';
-import {withClaimPatience} from '../utils/claim.js';
 import {cursorsOf, pacingAfterCycle} from './pacing.js';
 import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
@@ -51,10 +56,13 @@ const namedLogger = logs('@etherfold/browser');
  *
  * It is not the MAIN-THREAD host. That one is `createIndexerState`, adapted
  * (ADR-0082, `mainThread.ts`): a tab that hosts its own indexer already has a
- * container, an auto-index loop, a scheduled prune, a stream-seed install,
- * demotion and three reactive stores, and it serves the port from THOSE rather
- * than opening a second container beside them. What the two share is
- * `HostBacking` and everything behind it, which is the whole of what crosses.
+ * container, an auto-index loop, a scheduled prune, demotion and three reactive
+ * stores, and it serves the port from THOSE rather than opening a second
+ * container beside them. What the two share is `HostBacking` and everything
+ * behind it, which is the whole of what crosses, plus how a generation is BUILT
+ * (`generationSpec.ts`) and what a host STARTS FROM (`publishedStart.ts`: the
+ * publication index, the stream seed and the returning-tab switch), so a
+ * worker-hosted tab starts where a main-thread one does.
  */
 
 /**
@@ -71,31 +79,40 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 	ABI,
 	ProcessResultType,
 	ProcessorConfig
-> & {
-	/** The chain, built HERE: an EIP-1193 provider is code and cannot cross a port. */
-	provider: EIP1193ProviderWithoutEvents;
-	source: IndexingSource<ABI>;
-	config?: ProvidedIndexerConfig<ABI>;
-	/** Passed through and never defaulted here, exactly as `createIndexerState` passes it through. */
-	promotion?: PromotionConfig;
-	/** The processor's own configuration, where it takes one. */
-	processorConfig?: ProcessorConfig;
+> &
 	/**
-	 * How long the driver rests once the fold is AT THE TIP, in seconds. Defaults
-	 * to four, which is `createIndexerState`'s auto-index interval.
+	 * WHAT THE HOST STARTS FROM, under the names `createIndexerState` takes them:
+	 * `publication`, `catchUpWithinSeconds`, `seed` and the `keepStream` a seed is
+	 * installed into. All of it runs INSIDE the host, from what the worker entry
+	 * passes, and what it did reaches the tab on `HostProgress.publication` and
+	 * `HostProgress.streamSeed`. A `keepStream` in `config` wins over this one, as it
+	 * does on the main thread.
 	 */
-	tipIntervalInSeconds?: number;
-	/**
-	 * How long this host waits for a generation's WRITER CLAIM, in seconds.
-	 * Defaults to `DEFAULT_CLAIM_WITHIN_SECONDS` (ten).
-	 *
-	 * Handed to `createState` as a signal to forward to `openForWriting`. A claim
-	 * that never lands is the difference between a host that REFUSES -- which this
-	 * one reports as `phase: 'refused'` with a `failure` the tab reads over the
-	 * port -- and one that says `waiting` for ever. See `utils/claim.ts`.
-	 */
-	claimWithinSeconds?: number;
-};
+	PublishedStartOptions<ABI> & {
+		/** The chain, built HERE: an EIP-1193 provider is code and cannot cross a port. */
+		provider: EIP1193ProviderWithoutEvents;
+		source: IndexingSource<ABI>;
+		config?: ProvidedIndexerConfig<ABI>;
+		/** Passed through and never defaulted here, exactly as `createIndexerState` passes it through. */
+		promotion?: PromotionConfig;
+		/** The processor's own configuration, where it takes one. */
+		processorConfig?: ProcessorConfig;
+		/**
+		 * How long the driver rests once the fold is AT THE TIP, in seconds. Defaults
+		 * to four, which is `createIndexerState`'s auto-index interval.
+		 */
+		tipIntervalInSeconds?: number;
+		/**
+		 * How long this host waits for a generation's WRITER CLAIM, in seconds.
+		 * Defaults to `DEFAULT_CLAIM_WITHIN_SECONDS` (ten).
+		 *
+		 * Handed to `createState` as a signal to forward to `openForWriting`. A claim
+		 * that never lands is the difference between a host that REFUSES -- which this
+		 * one reports as `phase: 'refused'` with a `failure` the tab reads over the
+		 * port -- and one that says `waiting` for ever. See `utils/claim.ts`.
+		 */
+		claimWithinSeconds?: number;
+	};
 
 /** What the entry point that obtained the port gets back. */
 export type IndexerHost = {
@@ -193,6 +210,25 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * cleared at the same moment: when the container is open.
 	 */
 	let phase: SyncPhase = 'waiting';
+	/** What the publication index gave this host, as `HostProgress.publication` reports it. */
+	let publication: PublicationState | undefined;
+	/** What the stream-seed install did, as `HostProgress.streamSeed` reports it. */
+	let streamSeed: StreamSeedState | undefined;
+	/**
+	 * WHAT THIS HOST STARTS FROM (`publishedStart.ts`), the same code the main-thread
+	 * host runs. Built inside the first open rather than here, so a budget that cannot
+	 * mean one is REPORTED as this host's failure rather than thrown at a worker entry
+	 * point, where it would reach nobody.
+	 */
+	let start: PublishedStart<ABI> | undefined;
+	/** The registry the first open used, so a switch to the snapshot opens the SAME one again. */
+	let registry: GenerationRegistry | undefined;
+	/** How many times the canonical pointer moved, read as a stamp across an advance. */
+	let promotions = 0;
+	/** Reconfigures between their start and their answer: a switch waits for none of them to be mid-add. */
+	let reconfiguresInFlight = 0;
+	/** A switch to the snapshot in flight, which a reconfigure waits for before it adds to a container. */
+	let switching: Promise<unknown> | undefined;
 
 	/**
 	 * WHICH STORE EACH GENERATION FOLDS INTO, so a read is answered by the
@@ -238,6 +274,24 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		const key = generationKey(id);
 		if (!statesByGeneration.has(key)) statesByGeneration.set(key, state);
 	};
+
+	/**
+	 * THIS HOST'S GENERATION, as every host builds one (`generationSpec.ts`): the
+	 * boot generation with the snapshot a publication names, or one a reconfigure adds
+	 * on its own source.
+	 */
+	function generationFor(source?: IndexingSource<ABI>, snapshotFor?: ReturnType<PublishedStart<ABI>['snapshotFor']>) {
+		return generationSpecOf<ABI, ProcessResultType, ProcessorConfig>({
+			createState: spec.createState,
+			createProcessor: spec.createProcessor,
+			processorConfig: spec.processorConfig,
+			arrival: spec,
+			source,
+			claimWithinSeconds: spec.claimWithinSeconds,
+			recordState,
+			snapshotFor,
+		});
+	}
 
 	/**
 	 * A READ MAY ARRIVE BEFORE THE FIRST STORE EXISTS, and waits rather than being
@@ -289,6 +343,8 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			...(lastSync ? {lastToBlock: lastSync.lastToBlock, latestBlock: lastSync.latestBlock} : {}),
 			...(lastSync ? derivedProgress(lastSync, foldStartsAt()) : {}),
 			...(failure ? {failure} : {}),
+			...(publication ? {publication} : {}),
+			...(streamSeed ? {streamSeed} : {}),
 		};
 	}
 
@@ -371,49 +427,129 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 */
 	function openContainer(): Promise<Indexer<ABI, ProcessResultType>> {
 		opening ??= (async () => {
-			const opened = await openIndexer<ABI, ProcessResultType>({
-				registry: spec.registry ?? (await openMemoryGenerationRegistry(BROWSER_GENERATION_CAPS)),
-				provider: spec.provider,
-				source: spec.source,
-				config: spec.config ?? {},
-				...(spec.promotion ? {promotion: spec.promotion} : {}),
-				generations: [generationSpecOf(spec, recordState)],
+			start = createPublishedStart<ABI>(spec, {
+				publication(state) {
+					publication = state;
+					publish();
+				},
+				streamSeed(state) {
+					streamSeed = state;
+					publish();
+				},
 			});
-			container = opened;
+			// The keeper a seed is installed into, merged as `createIndexerState` merges it.
+			const config: ProvidedIndexerConfig<ABI> = {
+				...(spec.keepStream ? {keepStream: spec.keepStream} : {}),
+				...(spec.config ?? {}),
+			};
+			// THE PUBLICATION INDEX AND THE SEED, before the generation is built, exactly as
+			// on the main thread: the seed is installed before anything loads, and the
+			// snapshot entry is chosen when the generation's state is built.
+			await start.prepare({source: spec.source, config});
+			registry = spec.registry ?? (await openMemoryGenerationRegistry(BROWSER_GENERATION_CAPS));
+			const opened = await openOver(config, false);
 			// The container is open, so the generation it was given has been built and
 			// its state is recorded: a read that was waiting can be answered.
 			announceFirstState?.();
 			// The chain answered, so this host is no longer WAITING on a provider -- the
 			// same moment `createIndexerState` clears `waitingForProvider`.
 			enter('loading');
-			opened.onLastSyncUpdated = (updated) => {
-				// THE PUSH CADENCE, and the whole of it: the container publishes a cursor
-				// per APPLIED BATCH, so a batch that landed is a push and nothing else is.
-				lastSync = updated;
-				publish();
-			};
-			// ONE subscription to the fold, taken as the container opens and fanned out to
-			// whoever is listening on this host's port. Taken here rather than per tab
-			// because a container is what a host HAS: a shared host serving several tabs
-			// holds one handler on its fold and not one per client.
-			detachFromContainer = opened.onStateMoved((moved) => {
-				for (const handler of [...stateMovedHandlers]) handler(moved);
-			});
-			opened.onPromoted = () => {
-				// THE POINTER MOVED, so the cursor this host was reporting belongs to a
-				// generation that no longer answers anything. Dropped rather than kept, for
-				// the reason `createIndexerState` drops it: a figure derived from the retired
-				// fold would describe a fold nobody is reading from. The container publishes
-				// the new canonical generation's own cursor immediately after this, where it
-				// has one -- and where it has none (an `immediate` promotion is canonical
-				// before it has caught up) reporting nothing is the honest answer.
-				lastSync = undefined;
-				publish();
-			};
 			return opened;
 		})();
 		return opening;
 	}
+
+	/**
+	 * OPEN A CONTAINER over the generation this host builds, and wire it to the host.
+	 *
+	 * Called by the first open, and AGAIN by a switch to the snapshot with
+	 * `replaceLocal`, which is the whole difference: the same registry, the same
+	 * factories, and `createState` handed a snapshot it is told to install over the
+	 * local state (ADR-0096).
+	 */
+	async function openOver(config: ProvidedIndexerConfig<ABI>, replaceLocal: boolean) {
+		const opened = await openIndexer<ABI, ProcessResultType>({
+			registry: registry!,
+			provider: spec.provider,
+			source: spec.source,
+			config,
+			...(spec.promotion ? {promotion: spec.promotion} : {}),
+			generations: [generationFor(undefined, start?.snapshotFor(replaceLocal))],
+		});
+		container = opened;
+		start?.containerOpened();
+		opened.onLastSyncUpdated = (updated) => {
+			// THE PUSH CADENCE, and the whole of it: the container publishes a cursor
+			// per APPLIED BATCH, so a batch that landed is a push and nothing else is.
+			lastSync = updated;
+			publish();
+		};
+		// ONE subscription to the fold, taken as the container opens and fanned out to
+		// whoever is listening on this host's port. Taken here rather than per tab
+		// because a container is what a host HAS: a shared host serving several tabs
+		// holds one handler on its fold and not one per client.
+		detachFromContainer = opened.onStateMoved((moved) => {
+			for (const handler of [...stateMovedHandlers]) handler(moved);
+		});
+		opened.onPromoted = () => {
+			promotions++;
+			// THE POINTER MOVED, so the cursor this host was reporting belongs to a
+			// generation that no longer answers anything. Dropped rather than kept, for
+			// the reason `createIndexerState` drops it: a figure derived from the retired
+			// fold would describe a fold nobody is reading from. The container publishes
+			// the new canonical generation's own cursor immediately after this, where it
+			// has one -- and where it has none (an `immediate` promotion is canonical
+			// before it has caught up) reporting nothing is the honest answer.
+			lastSync = undefined;
+			publish();
+		};
+		return opened;
+	}
+
+	/**
+	 * WHAT THIS HOST DOES TO SWITCH TO THE SNAPSHOT, and nothing else (ADR-0096): let
+	 * go of the container folding the local state, and open it again with
+	 * `createState` handed `replaceLocal: true`. Whether to, and whether it took, are
+	 * `publishedStart`'s, which the main-thread host runs too.
+	 */
+	const switchHost: SnapshotSwitchHost<ABI> = {
+		get container() {
+			// Not while a reconfigure is ADDING a generation: rebuilding the container under
+			// it would drop what it is adding. The next advance asks again.
+			return reconfiguresInFlight > 0 ? undefined : container;
+		},
+		demoted: false,
+		letGo(open) {
+			open.disableProcessing();
+			open.onLastSyncUpdated = undefined;
+			open.onStateUpdated = undefined;
+			open.onLoad = undefined;
+			open.onPromoted = undefined;
+			detachFromContainer?.();
+			detachFromContainer = undefined;
+			statesByGeneration.clear();
+			lastSync = undefined;
+		},
+		async reopen() {
+			const config: ProvidedIndexerConfig<ABI> = {
+				...(spec.keepStream ? {keepStream: spec.keepStream} : {}),
+				...(spec.config ?? {}),
+			};
+			const reopened = openOver(config, true);
+			// A reconfigure arriving from here on adds to the container the switch built,
+			// and waits for it rather than racing it.
+			opening = reopened;
+			switching = reopened;
+			try {
+				const loaded = await (await reopened).load();
+				lastSync = loaded;
+				publish();
+				return loaded;
+			} finally {
+				switching = undefined;
+			}
+		},
+	};
 
 	/** THE DRIVER: load, then advance until something stops it. */
 	async function drive(): Promise<void> {
@@ -429,16 +565,22 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			enter('catching-up');
 
 			while (!disposed && !stopRequested) {
-				const before = cursorsOf(opened);
-				const advanced = await withRetries(() => opened.indexMore());
+				const before = cursorsOf(container);
+				// The advance, and the returning-tab switch where it applies (ADR-0096), as the
+				// main-thread host takes it. Read from `container` on every attempt, because a
+				// switch replaces it.
+				const advanced = await withRetries(() => {
+					const stamp = promotions;
+					return start!.advance(container!, switchHost, () => promotions !== stamp);
+				});
 				if (!advanced) return;
-				lastSync = advanced;
+				lastSync = advanced.lastSync;
 				// The phase and the rest are ONE decision, taken in `pacing.ts` so that this
 				// driver and the main-thread one cannot answer it differently. What is left
 				// here is the part that is genuinely this driver's: a rest it can be WOKEN
 				// from, which is how a reconfigure starts its successor at once instead of
 				// paying out the remainder of an interval.
-				const {phase, rest: shouldRest} = pacingAfterCycle(opened, before);
+				const {phase, rest: shouldRest} = pacingAfterCycle(container, before);
 				enter(phase);
 				if (shouldRest) {
 					// An advance straight away would be an `eth_blockNumber` per turn of the
@@ -560,11 +702,23 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		// still opening. Awaiting it is the same answer a read gets: the container is
 		// moments away, and a host that never opens one rejects with what stopped it
 		// rather than leaving the call hanging.
+		// A SWITCH TO THE SNAPSHOT replaces the container, so one in flight is waited out
+		// and the container it built is the one added to.
+		if (switching) await switching.catch(() => undefined);
+		reconfiguresInFlight++;
+		try {
+			return await addGeneration(source);
+		} finally {
+			reconfiguresInFlight--;
+		}
+	}
+
+	async function addGeneration(source: IndexingSource<ABI>): Promise<HostReconfigure> {
 		const opened = await openContainer();
 		const before = opened.generations.map((generation) => generation.record);
 		// The spec is handed the SOURCE rather than spread into an object carrying one:
 		// spreading would freeze the identity it fills in (see `generationSpecOf`).
-		const held = await opened.add(generationSpecOf(spec, recordState, source));
+		const held = await opened.add(generationFor(source));
 		// WAKE A RESTING DRIVER. The generation just added has a whole history to fetch,
 		// and the driver is resting precisely BECAUSE everything was level a moment ago.
 		// Without this it would sit out the remainder of the tip interval before giving
@@ -697,77 +851,4 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			}
 		},
 	};
-}
-
-/**
- * The two factories as the CONTAINER takes them, with the read handle it answers
- * through.
- *
- * The same translation `createIndexerState` does, minus the bookkeeping that
- * belongs to the surfaces this host does not carry yet (which store each
- * generation folds into, for the scheduled prune). When the last task in this
- * spec makes that function this host, the two become one call.
- */
-function generationSpecOf<ABI extends Abi, ProcessResultType, ProcessorConfig>(
-	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
-	recordState: (id: {stream: string; processor: string}, state: WritableStateStore) => void,
-	source?: IndexingSource<ABI>,
-) {
-	// WHAT NAMES THIS GENERATION, filled in by `createProcessor` below where the
-	// arrival supplied nothing. The read order is `Indexer.add`'s: state, processor,
-	// THEN identity -- which is what makes a MODULE arrival expressible, since a fold
-	// with no bytes cannot be named before the object exists. So this spec must reach
-	// the container WHOLE: a spread would copy the field while it is still
-	// `undefined` and the generation would quietly fall back to the declared hash,
-	// which is why a per-generation `source` is a parameter rather than something a
-	// caller merges in.
-	//
-	// The caller's own `spec` is NEVER written to: it is the application's object and
-	// may be reused for the next generation this host builds.
-	refuseAnIdentityBesideABundle(spec);
-	const processorBundle = spec.processorBundle;
-	const generationSpec = {
-		createState: async (context: GenerationContext) => {
-			// THE BUNDLE ARRIVES FIRST, inside this worker and before any state is built:
-			// a refused bundle (`ProcessorBundleRefusedError`) claims no store, folds
-			// nothing, and reaches the tab as this host's `failure`.
-			const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
-			return withClaimPatience(spec.claimWithinSeconds, (patience) => spec.createState(context, patience, bundle));
-		},
-		createProcessor: async (state: unknown, context: GenerationContext) => {
-			// The SAME arrival the state waited on, so the bytes this fold runs are the
-			// bytes the identity below was computed over.
-			const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
-			const built = await spec.createProcessor(state as WritableStateStore, context, bundle);
-			if (built.configure && spec.processorConfig) {
-				built.configure(spec.processorConfig);
-			}
-			// THE MODULE ARRIVAL'S OWN DERIVATION, where no other arrival named this fold:
-			// a dev server hands a tab -- or the worker it started -- a module OBJECT and
-			// there are no bytes to hash, so the identity comes from the handler sources
-			// (`moduleProcessorIdentity`, ADR-0086). The same expression `createIndexerState`
-			// uses, because the three hosting shapes run ONE implementation and an app must
-			// not be named differently for having moved its fold off the UI thread.
-			// A BUNDLE names its fold by its own bytes (ADR-0095), and nothing else may.
-			generationSpec.processorIdentity ??= bundle?.identity ?? spec.processorIdentity ?? moduleProcessorIdentity(built);
-			// Recorded HERE and not in `createState`, because this is the first moment
-			// both halves of a generation's identity exist: the stream is known up
-			// front, the fold's half only once the processor is built.
-			//
-			// Keyed on the SAME value the container registers this generation under,
-			// resolved a line above: a store recorded under a name the registry did not file
-			// is a read this host cannot answer.
-			recordState({stream: context.stream, processor: generationSpec.processorIdentity}, state as WritableStateStore);
-			return built;
-		},
-		stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
-			(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
-		// Handed STRAIGHT to the container, which registers the generation under it and
-		// never asks where it came from. `undefined` here means only that no arrival named
-		// this fold BEFORE it was built: `createProcessor` above fills the field in from
-		// the module itself, and the container reads it afterwards.
-		processorIdentity: spec.processorIdentity,
-		source,
-	};
-	return generationSpec;
 }

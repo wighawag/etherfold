@@ -51,6 +51,44 @@ The reason this survives testing is that the paths a human *clicks* — a wallet
 
 The same trap is not limited to the `unsubscribe` handle. Attach `indexer.syncing.subscribe(...)` and `indexer.state.subscribe(...)` at the **end** of your setup, after everything they close over exists. While writing the reference, those two calls sat above the pending-transaction map they read, and the page died on load. It typechecked perfectly; the browser run caught it.
 
+## Where the indexer runs: a dedicated worker, by default
+
+Indexing is a fold over every log your contract ever emitted, and it writes to IndexedDB as it goes: 45.6 ms per block of store writes on Chromium on the measured workload, and a stream-seed install whose longest main-thread block measured 190 ms on a mid-range phone in the recommended shape and up to 632 ms in others ([the finding](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md)). On the thread that paints, that is jank. So the indexer is **hosted** ([ADR-0082](../../adr/0082-the-indexer-is-hosted-and-a-tab-holds-a-port-to-its-host.md)): a host owns the store and the loop, your tab holds a **port** to it, and the default host is a **dedicated worker**. Every recipe below shows that shape first.
+
+The worker shape is two pieces. The worker entry, which your bundler builds with the rest of the app (the processor is code, so it is IMPORTED there and never sent as a message):
+
+```ts
+// indexer.worker.ts
+import {hostIndexerInThisWorker} from '@etherfold/browser';
+import {createState, createProcessor, provider, source} from './indexer.js';
+
+hostIndexerInThisWorker({
+	createState,
+	createProcessor,
+	// built HERE: a provider is an object with methods, so it cannot cross a port
+	provider,
+	source,
+	config: {stream: {finality: 12}},
+});
+```
+
+And the tab's side, one line:
+
+```ts
+import {connectToIndexerHost, createProgressReadable, dedicatedWorkerHost} from '@etherfold/browser';
+
+const indexer = connectToIndexerHost(
+	dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+);
+const progress = createProgressReadable(indexer); // a store, like `syncing`
+```
+
+The host starts indexing on its own. What the tab gets is the port: typed reads (`indexer.reads`, or `createPortReadSurface` over your declarations), control (`startIndexing`, `stopIndexing`, `reconfigure`), `checkTxInclusion`, and status PUSHED to it (`indexer.onProgress`, which `createProgressReadable` wraps). Everything a recipe below passes to the main-thread hook as an option (`publication`, `catchUpWithinSeconds`, `seed`, `keepStream`, `promotion`, `claimWithinSeconds`) goes in the worker entry's spec under the same name, and what the hook publishes on `syncing.publication` and `syncing.streamSeed` reaches the tab as `progress.publication` and `progress.streamSeed`, with the same values. A failure that stops the host (a refused bundle, a seed with no keeper) is `progress.failure`, beside `phase: 'refused'`, where the main thread would have rejected `init`.
+
+**Two things differ, and both are deliberate.** The PROVIDER is built in the worker, so it is an EIP-1193 provider over your chain's own RPC endpoint rather than the user's wallet, which lives in the tab and cannot cross (the first hazard below is about the wallet's chain, not the indexer's). And a value the host needs is decided in the worker entry, not handed over at run time by the tab.
+
+**The main thread is the documented alternative**, and it is the same host, adapted: `createIndexerState(spec, options)` then `init({provider, source, config})`, with reactive `syncing`, `status` and `state` stores in place of the port. It is reasonable in development (the hot-reload verbs below, `updateProcessor` and `addGeneration`, are the hook's), for a small state over a short history, and where your bundler cannot emit a worker. What it costs is the fold on the UI thread, measured above. `indexer.mainThreadHost()` gives it a port, so code written against the port is the same in both shapes. The reference implementation linked at the top of this page runs this main-thread shape, indexing through `connection.provider`; the recipes below lead with the worker. A **SharedWorker** (`sharedWorkerHost` in the tab, `hostIndexerInThisSharedWorker` in the entry, with the same spec) is opt-in: one store connection across tabs, at the price of a worker that needs `chrome://inspect` to debug.
+
 ## Starting from a published snapshot: the snapshot-only mode
 
 A browser app usually cannot rebuild its state from the chain: on a public node the historical `eth_getLogs` a backfill needs is frequently refused outright. So what the tab holds at startup has to arrive as a **published artifact**, and the supported shape of that is the **snapshot-only mode**: state seeded from a published state **snapshot**, the tab indexing forward from the snapshot's own block, and **no stream keeper at all**, so nothing is ever written or read under the stream keyspace. It is the path most browser apps should take rather than a fallback.
@@ -102,65 +140,96 @@ Two things have to match between the job and the app, and the index is keyed on 
 
 A snapshot is keyed to the processor that computed it, and the publisher's processor is named by the hash of its bundle's bytes. So the tab runs **the very bundle the job folded with**, published beside your app, fetched and hashed by the tab itself (`processorBundle`): its identity then matches the publisher's by construction, and an app that shipped a different bundle than the job folded is told so by name. A tab running the module your bundler compiled has a different identity from the same code as a bundle, and no build step may hand it the bundle's hash instead ([ADR-0095](../../adr/0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md)).
 
+The factories are the same in both shapes, so write them once, in a module the worker entry imports:
+
 ```ts
-import {createBrowserStateStore, createIndexerState, type InstantiatedProcessorBundle} from '@etherfold/browser';
+// indexer.ts
+import {createBrowserStateStore, type BrowserGenerationSpec, type InstantiatedProcessorBundle} from '@etherfold/browser';
 import {
 	EntityEventProcessor,
 	openAndBootstrap,
 	openForWriting,
 	type EntityProcessor,
+	type EntityStateView,
 } from '@etherfold/processor-entities';
 
 // Locations in priority order: a rolling remote your build NAMES, then the copy
 // EMBEDDED in this build at a relative path, which needs no host and is what
 // makes the app start when the remote is unreachable or gone.
-const PUBLICATION = [PUBLICATION_URI, '/indexed-states/publication.json'];
+export const PUBLICATION = [PUBLICATION_URI, '/indexed-states/publication.json'];
 
-const indexer = createIndexerState(
-	{
-		// The published bundle: the tab fetches it, names this generation by the
-		// SHA-256 of the bytes, and instantiates the processor FROM those bytes.
-		processorBundle: {url: '/processor.bundle.js'},
-		// `published` is the snapshot the index names for THIS generation, when it
-		// names one: the arguments the existing bootstrap takes. Open through
-		// `openAndBootstrap` either way: it opens snapshot-aware first (which is what
-		// recovers a floor an earlier run recorded) and downloads nothing when this
-		// tab has already synced, unless the hook asks for the local state to be
-		// REPLACED (`replaceLocal`, see "A returning tab" below). Forward it.
-		createState: async (context, {signal}, bundle, published) => {
-			const {store, outcome} = await openAndBootstrap(
-				await createBrowserStateStore(definitionOf(bundle).entities, {
-					databaseName: `app-${CHAIN.id}-${context.stream}`,
-				}),
-				published?.locations ?? [],
-				{processor: published?.processor ?? 'none', replaceLocal: published?.replaceLocal, finalityDepth: 12},
-			);
-			// A refusal is DATA rather than a throw: {status: 'bootstrapped', at, from} |
-			// {status: 'kept-local', at} | {status: 'not-bootstrapped', reason}.
-			showSeedingStatus(outcome);
-			// CLAIMED on the way out (ADR-0077). The signal bounds the CLAIM alone, not
-			// the download above, which has its own timeouts.
-			return openForWriting(store, {signal});
-		},
-		createProcessor: (state, _context, bundle) => new EntityEventProcessor(state, definitionOf(bundle)),
+export const spec: BrowserGenerationSpec<typeof abi, EntityStateView> = {
+	// The published bundle: the host fetches it, names this generation by the
+	// SHA-256 of the bytes, and instantiates the processor FROM those bytes.
+	processorBundle: {url: '/processor.bundle.js'},
+	// `published` is the snapshot the index names for THIS generation, when it
+	// names one: the arguments the existing bootstrap takes. Open through
+	// `openAndBootstrap` either way: it opens snapshot-aware first (which is what
+	// recovers a floor an earlier run recorded) and downloads nothing when this
+	// tab has already synced, unless the host asks for the local state to be
+	// REPLACED (`replaceLocal`, see "A returning tab" below). Forward it.
+	createState: async (context, {signal}, bundle, published) => {
+		const {store, outcome} = await openAndBootstrap(
+			await createBrowserStateStore(definitionOf(bundle).entities, {
+				databaseName: `app-${CHAIN.id}-${context.stream}`,
+			}),
+			published?.locations ?? [],
+			{processor: published?.processor ?? 'none', replaceLocal: published?.replaceLocal, finalityDepth: 12},
+		);
+		// A refusal is DATA rather than a throw: {status: 'bootstrapped', at, from} |
+		// {status: 'kept-local', at} | {status: 'not-bootstrapped', reason}.
+		logSeedingStatus(outcome);
+		// CLAIMED on the way out (ADR-0077). The signal bounds the CLAIM alone, not
+		// the download above, which has its own timeouts.
+		return openForWriting(store, {signal});
 	},
-	// No `keepStream`, and that ABSENCE is the whole of the snapshot-only mode:
-	// nothing is stored or read under `['stream', ...]`.
-	{publication: {locations: PUBLICATION}},
-);
+	createProcessor: (state, _context, bundle) => new EntityEventProcessor(state, definitionOf(bundle)),
+};
 
 // The bundle's processor is the authoring object its bytes made, typed by nothing
 // at compile time, so name the type you built it from.
 function definitionOf(bundle?: InstantiatedProcessorBundle) {
 	return bundle!.processor as EntityProcessor<typeof abi>;
 }
+```
 
+The worker entry hands the host the spec, the chain, and the publication:
+
+```ts
+// indexer.worker.ts
+import {hostIndexerInThisWorker} from '@etherfold/browser';
+import {PUBLICATION, provider, source, spec} from './indexer.js';
+
+hostIndexerInThisWorker({
+	...spec,
+	provider,
+	source,
+	config: {stream: {finality: 12}},
+	// No `keepStream`, and that ABSENCE is the whole of the snapshot-only mode:
+	// nothing is stored or read under `['stream', ...]`.
+	publication: {locations: PUBLICATION},
+});
+```
+
+And the tab holds a port to it, as above:
+
+```ts
+const indexer = connectToIndexerHost(
+	dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+);
+const progress = createProgressReadable(indexer);
+```
+
+On the main thread the same spec and the same option go to the hook:
+
+```ts
+const indexer = createIndexerState(spec, {publication: {locations: PUBLICATION}});
 await indexer.init({provider, source, config: {stream: {finality: 12}}});
 ```
 
 From there it is an ordinary indexer: it starts at the cursor the snapshot carried, re-reads that cursor's finality window without applying anything twice, and indexes forward. By default the tab downloads the index and the one snapshot its generation can use, and nothing else, even when the index lists a seed.
 
-**What the lookup gave is on `syncing.publication`**, and none of it stops your app: without a snapshot the tab indexes from the chain as it would with none at all. `found` names the snapshot `createState` was handed; `refused` says why there was none:
+**What the lookup gave is on `progress.publication`** (`syncing.publication` on the main thread, with the same values), and none of it stops your app: without a snapshot the tab indexes from the chain as it would with none at all. `found` names the snapshot `createState` was handed; `refused` says why there was none:
 
 | reason | what it means |
 | --- | --- |
@@ -176,19 +245,30 @@ A tab that already holds state from an earlier visit does not take the snapshot 
 - **The node refuses the catch-up** as needing archive access (`ArchiveRefusedError`), which a public node does for history it does not keep. No retry fixes that, so a tab whose publication names a snapshot further along than its own state switches to it. With no usable snapshot the refusal stops the tab exactly as it always did.
 - **The catch-up would take too long.** After every advance the tab estimates how long the rest of the gap to the tip will take, from the blocks its advances have covered so far and the time they took, and if that exceeds `catchUpWithinSeconds` it abandons the catch-up. The default is **30 seconds** (`DEFAULT_CATCH_UP_WITHIN_SECONDS`): it is a wait a user sits through looking at stale state, and a snapshot is sized by your state rather than your history, so installing one takes a few seconds.
 
-Switching is the ordinary install and nothing else: the hook builds the generation again and calls your `createState` with `published.replaceLocal` set to `true`, and `openAndBootstrap` then wipes the local state and installs the snapshot, as it does for a fresh tab. That is why the example above forwards `replaceLocal`: a `createState` that does not forward it keeps its local state, and the tab carries on as though no snapshot were published. After the switch the tab indexes forward from the snapshot's cursor, and `syncing.publication` says so: `{status: 'switched', reason, from, snapshot, at, left}`, where `reason` is `archive-refused` or `over-budget`, `left` is the block the local state had reached, and an `over-budget` switch also carries `estimateSeconds` and `budgetSeconds`.
+Switching is the ordinary install and nothing else: the host builds the generation again and calls your `createState` with `published.replaceLocal` set to `true`, and `openAndBootstrap` then wipes the local state and installs the snapshot, as it does for a fresh tab. That is why the example above forwards `replaceLocal`: a `createState` that does not forward it keeps its local state, and the tab carries on as though no snapshot were published. After the switch the tab indexes forward from the snapshot's cursor, and `progress.publication` says so (`syncing.publication` on the main thread): `{status: 'switched', reason, from, snapshot, at, left}`, where `reason` is `archive-refused` or `over-budget`, `left` is the block the local state had reached, and an `over-budget` switch also carries `estimateSeconds` and `budgetSeconds`. The switch runs where the fold runs, so in the worker shape the wipe, the download and the install are all off the UI thread.
 
 ```ts
-createIndexerState(spec, {
+// indexer.worker.ts
+hostIndexerInThisWorker({
+	...spec,
+	provider,
+	source,
+	config: {stream: {finality: 12}},
 	publication: {locations: PUBLICATION},
 	// seconds, or 'always'
 	catchUpWithinSeconds: chainInfo.slowLogs ? 10 : 30,
 });
 ```
 
+On the main thread it is the hook option of the same name:
+
+```ts
+createIndexerState(spec, {publication: {locations: PUBLICATION}, catchUpWithinSeconds: chainInfo.slowLogs ? 10 : 30});
+```
+
 **`'always'`** means always catch up yourself, however long it takes: the snapshot is then taken only when the node refuses the catch-up. **The value is one number, and choosing it per chain is yours**: a chain with fast blocks or a rate-limited node wants a smaller one, and the natural place to decide is wherever your app already keeps its chain info (its deployment tooling, say). The library carries no per-chain table. A fresh tab is unaffected (it starts from the snapshot anyway), and so is a tab whose own state is already at or ahead of the snapshot, which has nothing better to switch to.
 
-**A refused bundle is the other outcome to handle.** A bundle that cannot run (not self-contained, bytes that do not load, a Content-Security-Policy that forbids instantiating from bytes) raises `ProcessorBundleRefusedError` from `init` naming the reason, and folds nothing.
+**A refused bundle is the other outcome to handle.** A bundle that cannot run (not self-contained, bytes that do not load, a Content-Security-Policy that forbids instantiating from bytes) folds nothing and claims no store, and it names the reason: a worker host stops with `phase: 'refused'` and `progress.failure` carrying `ProcessorBundleRefusedError` and its `reason`, and on the main thread `init` rejects with that error.
 
 The lower-level form is still there, and it is what the hook composes: `openAndBootstrap(backend, locations, {processor, finalityDepth})` with the body's URL and the identity of the processor this tab actually runs. Reach for it when you publish some other way; the index is what saves you from naming, per build, which body goes with which processor.
 
@@ -207,10 +287,18 @@ The other published artifact: a **stream seed** puts the raw stream UNDER your s
 **A tab starting from the index installs it with one more field**, `publication: {locations, seed: true}`, plus the `keepStream` any seed needs:
 
 ```ts
-const indexer = createIndexerState(
-	{processorBundle, createState, createProcessor},
-	{keepStream: keepStreamOnIndexedDB('token'), publication: {locations: PUBLICATION, seed: true}},
-);
+// indexer.worker.ts
+hostIndexerInThisWorker({
+	...spec,
+	provider,
+	source,
+	config: {stream: {finality: 12}},
+	keepStream: keepStreamOnIndexedDB('token'),
+	publication: {locations: PUBLICATION, seed: true},
+});
+
+// or, on the main thread
+createIndexerState(spec, {keepStream: keepStreamOnIndexedDB('token'), publication: {locations: PUBLICATION, seed: true}});
 ```
 
 The seed listed for your stream is then installed before the generation loads, and it is what makes a processor-only change cheap: a tab running a NEW bundle, for which no snapshot has been published yet (`no-entry`), re-folds the installed stream locally and only asks the chain for the blocks above the seed. Seeds are per stream, not per processor, so an old build on the same stream takes the newest seed too. The `seed` option below is the same install for a seed published anywhere else; a boot installs ONE seed, so the two are refused together at `init`.
@@ -218,10 +306,11 @@ The seed listed for your stream is then installed before the generation loads, a
 
 ### The wiring, which has two shapes and one behaviour
 
-The **documented default is the hook's `seed` option**: it sequences the install for you and publishes what it did on the stores you already subscribe to.
+The **documented default is the host's `seed` option**: it sequences the install for you, inside the host and before the generation loads, and publishes what it did on the surface you already read.
 
 ```ts
-import {createIndexerState, keepStreamOnIndexedDB} from '@etherfold/browser';
+// indexer.worker.ts
+import {hostIndexerInThisWorker, keepStreamOnIndexedDB} from '@etherfold/browser';
 
 // Ordered, freshest first, and BOTH of these live in your BUILD: a rolling
 // remote your build names, then the copy embedded in the build at a relative,
@@ -229,16 +318,26 @@ import {createIndexerState, keepStreamOnIndexedDB} from '@etherfold/browser';
 // remote is gone.
 const SEED_LOCATIONS = ['https://seeds.example/token.seed.json.gz', '/seeds/token.seed.json.gz'];
 
+hostIndexerInThisWorker({
+	createState,
+	createProcessor,
+	provider,
+	source,
+	config: {stream: {finality: 12}},
+	keepStream: keepStreamOnIndexedDB('token'),
+	seed: {locations: SEED_LOCATIONS},
+	// For an IMMUTABLE, release-tied artifact, add the hash the producer PRINTED:
+	// seed: {locations: SEED_LOCATIONS, expectedContentHash: 'sha256:…'},
+});
+```
+
+On the main thread, the same two options go to the hook, where the install blocks the thread that paints for the time measured at the top of this page:
+
+```ts
 const indexer = createIndexerState(
 	{createState, createProcessor},
-	{
-		keepStream: keepStreamOnIndexedDB('token'),
-		seed: {locations: SEED_LOCATIONS},
-		// For an IMMUTABLE, release-tied artifact, add the hash the producer PRINTED:
-		// seed: {locations: SEED_LOCATIONS, expectedContentHash: 'sha256:…'},
-	},
+	{keepStream: keepStreamOnIndexedDB('token'), seed: {locations: SEED_LOCATIONS}},
 );
-
 await indexer.init({provider, source, config: {stream: {finality: 12}}});
 ```
 
@@ -261,7 +360,21 @@ const outcome = await installStreamSeed(keeper, SEED_LOCATIONS, {
 
 ### What reaches your stores
 
-No new reactive shape: a field on `syncing` and a value in the `status` phase enum.
+No new reactive shape. Across the port it is a field on the progress the host pushes:
+
+```ts
+indexer.onProgress(({streamSeed}) => {
+	// undefined when no seed was asked for; `installing`, then the outcome
+	if (streamSeed?.status === 'installing') showSpinner('Installing history…');
+	if (streamSeed?.status === 'seeded') show(`history from ${streamSeed.from}, up to block ${streamSeed.at}`);
+	// `subtree-not-empty` is the ORDINARY case on every visit after the first: see below
+	if (streamSeed?.status === 'refused' && streamSeed.reason !== 'subtree-not-empty') {
+		show(explain(streamSeed.reason, streamSeed.direction));
+	}
+});
+```
+
+On the main thread it is a field on `syncing` and a value in the `status` phase enum:
 
 ```ts
 indexer.status.subscribe(($status) => {
