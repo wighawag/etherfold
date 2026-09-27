@@ -249,6 +249,9 @@ importers:
         specifier: ^0.0.7
         version: 0.0.7
     devDependencies:
+      '@etherfold/browser':
+        specifier: workspace:*
+        version: link:../browser
       '@libsql/client':
         specifier: ^0.17.3
         version: 0.17.4
@@ -261,6 +264,9 @@ importers:
       as-soon:
         specifier: ^0.1.5
         version: 0.1.6
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
       fs-extra:
         specifier: ^11.3.5
         version: 11.3.5

@@ -264,7 +264,7 @@ should not be built yet. Each says which.
   seeding it is a different write path nobody has decided. ADR-0063 scopes itself to keeper-backed
   clients for this reason.
 - **The publishing pipeline** (CI, hosting, retention of old artifacts, who is allowed to publish):
-  `work/notes/ideas/publishing-snapshots-of-versioned-state.md`.
+  since decided by ADR-0095 (`docs/adr/0095-a-build-publishes-a-state-snapshot-and-an-optional-seed-under-an-index-that-never-forgets.md`).
 - **The snapshot's own verification**, which is BUILT, not pending:
   `work/tasks/done/a-snapshot-a-client-cannot-read-is-refused-not-installed.md` landed it. (The
   source exploration spec and ADR-0065 both cite it under `work/tasks/backlog/`, a path that no
