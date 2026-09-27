@@ -18,6 +18,7 @@
  * posts to it, and a message that is not ours must be IGNORED rather than
  * answered with an error about an unknown case.
  */
+import type {TabElectionState} from '../tabElection.js';
 import type {
 	Abi,
 	GenerationRecord,
@@ -241,6 +242,18 @@ export type HostProgress = {
 	 * See `HostHotUpdate`.
 	 */
 	readonly hotUpdate?: HostHotUpdate;
+	/**
+	 * WHAT THE TAB ELECTION MADE OF THIS HOST, or ABSENT where the app did not opt
+	 * in (ADR-0097): `reader` while another tab holds the lock and indexes, `writer`
+	 * once this host holds it, and `tookOver` once it became the writer after
+	 * waiting behind a tab that went away.
+	 *
+	 * A READER's block figures and `phase` are the LEADER's, heard over the election
+	 * channel (a leader publishes; it is not polled), so a tab that is not indexing
+	 * renders "syncing, 400 blocks behind" from the same report the indexing tab
+	 * renders. `host` and `scope` stay this host's own.
+	 */
+	readonly election?: TabElectionState;
 };
 
 /**
@@ -832,7 +845,9 @@ export function sameProgress(a: HostProgress, b: HostProgress): boolean {
 		JSON.stringify(a.publication) === JSON.stringify(b.publication) &&
 		JSON.stringify(a.streamSeed) === JSON.stringify(b.streamSeed) &&
 		// A count per hot update, so a repeated verdict is still news.
-		a.hotUpdate?.count === b.hotUpdate?.count
+		a.hotUpdate?.count === b.hotUpdate?.count &&
+		a.election?.role === b.election?.role &&
+		a.election?.tookOver === b.election?.tookOver
 	);
 }
 

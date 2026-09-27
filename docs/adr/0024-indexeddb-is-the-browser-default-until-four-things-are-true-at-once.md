@@ -20,7 +20,7 @@ IndexedDB wins on writes by 1.6x to 6.9x and on reads by 4x to 14x, on every eng
 
 1. **The deployment targets Chromium specifically.** Chromium's IndexedDB write path degrades roughly 10x as the store grows; Firefox and WebKit do not degrade at all, so on them there is no crossover to reach.
 2. **The live set is past roughly 5,000 to 13,000 rows and still growing.** That range is where two runs of the crossover sweep put the crossing. This game peaked at **4,072**.
-3. **The app is single-tab by construction, or willing to build leader election.** See the three-of-four failure above. A user with the app open twice is not an exotic deployment.
+3. **The app is single-tab by construction, or willing to build leader election.** See the three-of-four failure above. A user with the app open twice is not an exotic deployment. *Amended by [ADR-0097](0097-one-tab-indexes-by-a-web-lock-the-app-names-and-the-others-are-built-as-readers.md): leader election now EXISTS (one Web Lock per app, the other tabs built as readers), so the election half of this criterion is met by any app that opts in. What it does not change is that every tab still OPENS the store to read it, which is the open that failed three of four times on both SQLite VFSs.*
 4. **The app can afford 501.9 KB gzipped and a 130 to 190 ms cold start on every load, and does not need Safari**, where OPFS is unavailable and SQLite silently becomes an in-memory database that loses everything on reload.
 
 Fewer than four means IndexedDB. If all four ever hold, the browser adapter that would be needed is `remote-sql`'s work in another repository (that package ships libSQL, D1 and Durable Objects adapters and nothing for browsers), not this one's.

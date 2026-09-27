@@ -399,7 +399,18 @@ export type StateMovedAcrossTabs = {
  * the next block moves.
  */
 export function openStateMovedAcrossTabs(storage: CrossTabStateStorage = {}): StateMovedAcrossTabs {
-	const channelName = stateMovedChannelName(storage);
+	return openStateMovedChannel(stateMovedChannelName(storage));
+}
+
+/**
+ * THE SAME ADAPTER ON A CHANNEL NAMED BY ITS CALLER: what the tab election
+ * (`tabElection.ts`, ADR-0097) opens under the app's election name, so the
+ * leader's notifications and progress reach the tabs that elected it.
+ *
+ * Internal: an application names its channel by its storage
+ * (`openStateMovedAcrossTabs`), and this is not re-exported from the package.
+ */
+export function openStateMovedChannel(channelName: string): StateMovedAcrossTabs {
 	if (typeof BroadcastChannel === 'undefined') {
 		throw new Error(
 			`this runtime has no BroadcastChannel, so the state-moved signal and the fold's progress cannot cross between ` +

@@ -362,7 +362,10 @@ async function start() {
 	indexer.onProgress((progress: HostProgress) => {
 		el('progress').textContent =
 			progress.lastToBlock !== undefined && progress.latestBlock !== undefined && progress.latestBlock > 0
-				? `block ${progress.lastToBlock} / ${progress.latestBlock} (${progress.syncPercentage}%)`
+				? `block ${progress.lastToBlock} / ${progress.latestBlock} (${progress.syncPercentage}%)` +
+					// ONE TAB INDEXES (ADR-0097): a tab whose worker is reading renders the
+					// indexing tab's progress, and says so.
+					(progress.election?.role === 'reader' ? ', indexed by another tab' : '')
 				: 'waiting for the node...';
 		// A host that STOPPED says why, rather than leaving a number that stopped moving.
 		if (progress.failure) el('error').textContent = `${progress.failure.name}: ${progress.failure.message}`;

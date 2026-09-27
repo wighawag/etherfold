@@ -29,9 +29,23 @@ import {
 } from '@etherfold/core';
 import {pruneBudget, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
+import {
+	electionFor,
+	openReader,
+	readerContextOf,
+	readerProgress,
+	standForElection,
+	tabElectionName,
+	type Candidacy,
+	type ReaderState,
+	type TabElection,
+	type TabElectionState,
+} from './tabElection.js';
+import {openStateMovedChannel, type StateMovedAcrossTabs} from './stateMovedAcrossTabs.js';
 import {derivedProgress, hostGenerationOf, hostGenerationsOf, type HostBacking} from './host/cases.js';
 import {executionScopeName, type HostAccess} from './host/endpoint.js';
 import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './host/envelope.js';
+import {sameProgress} from './host/envelope.js';
 import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
 import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
@@ -235,6 +249,15 @@ export type SyncingState<ABI extends Abi> = {
 	 * happens, since a store that has lost is never re-claimed (ADR-0077).
 	 */
 	demotion?: Demotion;
+	/**
+	 * WHAT THE TAB ELECTION MADE OF THIS TAB, or ABSENT where the app did not opt in
+	 * (ADR-0097). `reader`: another tab holds the lock and indexes, this one answers
+	 * reads from the shared store, `lastSync` stays empty, and the leader's progress
+	 * is on the port (`mainThreadHost()`, `HostProgress`). `writer`: this tab holds
+	 * the lock and indexes, with `tookOver` once it became the writer after another
+	 * tab went away.
+	 */
+	election?: TabElectionState;
 };
 
 export type StatusState = {
@@ -383,6 +406,33 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 		 */
 		published?: PublicationSnapshot,
 	) => WritableStateStore | Promise<WritableStateStore>;
+	/**
+	 * THE READER FACTORY: where a tab that does NOT index reads this state from
+	 * (ADR-0097, D2). Optional, and it is half of the tab election's opt-in: the
+	 * election runs only when the host is also given a `tabElection` name.
+	 *
+	 * It hands back the SAME storage `createState` would open, opened for READING
+	 * (`openForReading`), plus the read handle over it -- no claim, no processor, no
+	 * fetch:
+	 *
+	 * ```ts
+	 * openState: async (context) => {
+	 *   const store = openForReading(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}));
+	 *   return {store, state: new EntityStateView(store)};
+	 * },
+	 * ```
+	 *
+	 * A tab that does not hold the election's lock is built from this at once: its
+	 * reads answer the shared store the leader writes, it follows the leader's
+	 * state-moved signal and progress, and it queues for the lock. When it wins, it
+	 * becomes the writer through `createState` exactly as a fresh start does
+	 * (ADR-0078). The `bundle` is the published bundle where the spec runs one, as
+	 * `createState` is handed it.
+	 */
+	openState?: (
+		context: GenerationContext,
+		bundle?: InstantiatedProcessorBundle,
+	) => ReaderState<ProcessResultType> | Promise<ReaderState<ProcessResultType>>;
 	/**
 	 * The fold, over that state. The FACTORY, not its result: `processorIdentity` NAMES the generation.
 	 *
@@ -657,6 +707,23 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * `createState` that ignores the signal waits exactly as long as it used to.
 		 */
 		claimWithinSeconds?: number;
+		/**
+		 * ONE TAB INDEXES AND THE OTHERS READ (ADR-0097): the name of the Web Lock the
+		 * app's tabs elect their indexing tab with. ON only together with the spec's
+		 * reader factory (`openState`) and where `navigator.locks` exists; otherwise this
+		 * hook behaves exactly as it did without it.
+		 *
+		 * A tab that finds the lock free is the writer and `init` resolves as it always
+		 * did. A tab that finds it held is built from `openState` instead: `init`
+		 * resolves with no container, `state` answers from the shared store, reads over
+		 * `mainThreadHost()` answer from it too, and the port reports the LEADER's
+		 * progress. `startAutoIndexing()` is remembered rather than run, and every
+		 * advance answers `undefined`. When the lock is released (the leader's tab closed
+		 * or crashed) this tab takes over: it builds its generation through
+		 * `createState`, claims, and indexes forward from the stored cursor, starting the
+		 * auto-index loop if it was asked for.
+		 */
+		tabElection?: TabElection;
 		// Optional factory used to construct the underlying IndexerGeneration. Receives the same
 		// arguments (already request-tracked/logged provider, configured processor, source, config)
 		// that would otherwise be passed to `new IndexerGeneration(...)`. Useful for injecting a
@@ -785,9 +852,46 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	}
 	expectFirstState();
 
+	/**
+	 * THE TAB ELECTION (ADR-0097), resolved once: `undefined` unless the app named one
+	 * AND gave a reader factory AND this runtime has `navigator.locks`, which is what
+	 * keeps every other configuration exactly as it was.
+	 */
+	const election = electionFor(options?.tabElection, spec.openState !== undefined);
+	/** This tab's place in the election, from `init` to `dispose`. */
+	let candidacy: Candidacy | undefined;
+	/** Where the leader publishes and the readers listen, under the election's name. */
+	let electionChannel: StateMovedAcrossTabs | undefined;
+	/** The READER this tab is built from while another tab holds the lock. */
+	let reading: ReaderState<ProcessResultType> | undefined;
+	/** The reader seat being built, which a takeover waits for. */
+	let seating: Promise<void> | undefined;
+	/** Stop following the leader's channel (the reader's two subscriptions). */
+	let stopFollowing: (() => void) | undefined;
+	/** The leader's last report, which is what a reader's port reports. */
+	let leaderProgress: HostProgress | undefined;
+	/** The last report this tab published as the leader, so a repeat is not posted. */
+	let publishedAsLeader: HostProgress | undefined;
+	/** `startAutoIndexing()` was asked of a reader, so a takeover starts the loop. */
+	let wantsAutoIndexing = false;
+
+	/** A reader: it holds a reader seat and no container. */
+	function isReading(): boolean {
+		return reading !== undefined && !indexer;
+	}
+
 	/** Tell every attached wire where the fold is, if it MOVED. See `ServedCases.publish`. */
 	function publishToPort(): void {
 		for (const wire of wires) wire.publish();
+		// THE LEADER PUBLISHES; it is not polled. Only a tab that holds the lock and a
+		// container says where the fold is, and a repeat is not posted.
+		if (electionChannel && indexer && $syncing.election?.role === 'writer') {
+			const report = hostProgress();
+			if (!publishedAsLeader || !sameProgress(publishedAsLeader, report)) {
+				publishedAsLeader = report;
+				electionChannel.publishProgress(report);
+			}
+		}
 	}
 
 	/** Move the port's phase and say so. A move to the phase it is already in posts nothing. */
@@ -995,9 +1099,104 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		},
 		processorConfig?: ProcessorConfig,
 	) {
-		if (indexer) {
+		if (indexer || reading || candidacy) {
 			throw new Error(`already initialised`);
 		}
+		if (election) {
+			// ONE TAB INDEXES (ADR-0097). A tab that finds the lock free leads from the
+			// start and goes on exactly as a tab with no election; one that finds it held
+			// is built from the reader factory and waits in the queue.
+			electionChannel = openStateMovedChannel(tabElectionName(election));
+			const standing = standForElection(election, () => void takeOver(standing, indexerSetup, processorConfig));
+			candidacy = standing;
+			if (!(await standing.atOnce)) {
+				if (candidacy !== standing) return;
+				seating = seatAsReader(indexerSetup, processorConfig);
+				return seating;
+			}
+			setSyncing({election: {name: election.name, role: 'writer', tookOver: false}});
+		}
+		return initAsWriter(indexerSetup, processorConfig);
+	}
+
+	/**
+	 * A READER SEAT (ADR-0097, D2): the shared store opened for reading through the
+	 * app's `openState`, published on `state`, answering reads over the port, and
+	 * following the leader over the election channel. No claim, no processor, no
+	 * fetch, so nothing here can demote the tab that is writing.
+	 */
+	async function seatAsReader(
+		indexerSetup: {source: IndexingSource<ABI>; config?: ProvidedIndexerConfig<ABI>},
+		processorConfig?: ProcessorConfig,
+	): Promise<void> {
+		processorConfigUsed = processorConfig;
+		const seat = await openReader(
+			spec.openState!,
+			readerContextOf(indexerSetup.source, {...indexerSetup.config}),
+			spec.processorBundle,
+		);
+		reading = seat;
+		setState(seat.state);
+		const channel = electionChannel!;
+		const detachMoved = channel.onStateMoved((moved) => {
+			// The handle is the same object; publishing it again is what tells a subscriber
+			// of `state` to re-read, exactly as a fold's own update does.
+			if (reading) setState(reading.state);
+			for (const handler of [...stateMovedHandlers]) handler(moved);
+		});
+		const detachProgress = channel.onProgress((progress) => {
+			leaderProgress = progress;
+			publishToPort();
+		});
+		stopFollowing = () => {
+			detachMoved();
+			detachProgress();
+			leaderProgress = undefined;
+		};
+		setSyncing({waitingForProvider: false, election: {name: election!.name, role: 'reader', tookOver: false}});
+		announceFirstState();
+		publishToPort();
+	}
+
+	/**
+	 * THE LOCK WAS RELEASED TO THIS TAB: the leader's tab or worker went away. Become
+	 * the writer through the ordinary fresh start (ADR-0078's recovery path): build the
+	 * generation through `createState`, claim, load the stored cursor and index
+	 * forward from it.
+	 */
+	async function takeOver(
+		standing: Candidacy,
+		indexerSetup: Parameters<typeof initAsWriter>[0],
+		processorConfig?: ProcessorConfig,
+	): Promise<void> {
+		await seating?.catch(() => undefined);
+		// Disposed (or re-initialised) while queued: this is somebody else's election now.
+		if (candidacy !== standing || indexer) return;
+		stopFollowing?.();
+		stopFollowing = undefined;
+		try {
+			setSyncing({election: {name: election!.name, role: 'writer', tookOver: true}});
+			await initAsWriter(indexerSetup, processorConfig);
+			reading = undefined;
+			publishToPort();
+			namedLogger.info(`this tab TOOK OVER as the indexing tab of election "${election!.name}"`);
+			if (wantsAutoIndexing) {
+				await startAutoIndexing(autoIndexingInterval);
+			}
+		} catch (error) {
+			namedLogger.error(`this tab won the tab election and could not start indexing`, error);
+			setSyncing({error: {message: (error as Error)?.message ?? String(error), id: 'TAKEOVER_FAILED'}});
+		}
+	}
+
+	async function initAsWriter(
+		indexerSetup: {
+			provider: EIP1193ProviderWithoutEvents;
+			source: IndexingSource<ABI>;
+			config?: ProvidedIndexerConfig<ABI>;
+		},
+		processorConfig?: ProcessorConfig,
+	) {
 		processorConfigUsed = processorConfig;
 		const config = {...{}, keepStream: options?.keepStream, ...(indexerSetup.config || {})};
 		const source = indexerSetup.source;
@@ -1152,6 +1351,8 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// to whoever is listening, because several wires may hold this one host.
 		detachFromContainer = indexer.onStateMoved((moved) => {
 			for (const handler of [...stateMovedHandlers]) handler(moved);
+			// THE LEADER TELLS THE READERS (ADR-0097): the value the fold published, unchanged.
+			electionChannel?.publish(moved);
 		});
 		// Published straight away, and it is the INDIRECT handle: a subscriber that
 		// keeps what it is handed keeps something that follows the canonical pointer.
@@ -1472,6 +1673,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			},
 			reason,
 		);
+		// A DEMOTED TAB GIVES THE ELECTION'S LOCK BACK (ADR-0097): it will never write
+		// again in this container, and holding the lock would stop a reader tab taking
+		// over when whoever displaced this one goes away.
+		candidacy?.resign();
 		// The transient flags go with it: nothing is loading, fetching or catching up any
 		// more, and leaving one standing would leave a spinner on screen for ever.
 		setSyncing({
@@ -1498,7 +1703,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * means nothing else: every other failure is thrown, exactly as before.
 	 */
 	async function whileWriting<T>(step: () => Promise<T>): Promise<T | undefined> {
-		if (demotion) {
+		// A READER of the tab election answers nothing too: another tab is indexing, and
+		// this one advances nothing until it holds the lock (ADR-0097).
+		if (demotion || isReading()) {
 			return undefined;
 		}
 		try {
@@ -1635,6 +1842,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 	async function startAutoIndexing(intervalInSeconds = 4): Promise<boolean> {
 		autoIndexingInterval = intervalInSeconds;
+		if (isReading()) {
+			// REMEMBERED, not run: another tab holds the election's lock and is indexing.
+			// The loop starts when this tab takes over (ADR-0097).
+			wantsAutoIndexing = true;
+			return true;
+		}
 		// A demoted tab does not start indexing again on being asked to: it becomes a
 		// writer again by CLAIMING again (a new store, a new `init`), and a loop started
 		// here would fetch a chain in order to be refused by every write it made.
@@ -1670,6 +1883,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	}
 
 	function stopAutoIndexing(): boolean {
+		wantsAutoIndexing = false;
 		if ($syncing.autoIndexing) {
 			if (indexingTimeout) {
 				clearTimeout(indexingTimeout);
@@ -1733,6 +1947,20 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		detachFromContainer?.();
 		detachFromContainer = undefined;
 
+		// The tab election goes with the container: the lock is given back (so a reader
+		// tab takes over at once), the queue is left, and the channel is closed.
+		candidacy?.resign();
+		candidacy = undefined;
+		stopFollowing?.();
+		stopFollowing = undefined;
+		electionChannel?.close();
+		electionChannel = undefined;
+		reading = undefined;
+		seating = undefined;
+		leaderProgress = undefined;
+		publishedAsLeader = undefined;
+		wantsAutoIndexing = false;
+
 		// 3. drop the indexer reference and reset browser-layer state so a later init() starts clean.
 		indexer = undefined;
 		// The port's view goes back to where it started, and a read that was waiting for
@@ -1771,6 +1999,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			lastSync: undefined,
 			error: undefined,
 			demotion: undefined,
+			election: undefined,
 			nonCanonicalGenerations: [],
 			// The install this hook reports is the one IT ran, at `init`. A later `init`
 			// runs its own (or none), so carrying the previous one across a dispose would
@@ -1915,8 +2144,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * which is what lets a test assert that the UI thread IS doing the fold here.
 	 */
 	function hostProgress(): HostProgress {
+		if (isReading() && $syncing.election) {
+			// A READER reports the LEADER's figures under its own name (ADR-0097).
+			return readerProgress(
+				{host: 'main-thread', scope: executionScopeName(), indexing: false},
+				leaderProgress,
+				$syncing.election,
+			);
+		}
 		const lastSync = $syncing.lastSync;
 		return {
+			...($syncing.election ? {election: $syncing.election} : {}),
 			host: 'main-thread',
 			scope: executionScopeName(),
 			// The DRIVER, which on this shape is the auto-index loop. An app driving
@@ -1947,6 +2185,8 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 */
 	async function storeForReads(): Promise<StateStore> {
 		await firstState;
+		// A READER answers from the shared store it opened for reading (ADR-0097).
+		if (reading && !indexer) return reading.store;
 		const canonical = indexer?.canonical.record;
 		const state = canonical && statesByGeneration.get(generationKey(canonical));
 		if (!state) {
@@ -2195,7 +2435,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * (`'write-refused'`), which is a lost race and not an application error. A
 		 * caller calls it with `'lease-lost'` when this tab is told another one holds
 		 * the write duty -- the one code path for both, which is what leader election
-		 * needs of this package (`work/specs/proposed/one-tab-indexes-and-the-others-read.md`)
+		 * needs of this package (`work/specs/tasked/one-tab-indexes-and-the-others-read.md`)
 		 * and the whole of what it needs.
 		 *
 		 * It is ONE-WAY for this container: a store that lost is never re-claimed

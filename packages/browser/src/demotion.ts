@@ -22,7 +22,7 @@ const namedLogger = logs('@etherfold/browser');
  * - a **refused write** (`StoreWriterChangedError`, the guard), which is the one
  *   that is reachable today, and
  * - a **lost lease**, which is what a tab that loses the write duty to another
- *   tab will learn (`work/specs/proposed/one-tab-indexes-and-the-others-read.md`).
+ *   tab will learn (`work/specs/tasked/one-tab-indexes-and-the-others-read.md`).
  *
  * The second one is not built here and does not need to be: what it needed was a
  * function to call, and this is it.
