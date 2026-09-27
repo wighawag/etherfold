@@ -490,6 +490,12 @@ importers:
       '@etherfold/core':
         specifier: workspace:*
         version: link:../core
+      '@etherfold/processor-entities':
+        specifier: workspace:*
+        version: link:../processor-entities
+      '@etherfold/state-store-sqlite':
+        specifier: workspace:*
+        version: link:../state-store-sqlite
       hono:
         specifier: ^4.13.3
         version: 4.13.3

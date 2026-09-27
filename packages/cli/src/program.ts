@@ -9,6 +9,7 @@ import {nodeMain, runMain} from './run.js';
 import {serve} from './serve.js';
 import type {CommandName, Options} from './types.js';
 import {uploadMain} from './uploadCommand.js';
+import {publishMain} from './publishCommand.js';
 
 /**
  * What `cli.ts` supplies and a test substitutes.
@@ -42,6 +43,12 @@ export type ProgramDependencies = {
 	 * Handed the options with the positional `<bundle>` already folded in as `bundle`.
 	 */
 	upload?: (options: Options) => void | Promise<void>;
+	/**
+	 * Writes a database out as a publication. Defaults to `publishMain`, which resolves
+	 * the exit code: `0` when the publication was written, `1` on any refusal, with
+	 * nothing written (ADR-0095).
+	 */
+	publish?: (options: Options) => void | Promise<void>;
 };
 
 /**
@@ -76,7 +83,8 @@ function registerInputs(command: Command, name: CommandName): void {
 
 /**
  * The command surface: six deployment intents, each of them meaning one thing,
- * plus `upload`, the one command that runs no deployment and is a CLIENT of one.
+ * plus two commands that run no deployment: `upload`, a CLIENT of a running one,
+ * and `publish`, a READER of a database one wrote.
  *
  * `CONTEXT.md` ("The COMMAND SET names deployment intents, not components")
  * is the authority for the set, and all six ship: **`run`** follows the
@@ -100,6 +108,13 @@ function registerInputs(command: Command, name: CommandName): void {
  * kept the revert an HTTP route rather than a verb (ADR-0057's 2026-09-26
  * amendment): the revert has to reach a Worker, which only HTTP does, while an
  * upload is by construction something an author does FROM a machine with a CLI.
+ *
+ * **`publish`** is the eighth, and the second that runs no deployment: it reads
+ * the canonical generation of a database a folding command wrote and writes it
+ * out, into `--out`, as the state snapshot a browser app starts from under a
+ * publication index keyed by generation (ADR-0095). It folds nothing and deletes
+ * nothing, and what it publishes is a library function (`producePublication`,
+ * `@etherfold/server`) this command only wraps.
  *
  * ## Why there is no DEFAULT command any more
  *
@@ -272,6 +287,34 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 	}
 	uploadCommand.action(async (bundle: string | undefined, options: Options) => {
 		await runUpload(bundle === undefined ? options : {...options, bundle});
+	});
+
+	const runPublish =
+		deps.publish ??
+		(async (options: Options) => {
+			await publishMain(options, {env});
+		});
+
+	const publishCommand = program
+		.command('publish')
+		.description(
+			'write the canonical generation of a database `build`, `run` or `index` wrote as the state snapshot a ' +
+				'browser app starts from: cut at `tip - finality`, under a body named by its content hash, and named by ' +
+				'the publication index (publication.json) in --out, which keeps the latest snapshot of EVERY generation ' +
+				'ever published there. It folds nothing and deletes nothing (ADR-0095)',
+		)
+		.usage('--db <libsql url> --out <dir> [-p <the bundle it is meant to publish>]');
+	registerInputs(publishCommand, 'publish');
+	// `-p` is the same INPUT as everywhere, and here it names what the publication must BE
+	const meant = publishCommand.options.find((option) => option.long === '--processor');
+	if (meant) {
+		meant.description =
+			'the bundle this publication is MEANT to be of. Optional: given, a database whose canonical generation is ' +
+			'another processor is REFUSED, naming both identities (the sha256 of each bundle, ADR-0086), so a `build` ' +
+			'whose final promotion failed never publishes the previous processor under a new app';
+	}
+	publishCommand.action(async (options: Options) => {
+		await runPublish(options);
 	});
 
 	return program;

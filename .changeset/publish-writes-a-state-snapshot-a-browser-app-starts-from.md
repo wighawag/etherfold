@@ -1,0 +1,10 @@
+---
+'@etherfold/server': minor
+'etherfold': minor
+---
+
+`etherfold publish` writes a build database out as the state snapshot a browser app starts from (ADR-0095).
+
+`@etherfold/server`: `producePublication(db, {stream, expectedProcessor?, declarationsOf, indexer?, savedAt?})` produces the publication of a database's CANONICAL generation without writing anything: a format-2 state snapshot (history `none`) cut at `tip - finality`, where `tip` is the block the generation folded through and `finality` is the resolved stream config's, whose rows are the as-of read at the cut and whose resume position is the stored cursor narrowed to the cut (so a consumer neither skips a block nor applies one twice). It answers the body, named by its content hash (`state-<hex>.ndjson.gz`, `contentHash` being `sha256:<hex>` over the decompressed document), and the publication index entry keyed by the generation's digest. It refuses, with `PublicationRefusedError` and a `reason`, a database with no canonical generation, one whose canonical generation is not `expectedProcessor` (naming both), a stream config the generation was not folded under, and a generation that folded nothing up to the cut. `parsePublicationIndex` and `mergePublicationIndex` read and update `publication.json` (`PUBLICATION_INDEX_NAME`, format `PUBLICATION_INDEX_FORMAT`), replacing only a publication's own generation's entry and keeping every other entry and key; `readGenerationBundle` reads the bundle a generation stores beside its state. The package now depends on `@etherfold/processor-entities` (the cursor codec) and `@etherfold/state-store-sqlite` (the row read).
+
+`etherfold`: a new command, `etherfold publish --db <url> --out <dir> [-p <bundle>]`, wraps it. It writes each body under its content-hash name (never overwritten) and `publication.json` last, each by a write beside the final name and a rename, deletes nothing, and prints what it wrote including the body's content hash. With `-p`, a database whose canonical generation is another processor is refused, naming both identities. `--out` is a new input every other command refuses by name.

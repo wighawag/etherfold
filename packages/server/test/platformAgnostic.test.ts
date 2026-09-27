@@ -60,7 +60,21 @@ describe('the server package names no runtime', () => {
 		// (nothing in it imports a Node built-in or a driver). The list is exhaustive
 		// rather than a deny-list so that ADDING a dependency is a decision somebody
 		// makes here, in the file that explains why the property matters.
-		expect(Object.keys(pkg.dependencies).sort()).toEqual(['@etherfold/core', 'hono', 'named-logs', 'remote-sql']);
+		//
+		// `@etherfold/processor-entities` and `@etherfold/state-store-sqlite` are the
+		// PUBLICATION producer's (ADR-0095, `publication.ts`): the entity processor owns
+		// the cursor codec the resume position is written in, and the SQLite backend owns
+		// the as-of row read a snapshot is made of. Both are platform-agnostic by their own
+		// tests (the SQLite backend takes a `RemoteSQL`, as this package does, and names no
+		// driver), and the Worker platform already runs that backend over D1.
+		expect(Object.keys(pkg.dependencies).sort()).toEqual([
+			'@etherfold/core',
+			'@etherfold/processor-entities',
+			'@etherfold/state-store-sqlite',
+			'hono',
+			'named-logs',
+			'remote-sql',
+		]);
 	});
 });
 

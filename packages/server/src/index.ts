@@ -169,6 +169,36 @@ export {
 } from './generations.js';
 export type {HeldGenerations, SQLGenerationRegistryOptions} from './generations.js';
 /**
+ * WHAT A BUILD PUBLISHES (ADR-0095): the canonical generation's STATE SNAPSHOT at
+ * `tip - finality`, as a content-addressed format-2 body, and the PUBLICATION
+ * INDEX entry (`publication.json`) that names it, keyed by generation so an old
+ * build of an app still finds the last snapshot of its own.
+ *
+ * A LIBRARY FUNCTION that reads and writes nothing but returns bytes and entries:
+ * `etherfold publish` writes them to a directory, and a serving host can answer
+ * the same value over HTTP. It lives here because this package owns the
+ * generation registry that says which generation is canonical; the row read is
+ * `@etherfold/state-store-sqlite`'s and the cursor codec the entity processor's.
+ */
+export {
+	producePublication,
+	readGenerationBundle,
+	mergePublicationIndex,
+	parsePublicationIndex,
+	stateSnapshotBodyName,
+	PublicationRefusedError,
+	PUBLICATION_INDEX_NAME,
+	PUBLICATION_INDEX_FORMAT,
+} from './publication.js';
+export type {
+	ProducedPublication,
+	ProducePublicationOptions,
+	PublicationBody,
+	PublicationIndex,
+	PublicationRefusalReason,
+	PublishedStateSnapshot,
+} from './publication.js';
+/**
  * PAIR-COMPACTION (ADR-0006): the one thing that ever DELETES from that stream,
  * and a call the HOST SCHEDULES rather than something an append does on its way
  * past (ADR-0022).

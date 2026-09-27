@@ -1,6 +1,6 @@
 # etherfold
 
-The command line. `etherfold run` follows a chain, folds the processor its configuration names into a libSQL database and answers HTTP over it, in one process; `etherfold node` is the same process configured with NO processor, whose code arrives by upload; `etherfold build` is the same thing as a one-shot that exits at the tip; `etherfold fetch` is the chain-facing half of a split deployment, pushing raw logs to a server elsewhere; `etherfold index` is the half that receives those pushes and owns the database; `etherfold serve` is the READ tier over a database written elsewhere, answering `/status` -- health, schema version, reorg counters and the cursor the fold has reached. Beside those six, `etherfold upload` DEPLOYS: it sends a processor bundle you already built to a running `node`, which indexes it beside the live version before switching.
+The command line. `etherfold run` follows a chain, folds the processor its configuration names into a libSQL database and answers HTTP over it, in one process; `etherfold node` is the same process configured with NO processor, whose code arrives by upload; `etherfold build` is the same thing as a one-shot that exits at the tip; `etherfold fetch` is the chain-facing half of a split deployment, pushing raw logs to a server elsewhere; `etherfold index` is the half that receives those pushes and owns the database; `etherfold serve` is the READ tier over a database written elsewhere, answering `/status` -- health, schema version, reorg counters and the cursor the fold has reached. Beside those six, `etherfold upload` DEPLOYS: it sends a processor bundle you already built to a running `node`, which indexes it beside the live version before switching. And `etherfold publish` writes a database any of them folded out as the state snapshot a browser app starts from, into a directory a static host can serve.
 
 ```sh
 npm i -g etherfold        # or: npx etherfold …
@@ -329,6 +329,30 @@ ADMIN_TOKEN=… etherfold upload ./dist/processor.bundle.js --to http://indexer:
 
 Everything a deployment is configured with -- the chain, the source, the database, the port, the promotion policy -- belongs to the node, so each of those flags is refused here with the reason. An upload carries its own contracts inside the bundle, and those are what the `node` indexes: it has no configured source to hold them to.
 
+## `etherfold publish` -- write a database out as what a browser app starts from
+
+```sh
+etherfold publish --db file:./etherfold.db --out ./web/static/indexed-states -p ./dist/processor.bundle.js
+```
+
+**It READS a database `build`, `run` or `index` wrote, and writes files; it folds nothing and deletes nothing** (ADR-0095). What it writes is the CANONICAL generation's state as a format-2 state snapshot, the document `bootstrapFromSnapshot` / `openAndBootstrap` already install, with history `none`: the live rows at one block and the resume position that belongs to them.
+
+**It cuts at `tip - finality`, not at the tip.** `tip` is the block the canonical generation has folded through and `finality` is the stream config's (`STREAM_FINALITY`, the same variable the folding commands read, and it must be the one the database was folded under: a different one is refused, naming both config hashes). A snapshot inside the reorg window could not absorb a reorg reaching under it. The rows are the database's own as-of read at the cut; the store records only blocks that carry logs, so the snapshot points at the highest recorded block at or below the cut (identical rows), while the resume position it carries is the cut itself, narrowed from the stored cursor, so a tab that installs it re-reads exactly the blocks it must and applies none twice.
+
+**The layout never forgets.** Each body is named by its content hash (`state-<sha256 hex>.ndjson.gz`; `contentHash` is SHA-256 over the DECOMPRESSED document, ADR-0066) and is never overwritten. The PUBLICATION INDEX, `publication.json`, names the latest snapshot PER GENERATION (stream digest and processor identity): a republication replaces only its own generation's entry and keeps every other one, so an old build of your app, running the old processor, still finds the last snapshot of its own generation. Nothing an earlier publication wrote is ever deleted; pruning is yours to do. Every file is written beside its name and renamed into place, and the index is renamed LAST, so no reader ever sees it name a body that is not there.
+
+**`-p` names what the publication must BE.** Optional; given, a database whose canonical generation is another processor is REFUSED, naming both identities. A `build` whose final promotion failed (it is fail-soft) otherwise leaves the previous processor canonical, and publishing that under an app shipping the new bundle would leave every tab without an entry. Without `-p`, the declarations the tables were made from are read from the bundle the generation stores beside its state (ADR-0092).
+
+**It refuses, writing nothing and exiting `1` with the reason**, a database with no canonical generation, one whose canonical generation has folded nothing up to the cut, one that is not the processor `-p` names, and an `--out` holding a `publication.json` it cannot read (rewriting it would forget its entries). On success it prints what it wrote, one `key: value` per line, including the body's `contentHash`, which a release may pin.
+
+| input | |
+| --- | --- |
+| `--db <url>` | REQUIRED (or `DB`). The database to publish. A `file:` URL naming no file is refused rather than created |
+| `--out <dir>` | REQUIRED. The directory the publication is written into, created if absent. Point it at the same directory every time |
+| `-p, --processor <bundle>` | optional. The bundle the publication is meant to be of |
+
+Everything a FOLD is configured with (the chain, the source, the store, the promotion policy, the port) belongs to the command that folded the database, so each of those flags is refused here with the reason; `--indexer` is refused too, because the name is learned from the rows, as `serve` learns it.
+
 ## Configuration: flags first, environment behind them
 
 Every command resolves every input THE SAME WAY, which is what makes moving between them a deployment change rather than a rewrite. The rules:
@@ -356,15 +380,15 @@ Some inputs have a variable and some do not, and the line is deliberate: **the e
 
 The CLI used to read a second name for the node URL (`ETHEREUM_NODE`). It is RETIRED: there is one name for it, and it is `ETH_NODE_URI`, which is what the fetcher deployable already refuses by.
 
-## The six names, the two compositions, and the seventh command
+## The six names, the two compositions, and the two commands that run no deployment
 
 All six intents ship, and `CONTEXT.md` is the authority for what each one means. Two compositions hold in the CODE rather than in this sentence: **`run` IS `fetch` plus `index` plus `serve` in one process** (the first pairing is the in-process direct ingestion, the same log-fetcher and the same stream-builder with the transport removed), and **`build` is `run` without the serving**, stopping at the tip. `node` is `run` configured with no code, receiving it by upload instead (ADR-0094).
 
 Which is why splitting is a deployment decision you can defer and then reverse. `packages/cli/test/equivalence.test.ts` asserts it at the commands rather than claiming it: the same processor, the same entity declarations and the same fixture chain -- reorg included, with the replacement branch carrying fewer events -- run once through `run` and once through `fetch` plus `index`, land on identical state and an identical cursor; and `index` plus `serve` against one database answer what `run` answers.
 
-`upload` is the seventh command and not a seventh intent: it runs no deployment, it sends a bundle to one. It still takes its inputs from the same table, which is why moving a flag onto it that belongs to the node is refused with the reason rather than ignored.
+`upload` is the seventh command and not a seventh intent: it runs no deployment, it sends a bundle to one. `publish` is the eighth, and not an intent either: it reads a database one wrote and writes files. Both still take their inputs from the same table, which is why moving a flag onto them that belongs to a deployment is refused with the reason rather than ignored.
 
-All seven rows of the configuration live in one table (`src/config.ts`), which is what makes moving between them a deployment change rather than a rewrite. Two asymmetries in it are load-bearing: `fetch` takes a source but no processor, and refuses `--store` and `--db` outright, because the chain-facing half holds no state (ADR-0003); and `index` resolves its source with NO chain call at all, so it takes it from `-d` or `INDEXING_SOURCE` and refuses a processor module that could only be resolved by asking a node for its chain id.
+All eight rows of the configuration live in one table (`src/config.ts`), which is what makes moving between them a deployment change rather than a rewrite. Two asymmetries in it are load-bearing: `fetch` takes a source but no processor, and refuses `--store` and `--db` outright, because the chain-facing half holds no state (ADR-0003); and `index` resolves its source with NO chain call at all, so it takes it from `-d` or `INDEXING_SOURCE` and refuses a processor module that could only be resolved by asking a node for its chain id.
 
 ## Tests
 
