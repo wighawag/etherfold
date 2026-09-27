@@ -139,6 +139,9 @@ importers:
 
   packages/browser:
     dependencies:
+      '@eip-1193/over-port':
+        specifier: ^0.1.0
+        version: 0.1.0
       '@etherfold/core':
         specifier: workspace:*
         version: link:../core
@@ -1112,6 +1115,9 @@ packages:
         optional: true
       search-insights:
         optional: true
+
+  '@eip-1193/over-port@0.1.0':
+    resolution: {integrity: sha512-oU2XYcgGwOYNE57tYswoD2CJc4tPlW9xtcsgEAgipXte2v9q//ss6CzLoNBvah8Uiz0nSJOm8BvpTwWpGqPhGg==}
 
   '@emnapi/core@1.10.0':
     resolution: {integrity: sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==}
@@ -2890,6 +2896,9 @@ packages:
 
   eip-1193@0.6.6:
     resolution: {integrity: sha512-pnEP5TRFfK0v0EbPsrOuJ1RvKDh8Ykh5OyvB+jlIgkJGdUt0nhC3fM/k2TsrOq6Qk+q1E0dpaikfdRzJ6/fi5g==}
+
+  eip-1193@0.7.0:
+    resolution: {integrity: sha512-Xeq6sfTPuedLQ6pmNF42UjvmLjtB4utSBCekkAwe+AwrnbgdB6fhY9BZrQYFvb/DIUzlf1wBOdV0iWIT9A0/3g==}
 
   emoji-regex-xs@1.0.0:
     resolution: {integrity: sha512-LRlerrMYoIDrT6jgpeZ2YYl/L8EulRTt5hQcYjy5AInh7HWXKimpqx68aknBFpGL2+/IcogTcaydJEgaTmOpDg==}
@@ -5140,6 +5149,10 @@ snapshots:
     transitivePeerDependencies:
       - '@algolia/client-search'
 
+  '@eip-1193/over-port@0.1.0':
+    dependencies:
+      eip-1193: 0.7.0
+
   '@emnapi/core@1.10.0':
     dependencies:
       '@emnapi/wasi-threads': 1.2.1
@@ -6624,6 +6637,8 @@ snapshots:
       promise-throttle: 1.1.2
 
   eip-1193@0.6.6: {}
+
+  eip-1193@0.7.0: {}
 
   emoji-regex-xs@1.0.0: {}
 

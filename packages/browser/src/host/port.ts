@@ -23,6 +23,7 @@ import {
 	type PortResponseValue,
 } from './envelope.js';
 import {errorFromPort} from './errors.js';
+import {handOverProvider, type IndexerProvider, type ProviderHandover} from './provider.js';
 import type {PortStateReads} from './reads.js';
 import {
 	backoffFor,
@@ -31,6 +32,54 @@ import {
 	type HostDeath,
 	type IndexerPortOptions,
 } from './restart.js';
+import type {HostSettings} from './settings.js';
+
+/**
+ * WHAT A TAB SAYS WHEN IT CONNECTS: how the port looks after the host's lifetime
+ * (`IndexerPortOptions`), and what it hands the host.
+ *
+ * ```ts
+ * const indexer = connectToIndexerHost(
+ *   dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+ *   {provider: window.ethereum, settings: {source, config, publication: {locations: [PUBLICATION]}}},
+ * );
+ * ```
+ *
+ * The two are the provider and the cloneable settings a worker entry may LEAVE
+ * OUT, the way `webevm`'s `createWorkerNode({worker, ...options})` passes its
+ * options with the connection: a worker entry holds the code, and the tab holds
+ * what it only knows at run time. They are sent FIRST, on every host this port
+ * obtains, so a restarted host is told again.
+ */
+export type IndexerConnectOptions = IndexerPortOptions & {
+	/**
+	 * THE CHAIN, for a host whose entry built none: a provider object this tab serves
+	 * (a wallet), a `MessagePort` served elsewhere (a node in another worker, so
+	 * requests go worker to worker), or a function returning such a port, called
+	 * once per host. See `IndexerProvider`.
+	 */
+	readonly provider?: IndexerProvider;
+	/** What the host folds with, where its entry left it out. See `HostSettings`. */
+	readonly settings?: HostSettings;
+	/**
+	 * BE TOLD WHETHER EACH HOST TOOK WHAT THIS TAB HANDED IT: called once per host
+	 * this port obtains (the first, and every restart), with where the fold is where
+	 * it was accepted, or with the refusal where it was not (by `name`:
+	 * `HostSettingsConflictError`, whose `fields` name the settings that disagree;
+	 * or the reason the settings or the provider could not be handed over at all).
+	 *
+	 * A refusal is ALSO logged, since it is a disagreement between a worker entry and
+	 * the tab that comes out of the same build, and an app that passed no callback
+	 * must not be left with a host waiting for ever and nothing said. Not called
+	 * where nothing is handed over.
+	 */
+	readonly onConnect?: (outcome: ConnectOutcome) => void;
+};
+
+/** What one host did with what a tab handed it. See `IndexerConnectOptions.onConnect`. */
+export type ConnectOutcome =
+	| {readonly accepted: true; readonly progress: HostProgress}
+	| {readonly accepted: false; readonly error: Error};
 
 const namedLogger = logs('@etherfold/browser');
 
@@ -303,7 +352,7 @@ export type IndexerPort = {
  * is what a tab may say about that; the defaults are in `resolvePortOptions` and
  * are meant to be left alone.
  */
-export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOptions): IndexerPort {
+export function connectToIndexerHost(access: HostAccess, options?: IndexerConnectOptions): IndexerPort {
 	const lifetime = resolvePortOptions(options);
 	/** What was asked, and WHICH CASE it was asked on, so a refusal can name it. */
 	type Pending = {resolve: (value: never) => void; reject: (error: unknown) => void; case: PortCaseName};
@@ -465,6 +514,52 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 	let stopListening = listen(held.endpoint, receive);
 
 	/**
+	 * WHAT THIS TAB HANDS EACH HOST IT OBTAINS, and what it serves for the current one.
+	 *
+	 * `handover` is the provider as handed to the CURRENT host: released when that
+	 * host dies or the port closes, so a wallet this tab served for a dead host is not
+	 * served for ever. `providerUsed` is what refuses to hand a bare `MessagePort` to
+	 * a second host, since it was transferred to the first.
+	 */
+	const handsOver = options?.provider !== undefined || options?.settings !== undefined;
+	let handover: ProviderHandover | undefined;
+	let providerUsed = false;
+
+	/**
+	 * PREPARE THE `connect` FOR A HOST: the settings checked for cloneability (naming
+	 * the field), and the provider handed over. Throws, before anything is sent, on
+	 * the two things a tab can get wrong: an unclonable setting, and a provider that
+	 * cannot be handed over (again).
+	 */
+	function prepareConnect(): {payload: PortRequestPayload<'connect'>; transfer: Transferable[]} | undefined {
+		if (!handsOver) return undefined;
+		const settings = options?.settings ?? {};
+		assertClonable(settings, `the settings handed to connectToIndexerHost()`);
+		handover?.release();
+		handover = undefined;
+		if (options?.provider === undefined) return {payload: {settings}, transfer: []};
+		handover = handOverProvider(options.provider, providerUsed);
+		providerUsed = true;
+		return {payload: {settings, provider: handover.port}, transfer: [handover.port]};
+	}
+
+	function sendConnect(prepared: NonNullable<ReturnType<typeof prepareConnect>>): void {
+		request('connect', prepared.payload, prepared.transfer).then(
+			(progress) => options?.onConnect?.({accepted: true, progress}),
+			(error: unknown) => refused(error),
+		);
+	}
+
+	function refused(error: unknown): void {
+		// A port CLOSED (or a host that died) before the answer is not a refusal: the
+		// tab let go, or the restart hands everything over again.
+		if (closed || error instanceof IndexerHostDiedError) return;
+		const failure = error instanceof Error ? error : new Error(String(error));
+		namedLogger.error(`the indexer host did not take the provider and settings this tab handed it`, failure);
+		options?.onConnect?.({accepted: false, error: failure});
+	}
+
+	/**
 	 * WATCH THE HOST, which is the only way a tab can learn it died.
 	 *
 	 * No browser fires an event when it evicts a dedicated worker, and
@@ -551,6 +646,9 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 		const corpse = held;
 		stopListening();
 		released = true;
+		// What this tab served for the dead host is let go of with it.
+		handover?.release();
+		handover = undefined;
 		try {
 			// NOT quiesced, and that is the whole point: this host answered nothing, so
 			// nothing is known about what it had in flight.
@@ -606,9 +704,22 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 	function restart(previous: HostAccess): void {
 		restartTimer = undefined;
 		if (closed) return;
+		let prepared: ReturnType<typeof prepareConnect>;
+		let preparing = true;
 		try {
+			// What the dead host was handed, handed again, BEFORE a host is started: a
+			// provider that cannot be handed over twice means a host that could never
+			// fold, and starting one would only leave it waiting.
+			prepared = prepareConnect();
+			preparing = false;
 			held = previous.reopen!();
 		} catch (error) {
+			handover?.release();
+			handover = undefined;
+			// Said as what it is where it is the HANDOVER that failed (a bare port handed
+			// to a host that died cannot be handed to the next); the restart is abandoned
+			// either way.
+			if (preparing) refused(error);
 			namedLogger.error(`the indexer port could not start another host, so this one holds nothing`, error);
 			const abandoned: HostDeath = {cause: 'unresponsive', attempt: deaths, restarting: false, rejected: 0};
 			lastDeath = abandoned;
@@ -619,6 +730,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 		released = false;
 		dead = false;
 		heardAt = Date.now();
+		if (prepared) sendConnect(prepared);
 		// ALIVE LONG ENOUGH IS FORGIVEN: the budget bounds a crash LOOP, not the number
 		// of evictions a tab open all day may survive.
 		settleTimer = unattended(
@@ -645,6 +757,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 	function request<Case extends PortCaseName>(
 		name: Case,
 		payload: PortRequestPayload<Case>,
+		transfer?: Transferable[],
 	): Promise<PortResponseValue<Case>> {
 		if (closed) {
 			return Promise.reject(
@@ -671,15 +784,29 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			// naming an object. Inside the promise, so the caller's own call REJECTS: a
 			// method that answers a promise everywhere else must not throw past an
 			// `await ... .catch(...)` on the one input it refuses.
-			assertClonable(payload, `the '${name}' request`);
+			// A request that TRANSFERS (the `connect`, whose provider port is not a clone)
+			// had what is cloned checked where it was prepared.
+			if (!transfer) assertClonable(payload, `the '${name}' request`);
 			pending.set(id, {resolve: resolve as (value: never) => void, reject, case: name});
 			try {
-				held.endpoint.postMessage(message);
+				if (transfer && transfer.length > 0) held.endpoint.postMessage(message, transfer);
+				else held.endpoint.postMessage(message);
 			} catch (error) {
 				pending.delete(id);
 				reject(error);
 			}
 		});
+	}
+
+	// FIRST on the wire, so every request an app makes after this is answered by a
+	// host that already has what the tab handed it.
+	try {
+		const prepared = prepareConnect();
+		if (prepared) sendConnect(prepared);
+	} catch (error) {
+		// Reported on the next turn, so an `onConnect` never fires before the call that
+		// registered it has returned the port.
+		queueMicrotask(() => refused(error));
 	}
 
 	watch();
@@ -790,11 +917,16 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerPortOp
 			}
 			if (released) {
 				stopListening();
+				handover?.release();
 				return;
 			}
 			const letting = held;
+			const serving = handover;
 			void quiesce(letting).then((quiesced) => {
 				stopListening();
+				// AFTER the stop: the cycle a stop waits to land may be waiting on this very
+				// provider, and a provider let go of first would hold the stop open.
+				serving?.release();
 				try {
 					letting.close?.({quiesced});
 				} catch (error) {

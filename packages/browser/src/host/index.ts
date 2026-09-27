@@ -21,6 +21,9 @@
  *   `IndexerPort.onProgress` and never a second source of truth.
  * - `envelope.ts` is what crosses: one request/response with correlation, the
  *   surfaces multiplexed on it as CASES.
+ * - `settings.ts` and `provider.ts` are what a tab HANDS a worker host when it
+ *   connects: the cloneable settings (and the one rule for a value given in two
+ *   places), and the chain as a `MessagePort` speaking `@eip-1193/over-port`.
  * - `restart.ts` is what happens when the host stops existing: a death an app is
  *   TOLD about, a typed refusal for the calls that were in flight, and the policy
  *   the port restarts under. The port drives it; the shape's `reopen` is the one
@@ -50,6 +53,10 @@ export * from './envelope.js';
 export * from './errors.js';
 export * from './port.js';
 export * from './progress.js';
+// The tab-side handover and the settings rule are the port's and the host's own;
+// what an app names is the provider it hands over, the settings, and the refusal.
+export type {IndexerProvider} from './provider.js';
+export {HOST_SETTING_NAMES, HostSettingsConflictError, type HostSettingName, type HostSettings} from './settings.js';
 export * from './reads.js';
 export * from './restart.js';
 export * from './serve.js';

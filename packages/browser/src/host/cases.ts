@@ -31,6 +31,7 @@ import {
 	type PortRow,
 } from './envelope.js';
 import {portErrorOf} from './errors.js';
+import type {HostSettings} from './settings.js';
 
 const namedLogger = logs('@etherfold/browser');
 
@@ -119,6 +120,16 @@ export type HostBacking = {
 	 * available outcome (ADR-0082).
 	 */
 	storeForReads(): Promise<StateStore>;
+	/**
+	 * TAKE WHAT A TAB HANDS OVER WHEN IT CONNECTS: its settings, and the chain as a
+	 * port. Applied SYNCHRONOUSLY (or refused, throwing), so a request that follows
+	 * the connect on the same wire finds it applied.
+	 *
+	 * Absent where a host takes neither from a tab, which is the main-thread host:
+	 * it was handed its provider and settings by `init`, on the thread that holds
+	 * them, and a port asking to replace them is REFUSED rather than ignored.
+	 */
+	connect?(settings: HostSettings, provider: MessagePort | undefined): HostProgress;
 };
 
 /** What a shape's host holds of the cases it is being served through. */
@@ -271,6 +282,19 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 		switch (request.case) {
 			case 'progress':
 				return backing.progress();
+			case 'connect': {
+				const asked = request.payload as PortCases['connect']['request'];
+				if (!backing.connect) {
+					// A port that cannot be used is closed here, so the context serving it is not
+					// left holding a channel nobody will ever ask anything on.
+					asked.provider?.close();
+					throw new Error(
+						`this indexer host takes its provider and settings from \`init\` on the thread it runs on, not from ` +
+							`a tab: connect to it with \`connectToIndexerHost(access)\` and no provider or settings.`,
+					);
+				}
+				return backing.connect(asked.settings ?? {}, asked.provider);
+			}
 			case 'ping':
 				// ANSWERING IS THE WHOLE ANSWER. A tab probes a host that has gone quiet,
 				// and what it is asking for is evidence that anything is still running here

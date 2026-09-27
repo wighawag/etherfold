@@ -21,6 +21,7 @@ import {
 import type {GenerationRegistry} from '@etherfold/core';
 import {type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import {providerOverPort, type ProviderOverPort} from '@eip-1193/over-port';
 import {logs} from 'named-logs';
 import {generationSpecOf} from '../generationSpec.js';
 import type {BrowserGenerationSpec} from '../IndexerState.js';
@@ -38,6 +39,7 @@ import {executionScopeName, type HostAccess} from './endpoint.js';
 import {cursorsOf, pacingAfterCycle} from './pacing.js';
 import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
+import {HostSettingsConflictError, hostSettingsOf, settleHostSettings, type HostSettings} from './settings.js';
 
 const namedLogger = logs('@etherfold/browser');
 
@@ -69,11 +71,25 @@ const namedLogger = logs('@etherfold/browser');
  * WHAT AN APP HANDS ITS HOST, wherever the host runs.
  *
  * It is the generation spec `createIndexerState` already takes, PLUS what that
- * function takes at `init` (a provider, a source, a config). The two are one
- * argument here because a host is constructed by an app's own entry point and
- * starts folding immediately: there is no separate moment at which a tab hands a
- * provider over, and there could not be -- a provider is an object with methods,
- * so it cannot cross a port and has to be built where the fold runs.
+ * function takes at `init` (a provider, a source, a config).
+ *
+ * ## What the entry must hold, and what a tab may hand over instead
+ *
+ * The CODE must be here: `createState`, `createProcessor`, a processor module, a
+ * `keepStream`. Code cannot be cloned, so it is imported where the fold runs
+ * (ADR-0082). The PROVIDER and the cloneable SETTINGS (`HostSettings`: `source`,
+ * `config`, `publication`, `catchUpWithinSeconds`, `seed`, `promotion`) may be
+ * here OR come from the tab that connects (`connectToIndexerHost(access,
+ * {provider, settings})`): a provider crosses as a `MessagePort` speaking
+ * `@eip-1193/over-port`, which is how a wallet's provider, or a node running in
+ * ANOTHER worker, reaches a worker-hosted indexer.
+ *
+ * The host STARTS once it has a provider and a source, from wherever they came.
+ * An entry that holds both starts at once, as it always did; one that leaves
+ * either out WAITS (`phase: 'waiting'`) for a tab to hand it over. A value given
+ * in both places, or sent by a tab once the host has started, must AGREE with the
+ * one held, or the tab's connect is refused naming the fields
+ * (`HostSettingsConflictError`, see `settleHostSettings`).
  */
 export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined> = BrowserGenerationSpec<
 	ABI,
@@ -89,9 +105,13 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 	 * does on the main thread.
 	 */
 	PublishedStartOptions<ABI> & {
-		/** The chain, built HERE: an EIP-1193 provider is code and cannot cross a port. */
-		provider: EIP1193ProviderWithoutEvents;
-		source: IndexingSource<ABI>;
+		/**
+		 * The chain, built HERE (from an RPC URL, say), or LEFT OUT for the tab that
+		 * connects to hand over as a port. Given in both places, the tab's is refused.
+		 */
+		provider?: EIP1193ProviderWithoutEvents;
+		/** What to fold. Left out, the host waits for a tab to send it (`HostSettings.source`). */
+		source?: IndexingSource<ABI>;
 		config?: ProvidedIndexerConfig<ABI>;
 		/** Passed through and never defaulted here, exactly as `createIndexerState` passes it through. */
 		promotion?: PromotionConfig;
@@ -171,11 +191,106 @@ export type IndexerHost = {
  * ONE main-thread path and it is that function, adapted (ADR-0082).
  */
 export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined>(
-	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
+	entry: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
 	access: HostAccess,
 ): IndexerHost {
 	const scope = executionScopeName();
-	const tipInterval = spec.tipIntervalInSeconds ?? 4;
+	const tipInterval = entry.tipIntervalInSeconds ?? 4;
+
+	/**
+	 * WHAT THIS HOST FOLDS WITH, once it has a provider and a source: the entry's
+	 * spec with the settings a tab handed over merged in (`settleHostSettings`).
+	 * Undefined while the host is WAITING for them; everything that reads it runs
+	 * after `untilSettled`.
+	 */
+	type Settled = HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig> & {
+		provider: EIP1193ProviderWithoutEvents;
+		source: IndexingSource<ABI>;
+	};
+	let spec: Settled = undefined as unknown as Settled;
+	let settledAlready = false;
+	/** The settings held so far: the entry's, then whatever tabs added before the start. */
+	let settings: HostSettings = hostSettingsOf(entry as HostSettings);
+	/** The provider held so far: the entry's, or the one a tab handed over. */
+	let provider: EIP1193ProviderWithoutEvents | undefined = entry.provider;
+	/** The provider a TAB handed over, which this host owns and lets go of on dispose. */
+	let tabProvider: ProviderOverPort | undefined;
+	let announceSettled: (() => void) | undefined;
+	let refuseSettled: ((error: unknown) => void) | undefined;
+	const settled = new Promise<void>((resolve, reject) => {
+		announceSettled = resolve;
+		refuseSettled = reject;
+	});
+	// Nobody may ever wait on it: a host disposed before any tab connected rejects it.
+	settled.catch(() => undefined);
+	/** Drivers waiting for a tab's settings, woken on the settle, a stop or a dispose. */
+	const waitingForSettings = new Set<() => void>();
+
+	/** Start folding with what is held, if that is now enough. */
+	function settleIfReady(): void {
+		if (settledAlready || !provider || !settings.source) return;
+		settledAlready = true;
+		spec = {...entry, ...(settings as Partial<Settled>), provider} as Settled;
+		announceSettled?.();
+		for (const wake of [...waitingForSettings]) wake();
+	}
+
+	/**
+	 * WAIT FOR A TAB TO HAND OVER WHAT THE ENTRY LEFT OUT, unless a stop or a
+	 * dispose comes first. The driver's own wait, so `stopIndexing` on a host that
+	 * never got a provider answers instead of hanging.
+	 */
+	function untilSettledOrStopped(): Promise<void> {
+		if (settledAlready) return Promise.resolve();
+		return new Promise<void>((resolve) => {
+			const wake = () => {
+				waitingForSettings.delete(wake);
+				resolve();
+			};
+			waitingForSettings.add(wake);
+		});
+	}
+
+	/**
+	 * A TAB CONNECTED, handing over its settings and maybe the chain.
+	 *
+	 * Checked in full before anything is applied, so a refused connect changes
+	 * nothing: see `settleHostSettings` for the rule, which is that neither side
+	 * wins and a disagreement is refused by name.
+	 */
+	function connect(sent: HostSettings, port: MessagePort | undefined): HostProgress {
+		if (disposed) {
+			port?.close();
+			throw new Error(`this indexer host was disposed, so it takes no connect.`);
+		}
+		let merged: HostSettings;
+		try {
+			if (port && provider) {
+				throw new HostSettingsConflictError(
+					['provider'],
+					entry.provider
+						? `was built by the worker entry, and a tab handed one over too`
+						: `was already handed over by a tab, and a host folds through one`,
+				);
+			}
+			merged = settleHostSettings(settings, sent, settledAlready);
+		} catch (error) {
+			// Refused, so the port is not going to be used: closing it tells whatever serves
+			// it, where the engine fires a `close` event.
+			port?.close();
+			throw error;
+		}
+		settings = merged;
+		if (port) {
+			tabProvider = providerOverPort(port);
+			// `@eip-1193/over-port` types its provider against `eip-1193` 0.7 and this
+			// package against 0.6, whose overloaded `request` signatures TypeScript will not
+			// relate; at run time both are one `request({method, params})`.
+			provider = tabProvider as unknown as EIP1193ProviderWithoutEvents;
+		}
+		settleIfReady();
+		return progress();
+	}
 	/** The shared case body, attached below once the backing it serves exists. */
 	let served: {publish(): void; stop(): void} | undefined;
 	const publish = () => served?.publish();
@@ -427,6 +542,10 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 */
 	function openContainer(): Promise<Indexer<ABI, ProcessResultType>> {
 		opening ??= (async () => {
+			// A tab may ask for something that needs the container (a read, a reconfigure)
+			// before the host has what it folds with; it waits, as a read waits for the
+			// first store, and a host disposed first rejects it.
+			await settled;
 			start = createPublishedStart<ABI>(spec, {
 				publication(state) {
 					publication = state;
@@ -554,6 +673,11 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	/** THE DRIVER: load, then advance until something stops it. */
 	async function drive(): Promise<void> {
 		try {
+			// WAITING for a tab to hand over what the entry left out (a provider, a
+			// source), which is `phase: 'waiting'` until it does. A stop or a dispose ends
+			// the wait, so neither hangs on a host no tab has connected to.
+			await untilSettledOrStopped();
+			if (disposed || stopRequested) return;
 			const opened = await openContainer();
 			if (disposed || stopRequested) return;
 
@@ -659,6 +783,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		// Nothing is in flight while the driver rests, so a stop asked for during a tip
 		// interval is honoured now rather than at the end of it.
 		wakeFromRest?.();
+		for (const wake of [...waitingForSettings]) wake();
 		const running = driving;
 		if (running) await running;
 		indexing = false;
@@ -815,6 +940,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		promotion,
 		checkTxInclusion,
 		storeForReads,
+		connect,
 		onStateMoved(handler) {
 			stateMovedHandlers.add(handler);
 			return () => {
@@ -823,6 +949,10 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		},
 	};
 	served = serveHostCases(access, backing);
+
+	// An entry that holds a provider and a source starts with them now, exactly as it
+	// always did; one that left either out waits for a tab's `connect`.
+	settleIfReady();
 
 	// Nothing awaits the first start: a host exists in order to fold, and its
 	// failures are REPORTED through `progress` rather than thrown at an entry point
@@ -837,8 +967,13 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			disposed = true;
 			stopRequested = true;
 			wakeFromRest?.();
+			for (const wake of [...waitingForSettings]) wake();
 			indexing = false;
 			refuseFirstState?.(new Error(`this indexer host was disposed, so it holds no store to read from.`));
+			refuseSettled?.(new Error(`this indexer host was disposed before a tab handed it a provider and a source.`));
+			// The provider a TAB handed over is this host's to let go of: requests still
+			// waiting on it reject rather than hang. One the entry built is the entry's.
+			tabProvider?.close();
 			served?.stop();
 			stateMovedHandlers.clear();
 			detachFromContainer?.();

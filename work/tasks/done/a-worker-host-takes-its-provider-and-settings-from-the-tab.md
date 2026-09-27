@@ -35,3 +35,24 @@ Keep the main-thread host's API and behaviour unchanged. Document the new shape 
 > FIRST, check this task against current reality: if a host already takes a provider port or tab settings, adjust or route to needs-attention with the discrepancy.
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **Precedence: neither side wins; a disagreement is refused by name.** The rule lives in `settleHostSettings` (`host/settings.ts`):
+  - A setting the tab leaves out agrees with anything.
+  - Before the host starts, a tab's value fills a gap and an equal value is accepted.
+  - Once the host has started, its settings are fixed. A tab's value must equal the one in force, and a value for a setting the host started without is refused too, because it could not take effect.
+  - A refused connect applies nothing. The error is `HostSettingsConflictError` with `fields`, which reaches the tab by name through the existing error details.
+  - Alternatives considered: "tab wins" (not possible once the host has started) and "entry wins" (would silently ignore a tab's source).
+  - This touches every worker host, and a SharedWorker with tabs that send different settings.
+- **A provider is refused the same way.** If the entry built one, or a tab already handed one over, the new one is refused with `fields: ['provider']` and its port is closed. The alternative was letting the tab's provider replace the entry's.
+- **When the host starts:** once it has a provider and a source, from any mix of entry and tab. An entry with both starts immediately, as before, so existing suites and apps are unchanged. The alternative, always waiting for a tab, would have changed every existing host.
+- **How the tab learns the outcome: an `onConnect(outcome)` option, called once per host (first and every restart), plus a log line on refusal.** I first added a `connected` promise to `IndexerPort`, but three existing suites pin the port's exact list of members, so it would have required editing them. A callback also covers restarts, which a one-shot promise cannot.
+- **Tab-side input forms:** a provider object, a `MessagePort`, or `() => MessagePort`. A bare port can only be transferred once, so restarting with one is refused with a message pointing at the function form; the restart is then abandoned and reported through `onHostDeath`.
+- **The SharedWorker provider pool lives in `sharedWorker.ts`, the layer that already knows which tab sent what.** The host is handed one provider: the pool, served on an in-worker `MessageChannel`. This costs one extra structured clone per response inside the worker, and keeps `serve.ts` independent of the hosting shape. The alternative was passing a non-cloneable object through the multiplexer's in-process message, which bypasses the message types.
+  - If the host refuses a tab's connect, that tab's provider leaves the pool (its settings, possibly its chain, are not the ones being folded).
+  - If the entry built a provider, the pool is disabled and tab providers go to the host unchanged, so the host's refusal applies.
+- **How the pool notices a tab went away, added on top of the liveness the host already tracked.** It still drops a tab whose port throws on a post, and now also drops one whose client port or provider port fires `close`, where the engine fires it (Node and current Chromium). Letting a tab go closes its provider, which rejects in-flight requests, and the pool retries them on the next tab. On an engine that fires neither signal, a vanished tab's in-flight request still hangs; this is documented in `sharedWorker.ts`. A heartbeat protocol was out of scope.
+- **With no tab left:** a retryable `NoTabProviderError`, so the driver retries every second as it does when a provider is down, and resumes through the next tab that connects.
+- **`MessageEndpoint.postMessage` gains an optional `transfer` argument.** Only the `connect` message uses it. Its settings are checked for cloneability separately, since a `MessagePort` in the payload is not a plain value.
+- **The `eip-1193` type mismatch is handled with a cast in `serve.ts`,** not a dependency bump. `@eip-1193/over-port` types against `eip-1193` 0.7 and this package uses 0.6; at run time both are a single `request({method, params})`.
