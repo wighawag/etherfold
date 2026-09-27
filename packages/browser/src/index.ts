@@ -43,6 +43,7 @@ export {
  * `@etherfold/core`'s (`PublicationIndex`), re-exported below.
  */
 export {
+	DEFAULT_CATCH_UP_WITHIN_SECONDS,
 	publishedSeedLocationsFor,
 	publishedSnapshotFor,
 	readPublicationIndex,
@@ -51,6 +52,7 @@ export {
 	type PublicationSnapshot,
 	type PublicationState,
 	type ReadPublication,
+	type SnapshotSwitchReason,
 } from './publication.js';
 
 export {reconfigureFromHotUpdate, type HotUpdatableIndexer, type HotUpdateGeneration} from './hotUpdate.js';

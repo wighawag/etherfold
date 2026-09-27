@@ -75,7 +75,11 @@ export type BrowserPublicationOptions = {
  * createState: async (context, {signal}, bundle, published) => {
  *   const backend = await createBrowserStateStore(entities, {databaseName: `app-${context.stream}`});
  *   const {store} = published
- *     ? await openAndBootstrap(backend, published.locations, {processor: published.processor, finalityDepth: 12})
+ *     ? await openAndBootstrap(backend, published.locations, {
+ *         processor: published.processor,
+ *         replaceLocal: published.replaceLocal,
+ *         finalityDepth: 12,
+ *       })
  *     : {store: await openSnapshotAware(backend)};
  *   return openForWriting(store, {signal});
  * },
@@ -94,7 +98,44 @@ export type PublicationSnapshot = {
 	readonly entry: PublishedStateSnapshot;
 	/** Which index location named it. */
 	readonly index: string;
+	/**
+	 * WHETHER THE LOCAL STATE IS TO BE REPLACED: `openAndBootstrap`'s `replaceLocal`,
+	 * so forward it.
+	 *
+	 * `false` when the generation is built at `init`: a tab that already holds local
+	 * state keeps it and catches up from its own cursor. `true` when the hook builds
+	 * the generation AGAIN mid-run because the catch-up was abandoned (ADR-0096: the
+	 * node refused it as an archive refusal, or it was estimated to take longer than
+	 * `catchUpWithinSeconds`), so the snapshot is installed over the local state, which
+	 * the install wipes first. A `createState` that does not forward it keeps its
+	 * local state, and the hook then reports the refusal it would have reported anyway.
+	 */
+	readonly replaceLocal: boolean;
 };
+
+/**
+ * WHY A RETURNING TAB ABANDONED ITS CATCH-UP for the published snapshot (ADR-0096).
+ *
+ * - `archive-refused`: the node refused the catch-up as needing archive access
+ *   (`ArchiveRefusedError`), which no retry and no range size fixes.
+ * - `over-budget`: the catch-up was estimated to take longer than the app's
+ *   `catchUpWithinSeconds`.
+ */
+export type SnapshotSwitchReason = 'archive-refused' | 'over-budget';
+
+/**
+ * HOW LONG A RETURNING TAB MAY SPEND CATCHING UP before it starts from the
+ * published snapshot instead, in seconds: `createIndexerState`'s
+ * `catchUpWithinSeconds` when none is given (ADR-0096).
+ *
+ * Thirty seconds, because it is a WAIT A USER SITS THROUGH with the app showing
+ * stale state, and past about that long an app reads as broken rather than busy;
+ * a snapshot the index names is sized by the state and not the history (a fraction
+ * of a megabyte on the reference deployment), so installing it is a few seconds on
+ * any connection that also serves the app. A value per chain is the app's to
+ * choose.
+ */
+export const DEFAULT_CATCH_UP_WITHIN_SECONDS = 30;
 
 /**
  * WHY THIS TAB STARTS FROM NO PUBLISHED SNAPSHOT, when it was pointed at an index.
@@ -150,6 +191,28 @@ export type PublicationState =
 			readonly snapshot: string;
 			/** The block the snapshot's rows are as of. */
 			readonly at: number;
+	  }
+	| {
+			/**
+			 * The tab HELD LOCAL STATE, started catching up from its own cursor, and
+			 * abandoned that for the snapshot the index names: the local state was wiped
+			 * and the snapshot installed through `createState` (handed `replaceLocal`), and
+			 * the tab indexes forward from the snapshot's cursor (ADR-0096).
+			 */
+			readonly status: 'switched';
+			readonly reason: SnapshotSwitchReason;
+			/** Which index location named the snapshot. */
+			readonly from: string;
+			/** Where the snapshot body is. */
+			readonly snapshot: string;
+			/** The block the snapshot's rows are as of, which is where the tab now resumes. */
+			readonly at: number;
+			/** How far the local state had got when it was abandoned. */
+			readonly left: number;
+			/** For `over-budget`: how long the rest of the catch-up was estimated to take, in seconds. */
+			readonly estimateSeconds?: number;
+			/** For `over-budget`: the budget it exceeded, in seconds (`catchUpWithinSeconds`). */
+			readonly budgetSeconds?: number;
 	  }
 	| {
 			/** No published snapshot for this generation. The tab starts ANYWAY, indexing from the chain. */
@@ -228,7 +291,7 @@ export function publishedSnapshotFor(
 	if (entry && entry.stream === generation.stream && entry.processor === processor) {
 		const location = publishedBodyLocation(from, entry.body);
 		return {
-			snapshot: {locations: [location], processor, entry, index: from},
+			snapshot: {locations: [location], processor, entry, index: from, replaceLocal: false},
 			state: {status: 'found', from, snapshot: location, at: entry.takenAt.number},
 		};
 	}

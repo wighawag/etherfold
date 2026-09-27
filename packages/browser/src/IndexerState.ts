@@ -49,6 +49,7 @@ import {
 	type ProcessorBundleSource,
 } from './processorBundle.js';
 import {
+	DEFAULT_CATCH_UP_WITHIN_SECONDS,
 	publishedSeedLocationsFor,
 	publishedSnapshotFor,
 	readPublicationIndex,
@@ -56,6 +57,7 @@ import {
 	type PublicationSnapshot,
 	type PublicationState,
 	type ReadPublication,
+	type SnapshotSwitchReason,
 } from './publication.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {withClaimPatience, type ClaimPatience} from './utils/claim.js';
@@ -275,6 +277,36 @@ function streamSeedStateOf(outcome: StreamSeedInstallOutcome): StreamSeedState {
 }
 
 /** The two refusal reasons that name a direction, and no others. */
+/**
+ * THE CATCH-UP BUDGET, as configured, or refused where it cannot mean a budget.
+ *
+ * Refused at construction rather than read as something else: a negative or
+ * non-finite number of seconds is a computation gone wrong in the app, and reading
+ * it as `'always'` or as zero would silently pick one of the two opposite behaviours.
+ */
+function catchUpBudgetOf(value: number | 'always' | undefined): number | 'always' {
+	if (value === undefined) return DEFAULT_CATCH_UP_WITHIN_SECONDS;
+	if (value === 'always') return value;
+	if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+		throw new Error(
+			`catchUpWithinSeconds must be a number of seconds (zero or more) or 'always', and it is ${String(value)}.`,
+		);
+	}
+	return value;
+}
+
+/**
+ * Whether a failed advance is the node refusing history as needing ARCHIVE access
+ * (`ArchiveRefusedError`, `@etherfold/core`).
+ *
+ * Read STRUCTURALLY, by the error's own name, as `isRetryable` reads its flag: a
+ * second copy of `@etherfold/core` in a bundle would fail an `instanceof` and turn
+ * the one refusal a snapshot can get past into a stopped tab.
+ */
+function isArchiveRefusal(error: unknown): boolean {
+	return (error as {name?: unknown} | undefined)?.name === 'ArchiveRefusedError';
+}
+
 function directionOf(reason: NotInstalledReason): StreamSeedDirection | undefined {
 	return reason === 'seed-covers-more' || reason === 'seed-covers-less' ? reason : undefined;
 }
@@ -755,6 +787,34 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 */
 		publication?: BrowserPublicationOptions;
 		/**
+		 * HOW LONG A RETURNING TAB MAY SPEND CATCHING UP before it starts from the
+		 * published snapshot instead, in seconds (ADR-0096). Defaults to
+		 * `DEFAULT_CATCH_UP_WITHIN_SECONDS` (thirty).
+		 *
+		 * It applies to a tab that already HOLDS local state and whose `publication`
+		 * names a snapshot for its generation further along than that state. Such a tab
+		 * catches up from its own cursor; after every advance it estimates how long the
+		 * rest of the gap to the tip will take, from the blocks the advances so far
+		 * covered and the time they took, and if that estimate exceeds this budget it
+		 * ABANDONS the catch-up: the generation is built again with `createState` handed
+		 * `replaceLocal: true`, the existing install wipes the local state and installs the
+		 * snapshot, and indexing resumes from the snapshot's cursor. The switch is
+		 * reported on `syncing.publication` as `switched` / `over-budget`, with the
+		 * estimate and this budget.
+		 *
+		 * `'always'` means always catch up yourself, however long it takes. The snapshot
+		 * is then taken only on a failure no catch-up survives: a node that refuses the
+		 * catch-up as an archive refusal (`ArchiveRefusedError`), which switches a tab
+		 * with a usable snapshot whatever this says (`switched` / `archive-refused`), and
+		 * is reported exactly as before where there is none.
+		 *
+		 * ONE value. Choosing it per chain (a slow chain or a rate-limited node wants a
+		 * smaller one) is the APP's business, for instance from its deployment tooling's
+		 * chain info: this package carries no per-chain table. A fresh tab is unaffected,
+		 * since it starts from the snapshot anyway.
+		 */
+		catchUpWithinSeconds?: number | 'always';
+		/**
 		 * WHEN the canonical pointer moves to a generation added beside the live one.
 		 *
 		 * PASSED THROUGH and never defaulted here. `on-catch-up` is the default in
@@ -1034,6 +1094,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		source?: IndexingSource<ABI>,
 		/** The publication index `init` read, for the ONE generation `init` builds. See `publication`. */
 		publication?: ReadPublication,
+		/**
+		 * Whether this build of the generation REPLACES the local state with the snapshot
+		 * the index names: `true` only when a catch-up was abandoned (`switchToSnapshot`).
+		 */
+		replaceLocal = false,
 	) {
 		const processorIdentity = arrival?.processorIdentity;
 		const processorBundle = arrival?.processorBundle;
@@ -1065,8 +1130,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 							processor: bundle?.identity ?? processorIdentity,
 						})
 					: undefined;
-				if (chosen) setSyncing({publication: chosen.state});
-				const published = chosen?.snapshot;
+				if (chosen && !replaceLocal) setSyncing({publication: chosen.state});
+				// The snapshot a returning tab may later SWITCH to, kept for that decision.
+				if (publication) bootSnapshot = chosen?.snapshot;
+				const published = chosen?.snapshot ? {...chosen.snapshot, replaceLocal} : undefined;
 				return withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience, bundle, published));
 			},
 			createProcessor: async (state: unknown, context: GenerationContext) => {
@@ -1350,30 +1417,15 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			});
 		}
 
-		// Build the generation here, because a generation's state and its fold are
-		// this hook's to construct, not the caller's to have constructed. The registry
-		// is what holds WHICH generations exist and which one is canonical.
-		indexer = await openIndexer<ABI, ProcessResultType>({
+		boot = {
 			registry: spec.registry ?? (await openMemoryGenerationRegistry(BROWSER_GENERATION_CAPS)),
 			provider,
 			source,
 			config,
-			...(options?.promotion ? {promotion: options.promotion} : {}),
-			generations: [
-				generationSpecFor(spec.createState, spec.createProcessor, processorConfig, spec, undefined, published),
-			],
-			createGeneration: options?.createIndexer,
-		});
-		indexer.onPromoted = onPromoted;
-		// ONE subscription to the fold, taken as the container is built so that a tab
-		// which subscribed before `init` hears this fold's very first block. Fanned out
-		// to whoever is listening, because several wires may hold this one host.
-		detachFromContainer = indexer.onStateMoved((moved) => {
-			for (const handler of [...stateMovedHandlers]) handler(moved);
-		});
-		// Published straight away, and it is the INDIRECT handle: a subscriber that
-		// keeps what it is handed keeps something that follows the canonical pointer.
-		setState(indexer.state);
+			processorConfig,
+			published,
+		};
+		await openContainer(boot, false);
 		setSyncing({waitingForProvider: false});
 		// The container is open, so the generation it was given has been built and its
 		// state recorded: a read across the port that was waiting can be answered. The
@@ -1385,6 +1437,75 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// nothing from the CONTAINER, rather than leaving the initial value standing
 		// for a container that may have been opened over a durable registry.
 		reportGenerationProgress();
+	}
+
+	/**
+	 * WHAT `init` BUILT THE CONTAINER FROM, kept so the generation can be built AGAIN
+	 * when a returning tab abandons its catch-up for the snapshot (`switchToSnapshot`).
+	 */
+	type Boot = {
+		registry: GenerationRegistry;
+		provider: EIP1193ProviderWithoutEvents;
+		source: IndexingSource<ABI>;
+		config: ProvidedIndexerConfig<ABI>;
+		processorConfig: ProcessorConfig | undefined;
+		published: ReadPublication | undefined;
+	};
+	let boot: Boot | undefined;
+	/** The snapshot the publication named for the generation `init` built, if it named one. */
+	let bootSnapshot: PublicationSnapshot | undefined;
+	/**
+	 * WHAT THE CATCH-UP HAS MEASURED so far: the blocks the canonical generation's
+	 * advances covered and the time they took, over the container now open.
+	 */
+	let catchUpMeasured = {blocks: 0, ms: 0};
+	/** Whether this container already tried the switch. One try per `init`: see `switchToSnapshot`. */
+	let switchTried = false;
+	/** The budget, validated where the app configured it rather than on the first cycle that reads it. */
+	const catchUpWithinSeconds = catchUpBudgetOf(options?.catchUpWithinSeconds);
+
+	/**
+	 * OPEN THE CONTAINER over the generation `init` names, and wire it to this hook.
+	 *
+	 * Called by `init`, and AGAIN by `switchToSnapshot` with `replaceLocal`, which is
+	 * the whole difference: the same registry, the same factories, and `createState`
+	 * handed a snapshot it is told to install over the local state. There is one
+	 * install and it is the app's (`openAndBootstrap`, ADR-0096).
+	 */
+	async function openContainer(from: Boot, replaceLocal: boolean): Promise<void> {
+		// Build the generation here, because a generation's state and its fold are
+		// this hook's to construct, not the caller's to have constructed. The registry
+		// is what holds WHICH generations exist and which one is canonical.
+		indexer = await openIndexer<ABI, ProcessResultType>({
+			registry: from.registry,
+			provider: from.provider,
+			source: from.source,
+			config: from.config,
+			...(options?.promotion ? {promotion: options.promotion} : {}),
+			generations: [
+				generationSpecFor(
+					spec.createState,
+					spec.createProcessor,
+					from.processorConfig,
+					spec,
+					undefined,
+					from.published,
+					replaceLocal,
+				),
+			],
+			createGeneration: options?.createIndexer,
+		});
+		catchUpMeasured = {blocks: 0, ms: 0};
+		indexer.onPromoted = onPromoted;
+		// ONE subscription to the fold, taken as the container is built so that a tab
+		// which subscribed before `init` hears this fold's very first block. Fanned out
+		// to whoever is listening, because several wires may hold this one host.
+		detachFromContainer = indexer.onStateMoved((moved) => {
+			for (const handler of [...stateMovedHandlers]) handler(moved);
+		});
+		// Published straight away, and it is the INDIRECT handle: a subscriber that
+		// keeps what it is handed keeps something that follows the canonical pointer.
+		setState(indexer.state);
 	}
 
 	let lastLastToBlock: number;
@@ -1500,6 +1621,129 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	}
 
 	/**
+	 * MEASURE ONE ADVANCE OF A CATCH-UP, and say whether the rest of it is over budget.
+	 *
+	 * The estimate is the loop's own arithmetic over what it has observed: the blocks
+	 * the canonical generation's advances covered since this container opened, and the
+	 * time they took (fetching and folding both, since both are what the user waits
+	 * for), extrapolated over the rest of the gap to the tip. It needs no knowledge of
+	 * the fetcher's learned range: a fetcher that learns wider ranges makes the next
+	 * advance cover more blocks per second, and the estimate follows.
+	 *
+	 * Only a catch-up that COULD switch is measured: the budget is not `'always'`, the
+	 * publication named a snapshot for this generation, the switch has not been tried,
+	 * and the cursor is still behind the snapshot. Past the snapshot there is nothing
+	 * to switch to, however long the rest takes.
+	 */
+	function measureCatchUp(
+		before: number | undefined,
+		after: LastSync<ABI>,
+		elapsedMs: number,
+	): {estimateSeconds: number; budgetSeconds: number} | undefined {
+		if (catchUpWithinSeconds === 'always' || !bootSnapshot || switchTried || before === undefined) {
+			return undefined;
+		}
+		if (after.lastToBlock >= bootSnapshot.entry.takenAt.number) {
+			return undefined;
+		}
+		catchUpMeasured.blocks += Math.max(0, after.lastToBlock - before);
+		catchUpMeasured.ms += Math.max(0, elapsedMs);
+		const remaining = after.latestBlock - after.lastToBlock;
+		if (remaining <= 0 || catchUpMeasured.blocks === 0) {
+			return undefined;
+		}
+		const estimateSeconds = (remaining * catchUpMeasured.ms) / catchUpMeasured.blocks / 1000;
+		return estimateSeconds > catchUpWithinSeconds ? {estimateSeconds, budgetSeconds: catchUpWithinSeconds} : undefined;
+	}
+
+	/**
+	 * ABANDON THE CATCH-UP FOR THE SNAPSHOT: build the generation again, with
+	 * `createState` handed `replaceLocal: true`, and resume from what it installed
+	 * (ADR-0096).
+	 *
+	 * The install is NOT here and there is not a second one: the snapshot is installed
+	 * by the app's `createState` through `openAndBootstrap`, which wipes the local
+	 * state first (`SnapshotAwareStateStore.bootstrap`), exactly as it installs on a
+	 * fresh tab. What this does is what only the hook can: stop the container folding
+	 * the local state, let go of it, and open it again over the generation `init`
+	 * built, so the factory runs again and the fold that follows reads the snapshot's
+	 * cursor.
+	 *
+	 * `undefined` means NOTHING WAS SWITCHED, and the caller carries on as before (a
+	 * refusal is re-thrown, an over-budget catch-up goes on catching up). That is the
+	 * answer when the switch cannot help (no snapshot for this generation, local state
+	 * already at or ahead of it, a demoted tab), when the container holds more than the
+	 * one generation `init` built (rebuilding it would drop a successor), when it was
+	 * already tried, and when the factory did not install: a `createState` that does
+	 * not forward `replaceLocal`, or a body no longer reachable. Tried ONCE per `init`,
+	 * so an install that fails is not re-attempted every cycle.
+	 */
+	async function switchToSnapshot(why: {
+		reason: SnapshotSwitchReason;
+		estimateSeconds?: number;
+		budgetSeconds?: number;
+	}): Promise<LastSync<ABI> | undefined> {
+		const snapshot = bootSnapshot;
+		const from = boot;
+		const open = indexer;
+		if (!snapshot || !from || !open || switchTried || demotion || open.generations.length !== 1) {
+			return undefined;
+		}
+		const left = open.canonical.lastSync?.lastToBlock;
+		const at = snapshot.entry.takenAt.number;
+		if (left === undefined || left >= at) {
+			return undefined;
+		}
+		switchTried = true;
+		namedLogger.warn(
+			why.reason === 'archive-refused'
+				? `the node refused this tab's catch-up from block ${left} as needing ARCHIVE access, so it starts from ` +
+						`the published snapshot at block ${at} instead`
+				: `this tab's catch-up from block ${left} was estimated at ${Math.round(why.estimateSeconds ?? 0)} s, ` +
+						`over its budget of ${why.budgetSeconds} s, so it starts from the published snapshot at block ${at} instead`,
+		);
+
+		// LET GO of the container folding the local state: nothing it does from here is
+		// kept, and its callbacks close over this hook's stores.
+		open.disableProcessing();
+		open.onLoad = undefined;
+		open.onLastSyncUpdated = undefined;
+		open.onStateUpdated = undefined;
+		open.onPromoted = undefined;
+		detachFromContainer?.();
+		detachFromContainer = undefined;
+		statesByGeneration.clear();
+		clearSyncingStateForReconfigure();
+
+		await openContainer(from, true);
+		const loaded = await setupIndexing();
+		reportGenerationProgress();
+		setLastSync(loaded);
+		setCatchup(loaded);
+		if (loaded.lastToBlock <= left) {
+			namedLogger.warn(
+				`the published snapshot at block ${at} was NOT installed (did \`createState\` forward ` +
+					`\`published.replaceLocal\` to \`openAndBootstrap\`, and is the body still reachable?), so this tab ` +
+					`goes on from its own state at block ${loaded.lastToBlock}`,
+			);
+			return undefined;
+		}
+		setSyncing({
+			publication: {
+				status: 'switched',
+				reason: why.reason,
+				from: snapshot.index,
+				snapshot: snapshot.locations[0],
+				at,
+				left,
+				...(why.estimateSeconds === undefined ? {} : {estimateSeconds: why.estimateSeconds}),
+				...(why.budgetSeconds === undefined ? {} : {budgetSeconds: why.budgetSeconds}),
+			},
+		});
+		return loaded;
+	}
+
+	/**
 	 * ONE advance, published unless the pointer moved during it.
 	 *
 	 * The skip is not an optimisation: the value this returns belongs to whichever
@@ -1513,7 +1757,28 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			throw new Error(`no indexer`);
 		}
 		const stamp = promotions;
-		const lastSync = await indexer.indexMore();
+		const before = indexer.canonical.lastSync?.lastToBlock;
+		const started = performance.now();
+		let lastSync: LastSync<ABI>;
+		try {
+			lastSync = await indexer.indexMore();
+		} catch (err) {
+			// The node will not serve the catch-up at all: the snapshot, where there is a
+			// usable one, is the only way forward. Where there is none the refusal goes on
+			// exactly as it always did.
+			if (isArchiveRefusal(err)) {
+				const switched = await switchToSnapshot({reason: 'archive-refused'});
+				if (switched) return switched;
+			}
+			throw err;
+		}
+		if (promotions === stamp) {
+			const overBudget = measureCatchUp(before, lastSync, performance.now() - started);
+			if (overBudget) {
+				const switched = await switchToSnapshot({reason: 'over-budget', ...overBudget});
+				if (switched) return switched;
+			}
+		}
 		if (promotions === stamp) {
 			setLastSync(lastSync);
 			setCatchup(lastSync);
@@ -1945,6 +2210,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// the previous container's states here would keep pruning them (and keep them
 		// reachable) long after nothing is indexing into them.
 		statesByGeneration.clear();
+		// What a switch to the snapshot would rebuild from is THIS container's `init`, and a
+		// later `init` gets its own try.
+		boot = undefined;
+		bootSnapshot = undefined;
+		switchTried = false;
+		catchUpMeasured = {blocks: 0, ms: 0};
 		setSyncing({
 			waitingForProvider: true,
 			loading: false,

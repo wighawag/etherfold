@@ -109,6 +109,26 @@ export type BootstrapOptions = {
 	 * the free-form path does implicitly.
 	 */
 	readonly finalityDepth?: number;
+	/**
+	 * Whether `openAndBootstrap` may install over a store that has ALREADY SYNCED.
+	 *
+	 * Off by default, and that default is the common case on every run after the
+	 * first: a store with a cursor is left alone without a single request, and the
+	 * tab catches up from its own cursor. `true` is what a host hands over when it
+	 * has decided that catching up is not worth it or not possible (ADR-0096: the
+	 * node refused the catch-up as an archive refusal, or the catch-up would take
+	 * longer than the app's budget), and it is what
+	 * `PublicationSnapshot.replaceLocal` (`@etherfold/browser`) carries to
+	 * `createState` for exactly that reason. Forward it.
+	 *
+	 * It does not make a snapshot BEHIND the store win: the choice is still
+	 * `bootstrapFromSnapshot`'s, so a store at or ahead of every candidate is kept
+	 * (`kept-local`), and one behind the best candidate is REPLACED whole, through
+	 * the one install (`SnapshotAwareStateStore.bootstrap`, which wipes first). Only
+	 * `openAndBootstrap` reads it; `bootstrapFromSnapshot` already installs over a
+	 * store that is behind.
+	 */
+	readonly replaceLocal?: boolean;
 	/** Injectable for tests and for a host with its own retry/timeout policy. */
 	readonly fetch?: typeof globalThis.fetch;
 };
@@ -454,7 +474,10 @@ async function cancelAll(candidates: readonly Candidate[]): Promise<void> {
  * handle would get the floor right today and lose it on the next reload.
  *
  * A store that has already synced is left alone without a single request, which
- * is the common case on every run after the first.
+ * is the common case on every run after the first, UNLESS the caller asks for
+ * local state to be replaced (`replaceLocal`, ADR-0096): then the published
+ * snapshot is installed over it if it is further along, and the store is kept
+ * otherwise.
  */
 export async function openAndBootstrap(
 	store: StateStoreBackend,
@@ -463,7 +486,7 @@ export async function openAndBootstrap(
 ): Promise<{store: SnapshotAwareStateStore; outcome: BootstrapOutcome}> {
 	const aware = await openSnapshotAware(store);
 	const local = await localPosition(aware);
-	if (local !== undefined) return {store: aware, outcome: {status: 'kept-local', at: local}};
+	if (local !== undefined && !options.replaceLocal) return {store: aware, outcome: {status: 'kept-local', at: local}};
 	return {store: aware, outcome: await bootstrapFromSnapshot(aware, locations, options)};
 }
 
