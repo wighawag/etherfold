@@ -93,8 +93,8 @@ export function moduleProcessorIdentity<ABI extends Abi, ProcessResultType>(
 			`this processor arrived as a MODULE, which has no bytes to hash, and its handlers have no readable source ` +
 				`either -- they are all bound, or behind a proxy -- so there is nothing to derive an identity from and the ` +
 				`generation cannot be named (ADR-0086). Hand over the processor object itself rather than a wrapper around ` +
-				`it, or name this fold by BYTES: fetch the self-contained bundle it was built from and pass the SHA-256 of ` +
-				`those octets as \`processorIdentity\`.`,
+				`it, or name this fold by BYTES: run the self-contained bundle it was built from as \`processorBundle\`, ` +
+				`which names the generation by the SHA-256 of the bytes it fetches and runs (ADR-0095).`,
 		);
 	}
 	return identity;

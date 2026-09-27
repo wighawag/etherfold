@@ -41,6 +41,12 @@ import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
 import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
 import {moduleProcessorIdentity} from './moduleIdentity.js';
+import {
+	arriveFromBundle,
+	refuseAnIdentityBesideABundle,
+	type InstantiatedProcessorBundle,
+	type ProcessorBundleSource,
+} from './processorBundle.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {withClaimPatience, type ClaimPatience} from './utils/claim.js';
 import {createRootStore, createStore} from './utils/stores.js';
@@ -460,11 +466,28 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	createState: (
 		context: GenerationContext,
 		patience: ClaimPatience,
+		/**
+		 * The PUBLISHED BUNDLE this generation runs, present exactly when the spec
+		 * names a `processorBundle`: it has already arrived by the time the state is
+		 * built, so a store can be declared from the entities the bundle's own
+		 * processor declares rather than from a second copy the app imported.
+		 */
+		bundle?: InstantiatedProcessorBundle,
 	) => WritableStateStore | Promise<WritableStateStore>;
-	/** The fold, over that state. The FACTORY, not its result: `processorIdentity` NAMES the generation. */
+	/**
+	 * The fold, over that state. The FACTORY, not its result: `processorIdentity` NAMES the generation.
+	 *
+	 * The third argument is the PUBLISHED BUNDLE this generation runs, present
+	 * exactly when the spec names a `processorBundle`: its `processor` is the
+	 * authoring object the bundle's own bytes made, which the factory wraps in the
+	 * entity runtime over `state` the way it would wrap an imported one
+	 * (`new EntityEventProcessor(state, bundle.processor)`). A module arrival is
+	 * handed `undefined` and ignores it.
+	 */
 	createProcessor: (
 		state: WritableStateStore,
 		context: GenerationContext,
+		bundle?: InstantiatedProcessorBundle,
 	) =>
 		| EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>
 		| Promise<EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>>;
@@ -473,8 +496,10 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	 * fold half of the generation this spec registers.
 	 *
 	 * ADR-0086: an author cannot STATE a processor's identity, so it comes from what
-	 * the processor IS. An app that fetched or read a self-contained BUNDLE names
-	 * its generation by the SHA-256 of those octets, and an edited handler is a
+	 * the processor IS. A tab running a published BUNDLE is named by the SHA-256 of
+	 * those octets, which `processorBundle` derives from the bytes it runs (use that
+	 * rather than supplying a hash here, which ADR-0095 refuses: a hash handed in
+	 * beside a module names bytes the tab does not run), and an edited handler is a
 	 * different generation whether or not anybody remembered to say so. Nothing here
 	 * or below looks INSIDE the value -- it is COMPARED and RENDERED, and nothing in
 	 * the tree parses one -- so neither this hook nor the container cares which
@@ -496,6 +521,29 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	 * to fold separately.
 	 */
 	processorIdentity?: string;
+	/**
+	 * THE BUNDLE ARRIVAL: run the processor bundle a build PUBLISHED, fetched from
+	 * `url`, and name this generation by the SHA-256 of those bytes (ADR-0095).
+	 *
+	 * The host fetches the bytes, hashes them exactly as `etherfold build` does,
+	 * refuses them if they are not self-contained, and instantiates the processor
+	 * FROM THOSE BYTES -- inside the worker, where the host is one -- before it builds
+	 * this generation's state. The instantiated bundle is handed to `createProcessor`
+	 * as its third argument, and its identity is what the generation is registered
+	 * under, so a snapshot published for that bundle is one this tab can use.
+	 *
+	 * A refusal (`ProcessorBundleRefusedError`, with the refusal's `reason`) stops
+	 * the host before anything is claimed or folded: `init` rejects with it on the
+	 * main thread, and a worker host reports it as `phase: 'refused'` with the
+	 * failure a tab reads across the port. A strict Content-Security-Policy is one of
+	 * those refusals, `forbidden-by-policy`, and names the policy.
+	 *
+	 * It EXCLUDES `processorIdentity`: the identity of a bundle is derived from the
+	 * bytes that run, never supplied beside them, and a spec naming both is refused
+	 * as a wiring mistake. Development keeps the MODULE arrival (hot updates, the
+	 * module identity); this is what a deployed tab runs.
+	 */
+	processorBundle?: ProcessorBundleSource;
 	/**
 	 * Which generations this indexer holds and which one is canonical.
 	 *
@@ -932,9 +980,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		createState: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createState'],
 		createProcessor: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['createProcessor'],
 		processorConfig?: ProcessorConfig,
-		processorIdentity?: string,
+		arrival?: {processorIdentity?: string; processorBundle?: ProcessorBundleSource},
 		source?: IndexingSource<ABI>,
 	) {
+		const processorIdentity = arrival?.processorIdentity;
+		const processorBundle = arrival?.processorBundle;
+		refuseAnIdentityBesideABundle(arrival);
 		// WHAT NAMES THIS GENERATION, filled in by `createProcessor` below where the
 		// arrival supplied nothing.
 		//
@@ -948,10 +999,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// per-generation `source` is a parameter here rather than a property a caller
 		// merges in.
 		const spec = {
-			createState: (context: GenerationContext) =>
-				withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience)),
+			createState: async (context: GenerationContext) => {
+				// THE BUNDLE ARRIVES FIRST, before any state is built: a refused bundle
+				// (`ProcessorBundleRefusedError`) then claims no store and folds nothing.
+				const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
+				return withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience, bundle));
+			},
 			createProcessor: async (state: unknown, context: GenerationContext) => {
-				const built = await createProcessor(state as WritableStateStore, context);
+				// The SAME arrival the state waited on (one load per source), so the bytes this
+				// fold runs are the bytes the identity below was computed over.
+				const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
+				const built = await createProcessor(state as WritableStateStore, context, bundle);
 				if (built.configure && processorConfig) {
 					built.configure(processorConfig);
 				}
@@ -966,7 +1024,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// The FIRST build wins, because that is what the container does with the
 				// generation itself: naming a generation it already holds RESOLVES to the one
 				// it is folding rather than adding a second engine over it.
-				spec.processorIdentity ??= processorIdentity ?? moduleProcessorIdentity(built);
+				//
+				// A BUNDLE names its fold by its own bytes (ADR-0095), and nothing else may.
+				spec.processorIdentity ??= bundle?.identity ?? processorIdentity ?? moduleProcessorIdentity(built);
 				// THE STATE THIS GENERATION FOLDS INTO, recorded HERE and not in
 				// `createState`, because this is the first moment both halves of the name
 				// exist: a generation is `{stream, processor identity}` and the fold's half is
@@ -1204,7 +1264,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			source,
 			config,
 			...(options?.promotion ? {promotion: options.promotion} : {}),
-			generations: [generationSpecFor(spec.createState, spec.createProcessor, processorConfig, spec.processorIdentity)],
+			generations: [generationSpecFor(spec.createState, spec.createProcessor, processorConfig, spec)],
 			createGeneration: options?.createIndexer,
 		});
 		indexer.onPromoted = onPromoted;
@@ -2024,7 +2084,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 						spec.createState,
 						spec.createProcessor,
 						processorConfigUsed,
-						spec.processorIdentity,
+						spec,
 						// The ABI is NARROWED here and nowhere else, exactly as the worker hosts
 						// narrow it: the envelope is not generic, and a tab and its host come out of
 						// ONE build. Handed to the builder rather than spread over what it returns,
@@ -2154,6 +2214,8 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				 * identity rather than inheriting the running generation's.
 				 */
 				processorIdentity?: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['processorIdentity'];
+				/** A published bundle to run instead, named by its own bytes (see `BrowserGenerationSpec.processorBundle`). */
+				processorBundle?: BrowserGenerationSpec<ABI, ProcessResultType, ProcessorConfig>['processorBundle'];
 			},
 			processorConfig?: ProcessorConfig,
 		): Promise<HeldGeneration<ABI, ProcessResultType>> {
@@ -2168,12 +2230,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					throw new Error(`no indexer setup, call init`);
 				}
 				const held = await indexer.add(
-					generationSpecFor(
-						generation.createState,
-						generation.createProcessor,
-						processorConfig,
-						generation.processorIdentity,
-					),
+					generationSpecFor(generation.createState, generation.createProcessor, processorConfig, generation),
 				);
 				// Reported from the moment it EXISTS, before it has folded anything: an app
 				// that hides its answers during a rebuild must be able to do so from the

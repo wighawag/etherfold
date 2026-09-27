@@ -1,4 +1,12 @@
-import type {Abi, AllContractData, ContractData, IndexingSource} from '@etherfold/core';
+import {
+	instantiateProcessor,
+	type Abi,
+	type AllContractData,
+	type ContractData,
+	type IndexingSource,
+	type InstantiateProcessorOptions,
+	type ProcessorModule,
+} from '@etherfold/core';
 import {createRequire} from 'node:module';
 import path from 'node:path';
 import {logs} from 'named-logs';
@@ -12,20 +20,12 @@ export type ChainIdProvider = {
 	request(args: {method: 'eth_chainId'}): Promise<unknown>;
 };
 
-// A processor module is whatever `import()`-ing the processor path yields. It may export a
-// `createProcessor` factory (function or already-built processor) plus contract data via
-// `contractsDataPerChain` (indexed by decimal chainId) and/or `contractsData`.
-//
-// `createProcessor` is deliberately untyped here: what it hands back is the AUTHORING object, and
-// only the HOST knows which entity runtime is going to be built around it (see
-// `instantiateProcessor`). Typing it as one runtime's shape here would make this module loader
-// depend on that runtime.
-export type ProcessorModule<ABI extends Abi, ProcessResultType = unknown> = {
-	createProcessor?: ((config?: any) => unknown) | object;
-	contractsDataPerChain?: {[chainId: string]: AllContractData<ABI> | ContractData<ABI>[]};
-	contractsData?: AllContractData<ABI> | ContractData<ABI>[];
-	[key: string]: any;
-};
+// WHAT A PROCESSOR MODULE IS, and how the authoring object is taken out of one, are
+// `@etherfold/core`'s (`ProcessorModule`, `instantiateProcessor`): a browser tab running a
+// published bundle (ADR-0095) asks the same question of the module it instantiated, and one
+// answer to "what is a processor module" is the point. Re-exported so this package's callers
+// keep importing them from where they always have.
+export {instantiateProcessor, type InstantiateProcessorOptions, type ProcessorModule};
 
 // ---------------------------------------------------------------------------------------------------
 // loadProcessorModule
@@ -95,97 +95,6 @@ export async function loadProcessorModule<ABI extends Abi, ProcessResultType>(
 			throw err;
 		}
 	}
-}
-
-// ---------------------------------------------------------------------------------------------------
-// instantiateProcessor
-// ---------------------------------------------------------------------------------------------------
-
-export type InstantiateProcessorOptions = {
-	// Path of the module, used only for error messages.
-	processorPath: string;
-	// Argument passed to the `createProcessor` factory. The CLI passes nothing; the server passes its
-	// `folder`. Making this an explicit parameter keeps the caller difference intentional rather than
-	// accidental (see MEDIUM-3 in the findings). When omitted the factory is called with no args.
-	processorConfig?: any;
-};
-
-// Call the module's `createProcessor` (or use it as-is when it is already an object) and hand back
-// whatever it produced, unread. Split out from `instantiateProcessor` so the module-shape refusals
-// -- and the exact no-arg call the CLI has always made -- are readable on their own.
-function createFromModule<ABI extends Abi, ProcessResultType>(
-	processorModule: ProcessorModule<ABI, ProcessResultType>,
-	options: InstantiateProcessorOptions,
-): unknown {
-	const processorFactory = processorModule.createProcessor;
-
-	if (!processorFactory) {
-		throw new Error(
-			`processor field could not be found: check module at ${options.processorPath} if it exports a "processor" field`,
-		);
-	}
-
-	if (typeof processorFactory !== 'function') {
-		return processorFactory;
-	}
-
-	// Pass processorConfig only when provided so the no-arg CLI call stays byte-identical.
-	const created =
-		'processorConfig' in options
-			? (processorFactory as (config?: any) => unknown)(options.processorConfig)
-			: (processorFactory as () => unknown)();
-
-	if (!created) {
-		throw new Error(
-			`Processor could not be created, check the function exported as "processor" in module ${options.processorPath}`,
-		);
-	}
-
-	return created;
-}
-
-/**
- * Resolve the `createProcessor` factory from the module and hand back what it
- * made: the AUTHORING object, declarations plus handlers.
- *
- *  - if `createProcessor` is a function, call it (with `processorConfig` if provided, else no args).
- *  - if `createProcessor` is already a processor object, use it as-is.
- *
- * Throws when no factory is found, when the factory produced nothing, and when
- * the module still carries the retired KIND TAG (below).
- *
- * What comes back is the authoring object and NOT an `EventProcessor`, because
- * WHERE the state lives is the deployment's choice: a module that picked a store
- * would have picked for every host that loads it. The host builds the runtime
- * (`new EntityEventProcessor(store, processor)`) around what this returns. It is
- * typed by the CALLER, through `EntityProcessorType`, so a host that owns an
- * entity runtime gets its own type at the wiring site while this package keeps
- * naming none of them; it defaults to `unknown`, the honest type for a caller
- * that has not said.
- */
-export function instantiateProcessor<ABI extends Abi, ProcessResultType, EntityProcessorType = unknown>(
-	processorModule: ProcessorModule<ABI, ProcessResultType>,
-	options: InstantiateProcessorOptions,
-): EntityProcessorType {
-	const created = createFromModule<ABI, ProcessResultType>(processorModule, options);
-
-	// The KIND TAG is gone with the kind it discriminated (ADR-0037): there is one
-	// authoring path, so `{kind, processor}` names a choice that no longer exists.
-	// Refused rather than unwrapped, because unwrapping it would keep a second
-	// module shape alive forever -- and refused HERE, where the module can be named,
-	// rather than three frames down where a store asks a wrapper for its `entities`
-	// and gets `undefined`.
-	if (typeof created === 'object' && created !== null && 'kind' in created) {
-		throw new Error(
-			`the processor module at ${options.processorPath} returns {kind: ${JSON.stringify(
-				(created as {kind: unknown}).kind,
-			)}, processor}, which was how a module said WHICH of two authoring paths it carried. There is one ` +
-				`(ADR-0037): the free-form js-object path is deleted. Return the processor itself -- declarations plus ` +
-				`handlers -- from "createProcessor".`,
-		);
-	}
-
-	return created as EntityProcessorType;
 }
 
 // ---------------------------------------------------------------------------------------------------

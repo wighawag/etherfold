@@ -15,6 +15,26 @@ export * from './IndexerState.js';
  * server side where the watcher stays outside the process. The bundler is the
  * watcher and it already exists.
  */
+/**
+ * THE BUNDLE ARRIVAL: run the processor bundle a build PUBLISHED, named by the
+ * SHA-256 of the bytes this tab fetched and runs (ADR-0095) -- the browser
+ * counterpart of `loadProcessorArtifact`. A host takes it as
+ * `BrowserGenerationSpec.processorBundle`; `loadProcessorBundle` is the same load
+ * for an app that drives it itself.
+ */
+export {
+	loadProcessorBundle,
+	ProcessorBundleRefusedError,
+	type InstantiatedProcessorBundle,
+	type LoadProcessorBundleOptions,
+	type ProcessorBundleLocation,
+	type ProcessorBundleOutcome,
+	type ProcessorBundlePolicyViolation,
+	type ProcessorBundleRefusalReason,
+	type ProcessorBundleSource,
+	type RefusedProcessorBundle,
+} from './processorBundle.js';
+
 export {reconfigureFromHotUpdate, type HotUpdatableIndexer, type HotUpdateGeneration} from './hotUpdate.js';
 
 /**
