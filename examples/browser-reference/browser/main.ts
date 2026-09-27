@@ -1,22 +1,24 @@
-import {createBrowserStateStore, createIndexerState, type GenerationContext} from '@etherfold/browser';
-import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
+import {connectToIndexerHost, createPortReadSurface, dedicatedWorkerHost, type HostProgress} from '@etherfold/browser';
 import {createConnection} from '@etherplay/connect';
 import {abi, tokenProcessor} from '../src/processor.js';
 
 /**
- * THE REFERENCE WIRING: one contract, indexed in a browser tab, read as stores.
+ * THE REFERENCE WIRING: one contract, indexed in a worker, read from a tab.
  *
  * Everything a template needs and nothing else. Read it top to bottom; it is
- * meant to be read in one sitting and copied.
+ * meant to be read in one sitting and copied, together with the one file beside
+ * it, `indexer.worker.ts`, which is where the indexer RUNS.
  *
  *   1. the wallet, and WHICH object to ask for the chain (not the obvious one)
- *   2. the store: one line, and the only place a backend is named
- *   3. the hook, and the two subscriptions that draw the page
+ *   2. the worker, and the port this tab holds to it
+ *   3. the reads, and the two subscriptions that draw the page
  *   4. `checkTxInclusion`: whether the state already accounts for a tx you sent
  *   5. hot reload, both axes
  *
- * There is no server. The tab talks to the node behind the user's own wallet,
- * decodes the logs itself, and keeps the rows in IndexedDB.
+ * There is no server. The worker reads the chain through the user's own wallet,
+ * decodes the logs itself, and keeps the rows in IndexedDB. This tab never folds
+ * a block: it holds a PORT to the worker (ADR-0082), hands it the wallet and the
+ * settings, and reads what the worker indexed.
  *
  * Four things in here are load-bearing and easy to get wrong. Each is marked
  * HAZARD where it appears, and two of them are bugs that actually shipped in
@@ -74,7 +76,8 @@ async function start() {
 	 *   NEVER ASK THE PROVIDER:                       connection.provider
 	 *
 	 * The provider is for READS (`eth_getLogs`, `eth_blockNumber`). It is not an
-	 * authority on what the wallet is pointed at.
+	 * authority on what the wallet is pointed at. The check is made HERE, before a
+	 * worker exists, so a wallet on the wrong chain starts no indexer at all.
 	 */
 	if (wallet.chainId !== undefined && wallet.chainId !== String(CHAIN.id)) {
 		el('error').textContent =
@@ -83,71 +86,73 @@ async function start() {
 		return;
 	}
 
-	// The provider is only ever used to READ. `EIP1193ProviderWithoutEvents`
-	// enumerates every JSON-RPC method it knows; this app uses three of them.
-	const provider = connection.provider as never;
-
 	// =====================================================================
-	// 2. THE STORE -- one line, and the only place a backend is named
+	// 2. THE WORKER, AND THE PORT THIS TAB HOLDS TO IT
 	// =====================================================================
-	// IndexedDB is the browser default (ADR-0024): versioned rows, and the sync
-	// cursor written in the same transaction as the block it describes, so a tab
-	// that is closed mid-index reopens consistent.
-	//
-	// It is a FACTORY and not a value, because an indexer holds any number of
-	// GENERATIONS -- a stream plus a fold over it -- one of which is canonical and
-	// answers every read, and each folds into its own state. The hook calls this
-	// once per generation.
-	// KEYED ON THE CONTEXT, which is what keeps each generation's state its own.
-	// The container hands the factory a `GenerationContext` precisely so the
-	// storage location can be derived from it: two generations sharing one
-	// `databaseName` are one store by IndexedDB's own definition, and they would
-	// collide on the sync cursor as well as on the rows, because that cursor lives
-	// under a fixed key.
-	// CLAIMED, because this tab INDEXES: building a store and becoming its writer
-	// are two acts, and `openForWriting` is the second one (ADR-0077). A tab that
-	// only rendered would open the same store and never call it, and the type is
-	// what stops it writing. `openForWriting` migrates, so this is the whole open.
-	const createState = async (context: GenerationContext) =>
-		openForWriting(
-			await createBrowserStateStore(tokenProcessor.entities, {
-				databaseName: `reference-${CHAIN.id}-${CONTRACT}-${context.stream}`,
-			}),
-		);
-
-	// The store the CANONICAL generation was built over, kept because the
-	// live-reload below rebuilds a processor over the SAME store: a hot reload
-	// replaces the author's object, not the tab's IndexedDB connection.
-	let store!: Awaited<ReturnType<typeof createState>>;
-
-	// =====================================================================
-	// 3. THE HOOK, AND THE TWO SUBSCRIPTIONS
-	// =====================================================================
-	const indexer = createIndexerState({
-		createState: async (context) => (store = await createState(context)),
-		createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
-	});
-
-	await indexer.init({
-		provider,
-		source: {chainId: String(CHAIN.id), contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}]},
-		config: {stream: {finality: 12}},
-	});
-
 	/**
-	 * `syncing` is the cursor and the progress. `state` is the data.
+	 * The indexer is HOSTED (ADR-0082): `indexer.worker.ts` owns the store and the
+	 * loop, and what this tab gets back is a PORT, which carries reads, control and
+	 * pushed status, and nothing that could write.
 	 *
-	 * On the entity path `state.$state` is a READ HANDLE rather than a value: the
-	 * state is rows in a store, so you ask it questions instead of being handed
-	 * all of it. `subscribe` tells you WHEN to re-ask.
+	 * The app writes the `new Worker(new URL(...), {type: 'module'})` line itself,
+	 * because the URL has to be a literal the bundler can see: that is what makes
+	 * the worker entry, and the processor it imports, part of the build. It is a
+	 * FACTORY and not a worker, because browsers evict workers and the port starts
+	 * another one when that happens; the fold resumes from the cursor in the store.
+	 *
+	 * THE WALLET CROSSES AS A PORT. A provider is an object with methods, so it
+	 * cannot be cloned into a worker, and the worker has no `window` to find a
+	 * wallet on. So this tab SERVES the wallet's provider on a `MessageChannel` and
+	 * transfers the other end (`@eip-1193/over-port`): every request the worker
+	 * makes passes through this tab as a message, while the fold stays in the
+	 * worker. A node's refusals keep their `code` and `data` on the way, so a range
+	 * hint reads the same as from a local provider. It is the same pinned
+	 * `connection.provider` as above, and still only for reads.
+	 *
+	 * THE SETTINGS are the cloneable half of what the worker folds: the contract
+	 * and its ABI, and the stream config. They live in the tab because they are
+	 * what the TAB knows (after a redeploy, only the tab has the new ABI); the
+	 * worker entry holds only code, and waits for them.
+	 */
+	const indexer = connectToIndexerHost(
+		dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+		{
+			// `EIP1193ProviderWithoutEvents` enumerates every JSON-RPC method it knows;
+			// the port needs only its `request`.
+			provider: connection.provider as never,
+			settings: {
+				source: {chainId: String(CHAIN.id), contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}]},
+				config: {stream: {finality: 12}},
+			},
+			// A host that REFUSED what this tab handed it (a setting its entry also
+			// gives, differently) folds nothing for us, so say so rather than show a
+			// page that is merely slow.
+			onConnect: (outcome) => {
+				if (!outcome.accepted) el('error').textContent = `${outcome.error.name}: ${outcome.error.message}`;
+			},
+		},
+	);
+
+	// =====================================================================
+	// 3. THE READS, AND THE TWO SUBSCRIPTIONS
+	// =====================================================================
+	/**
+	 * The store's reads, TYPED from the processor's own entity declarations and
+	 * answered by the worker from the store its canonical generation folds into.
+	 * The declarations are checked against the worker's on the first read, so a
+	 * tab and a worker from two different builds disagree loudly, not quietly.
+	 *
+	 * Every read is a round trip, so you ASK: the state is rows in a store, and
+	 * the port tells you WHEN to re-ask (`onStateMoved`, subscribed below).
 	 *
 	 * The subscriptions are attached at the BOTTOM of this function, not here, and
 	 * that is hazard 1 again -- see the note at the `subscribe` calls.
 	 */
+	const reads = createPortReadSurface(indexer, tokenProcessor.entities);
+
 	async function render() {
-		const view = indexer.state.$state;
-		const transfers = (await view.getCurrent<{value: number}>('counter', {name: 'transfers'}))?.value ?? 0;
-		el('transfers').textContent = String(transfers);
+		const counter = await reads.counter.getCurrent({name: 'transfers'});
+		el('transfers').textContent = String(counter?.value ?? 0);
 	}
 
 	// =====================================================================
@@ -171,6 +176,10 @@ async function start() {
 	 *
 	 * Three statuses and not two: `'unknown'` is a real answer, and collapsing it
 	 * into either of the others is what makes a wrong UI.
+	 *
+	 * Across the port it is one round trip for the whole pending set, answered from
+	 * where the fold is at that moment, so it is ASKED AGAIN whenever the progress
+	 * push says the fold moved, which is exactly when the answer can have changed.
 	 */
 	const pending = new Map<string, {minedAtBlock?: number}>();
 
@@ -179,7 +188,9 @@ async function start() {
 			el('pending').textContent = 'none';
 			return;
 		}
-		const verdicts = indexer.checkTxInclusion([...pending].map(([txHash, {minedAtBlock}]) => ({txHash, minedAtBlock})));
+		const verdicts = await indexer.checkTxInclusion(
+			[...pending].map(([txHash, {minedAtBlock}]) => ({txHash, minedAtBlock})),
+		);
 		const lines: string[] = [];
 		for (const [txHash, verdict] of Object.entries(verdicts)) {
 			if (verdict.status === 'included') {
@@ -206,31 +217,27 @@ async function start() {
 	// 5. HOT RELOAD -- both axes
 	// =====================================================================
 	/**
-	 * AXIS ONE: the developer edited the reducer, and the bundler handed this tab
-	 * a new processor module.
+	 * AXIS ONE: the developer edited the reducer.
+	 *
+	 * The processor is CODE, and code runs where the fold runs: it is imported by
+	 * `indexer.worker.ts` and cannot be sent across the port (ADR-0082). So there is
+	 * no handler for it here, and none is needed. A save that edits
+	 * `src/processor.ts` reaches no module that accepts it, so the dev server
+	 * RELOADS the page, and the worker it starts imports the edited processor.
 	 *
 	 * There is nothing to remember and no `version` to bump (ADR-0086). A module a
-	 * dev server hands this tab has no bytes to hash, so it is named by a derivation
-	 * over its HANDLER SOURCES: an edited handler is a different fold and the swap is
-	 * APPLIED, and a save that changed nothing is the same fold and is answered as
-	 * such. The state is DISCARDED and rebuilt from the start block when it is
-	 * applied, because the core cannot know which part of the state your edit
-	 * invalidated, and "all of it" is the only answer that cannot be wrong.
+	 * dev server hands the worker has no bytes to hash, so it is named by a
+	 * derivation over its HANDLER SOURCES: an edited handler is a different fold,
+	 * which the worker builds and folds from the start block, and a save that
+	 * changed nothing is the same fold, whose warm state is kept. The core cannot
+	 * know which part of the state an edit invalidated, and "all of it" is the only
+	 * answer that cannot be wrong.
 	 *
-	 * `updateProcessor(next, {force: true})` is for the edit that derivation cannot
-	 * see -- a helper edited in another module, behaviour decided by a captured value
-	 * -- and it costs the same rebuild.
+	 * What a reload does not keep is the page: the warm swap without one
+	 * (`updateProcessor`, `reconfigureFromHotUpdate`) is the MAIN-THREAD hook's,
+	 * because only there does the fold share a heap with the module the bundler
+	 * hands over. See the guide, "Hot reload: two independent axes".
 	 */
-	if (import.meta.hot) {
-		import.meta.hot.accept('../src/processor.js', async (module) => {
-			if (!module) return;
-			const next = module.tokenProcessor as typeof tokenProcessor;
-			const outcome = await indexer.updateProcessor(fromEntityProcessor(next)(store));
-			el('reload').textContent = outcome.stateDiscarded
-				? 'processor swapped: state discarded, rebuilding'
-				: 'nothing changed: the handlers are the same fold, so the warm state was kept.';
-		});
-	}
 
 	/**
 	 * AXIS TWO: the contract was redeployed.
@@ -238,21 +245,28 @@ async function start() {
 	 * On a local chain these apps deploy behind a PROXY, so a redeploy does NOT
 	 * move the address. What moves is the implementation, and therefore the
 	 * GENERATED ABI -- and the ABI is hashed into the indexing source, so handing
-	 * the new source to `updateIndexer` is enough. It discards and re-indexes.
-	 * `reset()` is NOT also needed; calling it would be a second full rebuild.
+	 * the new source to `reconfigure` is enough. A source is DATA, so unlike the
+	 * processor it crosses the port.
 	 *
-	 * If the ABI did NOT change, nothing is discarded, and that is correct rather
-	 * than a gap: the same signatures over the same address still mean what the
-	 * indexed rows say they mean.
+	 * A reconfigure is not an outage. The new source is a new GENERATION, folding
+	 * BESIDE the live one into a store of its own (the worker keys each store on
+	 * `context.stream`), and the live one goes on answering every read until the
+	 * new one has caught up; then the canonical pointer moves to it (`on-catch-up`,
+	 * the default promotion policy) and `onStateMoved` tells this tab to re-read.
+	 * `reset()` is NOT needed, and there is none on the port.
+	 *
+	 * If the ABI did NOT change in any way the source hashes, nothing is added
+	 * (`added: false`), and that is correct rather than a gap: the same signatures
+	 * over the same address still mean what the indexed rows say they mean.
 	 *
 	 * The case that looks like it needs a third branch -- an implementation that
 	 * changed what its events MEAN while keeping their signatures -- does not,
 	 * because it cannot happen without a PROCESSOR change. New meaning has to be
 	 * implemented by new handler code, and writing that is the developer's job.
-	 * So it travels AXIS ONE: edit the handler, and the swap discards and re-indexes.
-	 * There is no `reset()` special case and nothing for this function to detect.
+	 * So it travels AXIS ONE: edit the handler, and the worker re-indexes under it.
+	 * There is nothing for this function to detect.
 	 *
-	 *   - ABI changed at the same address .......... updateIndexer({source})
+	 *   - ABI changed at the same address .......... reconfigure({source})
 	 *   - event MEANING changed ..................... edit the processor's handler
 	 *   - genesis hash changed (a different chain) . reload the page
 	 *
@@ -260,12 +274,12 @@ async function start() {
 	 * only on a genesis change: a different chain invalidates the provider, the
 	 * cursor and the store at once, and no in-place reconfigure covers that.
 	 *
-	 * THE ONE THING A REBUILD DOES NOT DO FOR YOU. A discard replays the WHOLE
-	 * history, including blocks the previous implementation wrote. So a handler
-	 * that merely implements the new meaning silently reinterprets pre-upgrade
-	 * events under post-upgrade rules. The upgrade block is YOUR knowledge, and
-	 * spending it is ordinary handler code -- `event.blockNumber` is on every
-	 * event:
+	 * THE ONE THING A REBUILD DOES NOT DO FOR YOU. A new generation replays the
+	 * WHOLE history, including blocks the previous implementation wrote. So a
+	 * handler that merely implements the new meaning silently reinterprets
+	 * pre-upgrade events under post-upgrade rules. The upgrade block is YOUR
+	 * knowledge, and spending it is ordinary handler code -- `event.blockNumber` is
+	 * on every event:
 	 *
 	 *     const weight = event.blockNumber >= UPGRADE_BLOCK ? next : previous;
 	 *
@@ -273,60 +287,61 @@ async function start() {
 	 * its history always does.
 	 */
 	async function onRedeploy(next: {abi: typeof abi; address: `0x${string}`; startBlock: number}) {
-		const outcome = await indexer.updateIndexer({
+		const {generation, added} = await indexer.reconfigure({
 			source: {chainId: String(CHAIN.id), contracts: [next]},
 		});
-		// `stateDiscarded` is one bit: WHETHER the fold went. `sourceInvalidation` is
-		// the verdict it was collapsed from -- which half died (the raw log STREAM, the
-		// STATE folded out of it, or both) and from which BLOCK. Read it rather than
-		// hashing the source yourself: a second derivation is a second answer, and it
-		// can disagree with the one the indexer acted on.
-		const verdict = outcome.sourceInvalidation;
-		const from =
-			verdict && !verdict.state.valid ? ` from block ${verdict.state.invalidFromBlock} (${verdict.state.reason})` : '';
-		el('reload').textContent = outcome.stateDiscarded
-			? `new ABI at the same address: state discarded${from}, re-indexing from the start block`
-			: 'the source hashes the same, so nothing was discarded. If the MEANING changed, call reset().';
+		// `follows` says what the new generation COSTS: a generation that follows
+		// re-folds logs already stored, and one that does not asks the node for its
+		// history again (a new event is a new topic, so its logs were never fetched).
+		el('reload').textContent = !added
+			? 'the source hashes the same, so the running generation already folds it: nothing was added.'
+			: generation.follows
+				? 'new source: re-folding the stored logs beside the live state, which keeps answering until it catches up'
+				: 'new ABI at the same address: re-indexing from the start block beside the live state, which keeps answering until it catches up';
+		return generation.record;
 	}
 
 	// =====================================================================
 	// 6. SUBSCRIBE LAST
 	// =====================================================================
 	/**
-	 * HAZARD 1 AGAIN, and the reason these two calls are at the BOTTOM.
+	 * HAZARD 1 AGAIN, and the reason these calls are at the BOTTOM.
 	 *
-	 * `subscribe` invokes your callback SYNCHRONOUSLY, with the current value,
-	 * before it returns. So a callback that touches anything declared after the
-	 * `subscribe` call reaches into the temporal dead zone and throws.
+	 * A subscription may invoke your callback before the code after it has run:
+	 * `onProgress` hands a listener where the fold is as soon as the worker
+	 * answers, and a store's `subscribe` does it SYNCHRONOUSLY, before it returns.
+	 * So a callback that touches anything declared after the call reaches into the
+	 * temporal dead zone and throws.
 	 *
-	 * This is not hypothetical and it is not only about the `unsubscribe` handle
-	 * below: while writing THIS FILE these two subscriptions sat up in section 3,
-	 * where `refreshPending` closed over a `const pending` declared in section 4,
-	 * and the page died on load with `Cannot access 'pending' before
-	 * initialization`. It typechecked perfectly. It was caught by
-	 * `verify/reference.spec.ts` opening a real browser (ADR-0030).
+	 * This is not hypothetical and it is not only about an `unsubscribe` handle:
+	 * while writing THIS FILE these subscriptions sat up in section 3, where
+	 * `refreshPending` closed over a `const pending` declared in section 4, and the
+	 * page died on load with `Cannot access 'pending' before initialization`. It
+	 * typechecked perfectly. It was caught by `verify/reference.spec.ts` opening a
+	 * real browser (ADR-0030).
 	 *
 	 * The rule that falls out: WIRE FIRST, SUBSCRIBE LAST.
 	 *
-	 * Note also the ORDER the hook publishes in, which is a guarantee and not an
-	 * accident: within one update it sets `syncing` BEFORE `state`. So the cursor
-	 * can be one statement ahead of the rows and never behind, and that direction
-	 * is the safe one -- an optimistic overlay dropped a moment early flickers, one
-	 * dropped late is counted twice. A subscriber that reads both after an update
-	 * sees them agree.
+	 * The two pushes answer different questions, which is why there are two.
+	 * `onProgress` is how far the fold has got (a STATE, handed to you at once on
+	 * subscribing) and drives the progress line and the pending verdicts.
+	 * `onStateMoved` is WHAT MOVED (an EVENT, silent until the fold next applies a
+	 * block, a reorg retracts one, or a promotion changes which generation
+	 * answers): it is the signal to RE-READ. Because it is silent on attaching, the
+	 * first read is made once, by hand, right after it.
 	 */
-	indexer.syncing.subscribe((syncing) => {
-		const sync = syncing.lastSync;
-		el('progress').textContent = sync
-			? `block ${sync.lastToBlock} / ${sync.latestBlock} (${sync.syncPercentage}%)`
-			: 'waiting for the node...';
-		if (syncing.error) el('error').textContent = `${syncing.error.id}: ${syncing.error.message}`;
+	indexer.onProgress((progress: HostProgress) => {
+		el('progress').textContent =
+			progress.lastToBlock !== undefined && progress.latestBlock !== undefined && progress.latestBlock > 0
+				? `block ${progress.lastToBlock} / ${progress.latestBlock} (${progress.syncPercentage}%)`
+				: 'waiting for the node...';
+		// A host that STOPPED says why, rather than leaving a number that stopped moving.
+		if (progress.failure) el('error').textContent = `${progress.failure.name}: ${progress.failure.message}`;
 		void refreshPending();
 	});
 
-	indexer.state.subscribe(() => void render());
-
-	await indexer.startAutoIndexing();
+	indexer.onStateMoved(() => void render());
+	void render();
 
 	// Exposed so the browser verification can drive the paths a human cannot
 	// click: a redeploy, and a transaction whose inclusion has to be checked.

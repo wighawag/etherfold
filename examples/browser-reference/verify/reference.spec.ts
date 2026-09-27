@@ -17,6 +17,16 @@ import {installFakeWallet, type FakeChainOptions} from './wallet.js';
 
 const APP_CHAIN = 1;
 
+/** What the page exposes on `window.__reference`, as far as these tests reach into it. */
+type Reference = {
+	indexer: {
+		progress(): Promise<{host: string; scope: string; phase: string}>;
+		generations(): Promise<{record: {stream: string}; canonical: boolean}[]>;
+		checkTxInclusion(q: {txHash: string}[]): Promise<Record<string, {status: string; basis: string}>>;
+	};
+	onRedeploy(next: unknown): Promise<{stream: string}>;
+};
+
 async function open(page: Page, options: Partial<FakeChainOptions> = {}) {
 	const settings: FakeChainOptions = {walletChainId: APP_CHAIN, transfers: 5, tipBlock: 10, ...options};
 	await page.addInitScript(installFakeWallet, settings);
@@ -32,6 +42,32 @@ test('indexes the contract and publishes the result as stores', async ({page}) =
 	await expect(page.locator('#transfers')).toHaveText('5');
 	await expect(page.locator('#progress')).toContainText('block 10 / 10');
 	await expect(page.locator('#error')).toBeEmpty();
+	expect(errors).toEqual([]);
+});
+
+/**
+ * THE WORKER SHAPE (ADR-0082): the fold runs in a dedicated worker, and the chain
+ * it reads is the WALLET's, handed over as a port.
+ *
+ * Both halves are asserted as facts rather than inferred from timing. Where the
+ * fold runs is what the host MEASURES (`progress().scope`, which is what
+ * `globalThis` is where the answer was computed). And the wallet lives in the
+ * page, which a worker has no way to reach, so every `eth_getLogs` the page's
+ * wallet answered was a request the worker made through the port this tab
+ * serves the wallet's provider on.
+ */
+test('indexes in a dedicated worker, through the wallet handed over as a port', async ({page}) => {
+	const {errors} = await open(page);
+	await expect(page.locator('#transfers')).toHaveText('5');
+
+	const {progress, requests} = await page.evaluate(async () => {
+		const app = (window as never as {__reference: Reference}).__reference;
+		return {progress: await app.indexer.progress(), requests: window.__walletRequests};
+	});
+
+	expect(progress.host).toBe('dedicated-worker');
+	expect(progress.scope).toBe('DedicatedWorkerGlobalScope');
+	expect(requests['eth_getLogs'] ?? 0).toBeGreaterThan(0);
 	expect(errors).toEqual([]);
 });
 
@@ -80,13 +116,19 @@ test('refuses a wallet on another chain, which the pinned provider cannot detect
  *
  * Driven through the app's own `onRedeploy`, so what runs is the wiring a
  * template would copy, not a re-implementation of it in the test.
+ *
+ * Across the port a reconfigure is not an outage: the new source is a new
+ * generation folding BESIDE the live one, which goes on answering, and the
+ * canonical pointer moves to it once it has caught up (`on-catch-up`, the
+ * default). So what is asserted is the new generation becoming the one that
+ * answers, with the count it re-indexed from the start block.
  */
-test('a new ABI at the same address discards the state and re-indexes', async ({page}) => {
+test('a new ABI at the same address re-indexes beside the live state, then answers', async ({page}) => {
 	const {errors} = await open(page);
 	await expect(page.locator('#transfers')).toHaveText('5');
 
-	const discarded = await page.evaluate(async () => {
-		const app = (window as never as {__reference: {onRedeploy(next: unknown): Promise<void>}}).__reference;
+	const {reload, stream} = await page.evaluate(async () => {
+		const app = (window as never as {__reference: Reference}).__reference;
 		// the ABI a redeployed implementation generates: same address, one more event
 		const abiV2 = [
 			{
@@ -110,12 +152,26 @@ test('a new ABI at the same address discards the state and re-indexes', async ({
 				],
 			},
 		];
-		await app.onRedeploy({abi: abiV2, address: '0x0000000000000000000000000000000000000099', startBlock: 0});
-		return document.getElementById('reload')?.textContent ?? '';
+		const added = await app.onRedeploy({
+			abi: abiV2,
+			address: '0x0000000000000000000000000000000000000099',
+			startBlock: 0,
+		});
+		return {reload: document.getElementById('reload')?.textContent ?? '', stream: added.stream};
 	});
 
-	expect(discarded).toContain('state discarded');
-	// and it comes back, from the start block, under the new source
+	expect(reload).toContain('re-indexing from the start block beside the live state');
+
+	// the new generation catches up and becomes the one answering reads
+	await expect
+		.poll(async () =>
+			page.evaluate(async () => {
+				const app = (window as never as {__reference: Reference}).__reference;
+				return (await app.indexer.generations()).find((generation) => generation.canonical)?.record.stream;
+			}),
+		)
+		.toBe(stream);
+	// and it answers the same count, re-indexed from the start block under the new source
 	await expect(page.locator('#transfers')).toHaveText('5');
 	expect(errors).toEqual([]);
 });
@@ -132,13 +188,7 @@ test('says whether the indexed state already accounts for a transaction', async 
 	await expect(page.locator('#transfers')).toHaveText('5');
 
 	const verdicts = await page.evaluate(() => {
-		const app = (
-			window as never as {
-				__reference: {
-					indexer: {checkTxInclusion(q: {txHash: string}[]): Record<string, {status: string; basis: string}>};
-				};
-			}
-		).__reference;
+		const app = (window as never as {__reference: Reference}).__reference;
 		return app.indexer.checkTxInclusion([
 			// block 5, which the fake chain emitted and the indexer has processed
 			{txHash: `0x${(5).toString(16).padStart(64, '0')}`},

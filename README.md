@@ -199,4 +199,4 @@ indexer.syncing.subscribe(($syncing) => showProgress($syncing.lastSync?.syncPerc
 
 `.withHooks(react)` turns those observables into React hooks (`useState`, `useSyncing`, `useStatus`).
 
-A runnable version of all of this, against a real chain, is [`examples/event-processor-nfts`](https://github.com/wighawag/etherfold/blob/main/examples/event-processor-nfts/README.md); [`examples/browser-reference`](https://github.com/wighawag/etherfold/blob/main/examples/browser-reference) is the minimal wiring with both hot-reload axes.
+A runnable version of all of this, against a real chain, is [`examples/event-processor-nfts`](https://github.com/wighawag/etherfold/blob/main/examples/event-processor-nfts/README.md); [`examples/browser-reference`](https://github.com/wighawag/etherfold/blob/main/examples/browser-reference) is the minimal wiring, indexing in a dedicated worker, with both hot-reload axes.

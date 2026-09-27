@@ -30,8 +30,9 @@
 	<body>
 		<h1>The browser reference wiring</h1>
 		<p>
-			One contract, indexed in this tab over EIP-1193, kept in IndexedDB, read as stores. Read
-			<code>browser/main.ts</code>; it is the whole example.
+			One contract, indexed in a dedicated worker over the wallet's EIP-1193 provider, kept in IndexedDB, read by
+			this tab across a port. Read <code>browser/main.ts</code>, then <code>browser/indexer.worker.ts</code>; they are
+			the whole example.
 		</p>
 		<div id="error"></div>
 		<dl>

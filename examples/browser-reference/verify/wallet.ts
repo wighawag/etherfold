@@ -27,6 +27,12 @@ export type FakeChainOptions = {
 declare global {
 	interface Window {
 		__fake: FakeChainOptions;
+		/**
+		 * How many times the page's wallet was asked each method. The indexer runs in
+		 * a WORKER, which has no `window` and so no wallet of its own: a count here is
+		 * the wallet's provider being served to the worker by this tab.
+		 */
+		__walletRequests: Record<string, number>;
 	}
 }
 
@@ -62,8 +68,11 @@ export function installFakeWallet(options: FakeChainOptions): void {
 		});
 	}
 
+	const requests: Record<string, number> = {};
+
 	const provider = {
 		async request(args: {method: string; params?: any}): Promise<any> {
+			requests[args.method] = (requests[args.method] ?? 0) + 1;
 			switch (args.method) {
 				// The WALLET's own chain. This is what the connection state reports,
 				// and it is the answer the pinned wrapper does NOT give.
@@ -107,4 +116,5 @@ export function installFakeWallet(options: FakeChainOptions): void {
 	// Some code paths still reach for the legacy slot.
 	(window as unknown as {ethereum: unknown}).ethereum = provider;
 	window.__fake = options;
+	window.__walletRequests = requests;
 }
