@@ -286,6 +286,16 @@ type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHe
  * blocks with no cursor (it rides the last block). Either way the next boot
  * (`openAndBootstrap`, which finds no cursor) bootstraps again, and the install
  * replaces what the interrupted one left (`SnapshotAwareStateStore.bootstrap`).
+ *
+ * ## A store that is behind is replaced, not caught up
+ *
+ * A store whose own cursor is below the best candidate's `takenAt` is installed
+ * over, not only one that has never synced, and the install REPLACES whatever it
+ * computed itself (`SnapshotAwareStateStore.bootstrap` wipes it first, once the
+ * document's head and floor have been checked). Catching up from the local cursor
+ * instead would mean fetching the gap after a long absence, which is the historical
+ * `eth_getLogs` range a public node may refuse and exactly what a snapshot exists
+ * to avoid. A store at or ahead of every candidate is kept, untouched.
  */
 export async function bootstrapFromSnapshot(
 	store: SnapshotAwareStateStore,

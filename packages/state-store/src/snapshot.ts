@@ -316,19 +316,42 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	 * transaction to join: where atomicity is unavailable, the ORDER has to be
 	 * the safe one.
 	 *
-	 * ## An earlier install is replaced, never built on
+	 * ## Whatever the store held is replaced, never built on
 	 *
-	 * A snapshot that carries history is SEVERAL `applyBlock`s, so a download cut
-	 * short part-way leaves the marker, the floor and some later blocks, and no
-	 * cursor (it rides the last block). That store is not a complete install and is
-	 * not treated as one (`openAndBootstrap` finds no cursor and bootstraps again),
-	 * but replaying a document over it would offer blocks the store already holds,
-	 * which every backend refuses. So a store that already carries a snapshot origin
-	 * is WIPED first (`revertTo(-1)`, which drops the marker with the rows), once the
-	 * new document's head and floor have been checked. The same holds for a
-	 * complete earlier install a caller chose to replace with a more advanced one:
-	 * laying a floor's live rows over it would keep every row the newer snapshot no
-	 * longer has.
+	 * An install REPLACES the store: once the new document's head and floor have
+	 * been checked (so a refused document still changes nothing), the store is
+	 * WIPED (`revertTo(-1)`, which drops the rows, the recorded blocks and any
+	 * origin marker) and the document's cursor key is cleared, and only then is the
+	 * marker written. It is unconditional, because this handle has no verb that says
+	 * whether the store holds anything, and a wipe of an empty store is a no-op.
+	 * Three stores reach it holding state, and each is wrong to build on:
+	 *
+	 * - **An interrupted install.** A snapshot that carries history is SEVERAL
+	 *   `applyBlock`s, so a download cut short part-way leaves the marker, the floor
+	 *   and some later blocks, and no cursor (it rides the last block). That is not
+	 *   a complete install and is not treated as one (`openAndBootstrap` finds no
+	 *   cursor and bootstraps again), and replaying a document over it would offer
+	 *   blocks the store already holds, which every backend refuses.
+	 * - **A complete earlier install** a caller chose to replace with a more
+	 *   advanced one: laying a floor's live rows over it would keep every row the
+	 *   newer snapshot no longer has.
+	 * - **A store that computed its own state** and is behind the snapshot
+	 *   (`bootstrapFromSnapshot` installs whenever the local cursor is below the
+	 *   best candidate). The floor carries only LIVE rows, so a row the chain deleted
+	 *   between this store's tip and the floor would survive as a stale row nobody
+	 *   reports, and a floor at or below the store's own tip would be refused by
+	 *   `applyBlock`. A tab that is behind starts from the snapshot rather than
+	 *   catching up from its cursor, because the gap after a long absence is the
+	 *   historical `eth_getLogs` range a public node may refuse, which is what a
+	 *   snapshot exists to avoid.
+	 *
+	 * The cursor is cleared BEFORE the rows, for the reason the marker goes down
+	 * first: a revert leaves cursors alone (how far the caller got is not entity
+	 * state), so without this a replaced store's old cursor would sit over a
+	 * partly installed snapshot, and a download cut short would leave a store that
+	 * claims to have synced to a block its rows are not the state of. Cleared, an
+	 * interrupted install is cursor-less whatever the store held before, which is
+	 * the case the next boot already bootstraps again.
 	 */
 	async bootstrap(
 		snapshot: SnapshotDocument | SnapshotReader,
@@ -350,9 +373,11 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 			let next = await blocks.next();
 			if (next.done) throw new Error(`a snapshot document ended before its floor block`);
 
-			// a store that already carries a snapshot origin holds a PREVIOUS install:
-			// replaced whole, never built on (see "An earlier install" above)
-			if (this.origin !== undefined) await this.revertTo(-1);
+			// whatever the store held (a previous install, or state it computed itself)
+			// is replaced whole, never built on (see "Whatever the store held" above):
+			// the cursor first, so no step leaves an old cursor over new rows
+			if (head.cursor) await this.inner.clearCursor(head.cursor.key);
+			await this.revertTo(-1);
 
 			const marker: SnapshotOrigin = {format: SNAPSHOT_ORIGIN_FORMAT, block: head.floor};
 			await this.inner.writeSeamRecord('snapshotOrigin', JSON.stringify(marker));

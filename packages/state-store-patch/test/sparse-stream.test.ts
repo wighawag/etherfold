@@ -118,6 +118,22 @@ describe('a sparse stream, pruned at the finality depth', () => {
 		await expect(store.revertTo(START)).rejects.toThrow(/finality depth of 64/);
 		await expect(store.revertTo(START)).rejects.toThrow(/re-?index/i);
 	});
+
+	it('still WIPES, because the state below block 0 is empty whatever was pruned', async () => {
+		// what `EntityEventProcessor.reset()` and a snapshot install over this store
+		// call: refusing it for want of patches would refuse the one revert whose
+		// answer is known without them.
+		await store.prune();
+
+		await store.revertTo(-1);
+
+		expect(await pointsOf(store, '0xevil')).toBeUndefined();
+		expect(await store.getCurrent('token', {id: String(sparseBlock(3).number)})).toBeUndefined();
+		expect(store.retainedReversals()).toEqual([]);
+		// and it starts again at any height, the tip and the recorded blocks gone with the rows
+		await award(store, sparseBlock(0), '0xgood', 1);
+		expect(await pointsOf(store, '0xgood')).toBe(1);
+	});
 });
 
 describe('a sparse stream nobody has pruned', () => {

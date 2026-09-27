@@ -374,6 +374,49 @@ describe('a snapshot that carries history above its floor', () => {
 	});
 });
 
+describe('a snapshot installed over a store that computed its own state', () => {
+	it('leaves NO cursor when the download is cut short, never the old one over the new rows', async () => {
+		// a revert leaves cursors alone, so without clearing it the store would claim
+		// to have synced to its old tip over rows that are the snapshot's floor, and
+		// the next boot would index on from there instead of installing again.
+		const inner = new MemoryStateStore([TOKEN, ACCOUNT]);
+		await inner.applyBlock(block(TAKEN_AT - 100), [owns('9', '0xzed', 1)], {key: 'lastSync', value: 'self-at-900'});
+		const stopped = await handWritten([
+			{
+				format: 2,
+				processor: 'proc-v1',
+				savedAt: '',
+				takenAt: block(TAKEN_AT + 5),
+				floor: TAKEN_AT,
+				cursor: {key: 'lastSync', value: 'snap'},
+			},
+			{
+				declare: 'token',
+				id: ['id'],
+				fields: [
+					['owner', 'text'],
+					['transferCount', 'integer'],
+				],
+			},
+			{block: block(TAKEN_AT)},
+			{entity: 'token'},
+			['1', '0xalice', 3],
+			// the document stops inside the block above the floor, short of the cut
+			{block: block(TAKEN_AT + 3)},
+			{entity: 'token'},
+			['1', '0xcarol', 4],
+		]);
+
+		await expect((await openSnapshotAware(inner)).bootstrap(stopped)).rejects.toThrow(/cut/);
+
+		// the floor landed over a wiped store, and no cursor says it is complete
+		expect(await inner.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
+		expect(await inner.readCursor('lastSync')).toBeUndefined();
+		expect(await inner.getCurrent('token', {id: '9'})).toBeUndefined();
+		expect((await openSnapshotAware(inner)).snapshotOrigin).toBe(TAKEN_AT);
+	});
+});
+
 describe('the retention a bootstrapped store reports', () => {
 	it('is floored at the snapshot block, never the `unbounded` a fresh store would claim', async () => {
 		const fresh = new MemoryStateStore([TOKEN, ACCOUNT]);
