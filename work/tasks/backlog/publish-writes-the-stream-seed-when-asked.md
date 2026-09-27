@@ -4,7 +4,6 @@ slug: publish-writes-the-stream-seed-when-asked
 spec: a-build-publishes-what-a-browser-app-starts-from
 blockedBy: [publish-writes-a-state-snapshot-a-browser-app-starts-from]
 covers: [3, 11]
-needsAnswers: true
 ---
 
 ## What to build
@@ -13,12 +12,21 @@ With `--seed`, `publish` also writes a stream seed of the stream the canonical g
 
 Without `--seed`, nothing about the stream is written: the seed is opt-in because under a never-delete layout an hourly job would otherwise store a full copy of a long stream every run.
 
+> RE-SCOPED (maintainer, 2026-09-27, answering this task's needs-attention questions). The first attempt found two gaps; both are decided and are part of this task:
+>
+> 1. **The database records its stream's full source identity.** `StreamSeed.context.source` needs the per-event source hash entries (`sourceHashesOf(source)`, including `streamHash`), and the database stored only the 32-bit wire context, so no seed built from it could pass a tab's digest check. Persist the source hash entries at fold time (in the generation registry row, or beside the stored stream's coverage, whichever the schema makes natural; record the choice in `## Decisions`), and build the seed's source identity from them. `publish` stays node-free: no `--node-url`, no `--deployments`. There are no users yet, so no migration is owed for databases written before the change: a database without the recorded identity is refused for `--seed` by name (the state snapshot is unaffected). Assert that the digest the seed carries equals the canonical generation's stream digest.
+> 2. **The seed is the COMPACTED stream.** Everything in it is at or below the cut, so final: drop every matched apply/retract pair (ADR-0006's pair-compaction) so the seed carries exactly the final chain. It installs under the core coherence rule unchanged (no height with two block hashes), and two producers of the same chain publish the same bytes and the same content hash, which a pin (ADR-0065) relies on. Do NOT loosen core's coherence check. Test a stored stream that saw a reorg below the cut.
+>
+> The first attempt's work is kept on the branch (the observation `a-stored-stream-seed-with-a-reorg-is-refused-as-incoherent`), and a near-complete draft of the rest (server producer, `--seed` flag, stream-keyed index entry, printed pin, tests for chunked reads, pair dropping and index merging) may still be at `/tmp/etherfold-publish-seed/wip.patch` outside the repo; reuse it if present. ADR-0095 carries the decision in its section "The stream seed is opt-in, at both ends".
+
 ## Acceptance criteria
 
 - [ ] With `--seed`, the published seed installs through the browser's existing seed install and passes its coherence checks (digest, coverage), covering exactly up to the cut.
 - [ ] A tab that installs the seed and the snapshot, then re-folds the seed with the same processor, reaches the snapshot's state.
 - [ ] Without `--seed`, no seed body is written and the index has no seed entry for this stream, while another stream's existing entry is kept.
 - [ ] The printed hash is the one `pinnedStreamSeedContentHash` / the install's pin check accepts.
+- [ ] The database records the source hash entries at fold time, and the seed's digest equals the canonical generation's stream digest; a database without them is refused for `--seed` by name, and `publish` takes no node or deployments.
+- [ ] A stored stream with a reorg below the cut publishes a seed without the matched apply/retract pair, which installs and passes the unchanged coherence check.
 - [ ] Tests cover the new behaviour, mirroring the existing seed suites.
 
 ## Blocked by
