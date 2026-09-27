@@ -433,13 +433,18 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 	const deathListeners = new Set<(death: HostDeath) => void>();
 
 	/**
-	 * ASK THE HOST TO STOP, and say whether it answered.
+	 * TELL THE HOST THIS TAB IS LETTING GO, and say whether it was QUIETED.
 	 *
-	 * `stopIndexing` is the only quiet this port can establish: when it answers, the
-	 * cycle in flight has LANDED and no other will start (`serve.ts`), so the store
-	 * has no write of the fold's in flight. That is the precondition a shape needs
-	 * before it may kill its host, and the difference between a clean shutdown and a
-	 * database wedged for ever.
+	 * A stop is the only quiet this port can establish: when the host answers
+	 * `quiesced: true`, the cycle in flight has LANDED and no other will start
+	 * (`serve.ts`), so the store has no write of the fold's in flight. That is the
+	 * precondition a shape needs before it may kill its host, and the difference
+	 * between a clean shutdown and a database wedged for ever.
+	 *
+	 * It is posted as `letGo` and NOT as `stopIndexing`, because a host other tabs
+	 * still hold must not stop for this one (a SharedWorker's): the shape answers
+	 * `quiesced: false` for such a tab and the fold goes on. See the case on the
+	 * envelope.
 	 *
 	 * It does NOT go through `request()`, because by the time this runs the port is
 	 * closed and every caller's promise has already been refused; this is the port's
@@ -466,16 +471,18 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 			const withinMs = (lifetime.watch?.everyInSeconds ?? 1) * 1000;
 			const timer = setTimeout(() => finish(false), withinMs);
 			const stopWaiting = listen(access.endpoint, (data: unknown) => {
-				if (isPortResponse(data) && data.id === id) finish(data.ok);
+				if (isPortResponse(data) && data.id === id) {
+					finish(data.ok && data.case === 'letGo' && (data.value as PortResponseValue<'letGo'>).quiesced);
+				}
 			});
 			try {
 				access.endpoint.postMessage({
 					protocol: INDEXER_PORT_PROTOCOL,
 					kind: 'request',
 					id,
-					case: 'stopIndexing',
+					case: 'letGo',
 					payload: undefined,
-				} satisfies PortRequest<'stopIndexing'>);
+				} satisfies PortRequest<'letGo'>);
 			} catch {
 				// An endpoint that cannot be posted to is already gone, which is the same
 				// answer as one that does not reply.
@@ -889,9 +896,11 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 		 * host is asked to STOP before it is released. An app calling this on unmount
 		 * is the commonest way a worker is ended mid-fold, and ending a worker
 		 * mid-fold is what can wedge its IndexedDB database for ever on WebKit. A
-		 * `stopIndexing` that answers is a promise that the cycle in flight landed and
-		 * no other will start (see `serve.ts`), which is exactly the quiet a shape
-		 * needs before it may kill anything.
+		 * `letGo` answered `quiesced: true` is a promise that the cycle in flight
+		 * landed and no other will start (see `serve.ts`), which is exactly the quiet
+		 * a shape needs before it may kill anything. A host other tabs still hold (a
+		 * SharedWorker's) is not stopped for this one: it answers `quiesced: false`
+		 * and goes on folding for them.
 		 *
 		 * Everything the APP can observe still happens synchronously: no further
 		 * events, and every call in flight rejected now rather than when the host gets

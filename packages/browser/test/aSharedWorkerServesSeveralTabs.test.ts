@@ -110,9 +110,18 @@ function attachTab(scope: ReturnType<typeof sharedWorkerScope>): {
 	/** EVERY message the host posted at THIS tab, ours or not. */
 	received: {kind?: string; id?: number; case?: string}[];
 	close: () => void;
+	/**
+	 * LET GO AS A BROWSER TAB DOES: `port.close()`, and the host's end of the wire
+	 * closed only once the port has finished letting go (it has told the access to
+	 * `close`), so whatever the port posted on its way out is DELIVERED. Resolves
+	 * with what the port told the access.
+	 */
+	letGo: () => Promise<{quiesced: boolean}>;
 } {
 	const channel = new MessageChannel();
 	const received: {kind?: string; id?: number; case?: string}[] = [];
+	let released!: (state: {quiesced: boolean}) => void;
+	const releasedWith = new Promise<{quiesced: boolean}>((resolve) => (released = resolve));
 	const tabEnd = channel.port2 as unknown as MessageEndpoint;
 	tabEnd.addEventListener('message', (event) => received.push(event.data as {kind?: string}));
 	tabEnd.start?.();
@@ -123,7 +132,10 @@ function attachTab(scope: ReturnType<typeof sharedWorkerScope>): {
 		// What `close` does to the HOST is the shape's business, and a SharedWorker
 		// serving other tabs is not taken down by one of them letting go: this
 		// releases the tab's own end of the wire and nothing else.
-		close: () => channel.port2.close(),
+		close: (state) => {
+			channel.port2.close();
+			released(state);
+		},
 	});
 	return {
 		port,
@@ -131,6 +143,12 @@ function attachTab(scope: ReturnType<typeof sharedWorkerScope>): {
 		close: () => {
 			port.close();
 			channel.port1.close();
+		},
+		letGo: async () => {
+			port.close();
+			const state = await releasedWith;
+			channel.port1.close();
+			return state;
 		},
 	};
 }
@@ -345,6 +363,102 @@ describe('a SharedWorker serving several tabs from one host', () => {
 			expect(progress.indexing).toBe(true);
 			expect(await transfersAcross(first.port)).toBe(EXPECTED_A.transfers);
 			expect(await stateFrom(databaseName)).toEqual(EXPECTED_A);
+		} finally {
+			host.dispose();
+			first.close();
+			scope.restore();
+		}
+	});
+
+	/**
+	 * ONE TAB LETTING GO, WITH ITS GOODBYE DELIVERED.
+	 *
+	 * `IndexerPort.close()` asks for quiet before it lets go, and a browser DELIVERS
+	 * what a tab posted before it closed its port. The case above closes the host's
+	 * end of the wire in the same turn, which drops that message in flight; this one
+	 * lets the tab finish letting go the way a browser would, and only then looks.
+	 */
+	it('goes on folding for the tab that stayed when another lets go and the host hears it', async () => {
+		const databaseName = freshName();
+		const chain = gatedChain(103);
+		const scope = sharedWorkerScope();
+		const host = sharedHostOver(databaseName, chain, 4);
+		const first = attachTab(scope);
+		const second = attachTab(scope);
+
+		try {
+			await until(first.port, (progress) => progress.lastToBlock === 103);
+
+			// The tab leaving is told the host was NOT quieted for it: others hold it.
+			expect(await second.letGo()).toEqual({quiesced: false});
+			chain.release();
+
+			await untilAtTip(first.port);
+			// Long enough for a stop the leaving tab had asked for to have landed: the
+			// cycle it would wait on has finished, and the driver rests at the tip.
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			const progress = await first.port.progress();
+			expect(progress.indexing).toBe(true);
+			expect(host.progress().indexing).toBe(true);
+			expect(await transfersAcross(first.port)).toBe(EXPECTED_A.transfers);
+			expect(await stateFrom(databaseName)).toEqual(EXPECTED_A);
+		} finally {
+			host.dispose();
+			first.close();
+			second.close();
+			scope.restore();
+		}
+	});
+
+	/**
+	 * THE LAST TAB LETTING GO IS ASKED FOR QUIET, because nothing is left to fold
+	 * for and the browser is about to end the worker: ending it mid-write is what can
+	 * wedge its database for ever on WebKit (see `HostAccess.close`).
+	 */
+	it('stops the fold when the last tab lets go, and not before', async () => {
+		const scope = sharedWorkerScope();
+		const host = sharedHostOver(freshName(), fakeChain(), 4);
+		const first = attachTab(scope);
+		const second = attachTab(scope);
+
+		try {
+			await untilAtTip(first.port);
+
+			expect(await first.letGo()).toEqual({quiesced: false});
+			expect(host.progress().indexing).toBe(true);
+
+			// The last one: the host is asked to stop, and answers.
+			expect(await second.letGo()).toEqual({quiesced: true});
+			expect(host.progress().indexing).toBe(false);
+		} finally {
+			host.dispose();
+			first.close();
+			second.close();
+			scope.restore();
+		}
+	});
+
+	/**
+	 * A TAB REACHING AN INSTANCE THE BROWSER HAS NOT ENDED YET, after the last one
+	 * let go, is folded for, exactly as the fresh instance a moment later would.
+	 */
+	it('starts the fold again for a tab that attaches after the last one let go', async () => {
+		const scope = sharedWorkerScope();
+		const host = sharedHostOver(freshName(), fakeChain(), 4);
+		const first = attachTab(scope);
+
+		try {
+			await untilAtTip(first.port);
+			expect(await first.letGo()).toEqual({quiesced: true});
+			expect(host.progress().indexing).toBe(false);
+
+			const next = attachTab(scope);
+			try {
+				const progress = await until(next.port, (moved) => moved.indexing);
+				expect(progress.indexing).toBe(true);
+			} finally {
+				next.close();
+			}
 		} finally {
 			host.dispose();
 			first.close();

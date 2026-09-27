@@ -61,9 +61,10 @@ export type HostAccess = {
 	 */
 	readonly close?: (state: {
 		/**
-		 * `true` only when the host answered a `stopIndexing`, which is a promise
-		 * that the cycle in flight LANDED and no other will start. `false` means the
-		 * host did not answer -- it is being let go rather than shut down.
+		 * `true` only when the host answered the port's `letGo` by STOPPING, which is
+		 * a promise that the cycle in flight LANDED and no other will start. `false`
+		 * means the host did not answer, or did not stop because other tabs still
+		 * hold it (a SharedWorker's) -- it is being let go rather than shut down.
 		 */
 		quiesced: boolean;
 	}) => void;

@@ -314,6 +314,12 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 				return backing.startIndexing();
 			case 'stopIndexing':
 				return backing.stopIndexing();
+			case 'letGo':
+				// A STOP, always: whether this tab was the last one holding the host is the
+				// shape's to decide, and a shape that must not stop for it never forwards it
+				// (see the case on the envelope).
+				await backing.stopIndexing();
+				return {quiesced: true};
 			case 'reconfigure': {
 				const asked = request.payload as PortCases['reconfigure']['request'];
 				return backing.reconfigure(asked.source);

@@ -80,7 +80,7 @@ export function dedicatedWorkerHost(create: () => Worker): HostAccess {
 		// `addEventListener` meeting a one-signature structural type, not a
 		// difference in behaviour.
 		endpoint: worker as unknown as MessageEndpoint,
-		// Only a host that answered `stopIndexing` is killed; see the note above.
+		// Only a host that answered `letGo` with `quiesced: true` is killed; see the note above.
 		close: ({quiesced}) => {
 			if (quiesced) worker.terminate();
 		},

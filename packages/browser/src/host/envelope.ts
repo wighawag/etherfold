@@ -461,6 +461,26 @@ export type PortCases = {
 	 */
 	readonly stopIndexing: {readonly request: undefined; readonly response: HostProgress};
 	/**
+	 * THIS TAB IS LETTING GO: quiet the host if nothing else holds it, and say
+	 * whether it did.
+	 *
+	 * Posted by the port itself on its way out (`IndexerPort.close`), never by an
+	 * app, and deliberately NOT a `stopIndexing`: that one is an app asking for the
+	 * fold to stop, meant for the host, and a SharedWorker host must honour it for
+	 * every tab. This one is a tab leaving, and a host several tabs hold must not
+	 * stop for it while the others stay.
+	 *
+	 * The HOST answers it as a stop, always, because a host is never told how many
+	 * tabs hold it (ADR-0082): what reaches it is only what its endpoint forwards.
+	 * So the decision is the shape's. A dedicated worker, a main-thread wire and the
+	 * LAST tab of a SharedWorker forward it, and the host stops once the cycle in
+	 * flight has landed and answers `quiesced: true`, which is the only quiet a shape
+	 * may kill a host on (`HostAccess.close`). A SharedWorker tab that is NOT the
+	 * last is detached where it attached (`sharedWorker.ts`) and answered
+	 * `quiesced: false` there, and the fold goes on for the others.
+	 */
+	readonly letGo: {readonly request: undefined; readonly response: {readonly quiesced: boolean}};
+	/**
 	 * RECONFIGURE THE SOURCE: fold it in a generation BESIDE the live one.
 	 *
 	 * The SOURCE and nothing else, because the source is the only half of a
