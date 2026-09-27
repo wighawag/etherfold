@@ -38,6 +38,7 @@
 		"vitest": "^4.1.8"
 	},
 	"dependencies": {
+		"@eip-1193/over-port": "^0.1.0",
 		"@etherfold/core": "workspace:*",
 		"@etherfold/state-store": "workspace:*",
 		"@etherfold/state-store-indexeddb": "workspace:*",

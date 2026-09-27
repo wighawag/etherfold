@@ -14,7 +14,12 @@ import type {HostingShape} from './envelope.js';
  * (`connectToIndexerHost`), and this is the wire it speaks over.
  */
 export type MessageEndpoint = {
-	postMessage(message: unknown): void;
+	/**
+	 * `transfer` is what a `Worker`, a `MessagePort` and a worker scope all take as
+	 * their second argument. The port uses it for ONE message, the `connect` that
+	 * hands a host the provider's `MessagePort`; nothing else on the wire transfers.
+	 */
+	postMessage(message: unknown, transfer?: Transferable[]): void;
 	addEventListener(type: 'message', listener: (event: {data: unknown}) => void): void;
 	removeEventListener(type: 'message', listener: (event: {data: unknown}) => void): void;
 	/**

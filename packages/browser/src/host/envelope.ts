@@ -31,6 +31,7 @@ import type {EntityId, EntityIdPrefix, Listing, NormalizedEntity} from '@etherfo
 import type {PublicationState} from '../publication.js';
 import type {StreamSeedState} from '../publishedStart.js';
 import type {PortError} from './errors.js';
+import type {HostSettings} from './settings.js';
 
 export type {PortError} from './errors.js';
 
@@ -388,6 +389,24 @@ export type PortCases = {
 	 * replace, with the cost merely moved to the other end of the wire.
 	 */
 	readonly ping: {readonly request: undefined; readonly response: undefined};
+	/**
+	 * WHAT THE TAB HANDS ITS HOST WHEN IT CONNECTS: the cloneable settings, and the
+	 * chain as a `MessagePort` speaking `@eip-1193/over-port` (ADR-0082, amended).
+	 *
+	 * Sent by the port itself, FIRST, on every host it obtains (the first one and
+	 * every restart), so it is ahead of anything else on the wire and a restarted
+	 * host is told again what the dead one was told. The `provider` port rides in
+	 * the TRANSFER list, which is why this is the one request whose payload is not a
+	 * plain clone.
+	 *
+	 * Answered with where the fold is, or refused naming the fields that disagree
+	 * (`HostSettingsConflictError`). A main-thread host refuses it outright: it
+	 * takes its provider and settings from `init`, on the thread that holds them.
+	 */
+	readonly connect: {
+		readonly request: {readonly settings: HostSettings; readonly provider?: MessagePort};
+		readonly response: HostProgress;
+	};
 	/**
 	 * START THE DRIVER, and answer where the fold is now.
 	 *

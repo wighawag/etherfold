@@ -110,8 +110,33 @@ export function dedicatedWorkerHost(create: () => Worker): HostAccess {
  * ```
  *
  * The processor crosses as an IMPORT and never as a message, because it is code
- * and closures (ADR-0082). So is the provider, for the same reason: what the tab
- * holds is a port, and what builds the chain connection is this file.
+ * and closures (ADR-0082).
+ *
+ * ## Or the TAB hands over the provider and the settings
+ *
+ * The provider and the cloneable settings may be LEFT OUT here, and the host then
+ * waits for the tab to send them when it connects: the chain as a `MessagePort`
+ * (a wallet's provider served by the tab, or a node in another worker), and
+ * `source`, `config`, `publication`, `catchUpWithinSeconds` and the rest of
+ * `HostSettings`. What stays here is the code.
+ *
+ * ```ts
+ * // indexer.worker.ts
+ * hostIndexerInThisWorker({
+ *   createState: async (context, {signal}) =>
+ *     openForWriting(await createBrowserStateStore(processor.entities), {signal}),
+ *   createProcessor: (store) => new EntityEventProcessor(store, processor),
+ * });
+ *
+ * // the tab
+ * const indexer = connectToIndexerHost(dedicatedWorkerHost(() => new Worker(...)), {
+ *   provider: window.ethereum,
+ *   settings: {source, config, publication: {locations: [PUBLICATION]}},
+ * });
+ * ```
+ *
+ * A value given in both places must agree, or the tab's connect is refused naming
+ * it (`HostSettingsConflictError`).
  *
  * The store is opened for WRITING here, which is what makes the host the writer
  * and every tab a reader.

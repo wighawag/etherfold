@@ -1,4 +1,6 @@
 import type {Abi} from '@etherfold/core';
+import {providerOverPort, serveProvider, type ProviderOverPort} from '@eip-1193/over-port';
+import type {EIP1193GenericRequest} from 'eip-1193';
 import {logs} from 'named-logs';
 import {
 	isPortPush,
@@ -6,7 +8,9 @@ import {
 	isPortResponse,
 	pushSubscribedBy,
 	pushUnsubscribedBy,
+	type PortCases,
 	type PortPushName,
+	type PortRequest,
 } from './envelope.js';
 import {executionScopeName, listen, type HostAccess, type MessageEndpoint} from './endpoint.js';
 import {serveIndexerHost, type HostedIndexerSpec, type IndexerHost} from './serve.js';
@@ -152,16 +156,26 @@ export function sharedWorkerHost(create: () => SharedWorker): HostAccess {
  * ```
  *
  * The SPEC is the dedicated helper's spec, unchanged, and that is the point: the
- * processor crosses as an IMPORT and never as a message, the provider is built
- * here for the same reason, and the store is opened for WRITING here, which is
- * what makes this host the writer and every tab a reader. Only the helper's name
- * differs, and all it does differently is where it gets its wires.
+ * processor crosses as an IMPORT and never as a message, and the store is opened
+ * for WRITING here, which is what makes this host the writer and every tab a
+ * reader. Only the helper's name differs, and all it does differently is where it
+ * gets its wires.
+ *
+ * The provider and the settings may be left out here and handed over by the tabs
+ * instead (`connectToIndexerHost(access, {provider, settings})`), as for the
+ * dedicated helper. With SEVERAL tabs each handing over a provider, the host folds
+ * through the first attached tab's and moves to the next one's when that tab goes
+ * away, rather than failing every request; with none left, it retries as it does
+ * when a provider is down (`NoTabProviderError`). See `oneEndpointOverEveryClient`.
  */
 export function hostIndexerInThisSharedWorker<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined>(
 	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
 ): IndexerHost {
 	const scope = thisSharedWorker();
-	const clients = oneEndpointOverEveryClient();
+	// An entry that built its own provider takes none from a tab, so the tabs' are not
+	// pooled: their connects reach the host as they were sent, and the host refuses a
+	// second provider by name.
+	const clients = oneEndpointOverEveryClient({poolTabProviders: spec.provider === undefined});
 	// Attached BEFORE the host is served, and synchronously: a `connect` event is
 	// dispatched after this entry point's script has run, so the first tab's port
 	// arrives at a listener that is already there.
@@ -219,6 +233,26 @@ type EveryClient = {
 };
 
 /**
+ * NO TAB HOLDS A PROVIDER THIS HOST CAN USE: none has handed one over yet, or every
+ * one that did has gone.
+ *
+ * RETRYABLE, deliberately, which is what "with no tab left, it behaves as it does
+ * today when the provider fails" comes to: the driver retries it as it retries a
+ * node that is down (`isRetryable`), and the next tab that connects with a
+ * provider is the one it succeeds through.
+ */
+export class NoTabProviderError extends Error {
+	constructor() {
+		super(
+			`no tab attached to this SharedWorker indexer host holds a provider it can use: the tabs that handed one ` +
+				`over have gone, and none that is left handed one over. The fold resumes through the next tab that ` +
+				`connects with \`connectToIndexerHost(access, {provider})\`.`,
+		);
+		this.name = 'NoTabProviderError';
+	}
+}
+
+/**
  * EVERY ATTACHED CLIENT'S WIRE, PRESENTED AS ONE ENDPOINT.
  *
  * This is the whole of what the shared shape adds, and it exists so that the
@@ -260,39 +294,149 @@ type EveryClient = {
  * fixture's own traffic; the host already ignores what is not its own, and this
  * ignores it one step earlier.
  *
- * ## What it does NOT do: notice that a tab went away
+ * **A TAB'S PROVIDER JOINS A POOL.** A tab may hand the host the chain when it
+ * connects (`connectToIndexerHost(access, {provider})`), and several tabs each
+ * may. The HOST is handed one provider, the pool, which folds through the first
+ * attached tab that handed one over and moves to the next when that tab is let
+ * go, rather than failing every request. This is the only place that knows which
+ * tab sent which port, so it is the only place that can.
  *
- * Nothing tells a SharedWorker that a client is gone. There is no disconnect
- * event, `MessagePort`'s own `close` event is not on every engine this ships to,
- * and that is precisely why "closing one tab does not stop the fold" needs no
- * code: the host is never told, so it never acts. The cost is an entry per tab
- * that ever attached, and a post to a closed port, which the platform drops
- * silently -- bounded by the worker's own lifetime, since the browser ends it
- * when the last client goes. A client whose port THROWS on a post is dropped,
- * which is all the liveness that is actually observable here.
+ * ## What it notices of a tab going away, which is not much
+ *
+ * Nothing tells a SharedWorker that a client is gone on every engine. There is no
+ * disconnect event, and `MessagePort`'s own `close` event is not on every engine
+ * this ships to. The HOST never needs to know, which is why "closing one tab does
+ * not stop the fold" needs no code there. The POOL does, and uses what can be
+ * observed: a client whose port THROWS on a post is let go, and so is one whose
+ * port (or whose provider port) fires `close`, where the engine fires it (node,
+ * and current Chromium). Letting a tab go closes its provider, which rejects
+ * what was waiting on it and sends it to the next tab. On an engine that fires
+ * neither, a tab that vanished mid-request is not noticed, and that request waits
+ * as it would on a provider that stopped answering. The cost otherwise is an
+ * entry per tab that ever attached, and a post to a closed port, which the
+ * platform drops silently -- bounded by the worker's own lifetime, since the
+ * browser ends it when the last client goes.
  */
-function oneEndpointOverEveryClient(): EveryClient {
+function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): EveryClient {
 	type Client = {
 		readonly endpoint: MessageEndpoint;
 		/** WHICH pushes THIS tab asked for. The host counts them; this says which tab wanted which. */
 		readonly subscribed: Set<PortPushName>;
+		/** The chain THIS tab handed over, while it is attached and the host accepted it. */
+		provider?: ProviderOverPort;
 	};
 	const clients = new Set<Client>();
-	/** WHO ASKED, under the id this endpoint gave the host, and what THEY called it. */
-	const asked = new Map<number, {client: Client; id: number}>();
+	/**
+	 * WHO ASKED, under the id this endpoint gave the host, and what THEY called it,
+	 * plus what to do with the answer where the question was a `connect`.
+	 */
+	const asked = new Map<number, {client: Client; id: number; answered?: (ok: boolean) => void}>();
 	const listeners = new Set<(event: {data: unknown}) => void>();
 	let nextId = 1;
+	/** The ONE provider the host is handed: every tab's, served as one (see `pooled`). */
+	let pool: {readonly channel: MessageChannel; readonly served: {close(): void}} | undefined;
+
+	/**
+	 * LET A TAB GO, and its provider with it.
+	 *
+	 * Closing the tab's provider REJECTS every request still waiting on it (code
+	 * `4900`), which is what `pooled` below reads as "that tab went away" and
+	 * retries through the next tab's: without it, a fold waiting on a tab that closed
+	 * would wait for ever.
+	 */
+	function letGo(client: Client, why: string, error?: unknown): void {
+		if (!clients.delete(client)) return;
+		client.provider?.close();
+		namedLogger.info(`a tab attached to this indexer host ${why}, so it was let go`, ...(error ? [error] : []));
+	}
 
 	function post(client: Client, message: unknown): void {
 		try {
 			client.endpoint.postMessage(message);
 		} catch (error) {
 			// A port that refuses a post is a tab that is gone, and it is the only
-			// evidence of that this shape ever gets. Dropped rather than raised: the
-			// host is answering somebody else and has no caller to report this to.
-			clients.delete(client);
-			namedLogger.info(`a tab attached to this indexer host could not be posted to, so it was let go`, error);
+			// evidence of that this shape ever gets on every engine. Dropped rather than
+			// raised: the host is answering somebody else and has no caller to report
+			// this to.
+			letGo(client, `could not be posted to`, error);
 		}
+	}
+
+	/**
+	 * EVERY TAB'S PROVIDER, AS ONE: the host folds through the first attached tab that
+	 * handed one over, and when that tab goes away, through the next.
+	 *
+	 * A request that fails on a tab which is STILL attached is that provider's answer
+	 * (a range hint, an archive refusal, a node that is down) and is passed on as it
+	 * came, for the fetcher to read. One that fails because its tab was let go
+	 * meanwhile is not an answer at all, and is asked again of the next tab. With no
+	 * tab left, it fails the way a provider that is down fails (`NoTabProviderError`,
+	 * retryable).
+	 */
+	const pooled = {
+		async request(args: EIP1193GenericRequest): Promise<unknown> {
+			for (;;) {
+				const using = [...clients].find((client) => client.provider);
+				if (!using?.provider) throw new NoTabProviderError();
+				try {
+					return await using.provider.request(args as never);
+				} catch (error) {
+					if (clients.has(using)) throw error;
+				}
+			}
+		},
+	};
+
+	/**
+	 * A TAB'S `connect`, as the host is handed it.
+	 *
+	 * The host folds through ONE provider, so what it is handed is the POOL, once,
+	 * with the first tab's connect; every later tab's provider joins the pool and its
+	 * connect reaches the host carrying its settings only. A tab whose connect the
+	 * host REFUSES leaves the pool again, since its settings (its chain, perhaps) are
+	 * not the ones being folded.
+	 */
+	function connectOf(client: Client, request: PortRequest): {forwarded: PortRequest; answered?: (ok: boolean) => void} {
+		const payload = request.payload as PortCases['connect']['request'];
+		if (!options.poolTabProviders || !payload?.provider) return {forwarded: request};
+		const tabPort = payload.provider;
+		const provider = providerOverPort(tabPort);
+		client.provider = provider;
+		// Where the engine fires one, the tab's provider port closing is the tab going
+		// away (or letting its provider go), which is the same thing to this host.
+		(tabPort as unknown as {addEventListener?: (type: 'close', listener: () => void) => void}).addEventListener?.(
+			'close',
+			() => {
+				if (client.provider === provider) letGo(client, `closed the provider it handed over`);
+			},
+		);
+		const {provider: _handed, ...rest} = payload;
+		let carriesPool = false;
+		if (!pool) {
+			const channel = new MessageChannel();
+			pool = {channel, served: serveProvider(pooled, channel.port1)};
+			carriesPool = true;
+		}
+		const forwarded = {
+			...request,
+			payload: carriesPool ? {...rest, provider: pool.channel.port2} : rest,
+		} as PortRequest;
+		return {
+			forwarded,
+			answered(ok) {
+				if (ok) return;
+				if (client.provider === provider) client.provider = undefined;
+				provider.close();
+				tabPort.close();
+				if (carriesPool && pool) {
+					// The host refused the connect that carried the pool, and closed its end:
+					// the next tab's connect carries a fresh one.
+					pool.served.close();
+					pool.channel.port1.close();
+					pool = undefined;
+				}
+			},
+		};
 	}
 
 	return {
@@ -301,6 +445,7 @@ function oneEndpointOverEveryClient(): EveryClient {
 				if (isPortResponse(message)) {
 					const waiting = asked.get(message.id);
 					asked.delete(message.id);
+					waiting?.answered?.(message.ok);
 					// An answer to a question nobody is waiting for: the client went away
 					// while the host was computing it. Dropped, because there is nowhere to
 					// put it.
@@ -328,6 +473,14 @@ function oneEndpointOverEveryClient(): EveryClient {
 		attach(endpoint) {
 			const client: Client = {endpoint, subscribed: new Set<PortPushName>()};
 			clients.add(client);
+			// THE TAB'S WIRE CLOSING, where the engine fires a `close` event for it (node,
+			// and the Chromium engines that ship it), is the tab going away: said here
+			// rather than waited for until a post fails, which on most engines it never
+			// does.
+			(endpoint as unknown as {addEventListener(type: 'close', listener: () => void): void}).addEventListener(
+				'close',
+				() => letGo(client, `closed its port`),
+			);
 			listen(endpoint, (data) => {
 				if (!isPortRequest(data)) return;
 				const subscribing = pushSubscribedBy(data.case);
@@ -335,8 +488,9 @@ function oneEndpointOverEveryClient(): EveryClient {
 				const unsubscribing = pushUnsubscribedBy(data.case);
 				if (unsubscribing) client.subscribed.delete(unsubscribing);
 				const id = nextId++;
-				asked.set(id, {client, id: data.id});
-				const renumbered = {...data, id};
+				const connecting = data.case === 'connect' ? connectOf(client, data) : undefined;
+				asked.set(id, {client, id: data.id, ...(connecting?.answered ? {answered: connecting.answered} : {})});
+				const renumbered = {...(connecting?.forwarded ?? data), id};
 				for (const listener of [...listeners]) listener({data: renumbered});
 			});
 		},

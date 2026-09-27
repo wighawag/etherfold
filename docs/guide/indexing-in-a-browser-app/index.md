@@ -55,39 +55,77 @@ The same trap is not limited to the `unsubscribe` handle. Attach `indexer.syncin
 
 Indexing is a fold over every log your contract ever emitted, and it writes to IndexedDB as it goes: 45.6 ms per block of store writes on Chromium on the measured workload, and a stream-seed install whose longest main-thread block measured 190 ms on a mid-range phone in the recommended shape and up to 632 ms in others ([the finding](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-a-published-stream-seed-costs-to-install.md)). On the thread that paints, that is jank. So the indexer is **hosted** ([ADR-0082](../../adr/0082-the-indexer-is-hosted-and-a-tab-holds-a-port-to-its-host.md)): a host owns the store and the loop, your tab holds a **port** to it, and the default host is a **dedicated worker**. Every recipe below shows that shape first.
 
-The worker shape is two pieces. The worker entry, which your bundler builds with the rest of the app (the processor is code, so it is IMPORTED there and never sent as a message):
+The worker shape is two pieces. The worker entry, which your bundler builds with the rest of the app, holds the CODE: the processor is code, so it is IMPORTED there and never sent as a message.
 
 ```ts
 // indexer.worker.ts
 import {hostIndexerInThisWorker} from '@etherfold/browser';
-import {createState, createProcessor, provider, source} from './indexer.js';
+import {createState, createProcessor} from './indexer.js';
 
-hostIndexerInThisWorker({
-	createState,
-	createProcessor,
-	// built HERE: a provider is an object with methods, so it cannot cross a port
-	provider,
-	source,
-	config: {stream: {finality: 12}},
-});
+hostIndexerInThisWorker({createState, createProcessor});
 ```
 
-And the tab's side, one line:
+And the tab's side, which hands the host what only the tab knows: the chain the user connected, and the settings.
 
 ```ts
 import {connectToIndexerHost, createProgressReadable, dedicatedWorkerHost} from '@etherfold/browser';
+import {source} from './indexer.js';
 
 const indexer = connectToIndexerHost(
 	dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
+	{
+		provider: window.ethereum, // the user's wallet, served to the worker by this tab
+		settings: {source, config: {stream: {finality: 12}}, publication: {locations: [PUBLICATION]}},
+	},
 );
 const progress = createProgressReadable(indexer); // a store, like `syncing`
 ```
 
-The host starts indexing on its own. What the tab gets is the port: typed reads (`indexer.reads`, or `createPortReadSurface` over your declarations), control (`startIndexing`, `stopIndexing`, `reconfigure`), `checkTxInclusion`, and status PUSHED to it (`indexer.onProgress`, which `createProgressReadable` wraps). Everything a recipe below passes to the main-thread hook as an option (`publication`, `catchUpWithinSeconds`, `seed`, `keepStream`, `promotion`, `claimWithinSeconds`) goes in the worker entry's spec under the same name, and what the hook publishes on `syncing.publication` and `syncing.streamSeed` reaches the tab as `progress.publication` and `progress.streamSeed`, with the same values. A failure that stops the host (a refused bundle, a seed with no keeper) is `progress.failure`, beside `phase: 'refused'`, where the main thread would have rejected `init`.
+The host starts indexing on its own as soon as it has a provider and a source. What the tab gets is the port: typed reads (`indexer.reads`, or `createPortReadSurface` over your declarations), control (`startIndexing`, `stopIndexing`, `reconfigure`), `checkTxInclusion`, and status PUSHED to it (`indexer.onProgress`, which `createProgressReadable` wraps). What the hook publishes on `syncing.publication` and `syncing.streamSeed` reaches the tab as `progress.publication` and `progress.streamSeed`, with the same values. A failure that stops the host (a refused bundle, a seed with no keeper) is `progress.failure`, beside `phase: 'refused'`, where the main thread would have rejected `init`.
 
-**Two things differ, and both are deliberate.** The PROVIDER is built in the worker, so it is an EIP-1193 provider over your chain's own RPC endpoint rather than the user's wallet, which lives in the tab and cannot cross (the first hazard below is about the wallet's chain, not the indexer's). And a value the host needs is decided in the worker entry, not handed over at run time by the tab.
+### The provider and the settings: from the tab, or from the entry
 
-**The main thread is the documented alternative**, and it is the same host, adapted: `createIndexerState(spec, options)` then `init({provider, source, config})`, with reactive `syncing`, `status` and `state` stores in place of the port. It is reasonable in development (the hot-reload verbs below, `updateProcessor` and `addGeneration`, are the hook's), for a small state over a short history, and where your bundler cannot emit a worker. What it costs is the fold on the UI thread, measured above. `indexer.mainThreadHost()` gives it a port, so code written against the port is the same in both shapes. The reference implementation linked at the top of this page runs this main-thread shape, indexing through `connection.provider`; the recipes below lead with the worker. A **SharedWorker** (`sharedWorkerHost` in the tab, `hostIndexerInThisSharedWorker` in the entry, with the same spec) is opt-in: one store connection across tabs, at the price of a worker that needs `chrome://inspect` to debug.
+A provider is an object with methods, so it cannot be cloned into a worker; a `MessagePort` can be transferred into one. So the provider crosses as a port speaking [`@eip-1193/over-port`](https://www.npmjs.com/package/@eip-1193/over-port), and errors keep their `code` and `data` on the way, so a node's range hint or archive refusal is read by the fetcher exactly as from a local provider. `provider` takes one of three things:
+
+- **A provider object**, such as a wallet's (`window.ethereum`, or `connection.provider`). The port serves it on a fresh `MessageChannel` itself; every request the indexer makes passes through the tab as a message, but the fold stays in the worker.
+- **A `MessagePort` whose other end is already served elsewhere**, which is the case for a node that runs in ANOTHER worker, such as [`webevm`](https://github.com/wighawag/webevm). Requests then go worker to worker and the tab relays nothing. Pass a FUNCTION that returns a fresh port, so a restarted host can be handed one again (a port can be transferred only once):
+
+```ts
+import {serveProvider} from '@eip-1193/over-port';
+
+// the node's worker serves whatever port it is handed:
+//   self.addEventListener('message', (e) => e.data?.provide && serveProvider(node, e.data.provide));
+function nodePort(): MessagePort {
+	const {port1, port2} = new MessageChannel();
+	nodeWorker.postMessage({provide: port1}, [port1]);
+	return port2;
+}
+
+const indexer = connectToIndexerHost(dedicatedWorkerHost(() => new Worker(/* ... */)), {
+	provider: nodePort,
+	settings: {source},
+});
+```
+
+- **Nothing**, where the worker entry builds its own provider (from an RPC URL, say), which it still may: `hostIndexerInThisWorker({createState, createProcessor, provider, source})` starts at once, as it always did.
+
+`settings` is the cloneable part of the spec (`source`, `config`, `publication`, `catchUpWithinSeconds`, `seed`, `promotion`), under the same names the entry and the main-thread hook use. It is checked on the tab and a value that cannot cross is refused naming its field, so what is CODE stays in the entry: `createState`, `createProcessor`, a `keepStream`, a `fetch` override. A host whose entry leaves out the provider or the source WAITS (`phase: 'waiting'`) until a tab hands them over. The recipes below put these values in the worker entry's spec for brevity; each of the cloneable ones may come from the tab's `settings` instead, under the same name.
+
+**A value is given in one place.** Where the entry and the tab both give one, they must agree, and a host that has started keeps the settings it started with (change the source with `reconfigure`). A tab that disagrees is refused, naming the fields, and the host folds what it already had; `onConnect` tells the tab, and the refusal is logged either way:
+
+```ts
+connectToIndexerHost(access, {
+	provider,
+	settings,
+	onConnect: (outcome) => {
+		if (!outcome.accepted) console.error(outcome.error.name, (outcome.error as {fields?: string[]}).fields);
+	},
+});
+```
+
+A **SharedWorker** host takes a provider from every tab that hands one over, folds through the first, and when that tab goes away it switches to another connected tab's provider rather than failing every request. With no tab left it retries as it does when a provider is down, and resumes through the next tab that connects.
+
+**The main thread is the documented alternative**, and it is the same host, adapted: `createIndexerState(spec, options)` then `init({provider, source, config})`, with reactive `syncing`, `status` and `state` stores in place of the port. It is reasonable in development (the hot-reload verbs below, `updateProcessor` and `addGeneration`, are the hook's), for a small state over a short history, and where your bundler cannot emit a worker. What it costs is the fold on the UI thread, measured above. `indexer.mainThreadHost()` gives it a port, so code written against the port is the same in both shapes. The reference implementation linked at the top of this page runs this main-thread shape, indexing through `connection.provider`; the recipes below lead with the worker. A **SharedWorker** (`sharedWorkerHost` in the tab, `hostIndexerInThisSharedWorker` in the entry, with the same spec and the same tab-side options) is opt-in: one store connection across tabs, at the price of a worker that needs `chrome://inspect` to debug.
 
 ## Starting from a published snapshot: the snapshot-only mode
 
