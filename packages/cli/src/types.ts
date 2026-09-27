@@ -2,7 +2,7 @@ import type {Abi, IndexingSource, PromotionConfig} from '@etherfold/core';
 import type {RetentionSetting} from '@etherfold/processor-entities';
 
 /**
- * The seven commands: the six deployment INTENTS, named for what a process DOES
+ * The eight commands: the six deployment INTENTS, named for what a process DOES
  * rather than for the component split behind it (`CONTEXT.md`, "The COMMAND SET
  * names deployment intents, not components"), plus `upload`, which is not a way to
  * RUN a deployment at all but a CLIENT action against one that is running: it
@@ -13,11 +13,16 @@ import type {RetentionSetting} from '@etherfold/processor-entities';
  * `node` is the sixth intent (ADR-0094): `run`'s chain, store and database, with NO
  * processor and NO source, receiving its code only by `etherfold upload`. `run` is
  * CONFIGURED and receives none.
+ *
+ * `publish` is the second CLIENT-kind command (ADR-0095): it runs no deployment
+ * either, but READS a database any folding command wrote and writes the canonical
+ * generation out as the state snapshot a browser app starts from, under a
+ * publication index, into a directory.
  */
-export type CommandName = 'run' | 'node' | 'build' | 'fetch' | 'index' | 'serve' | 'upload';
+export type CommandName = 'run' | 'node' | 'build' | 'fetch' | 'index' | 'serve' | 'upload' | 'publish';
 
 /**
- * The flags ANY of the seven takes, exactly as commander hands them over.
+ * The flags ANY of the eight takes, exactly as commander hands them over.
  *
  * Everything is a string and everything is OPTIONAL, deliberately: requiredness
  * lives in the resolver (`resolveCommandConfig`) and not in the parser, so every
@@ -85,6 +90,8 @@ export type Options = {
 	to?: string;
 	/** `--admin-token <token>`, behind it `ADMIN_TOKEN`: the credential `upload` PRESENTS to the node's admin guard. */
 	adminToken?: string;
+	/** `--out <dir>`: the directory `publish` writes a publication into. */
+	out?: string;
 };
 
 /**
@@ -295,6 +302,25 @@ export type UploadConfig = {
 	readonly adminToken: string;
 };
 
+/**
+ * `publish`: a READER of a database any folding command wrote (ADR-0095). The
+ * database, the directory the publication goes into, and optionally the processor
+ * it is meant to publish. No chain, no store choice, no port and no name: it folds
+ * nothing and learns the named indexer from the rows, as `serve` does.
+ */
+export type PublishConfig = {
+	readonly command: 'publish';
+	readonly destination: DatabaseTarget;
+	/** The directory the bodies and `publication.json` are written into. Created if absent. */
+	readonly out: string;
+	/**
+	 * The BUNDLE this publication is meant to be of, as given. When present, a
+	 * database whose canonical generation is another processor is refused, naming
+	 * both identities (a `build` whose final promotion failed leaves exactly that).
+	 */
+	readonly processor?: string;
+};
+
 /** One row of the command table, resolved. */
 export type ResolvedConfig<ABI extends Abi = Abi> =
 	| RunConfig<ABI>
@@ -303,7 +329,8 @@ export type ResolvedConfig<ABI extends Abi = Abi> =
 	| FetchConfig<ABI>
 	| IndexConfig<ABI>
 	| ServeConfig
-	| UploadConfig;
+	| UploadConfig
+	| PublishConfig;
 
 /** The resolved shape of ONE named command. */
 export type ConfigFor<C extends CommandName, ABI extends Abi = Abi> = Extract<ResolvedConfig<ABI>, {command: C}>;

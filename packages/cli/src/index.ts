@@ -90,6 +90,16 @@ export {
 } from './indexCommand.js';
 export {node, nodeMain, run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
 export {serve, type ServeDependencies, type StartedServer} from './serve.js';
+export {
+	describePublication,
+	nodePublicationFiles,
+	publish,
+	publishMain,
+	writePublication,
+	type PublicationFiles,
+	type PublishDependencies,
+	type WrittenPublication,
+} from './publishCommand.js';
 import {newlyStalledFollowers, rebuildUntilLevel} from './followers.js';
 import {DEFAULT_PRUNE_BUDGET, pruneHeldMore, pruneHeldUntilComplete} from './pruning.js';
 import {printMessage} from './printMessage.js';

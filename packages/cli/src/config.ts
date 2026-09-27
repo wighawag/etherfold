@@ -75,7 +75,8 @@ export type ConfigInput =
 	| 'dropOnPromotion'
 	| 'override'
 	| 'to'
-	| 'adminToken';
+	| 'adminToken'
+	| 'out';
 
 /**
  * What ONE command does with ONE input.
@@ -265,6 +266,13 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			"the credential the node's admin guard checks, the same name the node reads it by. Prefer " +
 			'ADMIN_TOKEN: a secret on a command line is visible to every process on the host',
 	},
+	out: {
+		flag: '--out <dir>',
+		describe:
+			'the directory `etherfold publish` writes a publication into, created if absent: content-addressed bodies ' +
+			'that are never overwritten, and the publication index (publication.json) naming the latest per generation. ' +
+			'Nothing an earlier publication wrote there is deleted, so point it at the same directory every time',
+	},
 };
 
 /**
@@ -279,8 +287,15 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
  * | `serve` | NOT ACCEPTED | none | NOT ACCEPTED | database, required | port and host | NOT ACCEPTED | none |
  * | `upload` | the BUNDLE, required | NOT ACCEPTED | NOT ACCEPTED | NOT ACCEPTED | none | REQUIRED | none; `--to` + `ADMIN_TOKEN`, required |
+ * | `publish` | the BUNDLE it means to publish, optional | NOT ACCEPTED | NOT ACCEPTED | database, required; `--out`, required | none | NOT ACCEPTED (learned from the rows) | none |
  *
- * `upload` is the one row that is not a deployment intent: it is a CLIENT of a
+ * `publish` is the other row that is not a deployment intent (ADR-0095): it READS a
+ * database any folding command wrote and writes its canonical generation out as the
+ * state snapshot a browser app starts from, into `--out`, the one input no other
+ * command owns. It folds nothing, so everything a fold is configured with is refused
+ * there, and it learns the named indexer from the rows as `serve` does.
+ *
+ * `upload` is the one row that is not a deployment intent and SENDS something: it is a CLIENT of a
  * running `node`, sending an already-built bundle to its admin route and exiting
  * (ADR-0085). Its two inputs no other command owns are the node it sends TO
  * (`--to` / `UPLOAD_TO`, never the chain's `-n` / `ETH_NODE_URI`) and the admin
@@ -349,6 +364,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
+		out: 'refused',
 	},
 	node: {
 		// NOT ACCEPTED (ADR-0094): what it folds arrives by `etherfold upload`, and each
@@ -374,6 +390,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
+		out: 'refused',
 	},
 	build: {
 		processor: 'required',
@@ -395,6 +412,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
+		out: 'refused',
 	},
 	fetch: {
 		processor: 'refused',
@@ -416,6 +434,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
+		out: 'refused',
 	},
 	index: {
 		processor: 'required',
@@ -437,6 +456,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'optional',
 		to: 'refused',
 		adminToken: 'refused',
+		out: 'refused',
 	},
 	serve: {
 		processor: 'refused',
@@ -458,6 +478,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'refused',
 		to: 'refused',
 		adminToken: 'refused',
+		out: 'refused',
 	},
 	upload: {
 		processor: 'required',
@@ -479,6 +500,32 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		override: 'refused',
 		to: 'required',
 		adminToken: 'required',
+		out: 'refused',
+	},
+	publish: {
+		// the bundle it is MEANT to publish, optional: given, a database whose canonical
+		// generation is another processor is refused, naming both (ADR-0095)
+		processor: 'optional',
+		source: 'refused',
+		nodeUrl: 'refused',
+		rps: 'refused',
+		store: 'refused',
+		db: 'required',
+		retention: 'refused',
+		pruneInterval: 'refused',
+		port: 'refused',
+		host: 'refused',
+		autoSetup: 'refused',
+		// learned from the rows, as `serve` learns it: one database is one named indexer
+		indexer: 'refused',
+		ingestEndpoint: 'refused',
+		ingestToken: 'refused',
+		promotion: 'refused',
+		dropOnPromotion: 'refused',
+		override: 'refused',
+		to: 'refused',
+		adminToken: 'refused',
+		out: 'required',
 	},
 };
 
@@ -730,6 +777,50 @@ const NODE_REPLACES_NOTHING_AT_START =
 	'to it replaces a pending successor without being asked, because an upload is already a deliberate act. The ' +
 	'commands that take --override are `run`, `build` and `index`.';
 
+// ---------------------------------------------------------------------------------------------------
+// WHY `publish` TAKES A DATABASE, A DIRECTORY AND (OPTIONALLY) A BUNDLE, AND NOTHING ELSE (ADR-0095)
+// ---------------------------------------------------------------------------------------------------
+// `publish` READS what a folding command wrote and writes it out as files. Everything
+// that configures a FOLD belongs to the command that folded, so each is refused with
+// where it lives; and `--out` is refused everywhere else, because only `publish`
+// writes a publication.
+// ---------------------------------------------------------------------------------------------------
+
+const NOT_A_PUBLISHER =
+	'--out names the directory `etherfold publish` writes a publication into, and this command publishes ' +
+	'nothing. To publish what a database holds as the state snapshot a browser app starts from, run ' +
+	'`etherfold publish --db <url> --out <dir>` over it (ADR-0095).';
+
+const PUBLISH_HAS_NO_SOURCE =
+	'`publish` writes out what the database ALREADY holds: the canonical generation carries its own stream ' +
+	'digest, which is its source and stream config, and a source given here would be one nothing reads. The ' +
+	'source is the configuration of the command that FOLDED the database (`build`, `run` or `index`).';
+
+const PUBLISH_MAKES_NO_CHAIN_CALL =
+	'`publish` makes no chain call: it reads a database something else folded, and the cut it takes is ' +
+	'`tip - finality` of what that fold reached, not of the chain.';
+
+const PUBLISH_FOLDS_NOTHING =
+	'`publish` folds nothing, registers nothing and moves no pointer: it READS the canonical generation of a ' +
+	'database and writes it out as files. How a database is folded, kept and promoted is the configuration of ' +
+	'the command that folded it (`build`, `run`, `node` or `index`).';
+
+const PUBLISH_SERVES_NOTHING =
+	'`publish` binds no port and serves nothing: it writes files into --out, and whatever serves that directory ' +
+	'(a static host, a bucket, a git repository) is the operator\u2019s.';
+
+const PUBLISH_IS_NOT_A_WIRE =
+	'`publish` neither sends nor receives the ingest wire, which carries raw logs from `fetch` to `index`. It ' +
+	'reads a database and writes files.';
+
+const PUBLISH_IS_NOT_AN_UPLOAD =
+	'`publish` addresses no node and presents no admin credential: it reads a database and writes files into ' +
+	'--out. Sending a bundle to a running node is `etherfold upload`.';
+
+const PUBLISH_LEARNS_THE_NAME =
+	'`publish` learns the named indexer from the rows it reads, as `serve` does: a named indexer IS a database ' +
+	'(ADR-0053), so the canonical generation of the one this database holds is what it publishes.';
+
 const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput, string>>>>> = {
 	run: {
 		pruneInterval: PRUNES_PER_CYCLE,
@@ -737,6 +828,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		ingestToken: NO_WIRE_COMBINED,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
+		out: NOT_A_PUBLISHER,
 	},
 	node: {
 		processor: NODE_RECEIVES_ITS_PROCESSOR,
@@ -747,6 +839,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		override: NODE_REPLACES_NOTHING_AT_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
+		out: NOT_A_PUBLISHER,
 	},
 	build: {
 		pruneInterval: PRUNES_PER_CYCLE,
@@ -759,6 +852,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		dropOnPromotion: NEVER_PROMOTES_BUILD,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
+		out: NOT_A_PUBLISHER,
 	},
 	fetch: {
 		processor: NO_PROCESSOR_FETCH,
@@ -774,6 +868,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		override: NO_PROCESSOR_TO_START,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
+		out: NOT_A_PUBLISHER,
 	},
 	index: {
 		nodeUrl: NO_CHAIN_INDEX,
@@ -783,6 +878,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		dropOnPromotion: NEVER_PROMOTES_INDEX,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
+		out: NOT_A_PUBLISHER,
 	},
 	serve: {
 		processor: NO_PROCESSOR_SERVE,
@@ -800,6 +896,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		override: NO_PROCESSOR_TO_START,
 		to: NOT_A_SENDER,
 		adminToken: CHECKS_ADMIN_FROM_ENV,
+		out: NOT_A_PUBLISHER,
 	},
 	upload: {
 		source: UPLOAD_CARRIES_ITS_CONTRACTS,
@@ -817,6 +914,26 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		promotion: UPLOAD_DOES_NOT_PROMOTE,
 		dropOnPromotion: UPLOAD_DOES_NOT_PROMOTE,
 		override: OVERRIDE_IS_THE_NODES,
+		out: NOT_A_PUBLISHER,
+	},
+	publish: {
+		source: PUBLISH_HAS_NO_SOURCE,
+		nodeUrl: PUBLISH_MAKES_NO_CHAIN_CALL,
+		rps: PUBLISH_MAKES_NO_CHAIN_CALL,
+		store: PUBLISH_FOLDS_NOTHING,
+		retention: PUBLISH_FOLDS_NOTHING,
+		pruneInterval: PUBLISH_FOLDS_NOTHING,
+		port: PUBLISH_SERVES_NOTHING,
+		host: PUBLISH_SERVES_NOTHING,
+		autoSetup: PUBLISH_SERVES_NOTHING,
+		indexer: PUBLISH_LEARNS_THE_NAME,
+		ingestEndpoint: PUBLISH_IS_NOT_A_WIRE,
+		ingestToken: PUBLISH_IS_NOT_A_WIRE,
+		promotion: PUBLISH_FOLDS_NOTHING,
+		dropOnPromotion: PUBLISH_FOLDS_NOTHING,
+		override: PUBLISH_FOLDS_NOTHING,
+		to: PUBLISH_IS_NOT_AN_UPLOAD,
+		adminToken: PUBLISH_IS_NOT_AN_UPLOAD,
 	},
 };
 
@@ -890,6 +1007,8 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 			return options.to;
 		case 'adminToken':
 			return options.adminToken;
+		case 'out':
+			return options.out;
 	}
 }
 
@@ -1468,6 +1587,15 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 							'fails CLOSED, so an upload without it is answered 401 and deploys nothing',
 					),
 				};
+			case 'publish': {
+				const processor = given('processor', options, env);
+				return {
+					command: 'publish',
+					destination: requirePublishedDatabase(options, env),
+					out: requirePublicationDirectory(options),
+					...(processor === undefined ? {} : {processor}),
+				};
+			}
 			case 'serve':
 			default:
 				return {
@@ -1481,6 +1609,31 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 	// the switch above produces exactly the arm named by `command`, which the
 	// compiler cannot see through a generic parameter
 	return resolved as ConfigFor<C, ABI>;
+}
+
+/** The database `publish` reads. Required and never defaulted, like every database input. */
+function requirePublishedDatabase(options: Options, env: EnvRecord): DatabaseTarget {
+	const db = given('db', options, env);
+	if (db === undefined) {
+		throw new Error(
+			`${nameOf('db')} is required by \`etherfold publish\`, and it is the libSQL database whose canonical ` +
+				`generation is published, e.g. --db file:./etherfold.db: the one \`build\`, \`run\` or \`index\` wrote.`,
+		);
+	}
+	return {kind: 'database', db};
+}
+
+/** Where `publish` writes. Required, never defaulted: a publication nobody pointed anywhere would land beside the cwd. */
+function requirePublicationDirectory(options: Options): string {
+	const out = nonBlank(options.out);
+	if (out === undefined) {
+		throw new Error(
+			`${nameOf('out')} is required by \`etherfold publish\`, and it is the directory the publication is written ` +
+				`into (bodies named by their content hash, and publication.json naming them). It is not defaulted, so a ` +
+				`publication never lands somewhere nobody named. There is no environment fallback for it.`,
+		);
+	}
+	return out;
 }
 
 /**

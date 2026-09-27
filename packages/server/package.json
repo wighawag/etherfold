@@ -26,6 +26,8 @@
 	},
 	"dependencies": {
 		"@etherfold/core": "workspace:*",
+		"@etherfold/processor-entities": "workspace:*",
+		"@etherfold/state-store-sqlite": "workspace:*",
 		"hono": "^4.13.3",
 		"named-logs": "^0.4.1",
 		"remote-sql": "^0.0.7"
