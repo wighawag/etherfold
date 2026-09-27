@@ -246,6 +246,44 @@ export function blockAtOrBeforeStatement(timestamp: number, names: TableNames): 
 }
 
 /**
+ * The highest recorded block at or below a HEIGHT, riding the primary key.
+ *
+ * What a snapshot's pointer is (ADR-0095): the store records only blocks that
+ * carry logs, so a cut usually has no row of its own, and the state as of it is
+ * the state as of the last recorded block beneath it -- the one block below the
+ * cut whose hash and timestamp this store can give.
+ */
+export function blockAtOrBelowStatement(number: number, names: TableNames): Statement {
+	return {
+		sql: `SELECT ${BLOCK_COLUMNS} FROM ${names.blocks} WHERE number <= ? ORDER BY number DESC LIMIT 1`,
+		args: [number],
+	};
+}
+
+/**
+ * One PAGE of every version live as of a block, for one entity: the snapshot
+ * producer's read (`VersionedStateStore.liveRowsAsOf`).
+ *
+ * Keyset-paged on the surrogate `_rowid` (the table's INTEGER PRIMARY KEY), so a
+ * page resumes where the previous one ended with a seek rather than an OFFSET,
+ * and the whole read is ONE pass over the table however many pages it takes:
+ * never a whole entity held at once. It is a scan by construction, which is why
+ * it is this backend's own and never on the seam (ADR-0021).
+ */
+export function liveRowsAsOfStatement(
+	entity: NormalizedEntity,
+	at: number,
+	afterRowid: number,
+	limit: number,
+	names: TableNames,
+): Statement {
+	return {
+		sql: `SELECT * FROM ${names.entity(entity.name)} WHERE ${ROWID} > ? AND ${AS_OF_PREDICATE} ORDER BY ${ROWID} LIMIT ?`,
+		args: [afterRowid, at, at, limit],
+	};
+}
+
+/**
  * The highest recorded block: the TIP a retention window is measured back from.
  *
  * It rides the primary key, so it is a one-row index probe rather than a scan.

@@ -13,6 +13,7 @@ export * from './enforcement.js';
 export * from './pruning.js';
 export * from './errors.js';
 export * from './store.js';
+export * from './snapshot-document.js';
 export * from './snapshot.js';
 export * from './mutation-context.js';
 export * from './memory.js';

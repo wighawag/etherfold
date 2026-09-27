@@ -1,5 +1,12 @@
 import {assertBlockNumber} from './blocks.js';
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
+import {
+	readSnapshot,
+	SnapshotFormatError,
+	type SnapshotBlock,
+	type SnapshotDocument,
+	type SnapshotReader,
+} from './snapshot-document.js';
 import type {CursorWrite} from './cursor.js';
 import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
@@ -41,16 +48,19 @@ import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.j
  *
  * The obligation is identical on all of them -- refuse below the floor, report
  * the floor, refuse a revert that reaches under it -- and it is expressible
- * entirely through the seam a backend already implements: the rows install as
- * ONE `applyBlock` at the snapshot's block, and the floor persists through the
- * cursor port. Writing it once here means a new backend inherits it rather than
+ * entirely through the seam a backend already implements: a snapshot's blocks
+ * install as ordinary `applyBlock`s (the floor's live rows as ONE of them), and
+ * the floor persists as one of the seam's own records. Writing it once here means a new backend inherits it rather than
  * rediscovering the trap, which is precisely what the conformance suite asks of
  * it (`snapshot-bootstrap.ts` there runs these properties against every
  * backend).
  *
- * ## What a snapshot contains: CURRENT ROWS, and that is a decision
+ * ## What a snapshot contains: rows at a FLOOR, then the blocks above it
  *
- * See ADR-0028. The short of it is that history is roughly seven times the
+ * The document is format 2 (`snapshot-document.ts`, ADR-0095): the rows LIVE at
+ * a floor, then the changes of every later block up to the cut. How much history
+ * it carries is the producer's option, and the default (`none`) puts the floor at
+ * the cut, which is the current-rows snapshot ADR-0028 decided on. The short of it is that history is roughly seven times the
  * current state on the real measured workload (4,072 live rows against 29,393
  * versions, `work/notes/findings/sqlite-in-the-browser.md`) while the whole
  * gzipped event stream is 0.6 MB, so a snapshot carrying full history
@@ -59,109 +69,9 @@ import type {BlockPointer, EntityId, Mutation, NormalizedEntity} from './types.j
  * applying a block PRODUCES, and a write surface that could set `_lower` and
  * `_upper` directly could manufacture states no sequence of blocks could reach.
  * Current rows install as one ordinary block, through the verb every backend
- * already has.
+ * already has, and so does every block of history above them: replayed, never
+ * written as ranges.
  */
-
-/**
- * The on-the-wire version of the ENTITY snapshot envelope.
- *
- * Named for its envelope because it was not always the only format number a
- * snapshot carried in this repo: the free-form path's blob envelope had its own
- * (`BLOB_SNAPSHOT_FORMAT`, `@etherfold/core`) and a reader could hold both at
- * once, so they were separate constants with separate names rather than one
- * number a change to either would falsely invalidate the other. That envelope
- * is deleted with its path (ADR-0037) and this is the only one left; the NAME
- * stays, because a bare `SNAPSHOT_FORMAT` would be the coin toss the split
- * existed to prevent if a second artifact ever earns a number again.
- *
- * Bumped when the SHAPE changes in a way an older reader would misread. An
- * unknown format is refused (`SnapshotFormatError`) rather than parsed for the
- * fields that happen to be recognisable, because a snapshot half-understood is
- * state a client would accept and act on.
- *
- * ## It did NOT move when `processor` stopped being a declared version hash
- *
- * ADR-0086 changed where a `processor` label COMES FROM -- the identity the
- * producing deployment's arrival derived, rather than a hash of a field its
- * author wrote -- and that is a VALUE change, not a FORMAT change. It is worth
- * saying here because the opposite reading is reasonable: a consumer cannot tell
- * the two kinds of label apart by looking, and this repo's habit is to REFUSE a
- * document it cannot read rather than half-parse it (ADR-0040).
- *
- * What that habit protects against is a document whose SHAPE this build would
- * misread, and neither shape nor meaning moved: `processor` is the same field,
- * saying the same thing (WHICH FOLD computed these rows), carried the same way,
- * and it is opaque on both sides -- compared for EQUALITY and never parsed, which
- * is the invariant ADR-0086 rests on. So a label derived the old way is not
- * half-understood by a new reader; it simply is not this client's fold, and the
- * candidate rule already has the right answer for that: NOT A CANDIDATE
- * (`processor-mismatch`), or `SnapshotProcessorMismatchError` at install. A bump
- * would convert that precise refusal into `unreadable-format`, which tells a user
- * their app or the publisher is out of date when the truth is that the snapshot
- * is for another processor -- strictly less information, on the path where a
- * snapshot-seeded client has no stream to re-fold and nothing else to fall back
- * on.
- *
- * And nothing is published (`CONTEXT.md`), so no such document exists to be
- * refused either way: a bump would buy a distinction with no reader on either
- * side of it. Bump this when a FIELD appears, disappears or changes meaning --
- * which is what `a-snapshot-is-labelled-with-the-identity-it-was-computed-under`
- * weighed and decided against.
- */
-export const ENTITY_SNAPSHOT_FORMAT = 1;
-
-/**
- * State computed elsewhere, as of one block, ready to be installed.
- *
- * The metadata mirrors the free-form path's file envelope
- * (`{format, processor, savedAt, ...}`, see `.changeset/cli-snapshot-envelope.md`)
- * on purpose: the two paths carry different CONTENTS and the same claims about
- * where the contents came from, so a reader of one recognises the other.
- */
-export type StateSnapshot = {
-	readonly format: number;
-	/**
-	 * WHICH FOLD COMPUTED THESE ROWS: its identity, as the producing deployment's
-	 * ARRIVAL derived it (ADR-0086) -- the SHA-256 of a bundle's octets where there
-	 * are bytes.
-	 *
-	 * Checked for EQUALITY against the identity the local deployment was handed, so
-	 * state computed by different logic is refused rather than trusted. It is never
-	 * parsed, and nothing here has an opinion about which arrival produced either
-	 * side, which is what lets a producer and a consumer derive one two different
-	 * ways and still agree when they are the same fold.
-	 */
-	readonly processor: string;
-	/** When the snapshot was produced. Informational; nothing keys off it. */
-	readonly savedAt: string;
-	/**
-	 * The block the rows are the state AS OF, and therefore the store's history
-	 * floor once they are installed.
-	 */
-	readonly takenAt: BlockPointer;
-	/**
-	 * The cursor that belongs to these rows, installed in the SAME unit as them.
-	 *
-	 * Opaque here, as everywhere at this seam: it is a serialized `LastSync` and
-	 * only the processor above knows that. Optional only so that a store can be
-	 * seeded with rows in a test without inventing a cursor; a published snapshot
-	 * without one would have its consumer resume from the start block and index
-	 * over the rows it just installed.
-	 */
-	readonly cursor?: CursorWrite;
-	/** The LIVE rows at `takenAt`, as the upserts that reproduce them. */
-	readonly rows: readonly Mutation[];
-};
-
-/**
- * A snapshot minus its payload: enough to CHOOSE between mirrors without
- * downloading any of them.
- *
- * This is the entity-path counterpart of the free-form path's separate
- * `lastSync` file, and it is the same idea: the fields a client compares
- * (which block, which processor) are small and the rows are not.
- */
-export type SnapshotHead = Omit<StateSnapshot, 'rows'>;
 
 /**
  * What is written under the seam's `snapshotOrigin` record: small, versioned,
@@ -176,24 +86,16 @@ export type SnapshotHead = Omit<StateSnapshot, 'rows'>;
  *
  * It has to be durable at all because the trap comes back on RELOAD otherwise:
  * a floor held only in a JS closure is gone the next time the tab opens.
+ *
+ * Its `format` is the MARKER's own (`SNAPSHOT_ORIGIN_FORMAT`), not the document's
+ * (`ENTITY_SNAPSHOT_FORMAT`). The two used to share one number, which meant a new
+ * document format made every store bootstrapped under the previous one refuse to
+ * OPEN, though the marker (a block number) had not changed at all.
  */
 type SnapshotOrigin = {readonly format: number; readonly block: number};
 
-/** A snapshot whose envelope this build does not know how to read. */
-export class SnapshotFormatError extends Error {
-	readonly name = 'SnapshotFormatError';
-
-	constructor(
-		readonly found: unknown,
-		readonly supported: number = ENTITY_SNAPSHOT_FORMAT,
-	) {
-		super(
-			`snapshot format ${JSON.stringify(found)} is not one this build reads (it reads ${supported}). Reading the ` +
-				`fields that happen to be recognisable would install state understood only in part, which a client cannot ` +
-				`tell apart from state it understood fully.`,
-		);
-	}
-}
+/** The version of the `snapshotOrigin` marker's own shape. Unrelated to the document format. */
+const SNAPSHOT_ORIGIN_FORMAT = 1;
 
 /**
  * A snapshot computed by different logic than the processor about to use it.
@@ -373,8 +275,25 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	}
 
 	/**
-	 * Install a snapshot: check it, record where its contents came from, then
-	 * write the rows and their cursor as ONE unit.
+	 * Install a snapshot document: check its head, record where its contents came
+	 * from, then replay its blocks through `applyBlock`, the cursor riding the LAST.
+	 *
+	 * ## Streaming, one block at a time
+	 *
+	 * The document is inflated and parsed as it arrives (`readSnapshot`), and each
+	 * block is applied the moment the next one's opening line proves it complete, so
+	 * the install holds at most ONE block's mutations and never the document. A
+	 * block is one `applyBlock`, which is one atomic unit on every backend, so a
+	 * snapshot without history (`none`, the floor at the cut) holds its live rows
+	 * once, while they are written: that is intended (ADR-0095), and it is what keeps
+	 * installing a replay rather than a new verb on every backend.
+	 *
+	 * Everything checkable before a write is checked before one: the format and the
+	 * processor from the head, and the entity declarations and the floor block from
+	 * the first block, which is read in full before the marker goes down. A document
+	 * that goes wrong LATER (a download cut short) leaves the marker and whatever
+	 * blocks had landed; for a `none` snapshot that is the marker over an empty store,
+	 * the recoverable case below.
 	 *
 	 * ## The order, which is the interesting part
 	 *
@@ -396,28 +315,41 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	 * transaction to join: where atomicity is unavailable, the ORDER has to be
 	 * the safe one.
 	 */
-	async bootstrap(snapshot: StateSnapshot, options: {readonly processor?: string} = {}): Promise<void> {
-		if (snapshot.format !== ENTITY_SNAPSHOT_FORMAT) throw new SnapshotFormatError(snapshot.format);
-		if (options.processor !== undefined && options.processor !== snapshot.processor) {
-			throw new SnapshotProcessorMismatchError(options.processor, snapshot.processor, snapshot.takenAt.number);
+	async bootstrap(
+		snapshot: SnapshotDocument | SnapshotReader,
+		options: {readonly processor?: string} = {},
+	): Promise<void> {
+		const reader = isReader(snapshot) ? snapshot : await readSnapshot(snapshot);
+		const {head} = reader;
+		if (options.processor !== undefined && options.processor !== head.processor) {
+			await reader.cancel();
+			throw new SnapshotProcessorMismatchError(options.processor, head.processor, head.takenAt.number);
 		}
-		assertBlockNumber(snapshot.takenAt.number);
-		for (const row of snapshot.rows) {
-			if (row.type !== 'upsert') {
-				throw new Error(
-					`a snapshot carries the rows that are LIVE at its block, so it cannot contain a delete (\`` +
-						`${row.entity}\`). A row the processor deleted is simply absent from a snapshot; a delete here would ` +
-						`describe a version boundary the snapshot has no history to hold.`,
-				);
+		assertBlockNumber(head.takenAt.number);
+		assertBlockNumber(head.floor);
+
+		const blocks = reader.blocks({declarations: this.inner.declarations})[Symbol.asyncIterator]();
+		try {
+			// the FLOOR, read in full before anything is written: it is where a
+			// declaration this store does not have, or a malformed floor, is refused.
+			let next = await blocks.next();
+			if (next.done) throw new Error(`a snapshot document ended before its floor block`);
+
+			const marker: SnapshotOrigin = {format: SNAPSHOT_ORIGIN_FORMAT, block: head.floor};
+			await this.inner.writeSeamRecord('snapshotOrigin', JSON.stringify(marker));
+			this.origin = head.floor;
+			this.knownTip = head.floor;
+
+			while (!next.done) {
+				const block: SnapshotBlock = next.value;
+				await this.inner.applyBlock(block.block, block.mutations, block.last ? head.cursor : undefined);
+				this.knownTip = block.block.number;
+				if (block.last) return;
+				next = await blocks.next();
 			}
+		} finally {
+			await blocks.return?.();
 		}
-
-		const marker: SnapshotOrigin = {format: ENTITY_SNAPSHOT_FORMAT, block: snapshot.takenAt.number};
-		await this.inner.writeSeamRecord('snapshotOrigin', JSON.stringify(marker));
-		this.origin = snapshot.takenAt.number;
-		this.knownTip = snapshot.takenAt.number;
-
-		await this.inner.applyBlock(snapshot.takenAt, snapshot.rows, snapshot.cursor);
 	}
 
 	async applyBlock(block: BlockPointer, mutations?: readonly Mutation[], cursor?: CursorWrite): Promise<void> {
@@ -576,8 +508,12 @@ export async function openSnapshotAware(store: StateStoreBackend): Promise<Snaps
 				`re-bootstrap.`,
 		);
 	}
-	if (origin?.format !== ENTITY_SNAPSHOT_FORMAT || typeof origin.block !== 'number') {
-		throw new SnapshotFormatError(origin?.format);
+	if (origin?.format !== SNAPSHOT_ORIGIN_FORMAT || typeof origin.block !== 'number') {
+		throw new SnapshotFormatError(origin?.format, SNAPSHOT_ORIGIN_FORMAT);
 	}
 	return new SnapshotAwareStateStore(store, origin.block);
+}
+
+function isReader(value: SnapshotDocument | SnapshotReader): value is SnapshotReader {
+	return typeof (value as SnapshotReader).blocks === 'function' && 'head' in value;
 }

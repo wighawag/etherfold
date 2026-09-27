@@ -79,6 +79,7 @@ async function publish(store: StateStore, lastSync: Parameters<typeof createSnap
 			hash: `0xsnap${lastSync.lastToBlock.toString(16)}`,
 			timestamp: timestampOf(lastSync.lastToBlock),
 		},
+		entities: processor.entities,
 		rows,
 		lastSync,
 		// the identity the fold that computed these rows was handed, which is what
@@ -111,7 +112,7 @@ function mirror(snapshot: StateSnapshot) {
 	const asked: string[] = [];
 	const fetch = (async (input: string | URL | Request) => {
 		asked.push(String(input));
-		return {json: async () => snapshot} as Response;
+		return new Response(snapshot.document);
 	}) as unknown as typeof globalThis.fetch;
 	return {url: 'https://mirror.example/state.json', fetch, asked};
 }

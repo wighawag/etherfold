@@ -1,14 +1,13 @@
 import {
 	BlockNotRetainedError,
-	ENTITY_SNAPSHOT_FORMAT,
 	openSnapshotAware,
 	RevertBeyondSnapshotError,
+	SnapshotFormatError,
 	SnapshotProcessorMismatchError,
-	type StateSnapshot,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {expect} from 'vitest';
-import {CONFORMANCE_ENTITIES, LADDER_BASE, block, cases, owns} from '../fixtures.js';
+import {CONFORMANCE_ENTITIES, LADDER_BASE, block, burn, cases, owns, snapshotDocument} from '../fixtures.js';
 import type {ConformanceCase, StateStoreFactory} from '../types.js';
 
 const GROUP = 'bootstrapping from a snapshot';
@@ -50,17 +49,13 @@ export function snapshotBootstrapCases(
 	factory: StateStoreFactory,
 	capabilities: StateStoreCapabilities,
 ): ConformanceCase[] {
-	/** The minimal producer: the rows a test knows it wants, in the published shape. */
-	function snapshot(at: number, overrides: Partial<StateSnapshot> = {}): StateSnapshot {
-		return {
-			format: ENTITY_SNAPSHOT_FORMAT,
-			processor: 'conformance-processor-v1',
-			savedAt: '2026-08-24T00:00:00.000Z',
-			takenAt: block(at),
+	/** The minimal producer: the rows a test knows it wants, as a format-2 document (ADR-0095). */
+	function snapshot(at: number, overrides: {processor?: string} = {}): Promise<Uint8Array> {
+		return snapshotDocument(at, {
+			processor: overrides.processor,
 			cursor: {key: 'lastSync', value: `snapshot-at-${at}`},
 			rows: [owns('1', '0xalice', 7), owns('2', '0xbob', 2)],
-			...overrides,
-		};
+		});
 	}
 
 	/** A store from the factory, opened snapshot-aware and bootstrapped. The INNER one comes back too. */
@@ -68,7 +63,7 @@ export function snapshotBootstrapCases(
 		const inner = await factory(CONFORMANCE_ENTITIES);
 		const store = await openSnapshotAware(inner);
 		await store.migrate();
-		await store.bootstrap(snapshot(at), {processor: 'conformance-processor-v1'});
+		await store.bootstrap(await snapshot(at), {processor: 'conformance-processor-v1'});
 		return {inner, store};
 	}
 
@@ -88,7 +83,7 @@ export function snapshotBootstrapCases(
 			await store.migrate();
 
 			const refusal = await store
-				.bootstrap(snapshot(SNAPSHOT_BLOCK, {processor: 'some-other-version'}), {
+				.bootstrap(await snapshot(SNAPSHOT_BLOCK, {processor: 'some-other-version'}), {
 					processor: 'conformance-processor-v1',
 				})
 				.catch((error: unknown) => error);
@@ -97,6 +92,43 @@ export function snapshotBootstrapCases(
 			expect((refusal as Error).message).toContain('some-other-version');
 			expect((refusal as Error).message).toContain('conformance-processor-v1');
 			expect(await store.getCurrent('token', {id: '1'})).toBeUndefined();
+		},
+
+		'refuses a document of another format, installing nothing': async () => {
+			const store = await openSnapshotAware(await factory(CONFORMANCE_ENTITIES));
+			await store.migrate();
+			// format 1, as it was served: a JSON object, not a gzipped format-2 document
+			const formatOne = new TextEncoder().encode(
+				JSON.stringify({format: 1, processor: 'conformance-processor-v1', takenAt: block(SNAPSHOT_BLOCK), rows: []}),
+			);
+
+			await expect(store.bootstrap(formatOne)).rejects.toBeInstanceOf(SnapshotFormatError);
+			expect(store.snapshotOrigin).toBeUndefined();
+		},
+
+		'replays the blocks a snapshot carries above its floor, the cursor riding the last': async () => {
+			// what format 2 adds over the rows at one block (ADR-0095): installing is
+			// replaying blocks through `applyBlock`, so a backend needs nothing new for it
+			// and ends in the state AT THE CUT, whatever history it keeps.
+			const store = await openSnapshotAware(await factory(CONFORMANCE_ENTITIES));
+			await store.migrate();
+			const document = await snapshotDocument(SNAPSHOT_BLOCK, {
+				rows: [owns('1', '0xalice', 7), owns('2', '0xbob', 2)],
+				cursor: {key: 'lastSync', value: `snapshot-at-${SNAPSHOT_BLOCK + 9}`},
+				later: [
+					{block: block(SNAPSHOT_BLOCK + 4), mutations: [owns('1', '0xcarol', 8)]},
+					{block: block(SNAPSHOT_BLOCK + 9), mutations: [burn('2'), owns('3', '0xdave', 1)]},
+				],
+			});
+
+			await store.bootstrap(document, {processor: 'conformance-processor-v1'});
+
+			expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xcarol', transferCount: 8});
+			expect(await store.getCurrent('token', {id: '2'})).toBeUndefined();
+			expect(await store.getCurrent('token', {id: '3'})).toMatchObject({owner: '0xdave'});
+			expect(await store.readCursor('lastSync')).toBe(`snapshot-at-${SNAPSHOT_BLOCK + 9}`);
+			// the FLOOR is the store's floor, not the cut: the history above it was replayed
+			expect(store.snapshotOrigin).toBe(SNAPSHOT_BLOCK);
 		},
 
 		'goes on indexing from the snapshot block, so the rows and the new blocks are one state': async () => {

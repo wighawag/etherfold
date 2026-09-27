@@ -1,11 +1,17 @@
 import type {Abi, LastSync} from '@etherfold/core';
 import {
-	openSnapshotAware,
+	encodeSnapshot,
 	ENTITY_SNAPSHOT_FORMAT,
+	isReadableSnapshotHead,
+	openSnapshotAware,
+	readSnapshot,
+	SnapshotFormatError,
 	type BlockPointer,
+	type EntityDeclaration,
 	type Mutation,
 	type SnapshotAwareStateStore,
 	type SnapshotHead,
+	type SnapshotReader,
 	type StateSnapshot,
 	type StateStore,
 	type StateStoreBackend,
@@ -27,8 +33,9 @@ const logger = logs('@etherfold/processor-entities');
  * this module is where the behaviour lives now.
  *
  * This is that behaviour for a store of versioned rows. What differs is only the
- * shape of what is downloaded (`StateSnapshot`, at the seam, whose payload is
- * the LIVE rows rather than one blob) and one thing the blob shape had no
+ * shape of what is downloaded (a format-2 snapshot DOCUMENT, at the seam: rows at
+ * a floor then the blocks above it, gzipped and newline-delimited, ADR-0095,
+ * rather than one blob) and one thing the blob shape had no
  * counterpart for, because a blob has no history to lie about: a
  * bootstrapped store must report the floor its snapshot gives it, which
  * `openSnapshotAware` is responsible for and which this module simply must not
@@ -46,22 +53,22 @@ const logger = logs('@etherfold/processor-entities');
  *
  * ## What this is NOT
  *
- * It is not the publishing side. A snapshot as a first-class published artifact
- * -- who produces one and when, mirror layout and discovery, retention of old
- * snapshots, and who is allowed to publish state a client accepts without
- * recomputing -- is a design of its own
- * (`work/notes/ideas/publishing-snapshots-of-versioned-state.md`).
- * `createSnapshot` below is the MINIMAL producer this module's tests need, and
- * it is deliberately the smallest thing that can make a valid envelope rather
- * than a shipping publisher.
+ * It is not the publishing side. The producer that reads a snapshot out of a
+ * database is the SQLite backend's (`produceStateSnapshot`,
+ * `@etherfold/state-store-sqlite`), and what a build publishes, where, and under
+ * which index is ADR-0095's. `createSnapshot` below is the MINIMAL producer this
+ * module's tests need: it writes a valid document around rows a caller already
+ * has, and is deliberately not a shipping publisher.
  */
 
 /**
  * Where a snapshot is published.
  *
- * A bare string is the snapshot itself. The object form adds an optional `head`:
- * the same envelope WITHOUT its rows, which is what a client fetches to decide
- * between mirrors before downloading any of them. That is the entity-path
+ * A bare string is the snapshot DOCUMENT itself, and choosing between mirrors
+ * then reads only its first line (the head) before deciding whether to read on.
+ * The object form adds an optional `head`: that same first line, published as
+ * a small JSON document of its own (`SnapshotHead`), which is what a client
+ * fetches to decide between mirrors before opening any body. That is the entity-path
  * counterpart of the free-form path's separate `lastSync` file, and it is
  * optional for the same reason it is there: a mirror that publishes only the
  * snapshot is still usable, it just costs a full download to compare.
@@ -133,7 +140,7 @@ export type NotBootstrappedReason =
 	| 'inside-reorg-window';
 
 export type BootstrapOutcome =
-	/** Rows and their cursor were installed; the store's history begins at `at`. */
+	/** The snapshot and its cursor were installed; the store's state is as of `at` (the snapshot's `takenAt`). */
 	| {readonly status: 'bootstrapped'; readonly at: number; readonly from: string}
 	/**
 	 * Nothing was installed because the local store had already got further.
@@ -146,22 +153,29 @@ export type BootstrapOutcome =
 	| {readonly status: 'not-bootstrapped'; readonly reason: NotBootstrappedReason};
 
 /**
- * The MINIMAL producer: an envelope around rows a caller already has.
+ * The MINIMAL producer: a format-2 document around rows a caller already has.
  *
- * It exists so the consuming side can be tested against a real envelope rather
+ * It exists so the consuming side can be tested against a real document rather
  * than a hand-written literal, and it is honest about being that. It cannot read
  * the rows out of a store for you, and the reason is structural rather than an
  * omission: the seam has no "list everything" read and deliberately never will
- * (a listing is anchored at a key prefix by construction, ADR-0021), so
- * enumerating a whole state needs either a ledger of the ids a run touched (what
- * `@etherfold/conformance-workload-stratagems` keeps) or a backend's own query
- * surface. Which of those a publisher uses is the publishing spec's business.
+ * (a listing is anchored at a key prefix by construction, ADR-0021). The
+ * producer that DOES read a whole state is a backend's own
+ * (`produceStateSnapshot`, `@etherfold/state-store-sqlite`).
+ *
+ * The snapshot carries no history (`none`): its floor is `takenAt`, and `rows`
+ * are the rows live there.
  */
-export function createSnapshot<ABI extends Abi>(snapshot: {
+export async function createSnapshot<ABI extends Abi>(snapshot: {
 	/** The block the rows are the state AS OF. Its number becomes the consumer's history floor. */
 	readonly takenAt: BlockPointer;
+	/**
+	 * The entities the rows belong to: the processor's declarations. A format-2
+	 * document writes each once, and every row as its values in that column order.
+	 */
+	readonly entities: readonly EntityDeclaration[];
 	/** The LIVE rows at that block, as the upserts that reproduce them. */
-	readonly rows: readonly Mutation[];
+	readonly rows: Iterable<Mutation> | AsyncIterable<Mutation>;
 	/** The cursor those rows belong to. Serialized here, installed with them as one unit. */
 	readonly lastSync: LastSync<ABI>;
 	/**
@@ -181,21 +195,19 @@ export function createSnapshot<ABI extends Abi>(snapshot: {
 	 */
 	readonly processor: string;
 	readonly savedAt?: string;
-}): StateSnapshot {
-	return {
-		format: ENTITY_SNAPSHOT_FORMAT,
+}): Promise<StateSnapshot> {
+	const head: Omit<SnapshotHead, 'format'> = {
 		processor: snapshot.processor,
 		savedAt: snapshot.savedAt ?? new Date().toISOString(),
 		takenAt: snapshot.takenAt,
+		floor: snapshot.takenAt.number,
 		cursor: {key: SYNC_CURSOR_KEY, value: serializeLastSync(snapshot.lastSync)},
-		rows: snapshot.rows,
 	};
-}
-
-/** The same envelope without its payload: what a mirror publishes for selection. */
-export function snapshotHead(snapshot: StateSnapshot): SnapshotHead {
-	const {rows: _rows, ...head} = snapshot;
-	return head;
+	const document = encodeSnapshot(head, snapshot.entities, [{block: snapshot.takenAt, mutations: snapshot.rows}]);
+	return {
+		head: {format: ENTITY_SNAPSHOT_FORMAT, ...head},
+		document: new Uint8Array(await new Response(document).arrayBuffer()),
+	};
 }
 
 /**
@@ -221,7 +233,12 @@ export async function localPosition(store: StateStore): Promise<number | undefin
 	return parseStoredCursor(await store.readCursor(SYNC_CURSOR_KEY))?.lastToBlock;
 }
 
-type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHead; readonly body?: StateSnapshot};
+/**
+ * A mirror still in the running: its head, and -- when the head WAS the first line
+ * of the body -- the body opened at that point, so the winner costs no second
+ * request and a loser is cancelled rather than downloaded.
+ */
+type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHead; readonly reader?: SnapshotReader};
 
 /**
  * Bootstrap a store from the most advanced snapshot any of these locations has,
@@ -256,8 +273,17 @@ type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHe
  * judgement the free-form path makes: not finding a snapshot is a normal first
  * run in the wrong conditions, and the answer is to index from the start block.
  * What DOES throw is a snapshot that was selected and then turned out to be
- * unusable at install (`SnapshotProcessorMismatchError`, `SnapshotFormatError`),
- * because that is a publisher contradicting its own head.
+ * unusable at install (`SnapshotProcessorMismatchError`, a document that breaks
+ * its own shape), because that is a publisher contradicting its own head.
+ *
+ * ## The install streams
+ *
+ * The winner's body is inflated and installed as it downloads, a block at a time
+ * (`SnapshotAwareStateStore.bootstrap`), so the whole document is never held. A
+ * download that fails PART-WAY therefore throws rather than failing over, because
+ * the install has started: for a snapshot without history that leaves only the
+ * floor marker over an empty store, and the next boot (`openAndBootstrap`, which
+ * finds no cursor) bootstraps again.
  */
 export async function bootstrapFromSnapshot(
 	store: SnapshotAwareStateStore,
@@ -273,45 +299,34 @@ export async function bootstrapFromSnapshot(
 
 	for (const location of all) {
 		const {head: headUrl, body: bodyUrl} = urlsOf(location);
-		let fetched: StateSnapshot | SnapshotHead;
-		try {
-			fetched = (await (await get(headUrl)).json()) as StateSnapshot | SnapshotHead;
-		} catch (error) {
-			// logged and skipped, never thrown: one unreachable mirror must not
-			// decide whether the app starts.
-			logger.error(`could not read the snapshot head at ${headUrl}`, error);
-			reasons.add('unreachable');
+		const read = await readHead(get, headUrl, headUrl === bodyUrl);
+		if (read.status !== 'read') {
+			reasons.add(read.status);
 			continue;
 		}
+		const {head, reader} = read;
 
-		if (!isReadableHead(fetched)) {
-			// REACHED, and unreadable. Not `unreachable`: the host answered.
-			logger.error(`the snapshot head at ${headUrl} is not an envelope this build reads`);
-			reasons.add('unreadable-format');
-			continue;
-		}
-		if (fetched.processor !== options.processor) {
+		if (head.processor !== options.processor) {
 			logger.warn(
-				`ignoring the snapshot at ${headUrl}: it was computed by processor \`${fetched.processor}\` and this ` +
+				`ignoring the snapshot at ${headUrl}: it was computed by processor \`${head.processor}\` and this ` +
 					`deployment runs \`${options.processor}\``,
 			);
+			await reader?.cancel();
 			reasons.add('processor-mismatch');
 			continue;
 		}
-		if (options.finalityDepth !== undefined && insideReorgWindow(fetched, options.finalityDepth)) {
+		if (options.finalityDepth !== undefined && insideReorgWindow(head, options.finalityDepth)) {
 			logger.warn(
-				`ignoring the snapshot at ${headUrl}: it was taken at block ${fetched.takenAt.number}, within the ` +
-					`${options.finalityDepth}-block reorg window of the tip its producer had seen (${observedTip(fetched)}). ` +
+				`ignoring the snapshot at ${headUrl}: it was taken at block ${head.takenAt.number}, within the ` +
+					`${options.finalityDepth}-block reorg window of the tip its producer had seen (${observedTip(head)}). ` +
 					`A snapshot carries no history below its own block, so a reorg reaching under it could not be undone.`,
 			);
+			await reader?.cancel();
 			reasons.add('inside-reorg-window');
 			continue;
 		}
 
-		// when the head URL IS the snapshot URL, the payload is already in hand and
-		// the winner costs no second request.
-		const body = headUrl === bodyUrl && 'rows' in fetched ? (fetched as StateSnapshot) : undefined;
-		candidates.push({location, head: fetched, body});
+		candidates.push({location, head, reader});
 	}
 
 	if (candidates.length === 0) {
@@ -323,26 +338,98 @@ export async function bootstrapFromSnapshot(
 	const local = await localPosition(store);
 	if (local !== undefined && local >= candidates[0].head.takenAt.number) {
 		logger.info(`keeping local state at block ${local}: no published snapshot is further along`);
+		await cancelAll(candidates);
 		return {status: 'kept-local', at: local};
 	}
 
-	for (const candidate of candidates) {
+	for (const [index, candidate] of candidates.entries()) {
 		const {body: bodyUrl} = urlsOf(candidate.location);
-		let snapshot = candidate.body;
-		if (!snapshot) {
+		let reader = candidate.reader;
+		if (!reader) {
 			try {
-				snapshot = (await (await get(bodyUrl)).json()) as StateSnapshot;
+				reader = await readSnapshot(await bodyOf(await fetchOk(get, bodyUrl)));
 			} catch (error) {
-				logger.error(`could not download the snapshot at ${bodyUrl}, trying the next mirror`, error);
+				logger.error(`could not open the snapshot at ${bodyUrl}, trying the next mirror`, error);
 				continue;
 			}
 		}
-		await store.bootstrap(snapshot, {processor: options.processor});
-		logger.info(`bootstrapped from ${bodyUrl} at block ${snapshot.takenAt.number}`);
-		return {status: 'bootstrapped', at: snapshot.takenAt.number, from: bodyUrl};
+		await cancelAll(candidates.slice(index + 1));
+		await store.bootstrap(reader, {processor: options.processor});
+		logger.info(`bootstrapped from ${bodyUrl} at block ${reader.head.takenAt.number}`);
+		return {status: 'bootstrapped', at: reader.head.takenAt.number, from: bodyUrl};
 	}
 
 	return {status: 'not-bootstrapped', reason: 'unreachable'};
+}
+
+/**
+ * Ask one location for its head: a separately published head document, or the
+ * first line of the body itself.
+ *
+ * Transport and content stay apart (ADR-0071): a host that did not answer, or
+ * answered with an error status, is `unreachable`; a document that arrived and is
+ * not a format-2 head is `unreadable-format`.
+ */
+async function readHead(
+	get: typeof globalThis.fetch,
+	url: string,
+	isBody: boolean,
+): Promise<
+	| {readonly status: 'read'; readonly head: SnapshotHead; readonly reader?: SnapshotReader}
+	| {readonly status: 'unreachable' | 'unreadable-format'}
+> {
+	let response: Response;
+	try {
+		response = await fetchOk(get, url);
+	} catch (error) {
+		// logged and skipped, never thrown: one unreachable mirror must not
+		// decide whether the app starts.
+		logger.error(`could not read the snapshot head at ${url}`, error);
+		return {status: 'unreachable'};
+	}
+
+	if (isBody) {
+		try {
+			const reader = await readSnapshot(await bodyOf(response));
+			return {status: 'read', head: reader.head, reader};
+		} catch (error) {
+			if (!(error instanceof SnapshotFormatError)) {
+				logger.error(`could not read the snapshot at ${url}`, error);
+				return {status: 'unreachable'};
+			}
+			// REACHED, and unreadable. Not `unreachable`: the host answered.
+			logger.error(`the snapshot at ${url} is not a document this build reads`, error);
+			return {status: 'unreadable-format'};
+		}
+	}
+
+	let head: unknown;
+	try {
+		head = await response.json();
+	} catch {
+		head = undefined;
+	}
+	if (!isReadableSnapshotHead(head)) {
+		logger.error(`the snapshot head at ${url} is not a head this build reads`);
+		return {status: 'unreadable-format'};
+	}
+	return {status: 'read', head};
+}
+
+/** Fetch, treating an error status as the host not answering with the document. */
+async function fetchOk(get: typeof globalThis.fetch, url: string): Promise<Response> {
+	const response = await get(url);
+	if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+	return response;
+}
+
+/** A response's body as a document: the stream when there is one, the bytes otherwise. */
+async function bodyOf(response: Response): Promise<ReadableStream<Uint8Array> | Uint8Array> {
+	return response.body ?? new Uint8Array(await response.arrayBuffer());
+}
+
+async function cancelAll(candidates: readonly Candidate[]): Promise<void> {
+	await Promise.all(candidates.map((candidate) => candidate.reader?.cancel()));
 }
 
 /**
@@ -366,16 +453,6 @@ export async function openAndBootstrap(
 	const local = await localPosition(aware);
 	if (local !== undefined) return {store: aware, outcome: {status: 'kept-local', at: local}};
 	return {store: aware, outcome: await bootstrapFromSnapshot(aware, locations, options)};
-}
-
-function isReadableHead(value: unknown): value is SnapshotHead {
-	const head = value as SnapshotHead | undefined;
-	return (
-		!!head &&
-		head.format === ENTITY_SNAPSHOT_FORMAT &&
-		typeof head.processor === 'string' &&
-		typeof head.takenAt?.number === 'number'
-	);
 }
 
 /**
