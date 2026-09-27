@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import {describe, expect, it} from 'vitest';
 import {EntityEventProcessor, type EntityProcessor, type EntityStateView} from '@etherfold/processor-entities';
 import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
-import type {ReconfigureReport} from '@etherfold/core';
+import type {ReconfigureReport, StateMoved} from '@etherfold/core';
 import {
 	connectToIndexerHost,
 	createBrowserStateStore,
@@ -112,6 +112,22 @@ function pushesTo(port: IndexerPort): HostProgress[] {
 	return seen;
 }
 
+/**
+ * A TAB THAT RE-READS ON THE SIGNAL AND ON NOTHING ELSE: no progress listener, no
+ * generation poll. What it renders is what the state-moved signal told it to
+ * re-read, which is the whole of what a promotion at a quiet tip used to leave
+ * stale: the move published nothing, and a quiet chain has no next block.
+ */
+function rereadingOnTheSignal(port: IndexerPort) {
+	const told: StateMoved[] = [];
+	const rendered: (number | undefined)[] = [];
+	port.onStateMoved((moved) => {
+		told.push(moved);
+		void transfersOf(port).then((counter) => rendered.push(counter?.value));
+	});
+	return {told, rendered};
+}
+
 /** A dedicated-worker host at the tip, with a tab holding a port to it. */
 async function aHostAtTheTip() {
 	const ends = wire();
@@ -190,6 +206,27 @@ describe('a dedicated-worker host takes a hot-updated processor', () => {
 			expect(told?.hotUpdate).toEqual({count: 1, report});
 			// and on asking
 			expect((await app.port.progress()).hotUpdate).toEqual({count: 1, report});
+		} finally {
+			app.close();
+		}
+	});
+
+	it('tells the tab of the SWITCH over the port at a quiet tip, so a tab re-reading on the signal renders the edit', async () => {
+		const app = await aHostAtTheTip();
+		try {
+			const tab = rereadingOnTheSignal(app.port);
+			// The chain does not move for the rest of this case: nothing but the promotion
+			// can tell this tab anything.
+			const report = await app.host.reconfigureFromHotUpdate(handingOver(editedProcessorVariant({countBy: 10})));
+			if (report.outcome !== 'registered') throw new Error(`expected registered, got ${JSON.stringify(report)}`);
+
+			await until(
+				async () => tab.rendered.at(-1),
+				(value) => value === EXPECTED_A.transfers * 10,
+			);
+			// what told it was the move itself, ONCE, and no block
+			expect(tab.told.map((moved) => moved.kind)).toEqual(['repointed']);
+			expect(await canonicalOf(app.port)).toBe(report.generation.processor);
 		} finally {
 			app.close();
 		}
@@ -286,6 +323,7 @@ describe('a SharedWorker host takes a hot-updated processor', () => {
 			host = hostIndexerInThisSharedWorker<TestABI, EntityStateView>(entrySpec(freshName(), chain));
 			tabs.push(attachTab(scope), attachTab(scope));
 			const told = tabs.map((tab) => pushesTo(tab.port));
+			const rereading = tabs.map((tab) => rereadingOnTheSignal(tab.port));
 			await atTip(tabs[0].port);
 
 			const report: ReconfigureReport = await host.reconfigureFromHotUpdate(
@@ -307,6 +345,15 @@ describe('a SharedWorker host takes a hot-updated processor', () => {
 					() => transfersOf(tab.port),
 					(counter) => counter?.value === EXPECTED_A.transfers * 10,
 				);
+			}
+			// ...and each tab was TOLD of the switch on the signal, at a quiet tip, so a tab
+			// re-reading on it alone renders the edit without asking anything else
+			for (const tab of rereading) {
+				await until(
+					async () => tab.rendered.at(-1),
+					(value) => value === EXPECTED_A.transfers * 10,
+				);
+				expect(tab.told.filter((moved) => moved.kind === 'repointed').length).toBe(1);
 			}
 			// ONE host, so ONE successor: not a generation per tab
 			expect((await tabs[1].port.generations()).length).toBeLessThanOrEqual(2);

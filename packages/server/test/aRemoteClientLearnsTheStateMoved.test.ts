@@ -313,7 +313,7 @@ describe('a remote client is told the state moved', () => {
 		await client.close();
 	});
 
-	it('carries the rotation a PROMOTION makes: the next notification wears a token no client has seen', async () => {
+	it('carries a PROMOTION at once, with the token it rotated, and the block after it under that same token', async () => {
 		const deployment = await aServerMidFold();
 		const client = await deployment.watch();
 		await client.waitFor((events) => events.length > 0, 'the position on connect');
@@ -328,9 +328,19 @@ describe('a remote client is told the state moved', () => {
 		}
 		const promoted = generationDigestOf((await deployment.indexer.canonical()) as {stream: string; processor: string});
 
-		// the move PUBLISHES nothing; what a reader receives is the NEXT notification --
-		// which arrives when the fold that ANSWERS applies the block, and that fold is a
-		// follower, so the wire push reaches the stream's writer and the rebuild applies it
+		// ANNOUNCED with no block to wait for: a quiet chain still tells a remote reader
+		await client.waitFor(
+			(events) => events.some((e) => e.event === 'state-moved' && e.data['kind'] === 'repointed'),
+			'the promotion',
+		);
+		const announced = client.moved().find((moved) => moved['kind'] === 'repointed') as Record<string, unknown>;
+		expect(Object.keys(announced).sort()).toEqual(['coherence', 'generation', 'kind']);
+		expect(seen.has(announced['coherence'])).toBe(false);
+		expect(announced['generation']).toBe(promoted);
+
+		// and the next block arrives when the fold that ANSWERS applies it -- a follower,
+		// so the wire push reaches the stream's writer and the rebuild applies it -- under
+		// the SAME token: a reader invalidates everything once, not twice
 		await deployment.push({toBlock: 110, latestBlock: 110, logs: [transfer(107, '0xa107', BOB, 2n, 0, CONTRACT)]});
 		await deployment.indexer.rebuildMore();
 		await client.waitFor(
@@ -339,7 +349,7 @@ describe('a remote client is told the state moved', () => {
 		);
 
 		const after = client.moved()[client.moved().length - 1] as Record<string, unknown>;
-		expect(seen.has(after['coherence'])).toBe(false);
+		expect(after['coherence']).toBe(announced['coherence']);
 		expect(after['generation']).toBe(promoted);
 
 		await client.close();

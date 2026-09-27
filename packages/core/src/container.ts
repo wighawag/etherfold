@@ -1565,15 +1565,16 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		// It is canonical: it is no longer waiting to become so, and a REVERT past it
 		// later must not re-promote it on the next cycle.
 		entry.candidate = false;
+		let announce: ((moved: {generation: string}) => void) | undefined;
 		if (superseded !== entry) {
 			// THE TOKEN ROTATES, because a DIFFERENT FOLD answers from here on and that
 			// is indistinguishable, to a cache, from "everything you hold may be wrong"
-			// (ADR-0083). The SAME mechanism a retraction uses and deliberately not a
-			// second event kind: a reader does not care that a promotion is a different
-			// thing, and two kinds would be two code paths in every app ever written.
-			// Nothing is PUBLISHED here -- there is no block to name, the pointer moved
-			// and no fold applied anything -- so what a reader receives is the next
-			// notification, carrying a token it has never seen.
+			// (ADR-0083). The SAME rotation a retraction makes, and ANNOUNCED by a
+			// notification of its own (`repointed`, below) rather than left to ride the
+			// next block's: on a chain that has gone quiet there is no next block, and a
+			// reader would go on rendering the retired generation while reads answer
+			// this one. A reader's rule needs no third line for it: the token comparison
+			// already says invalidate everything.
 			//
 			// FIRST, before the pointer-moved callback below and before the state
 			// notification that applies the move, because both of them are a reader being
@@ -1585,8 +1586,8 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			// EVERY move of the pointer and not the forward ones alone: a REVERT changes
 			// which fold answers exactly as a promotion does, which is the only thing a
 			// reader can see of either.
-			this.stateMoved.rotate(
-				`a pointer move: reads are answered by the generation {stream: ${entry.record.stream}, processor: ` +
+			announce = this.stateMoved.rotateForPointerMove(
+				`reads are answered by the generation {stream: ${entry.record.stream}, processor: ` +
 					`${entry.record.processor}} from here on`,
 			);
 			// BEFORE the notification, so a consumer drops what it derived from the
@@ -1604,6 +1605,11 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 			// `checkTxInclusion` from a window nothing is maintaining any more.
 			this.onLastSyncUpdated?.(entry.lastSync);
 		}
+		// ANNOUNCED LAST, once the read path has followed the pointer, so a reader that
+		// re-reads the instant it is told is answered by the generation this names. And
+		// BEFORE the drop, which is the move's own housekeeping and may take a while: a
+		// reader has nothing to wait for it for.
+		announce?.({generation: generationDigestOf(entry.record)});
 		if (superseded && superseded !== entry) {
 			await this.arrangeDrop(superseded, entry, wasPromotion);
 		}

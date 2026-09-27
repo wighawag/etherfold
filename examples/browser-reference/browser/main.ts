@@ -243,26 +243,6 @@ async function start() {
 	}
 
 	/**
-	 * HAZARD 3's QUIETER SIBLING: A SWITCH NOBODY ANNOUNCES. When the new generation
-	 * catches up and the pointer moves to it, the reads answer from it at once, but
-	 * a pointer move names no block, so `onStateMoved` stays silent until the fold
-	 * next applies one. On a chain that has gone quiet (a local node between
-	 * transactions) that is never, and the page keeps showing the old answer. What
-	 * DOES move on the switch is the progress push, so while a generation is
-	 * catching up this tab asks, on each push, whether it answers yet, and re-reads
-	 * once it does. (`reconfigure` below waits the same way.)
-	 */
-	let switchingTo: {stream: string; processor: string} | undefined;
-	async function rereadOnceSwitched(): Promise<void> {
-		const waitingFor = switchingTo;
-		if (!waitingFor) return;
-		const canonical = (await indexer.generations()).find((generation) => generation.canonical)?.record;
-		if (canonical?.stream !== waitingFor.stream || canonical.processor !== waitingFor.processor) return;
-		if (switchingTo === waitingFor) switchingTo = undefined;
-		await render();
-	}
-
-	/**
 	 * What the worker's hot update DID, which reaches this tab on the progress push
 	 * because the tab did not make the call: the same three verdicts the main
 	 * thread's `reconfigureFromHotUpdate` answers. Rendered in section 6.
@@ -270,7 +250,6 @@ async function start() {
 	function renderHotUpdate(report: NonNullable<HostProgress['hotUpdate']>['report']) {
 		switch (report.outcome) {
 			case 'registered':
-				switchingTo = report.generation;
 				el('reload').textContent =
 					`processor edited: folding beside the live state, which keeps answering until the edit catches up ` +
 					`(${report.generation.processor})`;
@@ -336,7 +315,6 @@ async function start() {
 		const {generation, added} = await indexer.reconfigure({
 			source: {chainId: String(CHAIN.id), contracts: [next]},
 		});
-		if (added) switchingTo = generation.record;
 		// `follows` says what the new generation COSTS: a generation that follows
 		// re-folds logs already stored, and one that does not asks the node for its
 		// history again (a new event is a new topic, so its logs were never fetched).
@@ -373,10 +351,12 @@ async function start() {
 	 * `onProgress` is how far the fold has got (a STATE, handed to you at once on
 	 * subscribing) and drives the progress line and the pending verdicts.
 	 * `onStateMoved` is WHAT MOVED (an EVENT, silent until the fold next applies a
-	 * block or a reorg retracts one): it is the signal to RE-READ. Because it is
-	 * silent on attaching, the first read is made once, by hand, right after it. A
-	 * generation switch is the one re-read it does not announce, which is what
-	 * `rereadOnceSwitched` in section 5 is for.
+	 * block, a reorg retracts one, or the canonical pointer moves to a new
+	 * generation): it is the signal to RE-READ, and it is the ONLY one this tab
+	 * re-reads on. A generation switch is announced like the rest, at once and with
+	 * no block to wait for, so a quiet chain does not leave the page showing the
+	 * generation it replaced. Because it is silent on attaching, the first read is
+	 * made once, by hand, right after it.
 	 */
 	let hotUpdatesShown = 0;
 	indexer.onProgress((progress: HostProgress) => {
@@ -391,7 +371,6 @@ async function start() {
 			hotUpdatesShown = progress.hotUpdate.count;
 			renderHotUpdate(progress.hotUpdate.report);
 		}
-		void rereadOnceSwitched();
 		void refreshPending();
 	});
 

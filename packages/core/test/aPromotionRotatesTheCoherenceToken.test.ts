@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {BRANCH_A, makeLog} from './utils/streamCacheWorld.js';
+import type {StateMoved, StateRepointed} from '../src/stateMoved.js';
 import {appendsIn, driveToTip, openWorld, reportingFold} from './utils/stateMovedWorld.js';
 import {identityOf} from './utils/processorIdentity.js';
 
@@ -11,14 +12,14 @@ import {identityOf} from './utils/processorIdentity.js';
 // be wrong", so it gets the treatment a RETRACTION gets and by the SAME
 // mechanism: the token rotates and the reader invalidates everything (ADR-0083).
 //
-// That sameness is the whole content of these cases. A promotion and a reorg
-// have nothing in common mechanically, and exactly one thing in common for a
-// reader, which is that narrow invalidation is no longer sufficient -- so there
-// is ONE signal, ONE comparison and ONE code path in every reader ever written,
-// rather than a second event kind an app author has to learn the difference
-// between. What is asserted here therefore includes what is NOT published: a
-// promotion adds no notification and no case to the union, it moves the token
-// the next notification carries.
+// And it is ANNOUNCED, at once, by a notification of its own (`kind:
+// 'repointed'`, carrying the rotated token and the generation that answers now).
+// It used to publish nothing and leave the rotation to ride the NEXT block's
+// notification, which on a chain that had gone quiet was never: a reader kept
+// rendering the retired generation while reads already answered the new one.
+// The reader's two-line rule does not grow a third line for it: the token
+// comparison already says invalidate everything, and the narrow line reads
+// `entities` off an `applied` notification only.
 //
 // The `generation` field is not a second mechanism. It rides EVERY notification
 // and answers a different question: the token says WHETHER what a reader holds
@@ -49,6 +50,10 @@ const SUCCESSOR_ENTITIES = ['cell', 'tile'];
 /** Written by the successor's fold and by nothing else. */
 const SUCCESSOR_ONLY = 'tile';
 const successorOnlyRows = (rows: readonly string[]) => rows.some((row) => row.startsWith(`${SUCCESSOR_ONLY}@`));
+
+/** The pointer-move announcements among some notifications. */
+const repointingsIn = (moved: readonly StateMoved[]): StateRepointed[] =>
+	moved.filter((notification): notification is StateRepointed => notification.kind === 'repointed');
 
 /**
  * A successor built BESIDE the canonical generation and level with it, with the
@@ -117,8 +122,10 @@ describe('a promotion rotates the coherence token', () => {
 		await world.indexer.promote(id);
 		await andOneMoreBlock(106);
 
-		const since = appendsIn(world.moved.slice(publishedBefore));
-		expect(since.length).toBeGreaterThan(0);
+		const since = world.moved.slice(publishedBefore);
+		expect(since.length).toBeGreaterThan(1);
+		// the announcement of the move AND every append after it
+		expect(since[0].kind).toBe('repointed');
 		expect(since.every((moved) => moved.generation === world.digestOf('B'))).toBe(true);
 		// and the two are really different lineages, so the assertion above is not
 		// comparing one value with itself
@@ -176,27 +183,81 @@ describe('a promotion rotates the coherence token', () => {
 		await andOneMoreBlock(108);
 		await andOneMoreBlock(110);
 
-		const since = appendsIn(world.moved.slice(publishedBefore));
+		const [announced, ...appended] = world.moved.slice(publishedBefore);
+		expect(announced.kind).toBe('repointed');
+		const since = appendsIn(appended);
 		expect(since.map((moved) => moved.block)).toEqual([108, 110]);
-		// ONE token across the appends that followed the move: the rotation is what a
-		// POINTER MOVE does, not what a block does
-		expect(new Set(since.map((moved) => moved.coherence)).size).toBe(1);
+		// ONE token across the announcement and the appends that followed the move: the
+		// rotation is what a POINTER MOVE does, once, and not what a block does
+		expect(new Set([announced, ...since].map((moved) => moved.coherence)).size).toBe(1);
 		expect(beforeTheMove.has(since[0].coherence)).toBe(false);
 	});
 
-	it('is ONE mechanism shared with the retraction: no second event kind, and no notification of its own', async () => {
-		// A reader does not care that a promotion is a different THING from a reorg,
-		// and two kinds would mean every app handles both. So the union is unchanged
-		// and the pointer move publishes NOTHING: what it moves is the token the next
-		// notification carries.
-		const {world, id, andOneMoreBlock} = await aSuccessorBesideTheCanonicalOne();
+	it('ANNOUNCES the move AT ONCE, at a quiet tip: one notification with the rotated token and the generation that answers now', async () => {
+		// No block follows here: the chain has gone quiet, which is exactly the case in
+		// which "the next notification carries the new token" was never.
+		const {world, id} = await aSuccessorBesideTheCanonicalOne();
+		const tokensBefore = new Set(world.moved.map((notification) => notification.coherence));
 		const publishedBefore = world.moved.length;
 
 		await world.indexer.promote(id);
 
-		expect(world.moved.length).toBe(publishedBefore);
+		const since = world.moved.slice(publishedBefore);
+		expect(since.length).toBe(1);
+		const announced = since[0] as StateRepointed;
+		// EXACTLY these fields: no block (none was applied) and no entity set (a rotated
+		// token already says invalidate everything)
+		expect(Object.keys(announced).sort()).toEqual(['coherence', 'generation', 'kind']);
+		expect(announced.kind).toBe('repointed');
+		expect(tokensBefore.has(announced.coherence)).toBe(false);
+		expect(announced.coherence).toBe(world.indexer.coherenceNow());
+		expect(announced.generation).toBe(world.digestOf('B'));
+	});
+
+	it('ANSWERS a reader that re-reads on the announcement from the new generation, with no block and no polling', async () => {
+		const {world, id} = await aSuccessorBesideTheCanonicalOne();
+		const rendering: {generation: string; rows: string[]} = {generation: '', rows: []};
+		let held: string | undefined = world.moved[world.moved.length - 1].coherence;
+		world.indexer.onStateMoved((moved) => {
+			if (moved.coherence === held) return;
+			held = moved.coherence;
+			rendering.generation = moved.generation;
+			rendering.rows = [...world.indexer.state];
+		});
+
+		await world.indexer.promote(id);
+
+		// re-read INSIDE the handler, synchronously: the read path had already followed
+		// the pointer when the reader was told
+		expect(rendering.generation).toBe(world.digestOf('B'));
+		expect(successorOnlyRows(rendering.rows)).toBe(true);
+	});
+
+	it('delivers a promotion followed by a block as ONE announcement and ONE append, under ONE rotated token', async () => {
+		const {world, id, andOneMoreBlock} = await aSuccessorBesideTheCanonicalOne();
+		const tokenBefore = world.moved[world.moved.length - 1].coherence;
+		const publishedBefore = world.moved.length;
+		const decisions: string[] = [];
+		let held: string | undefined = tokenBefore;
+		world.indexer.onStateMoved((moved) => {
+			if (moved.coherence !== held) {
+				held = moved.coherence;
+				decisions.push('everything');
+				return;
+			}
+			decisions.push(moved.kind === 'applied' ? 'narrow' : 'nothing');
+		});
+
+		await world.indexer.promote(id);
 		await andOneMoreBlock(106);
-		expect(world.moved.every((notification) => notification.kind === 'applied')).toBe(true);
+
+		const since = world.moved.slice(publishedBefore);
+		expect(since.map((moved) => moved.kind)).toEqual(['repointed', 'applied']);
+		// the block does NOT rotate a second time: the reader invalidates everything once,
+		// at the announcement, and narrowly again from the block on
+		expect(since[0].coherence).not.toBe(tokenBefore);
+		expect(since[1].coherence).toBe(since[0].coherence);
+		expect(decisions).toEqual(['everything', 'narrow']);
 	});
 
 	it('rotates on the move the POLICY makes, not on the verb a caller called', async () => {
@@ -218,6 +279,10 @@ describe('a promotion rotates the coherence token', () => {
 		await world.indexer.load();
 		await driveToTip(world.indexer);
 		expect(world.indexer.canonical.record.processor).toBe(identityOf('B'));
+		// ...and ANNOUNCED it, exactly as an asked-for move is announced
+		const announced = repointingsIn(world.moved);
+		expect(announced.map((moved) => moved.generation)).toEqual([world.digestOf('B')]);
+		expect(before.has(announced[0].coherence)).toBe(false);
 
 		world.chain.serve([...BRANCH_A, makeLog(106, '0xa106')], 107);
 		await driveToTip(world.indexer);
@@ -235,8 +300,11 @@ describe('a promotion rotates the coherence token', () => {
 		const {world, andOneMoreBlock} = await aSuccessorBesideTheCanonicalOne();
 		await andOneMoreBlock(106);
 		const tokenBefore = world.moved[world.moved.length - 1].coherence;
+		const publishedBefore = world.moved.length;
 
 		await world.indexer.promote(world.indexer.canonical.record);
+		// and ANNOUNCES nothing, since nothing moved
+		expect(world.moved.length).toBe(publishedBefore);
 		await andOneMoreBlock(108);
 
 		expect(world.moved[world.moved.length - 1].coherence).toBe(tokenBefore);
