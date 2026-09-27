@@ -4,6 +4,7 @@ slug: publish-writes-the-stream-seed-when-asked
 spec: a-build-publishes-what-a-browser-app-starts-from
 blockedBy: [publish-writes-a-state-snapshot-a-browser-app-starts-from]
 covers: [3, 11]
+needsAnswers: true
 ---
 
 ## What to build
