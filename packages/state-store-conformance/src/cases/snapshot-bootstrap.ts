@@ -1,13 +1,25 @@
 import {
 	BlockNotRetainedError,
+	encodeSnapshot,
 	openSnapshotAware,
 	RevertBeyondSnapshotError,
 	SnapshotFormatError,
 	SnapshotProcessorMismatchError,
+	type EntityDeclaration,
+	type SnapshotAwareStateStore,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {expect} from 'vitest';
-import {CONFORMANCE_ENTITIES, LADDER_BASE, block, burn, cases, owns, snapshotDocument} from '../fixtures.js';
+import {
+	CONFORMANCE_ENTITIES,
+	LADDER_BASE,
+	block,
+	burn,
+	cases,
+	declaredColumns,
+	owns,
+	snapshotDocument,
+} from '../fixtures.js';
 import type {ConformanceCase, StateStoreFactory} from '../types.js';
 
 const GROUP = 'bootstrapping from a snapshot';
@@ -65,6 +77,73 @@ export function snapshotBootstrapCases(
 		await store.migrate();
 		await store.bootstrap(await snapshot(at), {processor: 'conformance-processor-v1'});
 		return {inner, store};
+	}
+
+	/** The block the self-indexed store below stopped at: its own recorded tip. */
+	const SELF_TIP = LADDER_BASE + 200;
+
+	/**
+	 * A store that INDEXED ITSELF, with no snapshot origin: token `9` is live here and
+	 * the chain deleted it before any snapshot below was taken, so no floor carries it.
+	 * It is pruned the way a long-running deployment is, which on a store that keeps
+	 * history as reverse patches drops the lowest block's, so a wipe has to work
+	 * without them.
+	 */
+	async function selfIndexed() {
+		const store = await openSnapshotAware(await factory(CONFORMANCE_ENTITIES));
+		await store.migrate();
+		await store.applyBlock(block(LADDER_BASE), [owns('1', '0xalice', 1), owns('9', '0xzed', 1)], {
+			key: 'lastSync',
+			value: `self-at-${LADDER_BASE}`,
+		});
+		await store.applyBlock(block(SELF_TIP), [owns('1', '0xbob', 2)], {key: 'lastSync', value: `self-at-${SELF_TIP}`});
+		await store.prune();
+		return store;
+	}
+
+	/** A store from the factory with nothing in it, to install the same document into. */
+	async function empty() {
+		const store = await openSnapshotAware(await factory(CONFORMANCE_ENTITIES));
+		await store.migrate();
+		return store;
+	}
+
+	/** A row as the seam defines it: the store's own `_` columns are its business (`declaredColumns`). */
+	function declaredOf(row: Record<string, unknown> | undefined) {
+		return row && Object.fromEntries(declaredColumns(row).map((column) => [column, row[column]]));
+	}
+
+	/**
+	 * Every read this group can ask, as data, so two stores are compared whole: the
+	 * tip rows, an as-of read of each at each block (or the refusal, which is an
+	 * answer too), the cursor, the floor and the claim.
+	 */
+	async function readsOf(store: SnapshotAwareStateStore, at: readonly number[]) {
+		const ids = ['1', '2', '3', '9'];
+		const current = [];
+		for (const id of ids) current.push(declaredOf(await store.getCurrent('token', {id})));
+		const asOf = [];
+		for (const number of at) {
+			for (const id of ids) {
+				asOf.push(
+					await store.getAsOf('token', {id}, number).then(
+						(row) => ({number, id, row: declaredOf(row)}),
+						(error: unknown) => ({
+							number,
+							id,
+							refused: error instanceof BlockNotRetainedError ? 'not-retained' : String(error),
+						}),
+					),
+				);
+			}
+		}
+		return {
+			current,
+			asOf,
+			cursor: await store.readCursor('lastSync'),
+			origin: store.snapshotOrigin,
+			capabilities: store.capabilities,
+		};
 	}
 
 	const shared = cases(GROUP, {
@@ -173,6 +252,104 @@ export function snapshotBootstrapCases(
 			await store.revertTo(SNAPSHOT_BLOCK);
 
 			expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
+		},
+
+		'REPLACES a store that indexed itself, rather than laying the floor over it': async () => {
+			// the floor carries only live rows, so a row the chain deleted between this
+			// store's tip and the snapshot is simply not in it: laid on top, it would
+			// survive as a stale row nothing ever reports.
+			const store = await selfIndexed();
+			const document = await snapshot(SNAPSHOT_BLOCK);
+
+			await store.bootstrap(document, {processor: 'conformance-processor-v1'});
+
+			const fresh = await empty();
+			await fresh.bootstrap(document, {processor: 'conformance-processor-v1'});
+			expect(await store.getCurrent('token', {id: '9'})).toBeUndefined();
+			expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice', transferCount: 7});
+			expect(await store.readCursor('lastSync')).toBe(`snapshot-at-${SNAPSHOT_BLOCK}`);
+			const at = [LADDER_BASE, SELF_TIP, SNAPSHOT_BLOCK - 1, SNAPSHOT_BLOCK];
+			expect(await readsOf(store, at)).toEqual(await readsOf(fresh, at));
+		},
+
+		'installs a history snapshot whose floor is at or below the tip the store indexed itself to': async () => {
+			const store = await selfIndexed();
+			const floor = SELF_TIP - 50;
+			const document = await snapshotDocument(floor, {
+				rows: [owns('1', '0xalice', 7), owns('2', '0xbob', 2)],
+				cursor: {key: 'lastSync', value: `snapshot-at-${SELF_TIP + 60}`},
+				later: [
+					// the very block this store recorded itself, carrying the chain's version of it
+					{block: block(SELF_TIP), mutations: [owns('1', '0xcarol', 8)]},
+					{block: block(SELF_TIP + 60), mutations: [burn('2'), owns('3', '0xdave', 1)]},
+				],
+			});
+
+			await store.bootstrap(document, {processor: 'conformance-processor-v1'});
+
+			const fresh = await empty();
+			await fresh.bootstrap(document, {processor: 'conformance-processor-v1'});
+			expect(store.snapshotOrigin).toBe(floor);
+			expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xcarol', transferCount: 8});
+			expect(await store.getCurrent('token', {id: '9'})).toBeUndefined();
+			const at = [floor - 1, floor, SELF_TIP - 1, SELF_TIP, SELF_TIP + 59, SELF_TIP + 60];
+			expect(await readsOf(store, at)).toEqual(await readsOf(fresh, at));
+			// and it goes on indexing from the cut, as the fresh install does
+			await store.applyBlock(block(SELF_TIP + 61), [owns('2', '0xerin', 1)]);
+			expect(await store.getCurrent('token', {id: '2'})).toMatchObject({owner: '0xerin'});
+		},
+
+		'leaves a store that indexed itself exactly as it was, when a snapshot is refused before a write': async () => {
+			const elsewhere: EntityDeclaration = {name: 'token', id: ['id'], fields: {owner: 'text', colour: 'text'}};
+			const mismatched = new Uint8Array(
+				await new Response(
+					encodeSnapshot(
+						{
+							processor: 'conformance-processor-v1',
+							savedAt: '2026-08-24T00:00:00.000Z',
+							takenAt: block(SNAPSHOT_BLOCK),
+							floor: SNAPSHOT_BLOCK,
+							cursor: {key: 'lastSync', value: `snapshot-at-${SNAPSHOT_BLOCK}`},
+						},
+						[elsewhere],
+						[
+							{
+								block: block(SNAPSHOT_BLOCK),
+								mutations: [
+									{type: 'upsert', entity: 'token', id: {id: '1'}, values: {owner: '0xalice', colour: 'red'}},
+								],
+							},
+						],
+					),
+				).arrayBuffer(),
+			);
+			const formatOne = new TextEncoder().encode(
+				JSON.stringify({format: 1, processor: 'conformance-processor-v1', takenAt: block(SNAPSHOT_BLOCK), rows: []}),
+			);
+			const refused = [
+				{
+					document: await snapshot(SNAPSHOT_BLOCK, {processor: 'some-other-version'}),
+					error: SnapshotProcessorMismatchError,
+				},
+				{document: formatOne, error: SnapshotFormatError},
+				{document: mismatched, error: Error},
+			];
+			const at = [LADDER_BASE, SELF_TIP];
+
+			for (const {document, error} of refused) {
+				const store = await selfIndexed();
+				const before = await readsOf(store, at);
+
+				await expect(store.bootstrap(document, {processor: 'conformance-processor-v1'})).rejects.toBeInstanceOf(error);
+
+				expect(await readsOf(store, at)).toEqual(before);
+				expect(before.current[3]).toMatchObject({owner: '0xzed'});
+				expect(before.cursor).toBe(`self-at-${SELF_TIP}`);
+				// its recorded tip is still its own: the next block goes on above it
+				await expect(store.applyBlock(block(SELF_TIP))).rejects.toThrow();
+				await store.applyBlock(block(SELF_TIP + 1), [owns('9', '0xzed', 2)]);
+				expect(await store.getCurrent('token', {id: '9'})).toMatchObject({transferCount: 2});
+			}
 		},
 
 		'lets a WIPE through, and drops the floor with the rows it was about': async () => {

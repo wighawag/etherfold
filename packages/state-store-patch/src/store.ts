@@ -167,11 +167,17 @@ export class PatchStateStore implements StateStoreBackend {
 		assertRevertOnly(options.retention);
 		this.finalityDepth = assertFinalityDepth(options.finalityDepth);
 
-		// one bucket per declared entity, up front, so a mutation never has to
-		// create one and a patch never carries the creation of a container.
+		this.state = this.emptyState();
+	}
+
+	/**
+	 * One bucket per declared entity, up front, so a mutation never has to create
+	 * one and a patch never carries the creation of a container.
+	 */
+	private emptyState(): LightState {
 		const state: LightState = {};
 		for (const entity of this.entities.keys()) state[entity] = {};
-		this.state = state;
+		return state;
 	}
 
 	get declarations(): ReadonlyMap<string, NormalizedEntity> {
@@ -372,10 +378,25 @@ export class PatchStateStore implements StateStoreBackend {
 	 * a store that cannot fully honour the revert is left untouched rather than
 	 * half-reverted. A partly-undone reorg is the plausible wrong state this
 	 * design refuses to produce (`RevertBeyondPatchHistoryError`).
+	 *
+	 * A WIPE (`keepUpTo < 0`, which is what `EntityEventProcessor.reset()` calls and
+	 * what installing a snapshot over this store calls) needs no reverse patch and
+	 * is never refused: every block is at or above 0 and this store starts empty,
+	 * so the state as of below block 0 is empty whatever has been pruned. Replaying
+	 * patches to reach it would refuse the one revert whose answer is known without
+	 * them, and a long-running tab has always pruned.
 	 */
 	async revertTo(keepUpTo: number): Promise<void> {
 		// the cursors are deliberately untouched: how far the CALLER got is not entity
 		// state, and the caller moves it when it applies the canonical branch.
+		if (keepUpTo < 0) {
+			this.state = this.emptyState();
+			this.reversals.clear();
+			this.blocks.clear();
+			this.hashes.clear();
+			this.tip = undefined;
+			return;
+		}
 		const above = [...this.blocks.keys()].filter((number) => number > keepUpTo).sort((a, b) => b - a);
 		if (above.length === 0) return;
 

@@ -11,6 +11,7 @@ import {
 	bootstrapFromSnapshot,
 	createSnapshot,
 	EntityEventProcessor,
+	localPosition,
 	openAndBootstrap,
 	SYNC_CURSOR_KEY,
 	type SnapshotLocation,
@@ -359,6 +360,68 @@ describe('choosing between published locations', () => {
 			status: 'not-bootstrapped',
 			reason: 'no-locations',
 		});
+	});
+});
+
+describe('a store that indexed itself', () => {
+	const A = 'https://a.example/state.json';
+
+	/**
+	 * Rows this store computed itself up to `tip`, token `9` among them (the chain
+	 * deleted it before any snapshot below was taken), and the sync cursor that says
+	 * so unless `cursor` is false.
+	 */
+	async function indexedItself(tip: number, cursor = true) {
+		const inner = await BACKENDS[0].open(processor.entities);
+		await inner.migrate();
+		await inner.applyBlock({number: tip, hash: `0x${tip.toString(16)}`, timestamp: timestampOf(tip)}, [
+			{type: 'upsert', entity: 'token', id: {id: '1'}, values: {owner: '0xzed', transferCount: 1}},
+			{type: 'upsert', entity: 'token', id: {id: '9'}, values: {owner: '0xzed', transferCount: 1}},
+		]);
+		if (cursor) await inner.writeCursor(SYNC_CURSOR_KEY, JSON.stringify(lastSync({lastToBlock: tip})));
+		return inner;
+	}
+
+	it('is REPLACED by a snapshot further along, rather than having the floor laid over it', async () => {
+		const store = await openSnapshotAware(await indexedItself(SNAPSHOT_BLOCK - 500));
+		const {fetch} = network({[A]: await published(SNAPSHOT_BLOCK)});
+
+		const outcome = await bootstrapFromSnapshot(store, [A], {processor: 'proc-v1', fetch});
+
+		expect(outcome).toMatchObject({status: 'bootstrapped', at: SNAPSHOT_BLOCK});
+		// the row the chain deleted is gone, not surviving as a stale row
+		expect(await store.getCurrent('token', {id: '9'})).toBeUndefined();
+		expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice', transferCount: 9});
+		expect(await localPosition(store)).toBe(SNAPSHOT_BLOCK);
+		expect(store.snapshotOrigin).toBe(SNAPSHOT_BLOCK);
+	});
+
+	it('is left alone, wiped of nothing, when it is already at or ahead of the snapshot', async () => {
+		const store = await openSnapshotAware(await indexedItself(SNAPSHOT_BLOCK));
+		const {fetch, asked} = network({[A]: await published(SNAPSHOT_BLOCK)});
+
+		const outcome = await bootstrapFromSnapshot(store, [A], {processor: 'proc-v1', fetch});
+
+		expect(outcome).toEqual({status: 'kept-local', at: SNAPSHOT_BLOCK});
+		expect(asked).toEqual([A]);
+		expect(await store.getCurrent('token', {id: '9'})).toMatchObject({owner: '0xzed'});
+		expect(store.snapshotOrigin).toBeUndefined();
+	});
+
+	it('is replaced on the boot path too, when it holds blocks and no cursor says how far it got', async () => {
+		const {fetch} = network({[A]: await published(SNAPSHOT_BLOCK)});
+
+		const {store, outcome} = await openAndBootstrap(await indexedItself(SNAPSHOT_BLOCK + 500, false), A, {
+			processor: 'proc-v1',
+			fetch,
+		});
+
+		// its own recorded block is above the snapshot's, which `applyBlock` would
+		// refuse the floor under: replaced whole, it installs
+		expect(outcome).toMatchObject({status: 'bootstrapped', at: SNAPSHOT_BLOCK});
+		expect(await store.getCurrent('token', {id: '9'})).toBeUndefined();
+		expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
+		expect(await localPosition(store)).toBe(SNAPSHOT_BLOCK);
 	});
 });
 
