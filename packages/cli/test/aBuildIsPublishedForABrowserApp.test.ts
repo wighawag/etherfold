@@ -431,14 +431,21 @@ describe('`etherfold publish --history`', () => {
 		}
 	});
 
-	it('is refused by every command that publishes nothing', async () => {
+	it('is refused by every command that publishes nothing, and by `build` without --publish', async () => {
+		await expect(
+			prepareIndexing(
+				'run',
+				{processor: BUNDLE, nodeUrl: 'http://x', store: 'sqlite', db: ':memory:', history: 'all'},
+				{env: {}},
+			),
+		).rejects.toThrow(/--history is not accepted by `etherfold run`/);
 		await expect(
 			prepareIndexing(
 				'build',
 				{processor: BUNDLE, nodeUrl: 'http://x', store: 'sqlite', db: ':memory:', history: 'all'},
 				{env: {}},
 			),
-		).rejects.toThrow(/--history is not accepted by `etherfold build`/);
+		).rejects.toThrow(/--history is only accepted by `etherfold build` together with --publish <dir>/);
 	});
 });
 
@@ -801,14 +808,21 @@ describe('`etherfold publish --seed`', () => {
 		expect(streamDigestOfSourceHashes(seed.context.source, seed.streamConfig)).toBe(canonical.stream);
 	});
 
-	it('is refused by every command that publishes nothing', async () => {
+	it('is refused by every command that publishes nothing, and by `build` without --publish', async () => {
+		await expect(
+			prepareIndexing(
+				'run',
+				{processor: BUNDLE, nodeUrl: 'http://x', store: 'sqlite', db: ':memory:', seed: true},
+				{env: {}},
+			),
+		).rejects.toThrow(/--seed is not accepted by `etherfold run`/);
 		await expect(
 			prepareIndexing(
 				'build',
 				{processor: BUNDLE, nodeUrl: 'http://x', store: 'sqlite', db: ':memory:', seed: true},
 				{env: {}},
 			),
-		).rejects.toThrow(/--seed is not accepted by `etherfold build`/);
+		).rejects.toThrow(/--seed is only accepted by `etherfold build` together with --publish <dir>/);
 	});
 });
 

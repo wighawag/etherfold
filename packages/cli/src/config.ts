@@ -10,6 +10,7 @@ import type {RetentionSetting} from '@etherfold/processor-entities';
 import {readProcessorPath} from '@etherfold/utils';
 import type {SnapshotHistory} from '@etherfold/state-store-sqlite';
 import type {
+	BuildPublication,
 	CommandName,
 	ConfigFor,
 	DatabaseTarget,
@@ -79,7 +80,8 @@ export type ConfigInput =
 	| 'adminToken'
 	| 'out'
 	| 'history'
-	| 'seed';
+	| 'seed'
+	| 'publish';
 
 /**
  * What ONE command does with ONE input.
@@ -294,6 +296,15 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
 			'instead of waiting for a republished snapshot. OFF by default, because nothing a publication writes is ' +
 			'deleted and a scheduled job would otherwise store a full copy of a long stream on every run',
 	},
+	publish: {
+		flag: '--publish <dir>',
+		describe:
+			'after folding to the tip and before exiting, PUBLISH the database this build wrote into this directory, ' +
+			'exactly as `etherfold publish --out <dir>` over it would, with this build\u2019s own processor as the one ' +
+			'expected (ADR-0095): a build whose own processor did not become canonical is refused rather than ' +
+			'publishing the previous one. --history and --seed pass through to it. A publication that is refused exits ' +
+			'non-zero, with the fold kept',
+	},
 };
 
 /**
@@ -303,7 +314,7 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * | --- | --- | --- | --- | --- | --- | --- | --- |
  * | `run` | required | optional (the module's own, else) | required | store + database, required | port and host | optional, defaults | none |
  * | `node` | NOT ACCEPTED (uploaded) | NOT ACCEPTED (the upload carries it) | required | store + database, required | port and host | optional, defaults | none |
- * | `build` | required | required | required | store + database, required | none | optional, defaults | none |
+ * | `build` | required | required | required | store + database, required; `--publish`, optional, with `--history`, `--seed` | none | optional, defaults | none |
  * | `fetch` | NOT ACCEPTED | required | required | NOT ACCEPTED | none | REQUIRED | endpoint + token, required |
  * | `index` | required | required, without a chain call | NOT ACCEPTED | store + database, required | port and host | REQUIRED | token (it receives) |
  * | `serve` | NOT ACCEPTED | none | NOT ACCEPTED | database, required | port and host | NOT ACCEPTED | none |
@@ -315,6 +326,11 @@ export const INPUTS: Readonly<Record<ConfigInput, InputSpec>> = {
  * state snapshot a browser app starts from, into `--out`, the one input no other
  * command owns. It folds nothing, so everything a fold is configured with is refused
  * there, and it learns the named indexer from the rows as `serve` does.
+ *
+ * `build --publish <dir>` is its ONE-STEP form (ADR-0095): after the build has folded
+ * to the tip it runs `publish`'s own implementation over the database it wrote, with
+ * its own processor as the expected one. `--history` and `--seed` are owned by
+ * `build` only beside `--publish`, and refused alone.
  *
  * `upload` is the one row that is not a deployment intent and SENDS something: it is a CLIENT of a
  * running `node`, sending an already-built bundle to its admin route and exiting
@@ -388,6 +404,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'refused',
 		history: 'refused',
 		seed: 'refused',
+		publish: 'refused',
 	},
 	node: {
 		// NOT ACCEPTED (ADR-0094): what it folds arrives by `etherfold upload`, and each
@@ -416,6 +433,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'refused',
 		history: 'refused',
 		seed: 'refused',
+		publish: 'refused',
 	},
 	build: {
 		processor: 'required',
@@ -438,8 +456,11 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		to: 'refused',
 		adminToken: 'refused',
 		out: 'refused',
-		history: 'refused',
-		seed: 'refused',
+		history: 'optional',
+		seed: 'optional',
+		// the one-step form of `publish` (ADR-0095): after it has folded to the tip, it
+		// publishes the database it wrote into this directory, as `publish` would over it
+		publish: 'optional',
 	},
 	fetch: {
 		processor: 'refused',
@@ -464,6 +485,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'refused',
 		history: 'refused',
 		seed: 'refused',
+		publish: 'refused',
 	},
 	index: {
 		processor: 'required',
@@ -488,6 +510,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'refused',
 		history: 'refused',
 		seed: 'refused',
+		publish: 'refused',
 	},
 	serve: {
 		processor: 'refused',
@@ -512,6 +535,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'refused',
 		history: 'refused',
 		seed: 'refused',
+		publish: 'refused',
 	},
 	upload: {
 		processor: 'required',
@@ -536,6 +560,7 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'refused',
 		history: 'refused',
 		seed: 'refused',
+		publish: 'refused',
 	},
 	publish: {
 		// the bundle it is MEANT to publish, optional: given, a database whose canonical
@@ -563,6 +588,8 @@ export const OWNERSHIP: Readonly<Record<CommandName, Readonly<Record<ConfigInput
 		out: 'required',
 		history: 'optional',
 		seed: 'optional',
+		// its own directory is --out; --publish is the one-step form on `build`
+		publish: 'refused',
 	},
 };
 
@@ -838,6 +865,19 @@ const NO_SEED_TO_PUBLISH =
 	'publishes nothing. To publish a database with the stream it folds, run `etherfold publish --db <url> ' +
 	'--out <dir> --seed` over it (ADR-0095).';
 
+const NOT_A_BUILD_PUBLISHER =
+	'--publish <dir> is `etherfold build`\u2019s: it publishes the database that build wrote, at the tip it stops at, ' +
+	'into that directory, and this command does not stop at a tip. To publish what a database holds as the state ' +
+	'snapshot a browser app starts from, run `etherfold publish --db <url> --out <dir>` over it (ADR-0095).';
+
+const BUILD_PUBLISHES_INTO_PUBLISH =
+	'--out is the directory of `etherfold publish`, the separate step. `build` publishes at the tip it stops at into ' +
+	'the directory --publish names: `etherfold build ... --publish <dir>` (ADR-0095).';
+
+const PUBLISH_WRITES_INTO_OUT =
+	'--publish is the one-step form on `etherfold build`, which publishes the database it has just folded. ' +
+	'`publish` writes into the directory --out names.';
+
 const PUBLISH_HAS_NO_SOURCE =
 	'`publish` writes out what the database ALREADY holds: the canonical generation carries its own stream ' +
 	'digest, which is its source and stream config, and a source given here would be one nothing reads. The ' +
@@ -878,6 +918,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		out: NOT_A_PUBLISHER,
 		history: NO_HISTORY_TO_PUBLISH,
 		seed: NO_SEED_TO_PUBLISH,
+		publish: NOT_A_BUILD_PUBLISHER,
 	},
 	node: {
 		processor: NODE_RECEIVES_ITS_PROCESSOR,
@@ -891,6 +932,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		out: NOT_A_PUBLISHER,
 		history: NO_HISTORY_TO_PUBLISH,
 		seed: NO_SEED_TO_PUBLISH,
+		publish: NOT_A_BUILD_PUBLISHER,
 	},
 	build: {
 		pruneInterval: PRUNES_PER_CYCLE,
@@ -903,9 +945,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		dropOnPromotion: NEVER_PROMOTES_BUILD,
 		to: NOT_A_SENDER,
 		adminToken: NO_ADMIN_SURFACE,
-		out: NOT_A_PUBLISHER,
-		history: NO_HISTORY_TO_PUBLISH,
-		seed: NO_SEED_TO_PUBLISH,
+		out: BUILD_PUBLISHES_INTO_PUBLISH,
 	},
 	fetch: {
 		processor: NO_PROCESSOR_FETCH,
@@ -924,6 +964,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		out: NOT_A_PUBLISHER,
 		history: NO_HISTORY_TO_PUBLISH,
 		seed: NO_SEED_TO_PUBLISH,
+		publish: NOT_A_BUILD_PUBLISHER,
 	},
 	index: {
 		nodeUrl: NO_CHAIN_INDEX,
@@ -936,6 +977,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		out: NOT_A_PUBLISHER,
 		history: NO_HISTORY_TO_PUBLISH,
 		seed: NO_SEED_TO_PUBLISH,
+		publish: NOT_A_BUILD_PUBLISHER,
 	},
 	serve: {
 		processor: NO_PROCESSOR_SERVE,
@@ -956,6 +998,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		out: NOT_A_PUBLISHER,
 		history: NO_HISTORY_TO_PUBLISH,
 		seed: NO_SEED_TO_PUBLISH,
+		publish: NOT_A_BUILD_PUBLISHER,
 	},
 	upload: {
 		source: UPLOAD_CARRIES_ITS_CONTRACTS,
@@ -976,6 +1019,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		out: NOT_A_PUBLISHER,
 		history: NO_HISTORY_TO_PUBLISH,
 		seed: NO_SEED_TO_PUBLISH,
+		publish: NOT_A_BUILD_PUBLISHER,
 	},
 	publish: {
 		source: PUBLISH_HAS_NO_SOURCE,
@@ -995,6 +1039,7 @@ const REFUSALS: Readonly<Record<CommandName, Readonly<Partial<Record<ConfigInput
 		override: PUBLISH_FOLDS_NOTHING,
 		to: PUBLISH_IS_NOT_AN_UPLOAD,
 		adminToken: PUBLISH_IS_NOT_AN_UPLOAD,
+		publish: PUBLISH_WRITES_INTO_OUT,
 	},
 };
 
@@ -1075,6 +1120,8 @@ function flagValue(input: ConfigInput, options: Options): string | undefined {
 		case 'seed':
 			// the same plain BOOLEAN shape as `--drop-on-promotion`
 			return options.seed === true ? 'true' : undefined;
+		case 'publish':
+			return options.publish;
 	}
 }
 
@@ -1584,6 +1631,8 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 					// a re-run `build` against a database holding a DIFFERENT pending successor is a
 					// START like `run`'s, guarded the same way (ADR-0084's amendment of 2026-09-26)
 					override: given('override', options, env) !== undefined,
+					// the one-step form of `publish` (ADR-0095), when --publish names a directory
+					...resolveBuildPublication(options),
 				};
 			}
 			case 'fetch': {
@@ -1677,6 +1726,30 @@ export function resolveCommandConfig<C extends CommandName, ABI extends Abi = Ab
 	// the switch above produces exactly the arm named by `command`, which the
 	// compiler cannot see through a generic parameter
 	return resolved as ConfigFor<C, ABI>;
+}
+
+/**
+ * `build --publish <dir>`, with the `--history` and `--seed` that pass through to it.
+ *
+ * `--history` and `--seed` describe a PUBLICATION, so on `build` they are owned only
+ * together with `--publish`: given alone, they are refused naming it, rather than
+ * accepted and ignored by a build that publishes nothing (ADR-0048's rule).
+ */
+function resolveBuildPublication(options: Options): {publish?: BuildPublication} {
+	const out = nonBlank(options.publish);
+	if (out === undefined) {
+		const stray = flagValue('history', options) !== undefined ? 'history' : options.seed === true ? 'seed' : undefined;
+		if (stray !== undefined) {
+			throw new Error(
+				`${nameOf(stray)} is only accepted by \`etherfold build\` together with --publish <dir>: it describes the ` +
+					`publication a build writes at the tip it stops at, and without --publish this build publishes nothing. ` +
+					`Add --publish <dir>, or publish the database afterwards with \`etherfold publish --db <url> --out <dir>\` ` +
+					`(ADR-0095).`,
+			);
+		}
+		return {};
+	}
+	return {publish: {out, history: parseHistory(options.history), seed: options.seed === true}};
 }
 
 /** The database `publish` reads. Required and never defaulted, like every database input. */
