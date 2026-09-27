@@ -36,7 +36,9 @@ import {
 	openWaitingFolding,
 	requireArrivedBundle,
 	streamConfigFor,
+	type ArrivedBundle,
 } from './folding.js';
+import {describePublication, publishDatabase, type PublishDependencies} from './publishCommand.js';
 import {StreamFetchers} from './fetchers.js';
 import {arrivalQueue} from './arrivalQueue.js';
 import {startGuardFor, type StartGuardDependencies} from './startGuard.js';
@@ -94,9 +96,11 @@ export {
 	describePublication,
 	nodePublicationFiles,
 	publish,
+	publishDatabase,
 	publishMain,
 	writePublication,
 	type PublicationFiles,
+	type PublicationRequest,
 	type PublishDependencies,
 	type WrittenPublication,
 } from './publishCommand.js';
@@ -157,6 +161,12 @@ export type IndexingDependencies = {
 	 * it starts with no configured processor, so its starts replace nothing (ADR-0094).
 	 */
 	startGuard?: StartGuardDependencies;
+	/**
+	 * What `build --publish` writes its publication through, and when it says it was
+	 * produced: `publish`'s own substitutes (`PublishDependencies`). Default to the real
+	 * disk and now.
+	 */
+	publication?: Pick<PublishDependencies, 'files' | 'savedAt'>;
 };
 
 /**
@@ -245,6 +255,13 @@ export type PreparedIndexing<
 	 * of it -- against `:memory:` they would not even be the same database.
 	 */
 	db: RemoteSQL;
+	/**
+	 * THE BUNDLE THIS PROCESS WAS CONFIGURED WITH, and its identity (ADR-0086): what its
+	 * arrival read. `build --publish` passes it to `publish` as the processor the
+	 * canonical generation must be (ADR-0095). ABSENT on `node`, which is configured with
+	 * none.
+	 */
+	arrived?: ArrivedBundle;
 	/**
 	 * RECEIVE a processor bundle's BYTES and register the generation they name, beside
 	 * the incumbent -- what `POST /{indexer}/admin/upload` does on this process
@@ -472,6 +489,7 @@ export async function prepareIndexing<
 		store,
 		stateOf,
 		db,
+		arrived,
 		// NO UPLOAD: a configured deployment receives no code (ADR-0094); that is `node`. It
 		// changes what it folds by RESTARTING with a different `-p` or source.
 		// ...and it is not WAITING: it was configured with what it folds and what it fetches
@@ -1050,8 +1068,47 @@ async function driveCycles<ABI extends Abi, ProcessResultType>(
  */
 export async function build(options: Options, deps: IndexingDependencies = {}): Promise<RunSummary> {
 	logger.info(JSON.stringify(options, null, 2));
-	const prepared = await prepareIndexing<Abi, unknown>('build', options, deps);
-	return prepared.index();
+	const prepared = await prepareIndexing<Abi, unknown, 'build'>('build', options, deps);
+	const summary = await prepared.index();
+	await publishAtTheTip(prepared, deps);
+	return summary;
+}
+
+/**
+ * `build --publish <dir>`: PUBLISH THE DATABASE THIS BUILD WROTE, at the tip it stopped
+ * at, through `publish`'s OWN implementation (`publishDatabase`) and never a second
+ * copy of it, so the one-step form and the separate step write the same files over the
+ * same database (ADR-0095).
+ *
+ * The processor it EXPECTS is always this build's own: the bundle its `-p` named, whose
+ * hash is the identity it folded under. The final settle is fail-soft (`driveCycles`), so
+ * a build whose successor did not become canonical exits with the pointer still naming
+ * the PREVIOUS processor, and publishing that under an app shipping the new bundle is the
+ * one mistake ADR-0095 names: `publish` refuses it instead, naming both.
+ *
+ * A refusal THROWS, so `main` exits non-zero. It runs after the fold has been kept (every
+ * write of the fold is already durable, and a publication writes nothing into the
+ * database), and every refusal of `publish` is made before its first file is written.
+ *
+ * A build STOPPED from outside publishes nothing, for the reason it skips its settle and
+ * its prune: the tip it stopped at is not the tip it was asked to publish at.
+ */
+async function publishAtTheTip(
+	prepared: PreparedIndexing<Abi, unknown, 'build'>,
+	deps: IndexingDependencies,
+): Promise<void> {
+	const publication = prepared.config.publish;
+	if (publication === undefined || deps.signal?.aborted) return;
+	// a configured build always has one (`requireArrivedBundle`); publishing without it
+	// would drop the one check this form exists to make
+	const expected = prepared.arrived;
+	if (expected === undefined) throw new Error(`this build has no bundle of its own to publish as`);
+	const written = await publishDatabase(
+		prepared.db,
+		{...publication, expected},
+		{...(deps.env === undefined ? {} : {env: deps.env}), ...deps.publication},
+	);
+	for (const line of describePublication(written, 'build')) console.log(line);
 }
 
 // Build to the tip and resolve the process exit code: 0 on success, 1 on failure. The `build`,

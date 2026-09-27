@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
 import {streamConfigFor} from './folding.js';
-import type {Options, PublishConfig} from './types.js';
+import type {BuildPublication, Options, PublishConfig} from './types.js';
 
 // ---------------------------------------------------------------------------------------------------
 // `etherfold publish`: WRITE A DATABASE OUT AS WHAT A BROWSER APP STARTS FROM (ADR-0095)
@@ -122,7 +122,6 @@ export type PublishDependencies = {
 export async function publish(options: Options, deps: PublishDependencies = {}): Promise<WrittenPublication> {
 	const env = deps.env ?? (process.env as EnvRecord);
 	const config: PublishConfig = resolveCommandConfig('publish', options, env);
-	const files = deps.files ?? nodePublicationFiles;
 
 	// the bundle this publication is MEANT to be of, read and judged by the one check
 	// every `--processor` goes through; its hash is the identity the canonical
@@ -139,12 +138,53 @@ export async function publish(options: Options, deps: PublishDependencies = {}):
 					return {bundle, identity: processorArtifactIdentity(bundle)};
 				})();
 
-	const server = await import('@etherfold/server');
 	const db = await openPublishedDatabase(config.destination.db, deps.createDB);
+	return publishDatabase(
+		db,
+		{
+			out: config.out,
+			history: config.history,
+			seed: config.seed,
+			...(expected === undefined ? {} : {expected}),
+		},
+		{...deps, env},
+	);
+}
+
+/**
+ * WHAT ONE PUBLICATION IS ASKED FOR, once the command's inputs are resolved: the
+ * directory, the history and the seed, and the bundle it is meant to be of.
+ */
+export type PublicationRequest = BuildPublication & {
+	/**
+	 * The bundle the canonical generation must be, and its identity (ADR-0086). Given,
+	 * a database whose canonical generation is another processor is refused naming
+	 * both. `publish` passes the one `-p` named; `build --publish` ALWAYS passes its own.
+	 */
+	readonly expected?: {readonly bundle: Uint8Array; readonly identity: string};
+};
+
+/**
+ * PUBLISH AN OPEN DATABASE: the implementation of `etherfold publish`, and the ONE
+ * `build --publish` calls over the database it has just folded (ADR-0095), so the
+ * two forms cannot drift apart. Everything after resolving the inputs and opening the
+ * database is here: the production, and the layout in `request.out`.
+ *
+ * Throws on every refusal `publish` documents, BEFORE the first file is written.
+ */
+export async function publishDatabase(
+	db: RemoteSQL,
+	request: PublicationRequest,
+	deps: Pick<PublishDependencies, 'env' | 'files' | 'savedAt'> = {},
+): Promise<WrittenPublication> {
+	const env = deps.env ?? (process.env as EnvRecord);
+	const files = deps.files ?? nodePublicationFiles;
+	const expected = request.expected;
+	const server = await import('@etherfold/server');
 	const produced = await server.producePublication(db, {
 		stream: streamConfigFor(env),
-		history: config.history,
-		seed: config.seed,
+		history: request.history,
+		seed: request.seed,
 		...(expected === undefined ? {} : {expectedProcessor: expected.identity}),
 		...(deps.savedAt === undefined ? {} : {savedAt: deps.savedAt}),
 		// WHICH COLUMNS the generation's tables have is its processor's declaration, and
@@ -172,7 +212,7 @@ export async function publish(options: Options, deps: PublishDependencies = {}):
 		},
 	});
 
-	return writePublication(config.out, produced, files, server);
+	return writePublication(request.out, produced, files, server);
 }
 
 /**
@@ -255,10 +295,10 @@ function localPathOf(url: string): string | undefined {
  * THE PUBLICATION IN WORDS, one `key: value` per line so a CI log can be grepped,
  * including the body's content hash, which a release may pin.
  */
-export function describePublication(written: WrittenPublication): string[] {
+export function describePublication(written: WrittenPublication, command: 'publish' | 'build' = 'publish'): string[] {
 	const {produced} = written;
 	return [
-		`etherfold publish: PUBLISHED the canonical generation ${produced.digest} into ${written.out}.`,
+		`etherfold ${command}: PUBLISHED the canonical generation ${produced.digest} into ${written.out}.`,
 		`generation: ${produced.digest}`,
 		`  stream: ${produced.generation.stream}`,
 		`  processor: ${produced.generation.processor}`,

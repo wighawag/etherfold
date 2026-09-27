@@ -97,6 +97,22 @@ export type Options = {
 	history?: string;
 	/** `--seed`: `publish` also writes a stream seed of the stream the canonical generation folds. */
 	seed?: boolean;
+	/** `--publish <dir>`: `build` publishes the database it wrote into this directory, at the tip it stops at. */
+	publish?: string;
+};
+
+/**
+ * WHAT `build --publish <dir>` PUBLISHES INTO, and how: the same three things
+ * `publish` takes (`--out`, `--history`, `--seed`), minus the database and the
+ * processor, which are the build's own (ADR-0095).
+ */
+export type BuildPublication = {
+	/** The directory, as `publish`'s `--out`. */
+	readonly out: string;
+	/** How much history the state snapshot carries below its cut. See `PublishConfig.history`. */
+	readonly history: SnapshotHistory;
+	/** Whether a stream seed is published beside it. See `PublishConfig.seed`. */
+	readonly seed: boolean;
 };
 
 /**
@@ -249,6 +265,12 @@ export type BuildConfig<ABI extends Abi = Abi> = {
 	readonly indexer: string;
 	/** Whether this START may replace or discard a DIFFERENT pending successor without asking. See `RunConfig.override`. */
 	readonly override: boolean;
+	/**
+	 * `--publish <dir>`: after folding to the tip, publish the database this build wrote,
+	 * through `publish`'s own implementation, with this build's processor as the one
+	 * expected (ADR-0095). Absent: this build publishes nothing.
+	 */
+	readonly publish?: BuildPublication;
 };
 
 /**

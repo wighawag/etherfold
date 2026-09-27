@@ -188,8 +188,15 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 
 	const build = program
 		.command('build')
-		.description('follow the chain, fold a processor into a libSQL database, and exit at the tip')
-		.usage(`-p <processor's path> --store sqlite --db <libsql url> [-d <deployment folder> -n http://localhost:8545]`);
+		.description(
+			'follow the chain, fold a processor into a libSQL database, and exit at the tip; with --publish <dir>, first ' +
+				'publish that database there exactly as `etherfold publish` would, expecting this build\u2019s own processor ' +
+				'(ADR-0095)',
+		)
+		.usage(
+			`-p <processor's path> --store sqlite --db <libsql url> [-d <deployment folder> -n http://localhost:8545] ` +
+				`[--publish <dir> [--history <all|blocks|none>] [--seed]]`,
+		);
 	registerInputs(build, 'build');
 	build.action((options: Options) => {
 		runBuild(options);
