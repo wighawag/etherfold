@@ -20,6 +20,8 @@ It writes the LAYOUT: the body under a name derived from its content hash, never
 
 It refuses, naming why and writing nothing: a database with no canonical generation, one whose canonical generation has folded nothing up to the cut, and one whose canonical generation is not the processor given with `-p`.
 
+> FORWARD-POINTER (conductor, after `a-state-snapshot-round-trips-from-a-build-database` landed as #218): the snapshot producer already exists in `@etherfold/state-store-sqlite` as `produceStateSnapshot(store, {at, processor, cursor})` over `VersionedStateStore.liveRowsAsOf(at)`, and it already applies the highest-recorded-block-at-or-below-the-cut rule (`getBlockAtOrBelow`). The library function in `@etherfold/server` WRAPS it (looks up the canonical generation, computes the cut and the resume position, lays out the bodies and the index); it does not duplicate the row read or the pointer rule. A snapshot is now `{head, document}` (`StateSnapshot`).
+
 ## Acceptance criteria
 
 - [ ] A database built over a fixture chain publishes an index and a body; installing the body answers every read as the database does AS OF `tip - finality`.

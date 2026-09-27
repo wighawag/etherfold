@@ -12,6 +12,8 @@ covers: [2]
 
 The installed store reports the FLOOR as its history floor, so a consumer can revert to, and read as of, any block from the floor up, and refuses under it (ADR-0028). A requested depth reaching below what the database itself retains (its `--retention`) is refused by name rather than silently shortened.
 
+> FORWARD-POINTER (conductor, after #218): format 2's later-blocks section is already DECODED and installed by `bootstrap` (tested in `packages/state-store/test/snapshot.test.ts`, 'a snapshot that carries history above its floor'); this task adds the PRODUCER side (`produceStateSnapshot` in `@etherfold/state-store-sqlite` gains the floor/history option) and the `--history` flag. Also check, and cover if needed: a download that fails partway through a history install leaves the floor and some later blocks installed; the next `openAndBootstrap` must not treat that store as a complete install.
+
 ## Acceptance criteria
 
 - [ ] For `none`, a depth and `all`, the installed store answers an as-of read at several blocks between the floor and the cut exactly as the source database does.
