@@ -3,6 +3,7 @@ title: 'A remaining tab takes over indexing when the indexing tab closes'
 slug: a-remaining-tab-takes-over-when-the-indexing-tab-closes
 blockedBy: [a-promotion-tells-readers-the-state-moved]
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
