@@ -15,6 +15,7 @@ import {
 import type {EmissionAppender} from './emissionStream.js';
 import type {GenerationId, GenerationRecord} from './generation/registry.js';
 import type {ReorgRecorder} from './reorgCounters.js';
+import {sourceHashesOf} from './internal/engine/eventRanges.js';
 import {streamDigestOf} from './stream/identity.js';
 import type {
 	EmittedLog,
@@ -22,6 +23,7 @@ import type {
 	IndexingSource,
 	LastSync,
 	ProvidedIndexerConfig,
+	SourceHashEntry,
 	UntypedWireBatch,
 	UsedStreamConfig,
 	WireBatch,
@@ -307,6 +309,11 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 
 	/** What the ARRIVAL derived: see `processorIdentity`. */
 	private readonly suppliedProcessorIdentity: string;
+	/**
+	 * The stream's FULL source identity, written beside its coverage (ADR-0095). See
+	 * `StreamCoverage.source`.
+	 */
+	private readonly sourceHashes: SourceHashEntry[];
 	private readonly finality: number;
 	private readonly recordReorg: ReorgRecorder | undefined;
 	private readonly appendEmissions: EmissionAppender | undefined;
@@ -334,6 +341,7 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 		// stream is addressed by, so an unset `finality` and the default written out
 		// have to be one stream here exactly as they are one config everywhere else.
 		this.streamDigest = streamDigestOf(source, this.streamConfig);
+		this.sourceHashes = sourceHashesOf(source);
 	}
 
 	/**
@@ -442,16 +450,19 @@ export class StreamBuilder<ABI extends Abi, ProcessResultType = unknown> impleme
 	 * proportional to the history, which is exactly what an empty save costs the
 	 * segment keeper (ADR-0035).
 	 *
-	 * The identity written beside the rows is THIS receiver's own `context` rather
+	 * The identity written beside the rows is THIS receiver's own source rather
 	 * than the cursor's, so that the coverage row and the `streamDigest` it is
-	 * filed under cannot describe two different filters.
+	 * filed under cannot describe two different filters. It is the source's FULL
+	 * hash entries (`sourceHashesOf`) and not the 32-bit wire context, so the row
+	 * digests to the very `streamDigest` it is filed under and a stream seed can be
+	 * built from the database alone (ADR-0095).
 	 */
 	private async storeStream(emissions: EmittedLog[], newLastSync: LastSync<ABI>): Promise<void> {
 		if (!this.appendEmissions) return;
 		await this.appendEmissions({
 			stream: this.streamDigest,
 			coverage: {
-				source: this.context.source,
+				source: this.sourceHashes,
 				config: this.context.config,
 				latestBlock: newLastSync.latestBlock,
 				lastFromBlock: newLastSync.lastFromBlock,

@@ -15,7 +15,8 @@ import type {Options, PublishConfig} from './types.js';
 // `etherfold publish`: WRITE A DATABASE OUT AS WHAT A BROWSER APP STARTS FROM (ADR-0095)
 // ---------------------------------------------------------------------------------------------------
 // A THIN WRAPPER. What is published -- which generation, where it is cut, the rows,
-// the resume position, the body's content-addressed name and the index entry -- is
+// the resume position, the stream seed when `--seed` asks for one, the bodies'
+// content-addressed names and the index entries -- is
 // `producePublication`'s (`@etherfold/server`), a library function a serving host
 // can answer over HTTP from the same database. What is HERE is what only a process
 // with a disk does: resolve the command's inputs, open the database READ-ONLY in
@@ -143,6 +144,7 @@ export async function publish(options: Options, deps: PublishDependencies = {}):
 	const produced = await server.producePublication(db, {
 		stream: streamConfigFor(env),
 		history: config.history,
+		seed: config.seed,
 		...(expected === undefined ? {} : {expectedProcessor: expected.identity}),
 		...(deps.savedAt === undefined ? {} : {savedAt: deps.savedAt}),
 		// WHICH COLUMNS the generation's tables have is its processor's declaration, and
@@ -268,6 +270,17 @@ export function describePublication(written: WrittenPublication): string[] {
 			`body: ${join(written.out, body.name)}${body.written ? '' : ' (already there, left as it was)'}`,
 			`  contentHash: ${body.contentHash}`,
 		]),
+		// what a release PINS for the seed (ADR-0065, ADR-0066): the content hash over
+		// the DECOMPRESSED payload, which an install's `expectedContentHash` takes verbatim
+		...(produced.seed === undefined
+			? []
+			: [
+					`seed: ${join(written.out, produced.seed.body)}`,
+					`  streamDigest: ${produced.seed.streamDigest}`,
+					`  coverage: ${produced.seed.coverage.fromBlock} -> ${produced.seed.coverage.toBlock}`,
+					`  events: ${produced.seed.events}`,
+					`  contentHash: ${produced.seed.contentHash}`,
+				]),
 		`index: ${written.index}`,
 	];
 }

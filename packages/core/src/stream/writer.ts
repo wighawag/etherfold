@@ -15,12 +15,14 @@ import {
 } from '../internal/engine/utils.js';
 import type {ReorgRecorder} from '../reorgCounters.js';
 import {assertWellFormed, type IngestionResult, type LogIngestion} from '../streamBuilder.js';
+import {sourceHashesOf} from '../internal/engine/eventRanges.js';
 import {streamDigestOf} from '../stream/identity.js';
 import type {
 	IndexingSource,
 	LastSync,
 	LogEvent,
 	ProvidedStreamConfig,
+	SourceHashEntry,
 	StoredLogEvent,
 	UsedStreamConfig,
 	WireBatch,
@@ -177,6 +179,11 @@ export class StreamWriter<ABI extends Abi> implements LogIngestion {
 	/** WHICH stream this writes, as everything that stores its emissions keys them. */
 	readonly streamDigest: string;
 
+	/**
+	 * The stream's FULL source identity, written beside its coverage (ADR-0095). See
+	 * `StreamCoverage.source`.
+	 */
+	private readonly sourceHashes: SourceHashEntry[];
 	private readonly finality: number;
 	private readonly cursor: StreamCursorSource;
 	private readonly appendEmissions: EmissionAppender;
@@ -195,6 +202,7 @@ export class StreamWriter<ABI extends Abi> implements LogIngestion {
 		this.defaultFromBlock = defaultFromBlockOf(source);
 		this.context = wireContextOf(source, this.streamConfig);
 		this.streamDigest = streamDigestOf(source, this.streamConfig);
+		this.sourceHashes = sourceHashesOf(source);
 		this.cursor = options.cursor;
 		this.appendEmissions = options.appendEmissions;
 		this.recordReorg = options.recordReorg;
@@ -345,7 +353,7 @@ export class StreamWriter<ABI extends Abi> implements LogIngestion {
 		await this.appendEmissions({
 			stream: this.streamDigest,
 			coverage: {
-				source: this.context.source,
+				source: this.sourceHashes,
 				config: this.context.config,
 				latestBlock: newLastSync.latestBlock,
 				lastFromBlock: newLastSync.lastFromBlock,

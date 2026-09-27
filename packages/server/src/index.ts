@@ -186,6 +186,7 @@ export {
 	mergePublicationIndex,
 	parsePublicationIndex,
 	stateSnapshotBodyName,
+	streamSeedBodyName,
 	PublicationRefusedError,
 	PUBLICATION_INDEX_NAME,
 	PUBLICATION_INDEX_FORMAT,
@@ -197,6 +198,8 @@ export type {
 	PublicationIndex,
 	PublicationRefusalReason,
 	PublishedStateSnapshot,
+	PublishedStreamSeed,
+	ProducedStreamSeed,
 } from './publication.js';
 /**
  * PAIR-COMPACTION (ADR-0006): the one thing that ever DELETES from that stream,

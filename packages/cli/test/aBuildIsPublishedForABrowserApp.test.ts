@@ -1,5 +1,18 @@
 import {createClient} from '@libsql/client';
-import {IndexerGeneration, type Abi} from '@etherfold/core';
+import {
+	createSegmentedStream,
+	IndexerGeneration,
+	installStreamSeed,
+	parseStreamSeed,
+	pinnedStreamSeedContentHash,
+	resolveStreamConfig,
+	streamDigestOf,
+	streamDigestOfSourceHashes,
+	type Abi,
+	type StoredSegment,
+	type StreamCursorRecord,
+	type StreamSegmentPort,
+} from '@etherfold/core';
 import {
 	EntityEventProcessor,
 	openForWriting,
@@ -7,11 +20,12 @@ import {
 	readSnapshot,
 	type EntityProcessor,
 } from '@etherfold/processor-entities';
-import {PUBLICATION_INDEX_NAME, type PublicationIndex} from '@etherfold/server';
+import {PUBLICATION_INDEX_NAME, readStreamCoverage, type PublicationIndex} from '@etherfold/server';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {loadProcessorArtifact, resolveSource} from '@etherfold/utils';
 import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import {gunzipSync} from 'node:zlib';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
@@ -47,7 +61,11 @@ import {canonicalStoreIn} from './utils/reads.js';
 //  - the layout never forgets: a republication replaces only its own generation's
 //    entry, a different generation adds one, and no file is ever deleted;
 //  - the index is renamed into place LAST, and nothing is written outside `--out`;
-//  - every refusal writes nothing, exits non-zero and says why.
+//  - every refusal writes nothing, exits non-zero and says why;
+//  - with `--seed`, the stream seed installs through core's `installStreamSeed`
+//    (the install a browser tab runs) under the hash it PRINTED, and re-folding it
+//    with the same processor reaches the snapshot's state; without it, no seed is
+//    written and another stream's seed entry is kept.
 // ---------------------------------------------------------------------------------------------------
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/processor-bundle/', import.meta.url));
@@ -502,6 +520,298 @@ describe('`etherfold publish` refuses, writing nothing', () => {
 	});
 });
 
+/**
+ * A tab's stream keeper, in memory: `createSegmentedStream`, the keeper the browser
+ * builds its IndexedDB one from, over a map. Its address arithmetic is the browser's
+ * own and is not what is asserted here; what is, is what the install and the load
+ * read and write through the keeper seam.
+ */
+function aTabsStreamKeeper() {
+	const rows = new Map<string, unknown>();
+	const port: StreamSegmentPort<Abi> = {
+		async readCursor() {
+			return rows.get('cursor') as StreamCursorRecord<Abi> | undefined;
+		},
+		async readSegments() {
+			const stored: StoredSegment[] = [];
+			for (const [key, value] of rows) if (key !== 'cursor') stored.push({ordinal: Number(key), value});
+			return stored.sort((a, b) => a.ordinal - b.ordinal);
+		},
+		async commitSegmentWithCursor(_source, allocate) {
+			const commit = allocate(rows.get('cursor') as StreamCursorRecord<Abi> | undefined);
+			if (!commit) return;
+			rows.set(String(commit.ordinal), commit.segment);
+			rows.set('cursor', commit.cursor);
+		},
+		async writeCursorOnly(_source, next) {
+			const record = next(rows.get('cursor') as StreamCursorRecord<Abi> | undefined);
+			if (record) rows.set('cursor', record);
+		},
+		async clearSubtree() {
+			const removed = rows.size;
+			rows.clear();
+			return removed;
+		},
+	};
+	return createSegmentedStream<Abi>(port);
+}
+
+/** A host serving `--out` as a static directory, the `.gz` as opaque bytes. */
+function servingTheDirectory(out: string): typeof globalThis.fetch {
+	return (async (location: string | URL | Request) => {
+		const name = String(location).split('/').at(-1)!;
+		return existsSync(join(out, name))
+			? new Response(new Uint8Array(readFileSync(join(out, name))), {status: 200})
+			: new Response('not found', {status: 404});
+	}) as typeof globalThis.fetch;
+}
+
+/** Publish through the PROCESS, keeping what it printed. */
+async function publishedAndPrinted(db: RemoteSQL, out: string, extra: Options = {}): Promise<string[]> {
+	const lines: string[] = [];
+	let code: number | undefined;
+	await publishMain(
+		{db: ':memory:', out, ...extra},
+		{
+			createDB: () => db,
+			env: ENV,
+			exit: (value) => (code = value),
+			log: (...args) => lines.push(args.join(' ')),
+			error: (...args) => lines.push(args.join(' ')),
+		},
+	);
+	expect(code, lines.join('\n')).toBe(0);
+	return lines;
+}
+
+/** The seed's `contentHash` line, as a release would copy it out of a CI log. */
+function thePrintedSeedHash(lines: string[]): string {
+	const at = lines.findIndex((line) => line.startsWith('seed: '));
+	expect(at).toBeGreaterThanOrEqual(0);
+	const printed = lines.slice(at).find((line) => line.startsWith('  contentHash: '));
+	return printed!.slice('  contentHash: '.length);
+}
+
+describe('`etherfold publish --seed`', () => {
+	for (const cutCarriesLogs of [true, false]) {
+		it(`writes a seed that installs through the tab's install under the hash it printed, covering exactly up to the cut (the cut ${
+			cutCarriesLogs ? 'carries logs' : 'carries none'
+		})`, async () => {
+			const logs = logsAround(cutCarriesLogs);
+			const db = oneDatabase();
+			await aBuild(db, fakeChain().serve(logs, TIP));
+			const {out} = aWorkspace();
+
+			const lines = await publishedAndPrinted(db, out, {seed: true});
+			const printed = thePrintedSeedHash(lines);
+
+			// a pin is exactly what the producer printed, in the one rendering it accepts
+			expect(pinnedStreamSeedContentHash(printed)).toBe(printed);
+			const canonical = (await canonicalGenerationIn(db))!;
+			const entry = theIndexIn(out).seeds![canonical.stream]!;
+			expect(entry).toMatchObject({stream: canonical.stream, contentHash: printed, coverage: {toBlock: CUT}});
+
+			const app = await theApp();
+			const chain = fakeChain().serve(logs, TIP);
+			const source = await resolveSource(app.processorModule, chain.provider);
+			const outcome = await installStreamSeed(aTabsStreamKeeper(), [`https://seeds.example/${entry.body}`], {
+				source,
+				streamConfig: resolveStreamConfig({finality: FINALITY}),
+				expectedContentHash: printed,
+				fetch: servingTheDirectory(out),
+			});
+
+			// identity (digest), coverage, coherence and capture depth all held
+			expect(outcome).toMatchObject({
+				status: 'installed',
+				at: CUT,
+				reachesBackTo: entry.coverage.fromBlock,
+				events: logs.filter((log) => parseInt(log.blockNumber, 16) <= CUT).length,
+			});
+		});
+	}
+
+	it('re-folded by a tab with the same processor, reaches the state of the snapshot published beside it', async () => {
+		const logs = logsAround(true);
+		const db = oneDatabase();
+		await aBuild(db, fakeChain().serve(logs, TIP));
+		const {out} = aWorkspace();
+		const written = await publish({db: ':memory:', out, seed: true}, {createDB: () => db, env: ENV});
+		const seed = written.produced.seed!;
+		const snapshot = written.bodies.find((body) => body.name !== seed.body)!;
+
+		const app = await theApp();
+		// the node a tab has: it refuses nothing, and it is asked for no log below the cut
+		const chain = fakeChain().serve(logs, TIP);
+		const source = await resolveSource(app.processorModule, chain.provider);
+		const keeper = aTabsStreamKeeper();
+		const installed = await installStreamSeed(keeper, [`./${seed.body}`], {
+			source,
+			streamConfig: resolveStreamConfig({finality: FINALITY}),
+			fetch: servingTheDirectory(out),
+		});
+		expect(installed).toMatchObject({status: 'installed', at: CUT});
+
+		// a processor-only change re-folds the installed stream: the same processor stands in
+		const refolded = await openForWriting(new VersionedStateStore(oneDatabase(), app.processor.entities));
+		const tab = new IndexerGeneration<Abi, unknown>(
+			chain.provider,
+			new EntityEventProcessor(refolded, app.processor, {finalityDepth: FINALITY}) as never,
+			source,
+			{stream: {finality: FINALITY}, keepStream: keeper},
+			{processorIdentity: app.identity},
+		);
+		const lastSync = await tab.load();
+
+		expect(lastSync.lastToBlock).toBe(CUT);
+		expect(chain.logRanges).toEqual([]);
+		const fromTheSnapshot = await aClientFrom(out, snapshot.name, app);
+		const reads = await everyRead((entity, id) => refolded.getCurrent(entity, id));
+		expect(reads).toEqual(await everyRead((entity, id) => fromTheSnapshot.getCurrent(entity, id)));
+		// every log up to the cut, once
+		expect(reads.counter).toEqual({
+			name: 'transfers',
+			value: logs.filter((log) => parseInt(log.blockNumber, 16) <= CUT).length,
+		});
+	});
+
+	it("keys its entry by STREAM: republishing replaces its own and keeps another stream's", async () => {
+		const db = oneDatabase();
+		const chain = fakeChain().serve(logsAround(false), TIP);
+		await aBuild(db, chain);
+		const {out} = aWorkspace();
+		const other = {
+			stream: 'other',
+			body: 'seed-other.json.gz',
+			contentHash: 'sha256:x',
+			coverage: {fromBlock: 1, toBlock: 2},
+			events: 0,
+			savedAt: 'then',
+		};
+		await nodePublicationFiles.mkdir(out);
+		await nodePublicationFiles.write(
+			join(out, PUBLICATION_INDEX_NAME),
+			JSON.stringify({format: 1, snapshots: {}, seeds: {other}}),
+		);
+
+		const first = await publish({db: ':memory:', out, seed: true}, {createDB: () => db, env: ENV});
+		chain.serve([...logsAround(false), transfer(TIP + 20, '0xamore', BOB, ALICE, 1n)], TIP + 40);
+		await aBuild(db, chain);
+		const second = await publish({db: ':memory:', out, seed: true}, {createDB: () => db, env: ENV});
+
+		const stream = (await canonicalGenerationIn(db))!.stream;
+		const seeds = theIndexIn(out).seeds!;
+		expect(Object.keys(seeds).sort()).toEqual([stream, 'other'].sort());
+		expect(seeds.other).toEqual(other);
+		expect(seeds[stream]!.body).toBe(second.produced.seed!.body);
+		expect(second.produced.seed!.body).not.toBe(first.produced.seed!.body);
+		// and nothing an earlier publication wrote was deleted
+		expect(existsSync(join(out, first.produced.seed!.body))).toBe(true);
+	});
+
+	it("without --seed writes no seed body and no seed entry for this stream, and keeps another stream's", async () => {
+		const db = oneDatabase();
+		await aBuild(db, fakeChain().serve(logsAround(false), TIP));
+		const {out} = aWorkspace();
+		const other = {
+			stream: 'other',
+			body: 'seed-other.json.gz',
+			contentHash: 'sha256:x',
+			coverage: {fromBlock: 1, toBlock: 2},
+			events: 0,
+			savedAt: 'then',
+		};
+		await nodePublicationFiles.mkdir(out);
+		await nodePublicationFiles.write(
+			join(out, PUBLICATION_INDEX_NAME),
+			JSON.stringify({format: 1, snapshots: {}, seeds: {other}}),
+		);
+
+		const lines = await publishedAndPrinted(db, out);
+
+		expect(readdirSync(out).filter((name) => name.startsWith('seed-'))).toEqual([]);
+		expect(theIndexIn(out).seeds).toEqual({other});
+		expect(lines.some((line) => line.startsWith('seed: '))).toBe(false);
+	});
+
+	it('drops a reorg below the cut as its apply/retract pair: the seed carries the final chain and installs under the unchanged coherence check', async () => {
+		const db = oneDatabase();
+		const before = logsAround(false);
+		const chain = fakeChain().serve(before, TIP);
+		await aBuild(db, chain);
+		// the chain reorgs at CUT + 2, inside the window, and moves on 40 blocks: the
+		// block that was replaced is now BELOW the next publication's cut
+		const replaced = transfer(CUT + 2, '0xbabove', CAROL, ALICE, 1n);
+		const after = [...before.filter((log) => log.blockHash !== '0xaabove'), replaced].sort(
+			(a, b) => parseInt(a.blockNumber, 16) - parseInt(b.blockNumber, 16),
+		);
+		chain.serve(after, TIP + 40);
+		await aBuild(db, chain);
+		// the append-only stream kept the reorg: the replaced block's retraction is stored
+		// (and everything the fold rewound above it, re-applied on the same hash)
+		const retractions = await db
+			.prepare(`SELECT blockHash FROM _emissions WHERE removed = 1`)
+			.all<{blockHash: string}>();
+		expect(retractions.results.map((row) => row.blockHash)).toContain('0xaabove');
+		const {out} = aWorkspace();
+
+		const written = await publish({db: ':memory:', out, seed: true}, {createDB: () => db, env: ENV});
+		const seed = parseStreamSeed(gunzipSync(readFileSync(join(out, written.produced.seed!.body))).toString('utf-8'));
+
+		const newCut = TIP + 40 - FINALITY;
+		expect(seed.coverage.toBlock).toBe(newCut);
+		expect(seed.eventStream.some((event) => event.removed)).toBe(false);
+		expect(seed.eventStream.map((event) => event.blockHash)).not.toContain('0xaabove');
+		expect(seed.eventStream.map((event) => event.blockHash)).toEqual(
+			after.filter((log) => parseInt(log.blockNumber, 16) <= newCut).map((log) => log.blockHash),
+		);
+
+		const app = await theApp();
+		const source = await resolveSource(app.processorModule, fakeChain().serve(after, TIP + 40).provider);
+		const outcome = await installStreamSeed(aTabsStreamKeeper(), [`./${written.produced.seed!.body}`], {
+			source,
+			streamConfig: resolveStreamConfig({finality: FINALITY}),
+			expectedContentHash: written.produced.seed!.contentHash,
+			fetch: servingTheDirectory(out),
+		});
+		expect(outcome).toMatchObject({status: 'installed', at: newCut, events: seed.eventStream.length});
+	});
+
+	it("records its stream's full source identity at fold time, and the seed's digest is the canonical generation's stream", async () => {
+		const db = oneDatabase();
+		await aBuild(db, fakeChain().serve(logsAround(false), TIP));
+		const canonical = (await canonicalGenerationIn(db))!;
+		const {out} = aWorkspace();
+
+		const written = await publish({db: ':memory:', out, seed: true}, {createDB: () => db, env: ENV});
+		const seed = parseStreamSeed(gunzipSync(readFileSync(join(out, written.produced.seed!.body))).toString('utf-8'));
+
+		const app = await theApp();
+		const source = await resolveSource(app.processorModule, fakeChain().serve([], TIP).provider);
+		// what the fold wrote beside its coverage is the source's FULL hash entries, which
+		// digest to the stream the claim is filed under, and not the 32-bit wire context
+		const coverage = (await readStreamCoverage(db, {indexer: written.produced.indexer, stream: canonical.stream}))!;
+		expect(coverage.source.length).toBeGreaterThan(0);
+		expect(coverage.source.every((entry) => entry.streamHash !== undefined)).toBe(true);
+		expect(streamDigestOfSourceHashes(coverage.source, seed.streamConfig)).toBe(
+			streamDigestOf(source, resolveStreamConfig({finality: FINALITY})),
+		);
+		expect(seed.context.source).toEqual(coverage.source);
+		expect(seed.streamDigest).toBe(canonical.stream);
+		expect(streamDigestOfSourceHashes(seed.context.source, seed.streamConfig)).toBe(canonical.stream);
+	});
+
+	it('is refused by every command that publishes nothing', async () => {
+		await expect(
+			prepareIndexing(
+				'build',
+				{processor: BUNDLE, nodeUrl: 'http://x', store: 'sqlite', db: ':memory:', seed: true},
+				{env: {}},
+			),
+		).rejects.toThrow(/--seed is not accepted by `etherfold build`/);
+	});
+});
+
 describe('the command line', () => {
 	it('parses `publish --db --out -p` into the handler, and refuses a flag it does not own by name', async () => {
 		const received: Options[] = [];
@@ -520,9 +830,16 @@ describe('the command line', () => {
 			'b.js',
 			'--history',
 			'5000',
+			'--seed',
 		]);
 
-		expect(received[0]).toMatchObject({db: 'file:x.db', out: './site', processor: 'b.js', history: '5000'});
+		expect(received[0]).toMatchObject({
+			db: 'file:x.db',
+			out: './site',
+			processor: 'b.js',
+			history: '5000',
+			seed: true,
+		});
 		await expect(publish({db: 'file:x.db', out: './site', nodeUrl: 'http://x'}, {env: {}})).rejects.toThrow(
 			/--node-url \(ETH_NODE_URI\) is not accepted by `etherfold publish`/,
 		);

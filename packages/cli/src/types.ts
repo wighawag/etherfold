@@ -95,6 +95,8 @@ export type Options = {
 	out?: string;
 	/** `--history <all|blocks|none>`: how much history `publish`'s state snapshot carries below its cut. */
 	history?: string;
+	/** `--seed`: `publish` also writes a stream seed of the stream the canonical generation folds. */
+	seed?: boolean;
 };
 
 /**
@@ -327,6 +329,12 @@ export type PublishConfig = {
 	 * when `--history` was not given, `all`, or a depth in blocks.
 	 */
 	readonly history: SnapshotHistory;
+	/**
+	 * Whether a stream seed is published beside the state snapshot (ADR-0095):
+	 * `true` only when `--seed` was given. Opt-in, because nothing a publication
+	 * writes is deleted and a seed is a full copy of the stream.
+	 */
+	readonly seed: boolean;
 };
 
 /** One row of the command table, resolved. */
