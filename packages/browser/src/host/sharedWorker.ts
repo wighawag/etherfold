@@ -6,11 +6,15 @@ import {
 	isPortPush,
 	isPortRequest,
 	isPortResponse,
+	INDEXER_PORT_PROTOCOL,
+	PORT_PUSH_SUBSCRIPTIONS,
 	pushSubscribedBy,
 	pushUnsubscribedBy,
+	type PortCaseName,
 	type PortCases,
 	type PortPushName,
 	type PortRequest,
+	type PortResponse,
 } from './envelope.js';
 import {executionScopeName, listen, type HostAccess, type MessageEndpoint} from './endpoint.js';
 import {serveIndexerHost, type HostedIndexerSpec, type IndexerHost} from './serve.js';
@@ -301,14 +305,31 @@ export class NoTabProviderError extends Error {
  * go, rather than failing every request. This is the only place that knows which
  * tab sent which port, so it is the only place that can.
  *
+ * **A TAB LETTING GO DETACHES THAT TAB, AND STOPS THE FOLD ONLY IF IT WAS THE
+ * LAST.** A port on its way out (`IndexerPort.close`) posts `letGo`, which a host
+ * answers by stopping, because a dedicated host belongs to the one tab that is
+ * leaving. Here it belongs to every tab, and the host is never told how many
+ * there are, so the decision is made HERE, the one place that knows: a tab that
+ * is not the last is let go on the spot (its provider leaves the pool, its
+ * subscriptions are handed back to the host, answers still owed to it are
+ * dropped) and is answered `quiesced: false` without the host hearing of it. The
+ * LAST tab's `letGo` is forwarded, so the fold is quieted before the browser ends
+ * the worker, which is the quiet `HostAccess.close` exists for. An app's own
+ * `stopIndexing` is a different case and reaches the host from any tab: that one
+ * is meant for the host.
+ *
+ * A tab that attaches AFTER the last one let go, to an instance the browser has
+ * not ended yet, finds a fold that stopped for nobody; the fold is started again
+ * for it, so it gets what it would have got from the fresh instance a moment
+ * later.
+ *
  * ## What it notices of a tab going away, which is not much
  *
  * Nothing tells a SharedWorker that a client is gone on every engine. There is no
  * disconnect event, and `MessagePort`'s own `close` event is not on every engine
- * this ships to. The HOST never needs to know, which is why "closing one tab does
- * not stop the fold" needs no code there. The POOL does, and uses what can be
- * observed: a client whose port THROWS on a post is let go, and so is one whose
- * port (or whose provider port) fires `close`, where the engine fires it (node,
+ * this ships to. The HOST never needs to know. The POOL does, and uses what can be
+ * observed: a tab's own `letGo` (above), a client whose port THROWS on a post is
+ * let go, and so is one whose port (or whose provider port) fires `close`, where the engine fires it (node,
  * and current Chromium). Letting a tab go closes its provider, which rejects
  * what was waiting on it and sends it to the next tab. On an engine that fires
  * neither, a tab that vanished mid-request is not noticed, and that request waits
@@ -330,11 +351,32 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 	 * WHO ASKED, under the id this endpoint gave the host, and what THEY called it,
 	 * plus what to do with the answer where the question was a `connect`.
 	 */
-	const asked = new Map<number, {client: Client; id: number; answered?: (ok: boolean) => void}>();
+	const asked = new Map<number, {client: Client; id: number; answered?: (response: PortResponse) => void}>();
 	const listeners = new Set<(event: {data: unknown}) => void>();
 	let nextId = 1;
 	/** The ONE provider the host is handed: every tab's, served as one (see `pooled`). */
 	let pool: {readonly channel: MessageChannel; readonly served: {close(): void}} | undefined;
+	/**
+	 * The fold was stopped because the LAST tab let go, and nobody has attached
+	 * since: the next tab to attach starts it again (`resume`).
+	 */
+	let quietedForNobody = false;
+
+	/**
+	 * ASK THE HOST something on behalf of THIS ENDPOINT rather than of a tab: under
+	 * an id nobody is waiting on, so its answer is dropped where every answer to a
+	 * gone tab is.
+	 */
+	function forward(name: PortCaseName): void {
+		const request = {protocol: INDEXER_PORT_PROTOCOL, kind: 'request', id: nextId++, case: name, payload: undefined};
+		for (const listener of [...listeners]) listener({data: request});
+	}
+
+	/** Start the fold again for a tab that arrived after the last one let go. */
+	function resume(): void {
+		quietedForNobody = false;
+		forward('startIndexing');
+	}
 
 	/**
 	 * LET A TAB GO, and its provider with it.
@@ -347,6 +389,11 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 	function letGo(client: Client, why: string, error?: unknown): void {
 		if (!clients.delete(client)) return;
 		client.provider?.close();
+		// ITS SUBSCRIPTIONS ARE HANDED BACK: the host counts them over every tab, and
+		// one that left holding a count would keep the host posting (and holding its
+		// own subscription to the fold) for nobody.
+		for (const push of client.subscribed) forward(PORT_PUSH_SUBSCRIPTIONS[push].unsubscribe);
+		client.subscribed.clear();
 		namedLogger.info(`a tab attached to this indexer host ${why}, so it was let go`, ...(error ? [error] : []));
 	}
 
@@ -396,7 +443,10 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 	 * host REFUSES leaves the pool again, since its settings (its chain, perhaps) are
 	 * not the ones being folded.
 	 */
-	function connectOf(client: Client, request: PortRequest): {forwarded: PortRequest; answered?: (ok: boolean) => void} {
+	function connectOf(
+		client: Client,
+		request: PortRequest,
+	): {forwarded: PortRequest; answered?: (response: PortResponse) => void} {
 		const payload = request.payload as PortCases['connect']['request'];
 		if (!options.poolTabProviders || !payload?.provider) return {forwarded: request};
 		const tabPort = payload.provider;
@@ -423,8 +473,8 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 		} as PortRequest;
 		return {
 			forwarded,
-			answered(ok) {
-				if (ok) return;
+			answered(response) {
+				if (response.ok) return;
 				if (client.provider === provider) client.provider = undefined;
 				provider.close();
 				tabPort.close();
@@ -439,13 +489,50 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 		};
 	}
 
+	/**
+	 * A TAB SAYING IT IS LETTING GO (`IndexerPort.close`): detached here while other
+	 * tabs stay, and forwarded to the host, which stops, only when it is the last.
+	 */
+	function letGoOf(client: Client, request: PortRequest): void {
+		const others = [...clients].some((other) => other !== client);
+		if (!others) {
+			// THE LAST ONE: the host is quieted before the browser ends the worker. The tab
+			// stays attached until the stop has landed, because the cycle a stop waits for
+			// may be waiting on this very tab's provider.
+			const id = nextId++;
+			asked.set(id, {
+				client,
+				id: request.id,
+				answered(response) {
+					letGo(client, `let go of its port, the last one attached`);
+					if (!response.ok) return;
+					// Somebody attached while the stop was landing: the fold was stopped for
+					// a tab that is not the last any more.
+					if (clients.size > 0) forward('startIndexing');
+					else quietedForNobody = true;
+				},
+			});
+			for (const listener of [...listeners]) listener({data: {...request, id}});
+			return;
+		}
+		letGo(client, `let go of its port while other tabs stay attached`);
+		post(client, {
+			protocol: INDEXER_PORT_PROTOCOL,
+			kind: 'response',
+			id: request.id,
+			case: 'letGo',
+			ok: true,
+			value: {quiesced: false},
+		} satisfies PortResponse<'letGo'>);
+	}
+
 	return {
 		endpoint: {
 			postMessage(message) {
 				if (isPortResponse(message)) {
 					const waiting = asked.get(message.id);
 					asked.delete(message.id);
-					waiting?.answered?.(message.ok);
+					waiting?.answered?.(message);
 					// An answer to a question nobody is waiting for: the client went away
 					// while the host was computing it. Dropped, because there is nowhere to
 					// put it.
@@ -473,6 +560,7 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 		attach(endpoint) {
 			const client: Client = {endpoint, subscribed: new Set<PortPushName>()};
 			clients.add(client);
+			if (quietedForNobody) resume();
 			// THE TAB'S WIRE CLOSING, where the engine fires a `close` event for it (node,
 			// and the Chromium engines that ship it), is the tab going away: said here
 			// rather than waited for until a post fails, which on most engines it never
@@ -483,6 +571,10 @@ function oneEndpointOverEveryClient(options: {poolTabProviders: boolean}): Every
 			);
 			listen(endpoint, (data) => {
 				if (!isPortRequest(data)) return;
+				if (data.case === 'letGo') {
+					letGoOf(client, data);
+					return;
+				}
 				const subscribing = pushSubscribedBy(data.case);
 				if (subscribing) client.subscribed.add(subscribing);
 				const unsubscribing = pushUnsubscribedBy(data.case);
