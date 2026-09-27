@@ -11,27 +11,21 @@ import type {
 	IndexingSource,
 	LastSync,
 	ExistingStream,
-	NotInstalledReason,
 	PromotionConfig,
 	UsedPromotionConfig,
 	ProvidedStreamConfig,
 	ProvidedIndexerConfig,
 	StateMovedDetach,
 	StateMovedHandler,
-	StreamSeedInstallOutcome,
-	StreamSeedLocation,
 	TxInclusionQuery,
 	TxInclusionVerdict,
 } from '@etherfold/core';
 import {
 	checkTxInclusion as checkTxInclusionAgainst,
-	installStreamSeed,
 	isRetryable,
 	openIndexer,
 	openMemoryGenerationRegistry,
-	resolveStreamConfig,
 	sameGeneration,
-	streamDigestOf,
 } from '@etherfold/core';
 import {pruneBudget, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
@@ -42,25 +36,18 @@ import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
 import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
 import {moduleProcessorIdentity} from './moduleIdentity.js';
+import {generationSpecOf} from './generationSpec.js';
+import type {InstantiatedProcessorBundle, ProcessorBundleSource} from './processorBundle.js';
+import type {BrowserPublicationOptions, PublicationSnapshot, PublicationState} from './publication.js';
 import {
-	arriveFromBundle,
-	refuseAnIdentityBesideABundle,
-	type InstantiatedProcessorBundle,
-	type ProcessorBundleSource,
-} from './processorBundle.js';
-import {
-	DEFAULT_CATCH_UP_WITHIN_SECONDS,
-	publishedSeedLocationsFor,
-	publishedSnapshotFor,
-	readPublicationIndex,
-	type BrowserPublicationOptions,
-	type PublicationSnapshot,
-	type PublicationState,
-	type ReadPublication,
-	type SnapshotSwitchReason,
-} from './publication.js';
+	createPublishedStart,
+	type BrowserStreamSeedOptions,
+	type PublishedStart,
+	type SnapshotSwitchHost,
+	type StreamSeedState,
+} from './publishedStart.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
-import {withClaimPatience, type ClaimPatience} from './utils/claim.js';
+import type {ClaimPatience} from './utils/claim.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
 import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
@@ -161,155 +148,12 @@ export type GenerationProgress = {
 };
 
 /**
- * WHICH WAY a refused seed and this client disagree, where the reason carries a
- * direction at all (ADR-0064).
- *
- * It is the refusal REASON, narrowed: the two members are exactly the two
- * reasons that name a direction, restated here so an application can switch on
- * one field instead of knowing which members of the refusal vocabulary happen to
- * be directional. It is DERIVED from `reason` and is never a second fact.
- *
- * What nothing in this library does with it is INFER. An app may render "a newer
- * version of this app may be available" off `seed-covers-more`; the library may
- * not, because a deliberately NARROWER client is indistinguishable from a stale
- * one and only the application knows which it is (ADR-0064).
+ * The stream-seed vocabulary and the options a host starts from are shared by
+ * every hosting shape, so they live with the one implementation
+ * (`publishedStart.ts`) and are re-exported here, where an app has always
+ * imported them from.
  */
-export type StreamSeedDirection = Extract<NotInstalledReason, 'seed-covers-more' | 'seed-covers-less'>;
-
-/**
- * WHAT HAPPENED TO THE STREAM SEED, as a small discriminated state an app can
- * render.
- *
- * The visibility half of `a-browser-app-starts-from-a-published-artifact`: an
- * app that cannot say WHY it has no seed shows an empty screen instead of an
- * explanation, which is the outcome that spec exists to avoid (ADR-0064). So the
- * outcome the loader returns reaches the surface an application already
- * subscribes to, and not only the boot path's return value.
- *
- * It REPORTS and it does not decide, exactly as `nonCanonicalGenerations` does:
- * whether "installing", "seeded" or "refused" should dim, hide or replace what is
- * on screen is the application's call.
- *
- * ## What it deliberately does NOT carry
- *
- * **No byte-level progress.** In the recommended single-document shape the whole
- * install is about 1 s on a mid-range phone and ~300 ms on desktop, which a
- * spinner covers; the variable part is the DOWNLOAD, not the install, so a
- * progress signal belongs on the fetch as an optional loader callback if it is
- * ever wanted (`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`).
- * `installing` and the terminal states are the whole surface, which is also why
- * this field publishes at most twice per boot.
- *
- * **No inference.** See `StreamSeedDirection`.
- */
-export type StreamSeedState =
-	/**
-	 * The install is running. Published before the fetch, and replaced by a
-	 * terminal state on every path the loader RETURNS from -- which is every
-	 * ordinary one, since a refusal is data.
-	 *
-	 * The exception, stated here because this is what an app author reads: if the
-	 * loader THROWS (a malformed `expectedContentHash`, a keeper failing mid-install,
-	 * a batch declined by another writer) there is no outcome to report, so this
-	 * value STANDS and `init` rejects instead. Neither of the alternatives is
-	 * truthful -- clearing the field says no seed was asked for, and a synthetic
-	 * terminal state needs a reason the loader's vocabulary does not have -- so the
-	 * honest signal is the rejection, and an app must treat `init` rejecting as the
-	 * end of the boot rather than waiting on this field. The status phase does NOT
-	 * stick: it returns to `Idle`, so a spinner keyed on `InstallingStreamSeed`
-	 * (which is what the guide shows) clears.
-	 */
-	| {readonly status: 'installing'}
-	| {
-			/** A stream was installed, and the app now holds history it never fetched. */
-			readonly status: 'seeded';
-			/** How far the installed stream REACHES: the seed's coverage end, above its last event. */
-			readonly at: number;
-			/** How far back it reaches: what the keeper recorded as the stream's `startBlock`. */
-			readonly reachesBackTo: number;
-			/** WHICH location served it, so an app can say where its history came from. */
-			readonly from: string;
-			readonly events: number;
-			/** How many saves it took, which is how many SEGMENTS the keeper now holds. */
-			readonly segments: number;
-	  }
-	| {
-			/**
-			 * No seed was installed, and the app STARTS ANYWAY.
-			 *
-			 * A refusal is a NORMAL condition and never gates the boot (ADR-0064): state
-			 * still comes up from a published snapshot and indexes forward from the tip,
-			 * and what is lost is the stream underneath, so the generation is a leaf and a
-			 * later processor-only change waits for a republished snapshot instead of
-			 * being free. That is why this is its own field and not `error`: an app
-			 * treating `error` as a fault would render a crash for an ordinary outcome,
-			 * and `acknowledgeError()` does not fit an outcome nothing can acknowledge
-			 * away.
-			 */
-			readonly status: 'refused';
-			/** WHY, verbatim from the loader, so an app can explain it. */
-			readonly reason: NotInstalledReason;
-			/** Present only where the reason names one. See `StreamSeedDirection`. */
-			readonly direction?: StreamSeedDirection;
-	  };
-
-/**
- * The loader's outcome as this surface publishes it, plus the direction where
- * the reason carries one.
- *
- * A translation and not a re-decision: every field is the loader's own, and the
- * `direction` is `reason` narrowed. It is a free function because it decides
- * nothing about any particular indexer.
- */
-function streamSeedStateOf(outcome: StreamSeedInstallOutcome): StreamSeedState {
-	if (outcome.status === 'installed') {
-		return {
-			status: 'seeded',
-			at: outcome.at,
-			reachesBackTo: outcome.reachesBackTo,
-			from: outcome.from,
-			events: outcome.events,
-			segments: outcome.segments,
-		};
-	}
-	const direction = directionOf(outcome.reason);
-	return {status: 'refused', reason: outcome.reason, ...(direction ? {direction} : {})};
-}
-
-/** The two refusal reasons that name a direction, and no others. */
-/**
- * THE CATCH-UP BUDGET, as configured, or refused where it cannot mean a budget.
- *
- * Refused at construction rather than read as something else: a negative or
- * non-finite number of seconds is a computation gone wrong in the app, and reading
- * it as `'always'` or as zero would silently pick one of the two opposite behaviours.
- */
-function catchUpBudgetOf(value: number | 'always' | undefined): number | 'always' {
-	if (value === undefined) return DEFAULT_CATCH_UP_WITHIN_SECONDS;
-	if (value === 'always') return value;
-	if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-		throw new Error(
-			`catchUpWithinSeconds must be a number of seconds (zero or more) or 'always', and it is ${String(value)}.`,
-		);
-	}
-	return value;
-}
-
-/**
- * Whether a failed advance is the node refusing history as needing ARCHIVE access
- * (`ArchiveRefusedError`, `@etherfold/core`).
- *
- * Read STRUCTURALLY, by the error's own name, as `isRetryable` reads its flag: a
- * second copy of `@etherfold/core` in a bundle would fail an `instanceof` and turn
- * the one refusal a snapshot can get past into a stopped tab.
- */
-function isArchiveRefusal(error: unknown): boolean {
-	return (error as {name?: unknown} | undefined)?.name === 'ArchiveRefusedError';
-}
-
-function directionOf(reason: NotInstalledReason): StreamSeedDirection | undefined {
-	return reason === 'seed-covers-more' || reason === 'seed-covers-less' ? reason : undefined;
-}
+export type {BrowserStreamSeedOptions, StreamSeedDirection, StreamSeedState} from './publishedStart.js';
 
 export type SyncingState<ABI extends Abi> = {
 	waitingForProvider: boolean;
@@ -621,53 +465,6 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	 * `openGenerationRegistryOnIndexedDB(name, {dropState})`.
 	 */
 	registry?: GenerationRegistry;
-};
-
-/**
- * WHERE A PUBLISHED STREAM SEED COMES FROM, as the hook takes it.
- *
- * ## Convenience, not a trust boundary and not a safety mechanism
- *
- * The loader is callable directly (`installStreamSeed`, `@etherfold/core`) and
- * an application may drive the install itself; this option saves it sequencing
- * the call, and gives this hook's surface something to publish. It is NOT a
- * safety mechanism: the install carries its own RESOLVED stream config and sets
- * it on the keeper before it addresses anything (ADR-0067), so it is correct
- * whether it runs before or after a generation exists.
- *
- * ## The trust contract travels with the locations (ADR-0066)
- *
- * The CALLER names the locations and owns that choice: the loader fetches where
- * it is pointed and nowhere else, so there is no origin check to make. Keep BOTH
- * the list and any `expectedContentHash` in the BUILD -- a pin read from the same
- * place as the artifact proves nothing -- and read `installStreamSeed`'s own
- * JSDoc before shipping one, including what it does NOT defend against
- * (OMISSION, which is impossible within the premise rather than deferred).
- */
-export type BrowserStreamSeedOptions = {
-	/**
-	 * The ORDERED list, freshest first, walked until one is usable. A relative,
-	 * hostless path is a first-class location and is what a BUILD-EMBEDDED artifact
-	 * is listed as, ordinarily LAST so the app still starts when the remote is gone.
-	 */
-	locations: StreamSeedLocation | readonly StreamSeedLocation[];
-	/**
-	 * An OPTIONAL content hash, verbatim as the producer printed it
-	 * (`sha256:<hex>`). Only an IMMUTABLE, release-tied artifact can have one
-	 * pinned: a build cannot know the hash of a ROLLING artifact, and rolling is how
-	 * this is ordinarily deployed.
-	 */
-	expectedContentHash?: string;
-	/**
-	 * The block the client will ask this stream FROM, which a seed must reach back
-	 * to or be refused. Defaults to the source's own earliest `startBlock`, which is
-	 * exactly what a fresh generation's `load()` asks for.
-	 */
-	reachBackTo?: number;
-	/** How many events one save carries, at most. Defaults to the loader's own 1,000. */
-	maxEventsPerBatch?: number;
-	/** Injectable for tests and for a host with its own retry/timeout policy. */
-	fetch?: typeof globalThis.fetch;
 };
 
 type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfig extends undefined
@@ -1092,103 +889,32 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		processorConfig?: ProcessorConfig,
 		arrival?: {processorIdentity?: string; processorBundle?: ProcessorBundleSource},
 		source?: IndexingSource<ABI>,
-		/** The publication index `init` read, for the ONE generation `init` builds. See `publication`. */
-		publication?: ReadPublication,
 		/**
-		 * Whether this build of the generation REPLACES the local state with the snapshot
-		 * the index names: `true` only when a catch-up was abandoned (`switchToSnapshot`).
+		 * The snapshot the publication names, for the ONE generation `init` builds (and
+		 * builds again on a switch). See `PublishedStart.snapshotFor`.
 		 */
-		replaceLocal = false,
+		snapshotFor?: ReturnType<PublishedStart<ABI>['snapshotFor']>,
 	) {
-		const processorIdentity = arrival?.processorIdentity;
-		const processorBundle = arrival?.processorBundle;
-		refuseAnIdentityBesideABundle(arrival);
-		// WHAT NAMES THIS GENERATION, filled in by `createProcessor` below where the
-		// arrival supplied nothing.
-		//
-		// THE READ ORDER IS THE CONTRACT and it is `Indexer.add`'s own: it builds the
-		// state, builds the processor, and only THEN resolves the identity -- which is
-		// what makes a MODULE arrival expressible at all, since a fold with no bytes
-		// cannot be named before the object exists (`moduleProcessorIdentity`). So this
-		// spec must reach the container WHOLE: spreading it into another object literal
-		// would copy this field at spread time, when it is still `undefined`, and the
-		// generation would quietly fall back to the declared hash. That is why a
-		// per-generation `source` is a parameter here rather than a property a caller
-		// merges in.
-		const spec = {
-			createState: async (context: GenerationContext) => {
-				// THE BUNDLE ARRIVES FIRST, before any state is built: a refused bundle
-				// (`ProcessorBundleRefusedError`) then claims no store and folds nothing.
-				const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
-				// THE ENTRY FOR THIS GENERATION, chosen by the identity it WILL be registered
-				// under: the bundle's bytes, or an identity the arrival handed over. A module
-				// arrival has none yet (it is derived from the fold, built after this), so it
-				// is refused by name rather than matched on half its generation.
-				const chosen = publication
-					? publishedSnapshotFor(publication, {
-							stream: context.stream,
-							processor: bundle?.identity ?? processorIdentity,
-						})
-					: undefined;
-				if (chosen && !replaceLocal) setSyncing({publication: chosen.state});
-				// The snapshot a returning tab may later SWITCH to, kept for that decision.
-				if (publication) bootSnapshot = chosen?.snapshot;
-				const published = chosen?.snapshot ? {...chosen.snapshot, replaceLocal} : undefined;
-				return withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience, bundle, published));
-			},
-			createProcessor: async (state: unknown, context: GenerationContext) => {
-				// The SAME arrival the state waited on (one load per source), so the bytes this
-				// fold runs are the bytes the identity below was computed over.
-				const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
-				const built = await createProcessor(state as WritableStateStore, context, bundle);
-				if (built.configure && processorConfig) {
-					built.configure(processorConfig);
-				}
-				// THE MODULE ARRIVAL'S OWN DERIVATION, where no other arrival named this
-				// fold: a dev server hands a tab a module OBJECT and there are no bytes to
-				// hash, so the identity comes from the handler sources (ADR-0086, and
-				// `moduleProcessorIdentity` for what that survives and why it is sound in
-				// the only runtime it can happen in). Nothing an application passed reaches
-				// it -- an app that could state one would be back on the author-declared
-				// identity ADR-0086 deletes.
-				//
-				// The FIRST build wins, because that is what the container does with the
-				// generation itself: naming a generation it already holds RESOLVES to the one
-				// it is folding rather than adding a second engine over it.
-				//
-				// A BUNDLE names its fold by its own bytes (ADR-0095), and nothing else may.
-				spec.processorIdentity ??= bundle?.identity ?? processorIdentity ?? moduleProcessorIdentity(built);
-				// THE STATE THIS GENERATION FOLDS INTO, recorded HERE and not in
-				// `createState`, because this is the first moment both halves of the name
-				// exist: a generation is `{stream, processor identity}` and the fold's half is
-				// only settled once the processor is built.
-				//
-				// Keyed on the SAME value the container registers this generation under,
-				// resolved a line above. A key that disagreed with the registry record would
-				// leave every read of this generation's store looking for a name nothing filed.
-				//
-				// The FIRST one wins here too: overwriting would point this at a store nothing
-				// writes to and quietly stop pruning the one that is growing.
-				const key = generationKey({stream: context.stream, processor: spec.processorIdentity});
-				if (!statesByGeneration.has(key)) {
-					statesByGeneration.set(key, state as WritableStateStore);
-				}
-				return built;
-			},
-			stateOf: (built: EventProcessor<ABI, ProcessResultType>) =>
-				(built as EntityEventProcessorLike<ABI, ProcessResultType, ProcessorConfig>).state,
-			// Handed STRAIGHT to the container, which registers the generation under it and
-			// never asks where it came from. `undefined` here means only that no arrival
-			// named this fold BEFORE it was built: `createProcessor` above fills the field in
-			// from the module itself, and the container reads it afterwards.
-			processorIdentity,
-			// PER GENERATION, and a parameter rather than something a caller merges into
-			// the returned object: see the note above on why this spec must not be spread.
-			// `undefined` is what the container reads as "this generation folds the stream
-			// the container already has".
+		// ONE translation for every host (`generationSpec.ts`): what is this hook's own is
+		// WHERE it records a generation's store, so the scheduled prune and the port's
+		// reads find it.
+		return generationSpecOf<ABI, ProcessResultType, ProcessorConfig>({
+			createState,
+			createProcessor,
+			processorConfig,
+			arrival,
 			source,
-		};
-		return spec;
+			claimWithinSeconds,
+			snapshotFor,
+			recordState(id, state) {
+				// The FIRST one wins: overwriting would point this at a store nothing writes
+				// to and quietly stop pruning the one that is growing.
+				const key = generationKey(id);
+				if (!statesByGeneration.has(key)) {
+					statesByGeneration.set(key, state);
+				}
+			},
+		});
 	}
 
 	/**
@@ -1261,65 +987,6 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		});
 	}
 
-	/**
-	 * INSTALL THE PUBLISHED SEED, and PUBLISH what it did.
-	 *
-	 * Run from `init` and BEFORE the generation is built, so the fold that follows
-	 * finds the stream already there rather than fetching a history a public node
-	 * would refuse to serve. Ordering is not what makes it correct, though: the
-	 * install takes the RESOLVED stream config as an argument and sets it on the
-	 * keeper itself (ADR-0067), so an application driving `installStreamSeed`
-	 * directly gets the same answer before `init` or after it.
-	 *
-	 * TWO publications and never more: `installing`, then the terminal outcome. A
-	 * refusal is DATA and does not stop anything -- `init` carries on, the generation
-	 * is built, state comes up from whatever the application's `createState`
-	 * bootstrapped and indexes forward, and the refusal is reported ALONGSIDE that
-	 * boot rather than gating it (ADR-0064).
-	 *
-	 * What DOES propagate is a THROW, which the loader reserves for what is not an
-	 * ordinary condition: a malformed pin, a keeper that failed mid-install, or a
-	 * batch declined by a subtree something else wrote into. `init` rejects, and
-	 * this field is left saying `installing`, which is what actually happened: there
-	 * is no terminal outcome to report.
-	 */
-	async function installSeed(
-		seed: BrowserStreamSeedOptions,
-		source: IndexingSource<ABI>,
-		config: ProvidedIndexerConfig<ABI>,
-	) {
-		const keepStream = config.keepStream;
-		if (!keepStream) {
-			throw new Error(
-				`a stream seed was given with no \`keepStream\`: a seed IS a stream, so there is nothing to install it ` +
-					`into. Pass a keeper (\`keepStreamOnIndexedDB(name)\`), or drop the seed and run the snapshot-only mode.`,
-			);
-		}
-		setSyncing({streamSeed: {status: 'installing'}});
-		setStatus({state: 'InstallingStreamSeed'});
-		try {
-			const outcome = await installStreamSeed(keepStream, seed.locations, {
-				source,
-				// RESOLVED here, because the install addresses the subtree with it and the
-				// digest half of that address must be the one the indexer itself will run
-				// under -- never the config as a user spelled it.
-				streamConfig: resolveStreamConfig(config.stream),
-				...(seed.reachBackTo === undefined ? {} : {reachBackTo: seed.reachBackTo}),
-				...(seed.maxEventsPerBatch === undefined ? {} : {maxEventsPerBatch: seed.maxEventsPerBatch}),
-				...(seed.expectedContentHash === undefined ? {} : {expectedContentHash: seed.expectedContentHash}),
-				...(seed.fetch === undefined ? {} : {fetch: seed.fetch}),
-			});
-			setSyncing({streamSeed: streamSeedStateOf(outcome)});
-			// The install is over either way, and nothing is loading yet. `setupIndexing`
-			// moves this on to `Loading` at the next call; leaving `InstallingStreamSeed`
-			// standing would be the one thing that is certainly untrue.
-			setStatus({state: 'Idle'});
-		} catch (err) {
-			setStatus({state: 'Idle'});
-			throw err;
-		}
-	}
-
 	async function init(
 		indexerSetup: {
 			provider: EIP1193ProviderWithoutEvents;
@@ -1335,43 +1002,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		const config = {...{}, keepStream: options?.keepStream, ...(indexerSetup.config || {})};
 		const source = indexerSetup.source;
 
-		// THE PUBLICATION INDEX, read BEFORE the seed install and the generation: the seed
-		// it lists (when asked for) is installed below, and the snapshot entry is chosen
+		// THE PUBLICATION INDEX AND THE SEED, before the generation is built: the seed the
+		// index lists (when asked for) is installed there, and the snapshot entry is chosen
 		// when the generation's state is built, by the identity it is registered under.
-		const publication = options?.publication;
-		let published: ReadPublication | undefined;
-		let seed = options?.seed;
-		if (publication) {
-			if (publication.seed && seed) {
-				throw new Error(
-					`both a \`seed\` and a \`publication\` asking for its seed were given: a boot installs ONE stream seed, ` +
-						`from one place. Drop \`seed\` to take the one the publication lists, or drop \`publication.seed\`.`,
-				);
-			}
-			setSyncing({publication: {status: 'reading'}});
-			published = await readPublicationIndex(publication.locations, publication.fetch);
-			if (published.status !== 'read') {
-				// Terminal already: no index means no entry for any generation.
-				setSyncing({publication: {status: 'refused', reason: published.status}});
-			}
-			if (publication.seed) {
-				// ONLY when asked (ADR-0095). The locations are the index's entry for THIS
-				// stream, or none, which the install itself reports as `no-locations`.
-				const stream = streamDigestOf(source, resolveStreamConfig(config.stream));
-				seed = {
-					...(publication.seed === true ? {} : publication.seed),
-					locations: publishedSeedLocationsFor(published, stream),
-					...(publication.fetch === undefined ? {} : {fetch: publication.fetch}),
-				};
-			}
-		}
-
-		// BEFORE the generation is built, and therefore before it loads: a fold that
-		// starts first would find an empty subtree, index into it, and the install would
-		// then be refused as `subtree-not-empty` -- loudly and as data, but too late.
-		if (seed) {
-			await installSeed(seed, source, config);
-		}
+		// The same code every hosting shape runs (`publishedStart.ts`).
+		await publishedStart.prepare({source, config});
 
 		let provider: EIP1193ProviderWithoutEvents = indexerSetup.provider;
 
@@ -1423,7 +1058,6 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			source,
 			config,
 			processorConfig,
-			published,
 		};
 		await openContainer(boot, false);
 		setSyncing({waitingForProvider: false});
@@ -1441,7 +1075,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 	/**
 	 * WHAT `init` BUILT THE CONTAINER FROM, kept so the generation can be built AGAIN
-	 * when a returning tab abandons its catch-up for the snapshot (`switchToSnapshot`).
+	 * when a returning tab abandons its catch-up for the snapshot (`switchHost`, `publishedStart.switchTo`).
 	 */
 	type Boot = {
 		registry: GenerationRegistry;
@@ -1449,25 +1083,42 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		source: IndexingSource<ABI>;
 		config: ProvidedIndexerConfig<ABI>;
 		processorConfig: ProcessorConfig | undefined;
-		published: ReadPublication | undefined;
 	};
 	let boot: Boot | undefined;
-	/** The snapshot the publication named for the generation `init` built, if it named one. */
-	let bootSnapshot: PublicationSnapshot | undefined;
 	/**
-	 * WHAT THE CATCH-UP HAS MEASURED so far: the blocks the canonical generation's
-	 * advances covered and the time they took, over the container now open.
+	 * WHAT THIS HOOK STARTS FROM: the publication index, the stream seed and the
+	 * returning-tab switch, as every hosting shape runs them (`publishedStart.ts`).
+	 *
+	 * Built HERE, so a budget that cannot mean one is refused where the app configured
+	 * it rather than on the first cycle that reads it. What is this hook's own is where
+	 * the outcomes are published: its stores, and every wire a `mainThreadHost()` holds,
+	 * so a tab reading the port is told what a tab reading `syncing` is.
 	 */
-	let catchUpMeasured = {blocks: 0, ms: 0};
-	/** Whether this container already tried the switch. One try per `init`: see `switchToSnapshot`. */
-	let switchTried = false;
-	/** The budget, validated where the app configured it rather than on the first cycle that reads it. */
-	const catchUpWithinSeconds = catchUpBudgetOf(options?.catchUpWithinSeconds);
+	const publishedStart = createPublishedStart<ABI>(
+		{
+			...(options?.seed ? {seed: options.seed} : {}),
+			...(options?.publication ? {publication: options.publication} : {}),
+			...(options?.catchUpWithinSeconds !== undefined ? {catchUpWithinSeconds: options.catchUpWithinSeconds} : {}),
+		},
+		{
+			publication(state) {
+				setSyncing({publication: state});
+				publishToPort();
+			},
+			streamSeed(state) {
+				setSyncing({streamSeed: state});
+				publishToPort();
+			},
+			installingSeed(installing) {
+				setStatus({state: installing ? 'InstallingStreamSeed' : 'Idle'});
+			},
+		},
+	);
 
 	/**
 	 * OPEN THE CONTAINER over the generation `init` names, and wire it to this hook.
 	 *
-	 * Called by `init`, and AGAIN by `switchToSnapshot` with `replaceLocal`, which is
+	 * Called by `init`, and AGAIN by a switch to the snapshot with `replaceLocal`, which is
 	 * the whole difference: the same registry, the same factories, and `createState`
 	 * handed a snapshot it is told to install over the local state. There is one
 	 * install and it is the app's (`openAndBootstrap`, ADR-0096).
@@ -1489,13 +1140,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					from.processorConfig,
 					spec,
 					undefined,
-					from.published,
-					replaceLocal,
+					publishedStart.snapshotFor(replaceLocal),
 				),
 			],
 			createGeneration: options?.createIndexer,
 		});
-		catchUpMeasured = {blocks: 0, ms: 0};
+		publishedStart.containerOpened();
 		indexer.onPromoted = onPromoted;
 		// ONE subscription to the fold, taken as the container is built so that a tab
 		// which subscribed before `init` hears this fold's very first block. Fanned out
@@ -1621,127 +1271,42 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	}
 
 	/**
-	 * MEASURE ONE ADVANCE OF A CATCH-UP, and say whether the rest of it is over budget.
-	 *
-	 * The estimate is the loop's own arithmetic over what it has observed: the blocks
-	 * the canonical generation's advances covered since this container opened, and the
-	 * time they took (fetching and folding both, since both are what the user waits
-	 * for), extrapolated over the rest of the gap to the tip. It needs no knowledge of
-	 * the fetcher's learned range: a fetcher that learns wider ranges makes the next
-	 * advance cover more blocks per second, and the estimate follows.
-	 *
-	 * Only a catch-up that COULD switch is measured: the budget is not `'always'`, the
-	 * publication named a snapshot for this generation, the switch has not been tried,
-	 * and the cursor is still behind the snapshot. Past the snapshot there is nothing
-	 * to switch to, however long the rest takes.
+	 * WHAT THIS HOOK DOES TO SWITCH TO THE SNAPSHOT, and nothing else (ADR-0096): let
+	 * go of the container folding the local state, and open it again over the
+	 * generation `init` built with `createState` handed `replaceLocal: true`. The
+	 * decision, and whether the switch took, are `publishedStart`'s, shared with every
+	 * hosting shape.
 	 */
-	function measureCatchUp(
-		before: number | undefined,
-		after: LastSync<ABI>,
-		elapsedMs: number,
-	): {estimateSeconds: number; budgetSeconds: number} | undefined {
-		if (catchUpWithinSeconds === 'always' || !bootSnapshot || switchTried || before === undefined) {
-			return undefined;
-		}
-		if (after.lastToBlock >= bootSnapshot.entry.takenAt.number) {
-			return undefined;
-		}
-		catchUpMeasured.blocks += Math.max(0, after.lastToBlock - before);
-		catchUpMeasured.ms += Math.max(0, elapsedMs);
-		const remaining = after.latestBlock - after.lastToBlock;
-		if (remaining <= 0 || catchUpMeasured.blocks === 0) {
-			return undefined;
-		}
-		const estimateSeconds = (remaining * catchUpMeasured.ms) / catchUpMeasured.blocks / 1000;
-		return estimateSeconds > catchUpWithinSeconds ? {estimateSeconds, budgetSeconds: catchUpWithinSeconds} : undefined;
-	}
-
-	/**
-	 * ABANDON THE CATCH-UP FOR THE SNAPSHOT: build the generation again, with
-	 * `createState` handed `replaceLocal: true`, and resume from what it installed
-	 * (ADR-0096).
-	 *
-	 * The install is NOT here and there is not a second one: the snapshot is installed
-	 * by the app's `createState` through `openAndBootstrap`, which wipes the local
-	 * state first (`SnapshotAwareStateStore.bootstrap`), exactly as it installs on a
-	 * fresh tab. What this does is what only the hook can: stop the container folding
-	 * the local state, let go of it, and open it again over the generation `init`
-	 * built, so the factory runs again and the fold that follows reads the snapshot's
-	 * cursor.
-	 *
-	 * `undefined` means NOTHING WAS SWITCHED, and the caller carries on as before (a
-	 * refusal is re-thrown, an over-budget catch-up goes on catching up). That is the
-	 * answer when the switch cannot help (no snapshot for this generation, local state
-	 * already at or ahead of it, a demoted tab), when the container holds more than the
-	 * one generation `init` built (rebuilding it would drop a successor), when it was
-	 * already tried, and when the factory did not install: a `createState` that does
-	 * not forward `replaceLocal`, or a body no longer reachable. Tried ONCE per `init`,
-	 * so an install that fails is not re-attempted every cycle.
-	 */
-	async function switchToSnapshot(why: {
-		reason: SnapshotSwitchReason;
-		estimateSeconds?: number;
-		budgetSeconds?: number;
-	}): Promise<LastSync<ABI> | undefined> {
-		const snapshot = bootSnapshot;
-		const from = boot;
-		const open = indexer;
-		if (!snapshot || !from || !open || switchTried || demotion || open.generations.length !== 1) {
-			return undefined;
-		}
-		const left = open.canonical.lastSync?.lastToBlock;
-		const at = snapshot.entry.takenAt.number;
-		if (left === undefined || left >= at) {
-			return undefined;
-		}
-		switchTried = true;
-		namedLogger.warn(
-			why.reason === 'archive-refused'
-				? `the node refused this tab's catch-up from block ${left} as needing ARCHIVE access, so it starts from ` +
-						`the published snapshot at block ${at} instead`
-				: `this tab's catch-up from block ${left} was estimated at ${Math.round(why.estimateSeconds ?? 0)} s, ` +
-						`over its budget of ${why.budgetSeconds} s, so it starts from the published snapshot at block ${at} instead`,
-		);
-
-		// LET GO of the container folding the local state: nothing it does from here is
-		// kept, and its callbacks close over this hook's stores.
-		open.disableProcessing();
-		open.onLoad = undefined;
-		open.onLastSyncUpdated = undefined;
-		open.onStateUpdated = undefined;
-		open.onPromoted = undefined;
-		detachFromContainer?.();
-		detachFromContainer = undefined;
-		statesByGeneration.clear();
-		clearSyncingStateForReconfigure();
-
-		await openContainer(from, true);
-		const loaded = await setupIndexing();
-		reportGenerationProgress();
-		setLastSync(loaded);
-		setCatchup(loaded);
-		if (loaded.lastToBlock <= left) {
-			namedLogger.warn(
-				`the published snapshot at block ${at} was NOT installed (did \`createState\` forward ` +
-					`\`published.replaceLocal\` to \`openAndBootstrap\`, and is the body still reachable?), so this tab ` +
-					`goes on from its own state at block ${loaded.lastToBlock}`,
-			);
-			return undefined;
-		}
-		setSyncing({
-			publication: {
-				status: 'switched',
-				reason: why.reason,
-				from: snapshot.index,
-				snapshot: snapshot.locations[0],
-				at,
-				left,
-				...(why.estimateSeconds === undefined ? {} : {estimateSeconds: why.estimateSeconds}),
-				...(why.budgetSeconds === undefined ? {} : {budgetSeconds: why.budgetSeconds}),
-			},
-		});
-		return loaded;
-	}
+	const switchHost: SnapshotSwitchHost<ABI> = {
+		get container() {
+			// Only a container `init` opened can be rebuilt from what `init` was given.
+			return boot ? indexer : undefined;
+		},
+		get demoted() {
+			return demotion !== undefined;
+		},
+		letGo(open) {
+			// Nothing it does from here is kept, and its callbacks close over this hook's
+			// stores.
+			open.disableProcessing();
+			open.onLoad = undefined;
+			open.onLastSyncUpdated = undefined;
+			open.onStateUpdated = undefined;
+			open.onPromoted = undefined;
+			detachFromContainer?.();
+			detachFromContainer = undefined;
+			statesByGeneration.clear();
+			clearSyncingStateForReconfigure();
+		},
+		async reopen() {
+			await openContainer(boot!, true);
+			const loaded = await setupIndexing();
+			reportGenerationProgress();
+			setLastSync(loaded);
+			setCatchup(loaded);
+			return loaded;
+		},
+	};
 
 	/**
 	 * ONE advance, published unless the pointer moved during it.
@@ -1757,28 +1322,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			throw new Error(`no indexer`);
 		}
 		const stamp = promotions;
-		const before = indexer.canonical.lastSync?.lastToBlock;
-		const started = performance.now();
-		let lastSync: LastSync<ABI>;
-		try {
-			lastSync = await indexer.indexMore();
-		} catch (err) {
-			// The node will not serve the catch-up at all: the snapshot, where there is a
-			// usable one, is the only way forward. Where there is none the refusal goes on
-			// exactly as it always did.
-			if (isArchiveRefusal(err)) {
-				const switched = await switchToSnapshot({reason: 'archive-refused'});
-				if (switched) return switched;
-			}
-			throw err;
-		}
-		if (promotions === stamp) {
-			const overBudget = measureCatchUp(before, lastSync, performance.now() - started);
-			if (overBudget) {
-				const switched = await switchToSnapshot({reason: 'over-budget', ...overBudget});
-				if (switched) return switched;
-			}
-		}
+		// The advance, and the returning-tab switch where it applies (ADR-0096): a
+		// switched answer is the cursor the REBUILT container loaded, already published.
+		const {lastSync, switched} = await publishedStart.advance(indexer, switchHost, () => promotions !== stamp);
+		if (switched) return lastSync;
 		if (promotions === stamp) {
 			setLastSync(lastSync);
 			setCatchup(lastSync);
@@ -2213,9 +1760,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// What a switch to the snapshot would rebuild from is THIS container's `init`, and a
 		// later `init` gets its own try.
 		boot = undefined;
-		bootSnapshot = undefined;
-		switchTried = false;
-		catchUpMeasured = {blocks: 0, ms: 0};
+		publishedStart.reset();
 		setSyncing({
 			waitingForProvider: true,
 			loading: false,
@@ -2382,6 +1927,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			...(lastSync ? {lastToBlock: lastSync.lastToBlock, latestBlock: lastSync.latestBlock} : {}),
 			...(lastSync ? derivedProgress(lastSync, indexer?.defaultFromBlock ?? 0) : {}),
 			...(hostFailure ? {failure: hostFailure} : {}),
+			// What this hook STARTED FROM, as the port reports it in every shape: the same
+			// values `syncing` carries, so a tab reading the port is told what a tab reading
+			// the stores is.
+			...($syncing.publication ? {publication: $syncing.publication} : {}),
+			...($syncing.streamSeed ? {streamSeed: $syncing.streamSeed} : {}),
 		};
 	}
 

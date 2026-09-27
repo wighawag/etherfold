@@ -22,6 +22,6 @@ The default is thirty seconds, because it is a wait a user sits through looking 
 
 ## Consequences
 
-- The switch is on the MAIN-THREAD host only, which is where the `publication` option is; the worker hosts (`host/serve.ts`) do not read a publication yet, and taking one there brings this with it.
+- The switch runs in EVERY hosting shape (amended 2026-09-27, `a-worker-hosted-tab-starts-from-a-publication`; it was first recorded as main-thread only, because the worker hosts did not read a publication). The decision, the estimate, the report and the one-try rule are ONE implementation (`packages/browser/src/publishedStart.ts`), which the main-thread host's advance and the worker hosts' driver (`host/serve.ts`) both call; what each host does itself is only let go of its container and open it again. A worker host reports the switch on the port, as `HostProgress.publication`, with the same value `syncing.publication` carries on the main thread, and the wipe and install run inside the worker, off the UI thread.
 - The switch rebuilds the container, so it is made only while the container holds the ONE generation `init` built: rebuilding it with a successor beside it would drop the successor.
 - A snapshot-seeded generation is a LEAF (ADR-0028, ADR-0095), so a tab that switched loses the history below the snapshot's floor that its own state had. That is the price of starting at all when the node will not serve the gap, and of starting within the budget when it would.
