@@ -199,6 +199,13 @@ export * from './stream/fixture.js';
  */
 export * from './stream/seed.js';
 /**
+ * THE PUBLICATION INDEX DOCUMENT (`publication.json`, ADR-0095): what a build
+ * publishes a state snapshot and a stream seed UNDER. Defined here because both of
+ * its sides depend on this package: the producer (`@etherfold/server`) writes it
+ * and a browser tab reads it, and one contract has one definition.
+ */
+export * from './publication.js';
+/**
  * THE PROCESSOR ARTIFACT's runtime-agnostic half: the identity of some bytes, the
  * modules they still name, and what a module must carry to be a processor.
  *

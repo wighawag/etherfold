@@ -35,6 +35,24 @@ export {
 	type RefusedProcessorBundle,
 } from './processorBundle.js';
 
+/**
+ * THE PUBLICATION INDEX ARRIVAL: start from what a build published (ADR-0095). A
+ * hook takes it as `createIndexerState`'s `publication` option and hands the chosen
+ * snapshot to `createState`; `readPublicationIndex` and `publishedSnapshotFor` are
+ * the same lookup for an app that drives it itself. The index DOCUMENT is
+ * `@etherfold/core`'s (`PublicationIndex`), re-exported below.
+ */
+export {
+	publishedSeedLocationsFor,
+	publishedSnapshotFor,
+	readPublicationIndex,
+	type BrowserPublicationOptions,
+	type PublicationRefusalReason,
+	type PublicationSnapshot,
+	type PublicationState,
+	type ReadPublication,
+} from './publication.js';
+
 export {reconfigureFromHotUpdate, type HotUpdatableIndexer, type HotUpdateGeneration} from './hotUpdate.js';
 
 /**
@@ -128,6 +146,11 @@ export type {
 	// that contract to be read from.
 	NotInstalledReason,
 	StreamSeedLocation,
+	// THE PUBLICATION INDEX a `publication` option points at, and the entries it names:
+	// `PublicationSnapshot.entry` is one, so a caller rendering it can annotate it.
+	PublicationIndex,
+	PublishedStateSnapshot,
+	PublishedStreamSeed,
 	// What the KEEPER seam speaks, both halves of it: a browser keeper is written
 	// against these, and a caller that cannot name them cannot annotate one.
 	StoredLogEvent,
