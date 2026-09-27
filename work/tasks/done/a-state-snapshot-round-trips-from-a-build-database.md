@@ -4,7 +4,6 @@ slug: a-state-snapshot-round-trips-from-a-build-database
 spec: a-build-publishes-what-a-browser-app-starts-from
 blockedBy: []
 covers: [2, 8, 12]
-needsAnswers: true
 ---
 
 ## What to build
