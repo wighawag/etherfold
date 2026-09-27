@@ -5,6 +5,7 @@ import type {
 	LastSync,
 	PromotionConfig,
 	ProvidedIndexerConfig,
+	ReconfigureReport,
 	StateMovedDetach,
 	StateMovedHandler,
 	TxInclusionQuery,
@@ -24,6 +25,7 @@ import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
 import {providerOverPort, type ProviderOverPort} from '@eip-1193/over-port';
 import {logs} from 'named-logs';
 import {generationSpecOf} from '../generationSpec.js';
+import {reconfigureFromHotUpdate, type HotUpdatableIndexer, type HotUpdateGeneration} from '../hotUpdate.js';
 import type {BrowserGenerationSpec} from '../IndexerState.js';
 import type {PublicationState} from '../publication.js';
 import {
@@ -37,7 +39,7 @@ import {BROWSER_GENERATION_CAPS} from '../storage/generation/OnIndexedDB.js';
 import {derivedProgress, hostGenerationsOf, hostGenerationOf, serveHostCases, type HostBacking} from './cases.js';
 import {executionScopeName, type HostAccess} from './endpoint.js';
 import {cursorsOf, pacingAfterCycle} from './pacing.js';
-import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
+import type {HostGeneration, HostHotUpdate, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
 import {HostSettingsConflictError, hostSettingsOf, settleHostSettings, type HostSettings} from './settings.js';
 
@@ -134,8 +136,17 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 		claimWithinSeconds?: number;
 	};
 
-/** What the entry point that obtained the port gets back. */
-export type IndexerHost = {
+/**
+ * What the entry point that obtained the port gets back.
+ *
+ * Generic over what the entry's spec was, because one of its verbs takes CODE
+ * (`reconfigureFromHotUpdate`, a processor of this host's own ABI). The
+ * defaults are `any` so that a bare `IndexerHost` still names EVERY host, as it
+ * did before the verb existed: code that only starts, stops and disposes one
+ * need not spell its ABI, and a narrower default would refuse every host whose
+ * processor is typed.
+ */
+export type IndexerHost<ABI extends Abi = any, ProcessResultType = any, ProcessorConfig = any> = {
 	/** How far the fold has got, as the port reports it. The same value the `progress` case answers. */
 	progress(): HostProgress;
 	/**
@@ -154,6 +165,60 @@ export type IndexerHost = {
 	 * would have left it.
 	 */
 	stopIndexing(): Promise<HostProgress>;
+	/**
+	 * TAKE THE PROCESSOR THIS WORKER'S OWN DEV SERVER JUST HANDED IT, folding it
+	 * BESIDE the live generation: the guide's hot-reload axis one, where the fold
+	 * runs in a worker.
+	 *
+	 * Call it from the worker ENTRY's own `import.meta.hot.accept(...)` handler,
+	 * with the module that handler receives. Under Vite a module worker is an HMR
+	 * client in its own right, so the edited module arrives HERE, where the fold
+	 * runs, and never has to cross a port
+	 * (`work/notes/findings/a-module-worker-receives-hmr-under-vite.md`):
+	 *
+	 * ```ts
+	 * const host = hostIndexerInThisWorker({createState, createProcessor, keepStream});
+	 * if (import.meta.hot) {
+	 *   let saves = 0;
+	 *   import.meta.hot.accept('./processor.js', (module) => {
+	 *     if (!module) return;
+	 *     const next = module.tokenProcessor;
+	 *     void host.reconfigureFromHotUpdate({
+	 *       // ITS OWN store: the successor folds beside the incumbent.
+	 *       createState: async (context, {signal}) =>
+	 *         openForWriting(
+	 *           await createBrowserStateStore(next.entities, {databaseName: `app-${context.stream}-${++saves}`}),
+	 *           {signal},
+	 *         ),
+	 *       createProcessor: (state) => fromEntityProcessor(next)(state),
+	 *     });
+	 *   });
+	 * }
+	 * ```
+	 *
+	 * It IS `reconfigureFromHotUpdate` (`hotUpdate.ts`), run against this host's
+	 * container, so it answers the same three verdicts the main thread's does and
+	 * for the same reasons: `registered` (the successor folds beside the incumbent,
+	 * which answers every read until the promotion policy moves the pointer),
+	 * `unchanged` (the handler sources are the fold already running) and `failed`
+	 * (the save did not build, and the host is exactly as it was). The processor is
+	 * built HERE, from the module this worker's own module graph received, so its
+	 * identity is the module arrival's derivation over what this worker
+	 * instantiated (ADR-0086) and nothing a tab computed.
+	 *
+	 * It is a METHOD here where the main thread's is a free function, and the
+	 * difference is what a tab needs: nobody on the tab's side made this call, so
+	 * the host PUBLISHES the verdict (`HostProgress.hotUpdate`) and every tab it
+	 * serves reads it off the progress push. It is serialised with a tab's
+	 * `reconfigure`, as the main thread serialises its reconfiguring verbs.
+	 *
+	 * A development path only: `processorBundle` and a production build never
+	 * reach it, and this package still subscribes to nothing.
+	 */
+	reconfigureFromHotUpdate(
+		generation: HotUpdateGeneration<ABI, ProcessResultType, ProcessorConfig>,
+		processorConfig?: ProcessorConfig,
+	): Promise<ReconfigureReport>;
 	/**
 	 * Stop driving and stop answering.
 	 *
@@ -193,7 +258,7 @@ export type IndexerHost = {
 export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined>(
 	entry: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
 	access: HostAccess,
-): IndexerHost {
+): IndexerHost<ABI, ProcessResultType, ProcessorConfig> {
 	const scope = executionScopeName();
 	const tipInterval = entry.tipIntervalInSeconds ?? 4;
 
@@ -329,6 +394,8 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	let publication: PublicationState | undefined;
 	/** What the stream-seed install did, as `HostProgress.streamSeed` reports it. */
 	let streamSeed: StreamSeedState | undefined;
+	/** The last hot update this host took, as `HostProgress.hotUpdate` reports it. */
+	let hotUpdate: HostHotUpdate | undefined;
 	/**
 	 * WHAT THIS HOST STARTS FROM (`publishedStart.ts`), the same code the main-thread
 	 * host runs. Built inside the first open rather than here, so a budget that cannot
@@ -460,6 +527,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			...(failure ? {failure} : {}),
 			...(publication ? {publication} : {}),
 			...(streamSeed ? {streamSeed} : {}),
+			...(hotUpdate ? {hotUpdate} : {}),
 		};
 	}
 
@@ -809,9 +877,18 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * next one, because `indexMore` iterates a copy.
 	 */
 	async function reconfigure(source: IndexingSource<ABI>): Promise<HostReconfigure> {
+		return inTurn(() => addGeneration(source));
+	}
+
+	/**
+	 * RUN ONE REQUEST TO ADD A GENERATION, in arrival order behind the others: a
+	 * tab's `reconfigure` and a worker entry's hot update alike, which are two ways
+	 * of asking for the same thing.
+	 */
+	function inTurn<T>(step: () => Promise<T>): Promise<T> {
 		const run = reconfiguring.then(
-			() => reconfigureNow(source),
-			() => reconfigureNow(source),
+			() => whileAdding(step),
+			() => whileAdding(step),
 		);
 		// The queue survives a refusal: one caller's cap refusal must not poison the
 		// next caller's turn.
@@ -822,7 +899,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		return run;
 	}
 
-	async function reconfigureNow(source: IndexingSource<ABI>): Promise<HostReconfigure> {
+	async function whileAdding<T>(step: () => Promise<T>): Promise<T> {
 		// A reconfigure needs the container, and a tab may ask for one while the host is
 		// still opening. Awaiting it is the same answer a read gets: the container is
 		// moments away, and a host that never opens one rejects with what stopped it
@@ -832,10 +909,71 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		if (switching) await switching.catch(() => undefined);
 		reconfiguresInFlight++;
 		try {
-			return await addGeneration(source);
+			return await step();
 		} finally {
 			reconfiguresInFlight--;
 		}
+	}
+
+	/**
+	 * THIS HOST, AS `reconfigureFromHotUpdate` NEEDS AN INDEXER: what it holds, and a
+	 * way to register a generation beside it.
+	 *
+	 * The generation is built exactly as a tab's reconfigure builds one
+	 * (`generationSpecOf`), with two differences that ARE the arrival: it takes the
+	 * factories the worker entry was just handed rather than the entry's own, and it
+	 * names no identity and no bundle, so the fold is named by the module arrival's
+	 * derivation over the processor built here (`moduleProcessorIdentity`). It keeps
+	 * the stream the host already folds (no `source`), so the successor FOLLOWS it.
+	 */
+	const hotUpdatable: HotUpdatableIndexer<ABI, ProcessResultType, ProcessorConfig> = {
+		get generations() {
+			return container?.generations ?? [];
+		},
+		async addGeneration(generation, processorConfig) {
+			if (disposed) {
+				throw new Error(`this indexer host was disposed, so it takes no hot update.`);
+			}
+			const opened = await openContainer();
+			const held = await opened.add(
+				generationSpecOf<ABI, ProcessResultType, ProcessorConfig>({
+					createState: generation.createState,
+					createProcessor: generation.createProcessor,
+					processorConfig,
+					claimWithinSeconds: spec.claimWithinSeconds,
+					recordState,
+				}),
+			);
+			// As a tab's reconfigure does: the successor has a stream to re-fold, now.
+			wakeFromRest?.();
+			publish();
+			return held;
+		},
+	};
+
+	/**
+	 * THE HOT UPDATE, as the worker entry hands it over: the main thread's own
+	 * `reconfigureFromHotUpdate`, against this host, with the verdict PUBLISHED.
+	 *
+	 * The container is waited for FIRST, so the generations the verdict is read
+	 * against are the ones this host holds rather than the empty list of a host still
+	 * opening: a save of the fold already running is `unchanged`, never a second
+	 * `registered`. A host that cannot open answers `failed` with what stopped it, by
+	 * letting the add below meet the same refusal. A host still WAITING for a tab's
+	 * provider or source holds the update until one connects, as a tab's own
+	 * `reconfigure` would wait.
+	 */
+	function reconfigureFromHotUpdateHere(
+		generation: HotUpdateGeneration<ABI, ProcessResultType, ProcessorConfig>,
+		processorConfig?: ProcessorConfig,
+	): Promise<ReconfigureReport> {
+		return inTurn(async () => {
+			await openContainer().catch(() => undefined);
+			const report = await reconfigureFromHotUpdate(hotUpdatable, generation, processorConfig);
+			hotUpdate = {count: (hotUpdate?.count ?? 0) + 1, report};
+			publish();
+			return report;
+		});
 	}
 
 	async function addGeneration(source: IndexingSource<ABI>): Promise<HostReconfigure> {
@@ -963,6 +1101,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		progress,
 		startIndexing,
 		stopIndexing,
+		reconfigureFromHotUpdate: reconfigureFromHotUpdateHere,
 		dispose() {
 			disposed = true;
 			stopRequested = true;

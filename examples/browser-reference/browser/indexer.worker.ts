@@ -1,4 +1,4 @@
-import {createBrowserStateStore, hostIndexerInThisWorker} from '@etherfold/browser';
+import {createBrowserStateStore, hostIndexerInThisWorker, keepStreamOnIndexedDB} from '@etherfold/browser';
 import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
 import {tokenProcessor} from '../src/processor.js';
 
@@ -20,7 +20,7 @@ import {tokenProcessor} from '../src/processor.js';
  * `import './indexer.worker.js'` in the tab fails loudly instead of starting a
  * second indexer on the UI thread.
  */
-hostIndexerInThisWorker({
+const host = hostIndexerInThisWorker({
 	// =====================================================================
 	// THE STORE: one line, and the only place a backend is named
 	// =====================================================================
@@ -50,4 +50,61 @@ hostIndexerInThisWorker({
 			{signal},
 		),
 	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
+	// =====================================================================
+	// THE STREAM KEEPER: the logs, kept, so a new fold need not fetch them again
+	// =====================================================================
+	// What makes an edited processor a WARM swap (below) rather than a second
+	// backfill: a processor change is a new generation over the SAME stream, so
+	// with the logs kept it re-folds them from IndexedDB and asks the wallet for
+	// nothing. Without a keeper the edit still folds beside the live one, but it
+	// fetches the whole history again first.
+	keepStream: keepStreamOnIndexedDB('reference-stream'),
 });
+
+// =====================================================================
+// HOT RELOAD, AXIS ONE: the developer edited the reducer
+// =====================================================================
+/**
+ * The processor is CODE, and code runs where the fold runs, so the edited module
+ * arrives HERE: under Vite a module worker is an HMR client of its own, and this
+ * accept handler is handed the new module while the page stays where it is
+ * (`work/notes/findings/a-module-worker-receives-hmr-under-vite.md`). Nothing
+ * crosses the port but the verdict.
+ *
+ * `host.reconfigureFromHotUpdate` is the main thread's `reconfigureFromHotUpdate`
+ * against this worker's indexer: the edit folds as a new GENERATION beside the
+ * live one, which goes on answering every read until the edit has caught up;
+ * then the canonical pointer moves (`on-catch-up`, the default) and the tab is
+ * told to re-read. There is no `version` to bump (ADR-0086): a module has no
+ * bytes to hash, so the fold is named by a derivation over its HANDLER SOURCES,
+ * taken over the processor built here.
+ *
+ * What it answered reaches the tab on the progress push (`progress.hotUpdate`),
+ * because the tab did not make this call: `registered`, `unchanged` (a save that
+ * changed nothing the derivation sees) or `failed` (a save mid-edit, which left
+ * everything as it was).
+ *
+ * THE SUCCESSOR'S STORE IS ITS OWN, and that is the line to get right when you
+ * copy this. It folds while the incumbent goes on writing its own rows, and two
+ * generations sharing one `databaseName` are ONE store, so each save gets a name
+ * of its own.
+ *
+ * A production build drops this whole block with the `if`. A save the handler
+ * text does not carry (an imported helper, an entity declaration) is `unchanged`,
+ * because it names the fold already running; see `src/processor.ts`.
+ */
+if (import.meta.hot) {
+	let saves = 0;
+	import.meta.hot.accept('../src/processor.js', (module) => {
+		if (!module) return;
+		const next = module.tokenProcessor as typeof tokenProcessor;
+		void host.reconfigureFromHotUpdate({
+			createState: async (context, {signal}) =>
+				openForWriting(
+					await createBrowserStateStore(next.entities, {databaseName: `reference-${context.stream}-save-${++saves}`}),
+					{signal},
+				),
+			createProcessor: (state) => fromEntityProcessor(next)(state),
+		});
+	});
+}

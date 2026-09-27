@@ -43,14 +43,16 @@ export type TokenABI = typeof abi;
  * ## What that means for you TODAY
  *
  * Edit the reducer below, save, and the edit RUNS: a different handler source is a
- * different fold, so the hot reload swaps it in and rebuilds the state under it
- * (`browser/main.ts`, "axis one"). Save a file you did not change and nothing is
- * discarded, which the outcome says. There is no string here to remember.
+ * different fold, so the worker takes the hot update and folds it BESIDE the live
+ * state, which answers until the edit has caught up (`browser/indexer.worker.ts`,
+ * "axis one"). Save a file you did not change and nothing is registered, which the
+ * outcome says. There is no string here to remember.
  *
  * What the derivation cannot see is a change the handler SOURCE TEXT does not
  * carry: a helper you edited in another module, an entity declaration you
- * changed, or behaviour decided by a value the handler captured. Pass
- * `{force: true}` when you know better; it costs the same rebuild.
+ * changed, or behaviour decided by a value the handler captured. Those name the
+ * fold already running, so its warm state is kept (the save answers `unchanged`,
+ * and so does a page reload); clear the site's storage to fold from scratch.
  */
 export const tokenProcessor: EntityProcessor<TokenABI> = {
 	entities: [

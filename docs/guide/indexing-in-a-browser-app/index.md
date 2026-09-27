@@ -125,7 +125,7 @@ connectToIndexerHost(access, {
 
 A **SharedWorker** host takes a provider from every tab that hands one over, folds through the first, and when that tab goes away it switches to another connected tab's provider rather than failing every request. With no tab left it retries as it does when a provider is down, and resumes through the next tab that connects.
 
-**The main thread is the documented alternative**, and it is the same host, adapted: `createIndexerState(spec, options)` then `init({provider, source, config})`, with reactive `syncing`, `status` and `state` stores in place of the port. It is reasonable in development (the hot-reload verbs below, `updateProcessor` and `addGeneration`, are the hook's), for a small state over a short history, and where your bundler cannot emit a worker. What it costs is the fold on the UI thread, measured above. `indexer.mainThreadHost()` gives it a port, so code written against the port is the same in both shapes. The reference implementation linked at the top of this page runs the worker shape, with `connection.provider` handed over as a port; nothing in it indexes on the main thread. A **SharedWorker** (`sharedWorkerHost` in the tab, `hostIndexerInThisSharedWorker` in the entry, with the same spec and the same tab-side options) is opt-in: one store connection across tabs, at the price of a worker that needs `chrome://inspect` to debug.
+**The main thread is the documented alternative**, and it is the same host, adapted: `createIndexerState(spec, options)` then `init({provider, source, config})`, with reactive `syncing`, `status` and `state` stores in place of the port. It is reasonable where you want the in-place hot-reload verbs below (`updateProcessor`, `updateIndexer`, which are the hook's; the warm swap beside the live generation works in both shapes), for a small state over a short history, and where your bundler cannot emit a worker. What it costs is the fold on the UI thread, measured above. `indexer.mainThreadHost()` gives it a port, so code written against the port is the same in both shapes. The reference implementation linked at the top of this page runs the worker shape, with `connection.provider` handed over as a port; nothing in it indexes on the main thread. A **SharedWorker** (`sharedWorkerHost` in the tab, `hostIndexerInThisSharedWorker` in the entry, with the same spec and the same tab-side options) is opt-in: one store connection across tabs, at the price of a worker that needs `chrome://inspect` to debug.
 
 ## Starting from a published snapshot: the snapshot-only mode
 
@@ -658,6 +658,67 @@ A `failed` is the ordinary case in an editing loop, so it is data rather than an
 **A burst stays bounded with nothing to do on your side.** The `successor` slot holds at most one, so the fourth save *replaces* the third rather than landing beside it, and the count never climbs towards the browser's cap of two generations ([ADR-0084](https://github.com/wighawag/etherfold/blob/main/docs/adr/0084-a-generation-is-held-by-named-durable-slots-and-canonical-is-merely-the-first-one.md)).
 
 There is no `{force}` here, and there cannot be: forcing means registering a generation beside one of the same name, and the name *is* the generation. For a change the handler text does not carry, `updateProcessor(next, {force: true})` is the in-place verb — and it costs the rebuild this call exists to avoid.
+
+### When the indexer runs in a worker
+
+In the worker shape the processor is code the **worker** imports, so the edited module has to reach the worker, and it does: under Vite a module worker (dedicated or shared) is an HMR client of its own, and an `import.meta.hot.accept` in the worker entry is handed the edited module with no page reload ([the measurement](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/a-module-worker-receives-hmr-under-vite.md)). Hand it to the host, which is the same `reconfigureFromHotUpdate` run against the worker's indexer:
+
+```ts
+// indexer.worker.ts
+import {createBrowserStateStore, hostIndexerInThisWorker, keepStreamOnIndexedDB} from '@etherfold/browser';
+import {fromEntityProcessor, openForWriting} from '@etherfold/processor-entities';
+import {tokenProcessor} from './processor.js';
+
+const host = hostIndexerInThisWorker({
+	createState: async (context, {signal}) =>
+		openForWriting(await createBrowserStateStore(tokenProcessor.entities, {databaseName: `app-${context.stream}`}), {signal}),
+	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
+	// The logs, kept: the successor re-folds them instead of fetching the history again.
+	keepStream: keepStreamOnIndexedDB('app-stream'),
+});
+
+if (import.meta.hot) {
+	let saves = 0;
+	import.meta.hot.accept('./processor.js', (module) => {
+		if (!module) return;
+		const next = module.tokenProcessor;
+		void host.reconfigureFromHotUpdate({
+			// ITS OWN store, for the reason above.
+			createState: async (context, {signal}) =>
+				openForWriting(
+					await createBrowserStateStore(next.entities, {databaseName: `app-${context.stream}-${++saves}`}),
+					{signal},
+				),
+			createProcessor: (state) => fromEntityProcessor(next)(state),
+		});
+	});
+}
+```
+
+Everything above holds unchanged: the edit folds beside the live generation, which answers every read until the promotion policy moves the pointer, a burst stays bounded, and the processor is built inside the worker from the module the worker received, so its identity is derived there and nothing on the tab computes it. `hostIndexerInThisSharedWorker` returns the same host, so one save reaches the one host that serves every tab.
+
+**Your tab learns the outcome from the progress push**, because the tab did not make the call. `progress.hotUpdate` is `{count, report}`: `report` is the same `ReconfigureReport` as above, and `count` goes up by one per update, so two saves with the same outcome are still two pushes.
+
+```ts
+let shown = 0;
+indexer.onProgress((progress) => {
+	if (progress.hotUpdate && progress.hotUpdate.count !== shown) {
+		shown = progress.hotUpdate.count;
+		show(progress.hotUpdate.report); // the same switch as above
+	}
+});
+```
+
+**Every module that imports the processor has to accept the update, or the save reloads the page.** Vite sends an update through every importer, and one that does not accept it is a full reload, so the worker never gets its warm swap. A tab that imports the processor module for its ABI or its entity declarations (the reference does) accepts it and does nothing with it:
+
+```ts
+// in the tab
+if (import.meta.hot) import.meta.hot.accept('./processor.js', () => {});
+```
+
+**A switch posts no `onStateMoved`.** When the pointer moves, reads answer from the new generation at once, but a pointer move names no block, so `onStateMoved` stays silent until the fold next applies one, and on a chain that has gone quiet that can be a long time. The progress push does fire on the switch, so a tab that is waiting for one asks `indexer.generations()` on each push and re-reads once the generation it is waiting for is `canonical`. The [reference](https://github.com/wighawag/etherfold/blob/main/examples/browser-reference/browser/main.ts) does exactly that, for both axes.
+
+The processor-bundle arrival (`processorBundle`) and a production build are untouched: the `if (import.meta.hot)` block is eliminated there, and a bundler without worker HMR simply never calls the verb, so a save reloads the page and the new worker folds the edit from the start.
 
 ### Axis two — the contract was redeployed
 
