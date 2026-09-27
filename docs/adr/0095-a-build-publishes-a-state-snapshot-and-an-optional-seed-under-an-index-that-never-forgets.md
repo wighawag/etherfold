@@ -1,0 +1,40 @@
+---
+status: accepted, not yet implemented
+---
+
+# A build publishes a state snapshot, and optionally a stream seed, under an index that never forgets a generation
+
+A browser app often cannot index from its contracts' start block, so it starts from a PUBLISHED artifact, and etherfold could consume two (a state snapshot, ADR-0028 and ADR-0040; a stream seed, ADR-0063 to ADR-0066) while nothing produced either from a real deployment. We decide that the CLI produces them from the libSQL database any command wrote (`etherfold publish`, and `etherfold build --publish` at the tip it stops at), in a new snapshot format, under a layout a plain static host can serve, and that a tab which wants to use them runs the very bundle that computed them. Decided with the maintainer on 2026-09-26, while writing the spec `a-build-publishes-what-a-browser-app-starts-from`; the first user is `port-stratagems-to-the-etherfold-packages`.
+
+## The snapshot format is replaced, not extended
+
+`ENTITY_SNAPSHOT_FORMAT` 1 (a JSON document of `Mutation` upserts at one block, written by `createSnapshot`) was never published, so nothing constrains it. It could not carry history and repeated every entity and field name on every row. Format 2 replaces it:
+
+- **Rows at a FLOOR, then the changes of every later block up to the CUT.** Installing it is replaying those blocks through `applyBlock`, the seam every backend already has, so no backend gains an install path and the tip-only patch store installs it unchanged. How much history a snapshot carries is ONE option over one shape: `none` puts the floor at the cut (live rows only, the old content), a depth `N` puts it `N` blocks below, and `all` at the source's start block. The installed store reports the floor as its history floor (ADR-0028), not the cut. The rejected alternative shipped the store's own version rows with their block ranges, which needed a new install path per backend for the same information.
+- **Columnar per entity, newline-delimited, gzipped**: each entity's declaration once, then its rows as arrays in that column order, so a browser inflates it with the built-in `DecompressionStream` and installs chunk by chunk without holding the document. The download and the write are where a phone spends its time (`work/notes/findings/what-a-published-stream-seed-costs-to-install.md`).
+- **The state snapshot never contains the stream.** Its size follows the STATE, so an app with a small state over a long history (a game) starts from a download proportional to what it displays. History changes are state mutations, never raw logs.
+
+## The cut is `tip - finality`, for both artifacts
+
+A snapshot taken inside the reorg window of the tip its producer had seen cannot absorb a reorg reaching under it, so the producer cuts there itself rather than trusting its caller. The rows at the cut come from the versioned store's as-of read, with no second fold. The store records only blocks that carry logs, so the cut itself usually has no known hash or timestamp and the producer has no node to ask: the snapshot's block pointer is the HIGHEST RECORDED BLOCK AT OR BELOW THE CUT (the rows as of it are the rows as of the cut, since nothing changed between), while the resume position's `lastToBlock` is the cut. The resume position (`LastSync`) written for the cut must make a consumer re-read exactly the blocks `getFromBlock` and the unconfirmed window call for: neither skipping one nor applying one twice.
+
+## The layout: immutable bodies, and a PUBLICATION INDEX keyed so an old build is never stranded
+
+- Bodies are named by their content hash and never change, so a CDN caches them for ever and two publications never write one path.
+- **Nothing a publication wrote is deleted by a later one.** A publisher cannot know how long a user keeps an old build open, and a release may pin a body's hash (ADR-0065). Pruning is an operator's explicit act.
+- **One mutable PUBLICATION INDEX (`publication.json`), keyed**: the latest state snapshot PER GENERATION (stream digest and processor identity, ADR-0053) and the latest stream seed PER STREAM. Keyed by generation and not by processor alone, because a tab keeps an installed snapshot only when the cursor's SOURCE and STREAM CONFIG hashes match its own as well as its processor (`IndexerGeneration.load` otherwise discards the state and starts from the start block, the backfill a public node refuses), and the stream digest is exactly those two: so a tab looks up the one entry it can use, a contract change is a different entry rather than an overwrite, and a tab with no matching entry is refused by name instead of installing and silently discarding. An old build runs the old processor and refuses every snapshot of the new one (ADR-0086); keyed, it finds the last snapshot published for its own generation, stale but valid, and indexes forward from there. A seed belongs to a stream, not a processor, so an old build on the same stream still takes the newest seed. Entries are never removed. The rejected alternative named one "current" publication, which strands every tab that has not reloaded.
+- It is deliberately NOT called a head: `SnapshotLocation.head` and `SnapshotHead` already name ONE snapshot's small metadata document, which format 2 keeps as its first line; the index names many publications. A client may list several index locations and fails over between them, as it fails over between snapshot mirrors today.
+- The index is written LAST (a rename, or one commit on a git host), so no reader sees it name a body that is not there.
+- **What is published is the generation the publisher expects.** `publish` takes the processor it is meant to publish and refuses, naming both, a database whose canonical generation is another one; `build --publish` always passes its own. A `build` whose final promotion failed (it is fail-soft) otherwise publishes the OLD processor while the app ships the new bundle, and every tab finds no entry for itself.
+
+## The stream seed is opt-in, at both ends
+
+Publishing one is asked for (`--seed`), because under a never-delete layout an hourly job would otherwise store a full copy of a long stream on every run. A tab installs one only when the app asks, and otherwise runs the snapshot-only mode. What a seed buys is unchanged (a processor-only change re-folds locally instead of waiting for a republished snapshot); it is a choice per app, not a default.
+
+## A tab runs the BUNDLE, so its identity is the bytes' hash
+
+A snapshot is keyed to the identity of the fold that computed it, and `build` names its fold by the SHA-256 of the bundle bytes (ADR-0086). The browser already accepts an identity from its arrival (`processorIdentity`), so a build step COULD inject the bundle's hash into a tab running the module its bundler compiled. That is refused: the identity would name bytes the tab does not run, which is the lie ADR-0086 removes (the same code as a module and as a bundle are different generations). Instead the tab fetches the very bundle that was published, hashes it and instantiates from it, the browser counterpart of `loadProcessorArtifact`. The identity then matches the publisher's by construction, a mismatched deploy is refused by name, and HMR in development keeps its module arrival and module identity.
+
+## Status
+
+`accepted, not yet implemented`: the tasks of `a-build-publishes-what-a-browser-app-starts-from` build it, and the last of them (`a-build-published-app-starts-from-its-own-publication`) removes this status line in the same change (`work/protocol/ADR-FORMAT.md`).

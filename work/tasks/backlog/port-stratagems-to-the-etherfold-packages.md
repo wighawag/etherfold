@@ -2,7 +2,7 @@
 title: 'Port stratagems and its snapshot job off the deprecated ethereum-indexer packages'
 slug: port-stratagems-to-the-etherfold-packages
 humanOnly: true
-blockedBy: []
+blockedBy: [a-build-published-app-starts-from-its-own-publication]
 covers: []
 ---
 
@@ -10,7 +10,7 @@ covers: []
 
 1. **Port, not retire.** Stratagems stays as a real consumer of the published packages: it serves as an example and as a test of them.
 2. **Only `alpha1` matters.** `alpha1test` and `composablelabs` are already commented out of the snapshot job and are not ported.
-3. **The static state file is replaced by what the CLI publishes**, which is a feature etherfold does not have yet: `build` folds into libSQL, and nothing writes that database out as the state snapshot and stream seed a browser app starts from. That producer is the proposed spec `a-build-publishes-what-a-browser-app-starts-from`, and this task waits for it (see Blocked by). Whether a deployed `web/` must keep reading the old files is moot: `web/` is ported with the job and reads the new artifacts.
+3. **The static state file is replaced by what the CLI publishes**, which is a feature etherfold does not have yet: `build` folds into libSQL, and nothing writes that database out as the state snapshot and stream seed a browser app starts from. That producer is the spec `a-build-publishes-what-a-browser-app-starts-from` (ADR-0095), and this task waits for it (see Blocked by). For stratagems it means `build --publish` with history `none` and no seed, and `web/` loading the published processor bundle and starting from the publication index, with the same contracts and finality the job publishes with. Whether a deployed `web/` must keep reading the old files is moot: `web/` is ported with the job and reads the new artifacts.
 
 
 ## What to build
@@ -36,7 +36,7 @@ Move the two consumers we own off the seven `ethereum-indexer*` names, which wer
 
 ## Blocked by
 
-- The producer from the proposed spec `a-build-publishes-what-a-browser-app-starts-from`. It is not tasked yet, so it cannot be named in `blockedBy`; once its tasks exist, list the one that ships the command there. Everything else is ready: `publish-etherfold-and-deprecate-old-names` is done and every `@etherfold/*` package is on npm.
+- `a-build-published-app-starts-from-its-own-publication`: the last task of the spec `a-build-publishes-what-a-browser-app-starts-from`, which proves `build --publish`, the bundle arrival and the publication-index option end to end in the shape this port needs (history `none`, no seed). Everything else is ready: `publish-etherfold-and-deprecate-old-names` is done and every `@etherfold/*` package is on npm.
 
 ## Prompt
 
