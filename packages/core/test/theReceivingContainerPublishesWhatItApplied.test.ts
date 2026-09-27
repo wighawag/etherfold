@@ -34,7 +34,7 @@ import {identityOf} from './utils/processorIdentity.js';
 // asks its twin, and the answer that matters is that it is the SAME answer from
 // the SAME assembly (`StateMovedPublisher`) rather than a second implementation:
 // only the CANONICAL fold publishes, a retraction rotates the token as it
-// publishes, and a POINTER MOVE rotates it and publishes nothing.
+// publishes, and a POINTER MOVE rotates it and ANNOUNCES it at once.
 //
 // The ENTITY NAMES are the layer below's and are asserted against a real
 // processor over the real workload, on this container, in
@@ -210,11 +210,11 @@ describe('the receiving container publishes what it applied', () => {
 		expect(after.coherence).toBe(tokenBeforeTheFollower);
 	});
 
-	it('ROTATES the token on a POINTER MOVE, publishes nothing for it, and then names the fold that answers', async () => {
-		// The same mechanism the retraction uses and deliberately not a second event
-		// kind: a different fold answers from here on, which from a cache's point of
-		// view is indistinguishable from "everything you hold may be wrong". The move
-		// is the one the DEFAULT policy makes on its own, so nobody asked for it.
+	it('ROTATES the token on a POINTER MOVE, ANNOUNCES it at once, and then names the fold that answers', async () => {
+		// The same rotation the retraction makes: a different fold answers from here
+		// on, which from a cache's point of view is indistinguishable from "everything
+		// you hold may be wrong". The move is the one the DEFAULT policy makes on its
+		// own, so nobody asked for it.
 		const {w, incumbent, moved, push, digestOf} = await aContainerBeingFed();
 		await push({toBlock: 105, latestBlock: 105, logs: [AT_101, DEAD_104]});
 		await push({toBlock: 106, latestBlock: 106, logs: [REORGED_104, AT_106]});
@@ -227,9 +227,12 @@ describe('the receiving container publishes what it applied', () => {
 		await incumbent.add(w.specFor('v2', 10));
 		await catchUp(incumbent);
 		expect((await incumbent.canonical())?.processor).toBe(identityOf('v2'));
-		// THE MOVE PUBLISHED NOTHING: a pointer move has no block to name and no fold
-		// applied anything, so what a reader receives is the NEXT notification.
-		expect(moved.length).toBe(publishedBefore);
+		// THE MOVE IS ANNOUNCED with no block to wait for: one notification, carrying the
+		// rotated token and the generation that answers now, and nothing else.
+		expect(moved.length).toBe(publishedBefore + 1);
+		const announced = moved[moved.length - 1];
+		expect(announced).toEqual({kind: 'repointed', coherence: incumbent.coherenceNow(), generation: digestOf('v2')});
+		expect(tokensBefore.has(announced.coherence)).toBe(false);
 
 		// One more block. It reaches the STREAM's writer -- the DEPLOYMENT's, not either
 		// generation's (ADR-0087) -- which appends it and then OFFERS it to every fold on
@@ -238,13 +241,14 @@ describe('the receiving container publishes what it applied', () => {
 		const LATER = transfer(112, '0xa112', 5n);
 		await push({toBlock: 115, latestBlock: 115, logs: [REORGED_104, AT_106, LATER]});
 
-		// The notification names the fold that ANSWERS, carries a token no reader has
-		// seen, and there is exactly one of it even though two folds applied the block.
+		// The notification names the fold that ANSWERS, carries the token the
+		// announcement carried (the block does not rotate a second time), and there is
+		// exactly one of it even though two folds applied the block.
 		const after = moved[moved.length - 1];
-		expect(moved.length).toBe(publishedBefore + 1);
+		expect(moved.length).toBe(publishedBefore + 2);
 		expect(appendsIn([after])[0].block).toBe(112);
 		expect(after.generation).toBe(digestOf('v2'));
-		expect(tokensBefore.has(after.coherence)).toBe(false);
+		expect(after.coherence).toBe(announced.coherence);
 		expect(digestOf('v2')).not.toBe(digestOf('v1'));
 	});
 

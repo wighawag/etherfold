@@ -117,7 +117,23 @@ function isStateMoved(data: unknown): data is StateMovedMessage {
 	const message = data as Partial<StateMovedMessage>;
 	if (message.protocol !== STATE_MOVED_CHANNEL_PROTOCOL || message.kind !== 'stateMoved') return false;
 	const value = message.value as Partial<StateMoved> | undefined;
-	return typeof value === 'object' && value !== null && (value.kind === 'applied' || value.kind === 'retracted');
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		(value.kind === 'applied' || value.kind === 'retracted' || value.kind === 'repointed')
+	);
+}
+
+/** What one notification was ABOUT, for a log line: never parsed back. */
+function describeMove(moved: StateMoved): string {
+	switch (moved.kind) {
+		case 'applied':
+			return `block ${moved.block}`;
+		case 'retracted':
+			return `a retraction to block ${moved.forkPoint}`;
+		case 'repointed':
+			return `a move of the canonical pointer to ${moved.generation}`;
+	}
 }
 
 /**
@@ -498,8 +514,8 @@ export function openStateMovedAcrossTabs(storage: CrossTabStateStorage = {}): St
 				// by mistake is findable, and never raised at a fold that has already applied
 				// its block.
 				namedLogger.info(
-					`this cross-tab state-moved channel is closed, so a notification about block ` +
-						`${moved.kind === 'applied' ? moved.block : moved.forkPoint} was not posted to the other tabs.`,
+					`this cross-tab state-moved channel is closed, so a notification about ${describeMove(moved)} was ` +
+						`not posted to the other tabs.`,
 				);
 				return;
 			}

@@ -1,4 +1,4 @@
-import type {StateApplied, StateMoved, StateMovedDetach, StateRetracted} from '@etherfold/core';
+import type {StateApplied, StateMoved, StateMovedDetach, StateRepointed, StateRetracted} from '@etherfold/core';
 import {expect} from 'vitest';
 import {readerRule, type Reader} from './reader.js';
 import type {ConformanceCase, StateMovedTransport, StateMovedTransportFactory} from './types.js';
@@ -108,6 +108,14 @@ export function aRetraction(moved: StateMoved | undefined): StateRetracted {
 	return moved;
 }
 
+/** The same, for a move of the canonical pointer. */
+export function aRepointing(moved: StateMoved | undefined): StateRepointed {
+	if (moved?.kind !== 'repointed') {
+		expect.fail(`expected a pointer-move notification, got ${JSON.stringify(moved ?? null)}`);
+	}
+	return moved;
+}
+
 /**
  * THE FIELDS THE SIGNAL CARRIES, per case of it -- asserted as an exact key set
  * and never a subset.
@@ -119,3 +127,4 @@ export function aRetraction(moved: StateMoved | undefined): StateRetracted {
  */
 export const APPLIED_FIELDS = ['block', 'coherence', 'entities', 'generation', 'kind'] as const;
 export const RETRACTED_FIELDS = ['coherence', 'forkPoint', 'generation', 'kind'] as const;
+export const REPOINTED_FIELDS = ['coherence', 'generation', 'kind'] as const;

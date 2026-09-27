@@ -461,12 +461,13 @@ indexer.syncing.subscribe(($syncing) => {
 
 Everything above tells you how the state gets there. This is how your UI finds out it did, without inventing a polling interval.
 
-The side that applied the block **tells** the sides that are reading, and what it says is the same in every deployment ([ADR-0083](../../adr/0083-a-reader-is-told-the-state-moved-by-a-signal-carrying-a-coherence-token.md)). Two things can be said, and they are a discriminated union on `kind` rather than one shape with optional fields, so a handler that reads `block` off a withdrawal does not compile:
+The side that applied the block **tells** the sides that are reading, and what it says is the same in every deployment ([ADR-0083](../../adr/0083-a-reader-is-told-the-state-moved-by-a-signal-carrying-a-coherence-token.md)). Three things can be said, and they are a discriminated union on `kind` rather than one shape with optional fields, so a handler that reads `block` off a withdrawal does not compile:
 
 ```ts
 type StateMoved =
 	| {kind: 'applied'; block: number; coherence: string; entities: readonly string[]; generation: string}
-	| {kind: 'retracted'; forkPoint: number; coherence: string; generation: string};
+	| {kind: 'retracted'; forkPoint: number; coherence: string; generation: string}
+	| {kind: 'repointed'; coherence: string; generation: string};
 ```
 
 **Your whole rule is two lines.** `coherence` is an opaque **coherence token**: compare it, never parse it.
@@ -481,7 +482,7 @@ port.onStateMoved((moved) => {
 
 **Who needs this, and who does not.** An app holding `createIndexerState(...)` directly has the indexer in its own heap and already has `state` to subscribe to — that is the case that always worked, and it is why the hook itself has no `onStateMoved`. The signal is for the readers that heap does not reach: a tab whose indexer is in a worker (the default, and the `port` above), a tab that is not the one indexing, and an app pointed at a hosted indexer. On the main thread the port is `connectToIndexerHost(indexer.mainThreadHost(), {watch: false})`, which is a wire to the host that is already there rather than a second one.
 
-Note what those two lines do **not** have to do. A reorg arrives with a rotated token, so the first line already covers it. A promotion — a different fold now answering your reads — publishes nothing of its own and shows up as a token you have never held on the next notification. And a notification you **missed** is covered by the same line at the next one, which is why nothing is buffered for you and why a producer's memory does not grow with the number of open tabs.
+Note what those two lines do **not** have to do. A reorg arrives with a rotated token, so the first line already covers it. A promotion (a different fold now answering your reads) is announced at once, as `repointed` with a token you have never held, so the first line covers it too, and it arrives even when the chain has gone quiet; the block after it carries that same token, so you invalidate everything once. And a notification you **missed** is covered by the same line at the next one, which is why nothing is buffered for you and why a producer's memory does not grow with the number of open tabs.
 
 ### Three transports, one handler
 
@@ -716,7 +717,7 @@ indexer.onProgress((progress) => {
 if (import.meta.hot) import.meta.hot.accept('./processor.js', () => {});
 ```
 
-**A switch posts no `onStateMoved`.** When the pointer moves, reads answer from the new generation at once, but a pointer move names no block, so `onStateMoved` stays silent until the fold next applies one, and on a chain that has gone quiet that can be a long time. The progress push does fire on the switch, so a tab that is waiting for one asks `indexer.generations()` on each push and re-reads once the generation it is waiting for is `canonical`. The [reference](https://github.com/wighawag/etherfold/blob/main/examples/browser-reference/browser/main.ts) does exactly that, for both axes.
+**A switch is announced on `onStateMoved`.** When the pointer moves, reads answer from the new generation at once, and the move is published at once as a `repointed` notification with a rotated token, with no block to wait for. So a tab that re-reads on `onStateMoved` renders the new generation even on a chain that has gone quiet, and there is nothing to poll. The [reference](https://github.com/wighawag/etherfold/blob/main/examples/browser-reference/browser/main.ts) re-reads on that signal alone, for both axes.
 
 The processor-bundle arrival (`processorBundle`) and a production build are untouched: the `if (import.meta.hot)` block is eliminated there, and a bundler without worker HMR simply never calls the verb, so a save reloads the page and the new worker folds the edit from the start.
 

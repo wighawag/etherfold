@@ -33,7 +33,7 @@ Every verb moves a **real fold** and lets the **real producer** publish. An adap
 | chapter                            | what breaks without it                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `one handler`                      | the value, the sequence, and what a reader ATTACHING is told                                       |
-| `the coherence token`              | that it holds still while nothing invalidates, and rotates on a retraction and on a promotion      |
+| `the coherence token`              | that it holds still while nothing invalidates, rotates on a retraction, and rotates on a promotion that is ANNOUNCED at once rather than left for the next block |
 | `a dropped notification`           | that nothing is held for a reader that was away, and that it converges anyway                      |
 | `coherent with what a reader reads` | that a read a notification prompted is not answered from underneath it                             |
 

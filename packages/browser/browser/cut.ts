@@ -1502,12 +1502,19 @@ function crossTabDatabases(params: Params): {here: string; nextDoor: string} {
 	return {here: databaseName(params, 'cross-tab'), nextDoor: databaseName(params, 'cross-tab-next-door')};
 }
 
+/**
+ * The block one notification names: the one applied, or the fork point a
+ * retraction reverted to. A pointer move names none, because none was applied.
+ */
+const blockNamedBy = (moved: StateMoved): number | undefined =>
+	moved.kind === 'applied' ? moved.block : moved.kind === 'retracted' ? moved.forkPoint : undefined;
+
 /** One thing a tab was told, flattened to what a committed result can carry. */
-type ToldOf = {kind: string; block: number; coherence: string; entities: string[]; generation: string};
+type ToldOf = {kind: string; block?: number; coherence: string; entities: string[]; generation: string};
 
 const toldOf = (moved: StateMoved): ToldOf => ({
 	kind: moved.kind,
-	block: moved.kind === 'applied' ? moved.block : moved.forkPoint,
+	block: blockNamedBy(moved),
 	coherence: moved.coherence,
 	entities: moved.kind === 'applied' ? [...moved.entities] : [],
 	generation: moved.generation,
@@ -1523,7 +1530,7 @@ const toldOf = (moved: StateMoved): ToldOf => ({
  */
 function whatThisTabWasTold(tabs: StateMovedAcrossTabs, reread?: () => Promise<unknown>) {
 	const heard: StateMoved[] = [];
-	const reads: {block: number; state: unknown}[] = [];
+	const reads: {block?: number; state: unknown}[] = [];
 	const waiting: {matches: (moved: StateMoved) => boolean; resolve: () => void}[] = [];
 	let queue: Promise<unknown> = Promise.resolve();
 	const stop = tabs.onStateMoved((moved) => {
@@ -2069,7 +2076,7 @@ async function progressWriterFinishCase(_params: Params, timings: Timing[]): Pro
 		atTip: progressOf(done),
 		published: tab.published.map(progressOf),
 		// the notifications on the same channel, to show one channel carrying both
-		movedBlocks: tab.movedPublished.map((moved) => (moved.kind === 'applied' ? moved.block : moved.forkPoint)),
+		movedBlocks: tab.movedPublished.map(blockNamedBy),
 	};
 }
 

@@ -1,5 +1,15 @@
 import {expect} from 'vitest';
-import {anAppend, aRetraction, cases, listening, over, RETRACTED_FIELDS, told} from '../harness.js';
+import {
+	anAppend,
+	aRepointing,
+	aRetraction,
+	cases,
+	listening,
+	over,
+	REPOINTED_FIELDS,
+	RETRACTED_FIELDS,
+	told,
+} from '../harness.js';
 import type {ConformanceCase, StateMovedTransportFactory} from '../types.js';
 
 const GROUP = 'the coherence token';
@@ -16,8 +26,8 @@ const GROUP = 'the coherence token';
  * with no symptom until the next reorg.
  *
  * So: it does not move while nothing invalidates, a RETRACTION arrives whole and
- * rotated, and a PROMOTION arrives as a token nobody has seen on the next
- * notification rather than as an event of its own.
+ * rotated, and a PROMOTION arrives AT ONCE, as a notification of its own wearing
+ * a token nobody has seen, with the block after it under that same token.
  */
 export function tokenCases(factory: StateMovedTransportFactory): ConformanceCase[] {
 	return cases(GROUP, {
@@ -79,36 +89,58 @@ export function tokenCases(factory: StateMovedTransportFactory): ConformanceCase
 				expect(reader.decisions.at(-1)).toEqual({invalidate: [...after.entities]});
 			}),
 
-		'says NOTHING for a promotion, and the next notification wears a token no reader has held': () =>
+		'ANNOUNCES a promotion AT ONCE, with no block to wait for: a rotated token and the generation that answers now':
+			() =>
+				over(factory, async (transport) => {
+					const reader = await listening(transport);
+					await transport.applyNextBlock();
+					await told(reader, (received) => received.length >= 1, 'the block it applied');
+					const before = anAppend(reader.received[0]);
+					const toldSoFar = reader.received.length;
+
+					// NO BLOCK FOLLOWS: the chain has gone quiet, which is exactly the case in which
+					// "the next notification carries the new token" never arrives, and a reader went
+					// on rendering the retired generation while reads answered the new one.
+					await transport.promote();
+					await told(reader, (received) => received.length > toldSoFar, 'the promotion');
+
+					const announced = aRepointing(reader.received[toldSoFar]);
+					// no block (none was applied) and no entity set (the token already says it all)
+					expect(Object.keys(announced).sort()).toEqual([...REPOINTED_FIELDS]);
+					// A different fold answers now, which from a cache's point of view is
+					// indistinguishable from "everything you hold may be wrong" -- the SAME
+					// comparison a retraction rides, so the reader's rule has no third line.
+					expect(announced.coherence).not.toBe(before.coherence);
+					expect(reader.decisions.at(toldSoFar)).toEqual({invalidate: 'everything'});
+					// ...and it NAMES the lineage that answers, which the token can never do
+					// because a reader must never parse it.
+					expect(announced.generation).not.toBe(before.generation);
+				}),
+
+		'carries the block AFTER a promotion under the SAME rotated token, so a reader invalidates everything ONCE': () =>
 			over(factory, async (transport) => {
 				const reader = await listening(transport);
 				await transport.applyNextBlock();
 				await told(reader, (received) => received.length >= 1, 'the block it applied');
-				const before = anAppend(reader.received[0]);
 				const toldSoFar = reader.received.length;
-
-				// A pointer move has no block to name and no fold applied anything, so there
-				// is deliberately no event kind for it: a reader does not care that a
-				// promotion is a different thing, and two kinds would be two code paths in
-				// every app.
 				await transport.promote();
-				expect(
-					reader.received.length,
-					`this transport published something for a pointer move: ${JSON.stringify(reader.received.slice(toldSoFar))}`,
-				).toBe(toldSoFar);
+				await told(reader, (received) => received.length > toldSoFar, 'the promotion');
 
 				await transport.applyNextBlock();
-				await told(reader, (received) => received.length > toldSoFar, 'the block folded after the promotion');
+				await told(reader, (received) => received.length > toldSoFar + 1, 'the block folded after the promotion');
 
-				const after = anAppend(reader.received.at(-1));
-				// A different fold answers now, which from a cache's point of view is
-				// indistinguishable from "everything you hold may be wrong" -- ONE comparison
-				// and one code path rather than two.
-				expect(after.coherence).not.toBe(before.coherence);
-				expect(reader.decisions.at(-1)).toEqual({invalidate: 'everything'});
-				// ...and it NAMES the lineage that answered, which the token can never do
-				// because a reader must never parse it.
-				expect(after.generation).not.toBe(before.generation);
+				// ONE announcement and ONE append, and the append does not rotate a second
+				// time: a confusing pair would have a reader throw its cache away twice.
+				const since = reader.received.slice(toldSoFar);
+				expect(since.map((moved) => moved.kind)).toEqual(['repointed', 'applied']);
+				const announced = aRepointing(since[0]);
+				const after = anAppend(since[1]);
+				expect(after.coherence).toBe(announced.coherence);
+				expect(after.generation).toBe(announced.generation);
+				expect(reader.decisions.slice(toldSoFar)).toEqual([
+					{invalidate: 'everything'},
+					{invalidate: [...after.entities]},
+				]);
 			}),
 	});
 }

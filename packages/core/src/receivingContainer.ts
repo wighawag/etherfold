@@ -2537,28 +2537,32 @@ export class ReceivingIndexer<
 					`state stood.`,
 			);
 		}
+		let announce: ((moved: {generation: string}) => void) | undefined;
 		if (!supersededRecord || !sameGeneration(supersededRecord, record)) {
 			// THE TOKEN ROTATES, because a DIFFERENT FOLD answers from here on and that is
 			// indistinguishable, to a cache, from "everything you hold may be wrong"
-			// (ADR-0083). The same mechanism a retraction uses and deliberately not a second
-			// event kind, and the same one line at the same point the chain-facing container
-			// puts it at (`Indexer.movePointerTo`) -- one rule, two containers.
+			// (ADR-0083). The same rotation a retraction makes, ANNOUNCED by a notification
+			// of its own (`repointed`) rather than left to ride the next block's, and the
+			// same two steps at the same points the chain-facing container puts them at
+			// (`Indexer.movePointerTo`) -- one rule, two containers.
 			//
-			// Nothing is PUBLISHED here: a pointer move has no block to name and no fold
-			// applied anything, so what a reader receives is the NEXT notification carrying a
-			// token it has never seen. AFTER the registry write, so a move that did not happen
-			// does not invalidate every reader's cache; and EVERY move rather than the forward
-			// ones alone, because a REVERT changes which fold answers exactly as a promotion
-			// does, which is the only thing a reader can see of either.
-			this.stateMoved.rotate(
-				`a pointer move: reads are answered by the generation {stream: ${record.stream}, processor: ` +
+			// AFTER the registry write, so a move that did not happen does not invalidate
+			// every reader's cache; and EVERY move rather than the forward ones alone,
+			// because a REVERT changes which fold answers exactly as a promotion does, which
+			// is the only thing a reader can see of either.
+			announce = this.stateMoved.rotateForPointerMove(
+				`reads are answered by the generation {stream: ${record.stream}, processor: ` +
 					`${record.processor}} from here on`,
 			);
 		}
 		// The fold that answers reads NOW, which is what the publication filter reads.
 		// `undefined` where this container holds no fold for the target, which is the
-		// ordinary post-redeploy revert: nothing here publishes then, and nothing should.
+		// ordinary post-redeploy revert: no FOLD publishes then, and none should.
 		this.noteCanonical(record);
+		// ANNOUNCED once this container answers from the new pointer (reads here resolve
+		// the DURABLE pointer, written above), and whether or not a fold is held for it:
+		// the reads a reader re-makes are answered by it either way.
+		announce?.({generation: generationDigestOf(record)});
 		// WHAT THIS DEPLOYMENT SAYS IT FETCHES FOLLOWS THE POINTER on a deployment started
 		// with nothing configured (ADR-0093): once a generation on another stream answers
 		// reads, its source is the one `fetchedSource` names, as a restart would find it.

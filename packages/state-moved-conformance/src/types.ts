@@ -84,11 +84,11 @@ export type StateMovedTransport = {
 	/**
 	 * MOVE THE CANONICAL POINTER onto a different generation.
 	 *
-	 * It PUBLISHES nothing, deliberately -- a pointer move has no block to name and
-	 * no fold applied anything -- so what a reader sees of it is the NEXT
-	 * notification, wearing a token it has never held and naming the generation
-	 * that answers now. The case asserts exactly that, which is why this verb does
-	 * not answer anything.
+	 * The producer ANNOUNCES it (`kind: 'repointed'`, a rotated token and the
+	 * generation that answers now) with no block to wait for, so the case asserts
+	 * that it arrives while the chain is quiet. It is CAUSED, never faked: a
+	 * successor generation is added and the pointer moves onto it, by the policy or
+	 * by an explicit move, and the producer publishes what it publishes.
 	 */
 	promote(): Promise<void>;
 	/**

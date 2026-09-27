@@ -47,13 +47,15 @@ export type Reader = {
  *
  * - it does not special-case a RETRACTION, because a retraction always carries a
  *   rotated token, so the first line already covers it;
- * - it does not special-case a PROMOTION, because the pointer move publishes
- *   nothing and what arrives next carries a token this reader has never held;
+ * - it does not special-case a PROMOTION, because the pointer move is announced
+ *   with a rotated token too, so the first line covers it as it covers a
+ *   retraction;
  * - it does not special-case a MISSED notification, because the next one repairs
  *   it by the same comparison.
  *
  * The `kind` narrowing on the second line is the one thing the compiler forces,
- * and that is deliberate too: a retraction has no `entities` and no `block`, so a
+ * and that is deliberate too: a retraction and a pointer move have no `entities`
+ * and no `block`, so a
  * reader that read either off one does not compile rather than invalidating
  * against a number that means the opposite of what it thinks.
  *

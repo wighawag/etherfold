@@ -10,8 +10,9 @@ const namedLogger = logs('@etherfold/core');
  * subscribing to a store in the indexer's own heap): the fold moves into a
  * worker, a query surface replaces the handle, a remote indexer has no shared
  * heap at all, one tab indexes and the others do not. ADR-0083 decides the
- * answer, and this module is the WHOLE of the producer's half of it: the two
- * shapes that go out (a block APPLIED, a branch RETRACTED), the token that makes
+ * answer, and this module is the WHOLE of the producer's half of it: the three
+ * shapes that go out (a block APPLIED, a branch RETRACTED, the canonical pointer
+ * REPOINTED), the token that makes
  * best-effort delivery safe, and the subscription that holds NOTHING per
  * subscriber.
  *
@@ -131,8 +132,49 @@ export type StateRetracted = {
 };
 
 /**
+ * WHAT GOES OUT when the CANONICAL POINTER MOVED: a different generation answers
+ * reads from here on, and nothing else happened.
+ *
+ * A promotion (a successor caught up, or was named) and a move BACK (a revert)
+ * are this one case, because a reader can see nothing of either except that a
+ * different fold answers now, which from a cache's point of view is
+ * indistinguishable from "everything you hold may be wrong".
+ *
+ * ## Why it is ANNOUNCED rather than left to the next notification
+ *
+ * The rotated token alone would reach a reader on the next block, and on a chain
+ * that has gone quiet there is no next block: the reader keeps rendering the
+ * retired generation while every read already answers the new one. So the move
+ * is published AT ONCE, whatever the chain is doing (ADR-0083).
+ *
+ * ## Why it carries NO block and NO entity set
+ *
+ * No block was applied, so there is none to name, and a number here would be a
+ * reader's invitation to compare it with one it holds. And the token is ALWAYS
+ * rotated on this case (`StateMovedPublisher.rotateForPointerMove` is the only
+ * way to publish one), which already says invalidate everything, so an entity
+ * set would be a narrower answer to a question nobody asked.
+ *
+ * A reader's two-line rule therefore has no third line for it: the token
+ * comparison covers it, and the narrow line reads `entities` off an `applied`
+ * notification only.
+ */
+export type StateRepointed = {
+	/** WHICH case of the signal this is. See `StateMoved`. */
+	kind: 'repointed';
+	/**
+	 * Opaque. COMPARE it, never parse it. ALWAYS a token this producer has not
+	 * published before, and the one the blocks the new generation applies next
+	 * carry, so a reader that received this invalidates everything ONCE.
+	 */
+	coherence: string;
+	/** WHICH generation answers from here on, so a refetch is not served by another lineage. */
+	generation: string;
+};
+
+/**
  * THE SIGNAL: what the side that moved the state tells the sides that are
- * reading, in the two cases a reader has to tell apart.
+ * reading, in the three cases a reader has to tell apart.
  *
  * A DISCRIMINATED union on `kind`, never one shape with optional fields: a
  * retraction is a different thing from an append rather than an append missing a
@@ -147,11 +189,12 @@ export type StateRetracted = {
  * });
  * ```
  *
- * Note what that handler does NOT have to do: a retraction always arrives with a
- * rotated token, so the first line already covers it, and a reader that never
- * receives it is covered by the same line at the next notification.
+ * Note what that handler does NOT have to do: a retraction and a pointer move
+ * always arrive with a rotated token, so the first line already covers both, and
+ * a reader that never receives one is covered by the same line at the next
+ * notification.
  */
-export type StateMoved = StateApplied | StateRetracted;
+export type StateMoved = StateApplied | StateRetracted | StateRepointed;
 
 /**
  * THE APP-FACING HANDLER, and it is a plain callback.
@@ -257,12 +300,11 @@ export class StateMovedPublisher {
 	 * ONE LINE AT THE POINT WHERE THE REASON OCCURS, which is the whole shape of
 	 * it: a RETRACTION rotates it because the stale entities are the abandoned
 	 * branch's and no changed-set names them (`publishRetraction` below does it, so
-	 * that a retraction which forgot to rotate is unexpressible), and a PROMOTION
+	 * that a retraction which forgot to rotate is unexpressible), and a POINTER MOVE
 	 * rotates it because a different fold now answers, which from a cache's point of
-	 * view is indistinguishable from "everything you hold may be wrong". One
-	 * comparison and one code path rather than two -- and the promotion PUBLISHES
-	 * nothing, because a pointer move has no block to name: it calls this, and the
-	 * next notification carries the new token (`Indexer.movePointerTo`).
+	 * view is indistinguishable from "everything you hold may be wrong"
+	 * (`rotateForPointerMove` below does it, for the same reason). One comparison and
+	 * one code path in a reader rather than three.
 	 *
 	 * It rotates whether or not anybody is listening, because the token is a fact
 	 * about THIS PRODUCER's history and not about a delivery: a reader that attaches
@@ -283,8 +325,8 @@ export class StateMovedPublisher {
 	 *
 	 * Both stamps are made HERE rather than supplied by the caller, and for one
 	 * reason: a producer must not be able to publish a token it has not rotated, nor
-	 * an append wearing a retraction's tag. `publishRetraction` beside this is the
-	 * only other way out, and it rotates.
+	 * an append wearing a retraction's tag. `publishRetraction` and
+	 * `rotateForPointerMove` beside this are the only other ways out, and both rotate.
 	 */
 	publish(moved: Omit<StateApplied, 'coherence' | 'kind'>): void {
 		this.deliver({...moved, kind: 'applied', coherence: this.coherence});
@@ -309,6 +351,32 @@ export class StateMovedPublisher {
 	publishRetraction(retraction: Omit<StateRetracted, 'coherence' | 'kind'>): void {
 		const coherence = this.rotate(`a retraction: the fold reverted to block ${retraction.forkPoint}`);
 		this.deliver({...retraction, kind: 'retracted', coherence});
+	}
+
+	/**
+	 * ROTATE for a POINTER MOVE now, and answer the call that ANNOUNCES it.
+	 *
+	 * Two steps rather than one, because the two halves belong at two different
+	 * points of a move, and getting either order wrong is visible to a reader:
+	 *
+	 * - the ROTATION belongs FIRST, before anything tells a reader to re-read (a
+	 *   container's pointer-moved callback, its state notification), so that no
+	 *   question about the new generation is answered under the retired one's token;
+	 * - the ANNOUNCEMENT belongs LAST, once the read path has followed the pointer,
+	 *   so that a reader re-reading the instant it is told is answered by the
+	 *   generation the announcement names rather than by the one it replaced.
+	 *
+	 * The announcer carries the token rotated HERE, so a pointer move published under
+	 * a token it did not rotate is unexpressible, exactly as a retraction's is. It is
+	 * called once; calling it again announces the same move again, which is a
+	 * caller's bug and not one this guards (it holds nothing to guard it with).
+	 *
+	 * A move that is NOT announced (a caller that rotated and then threw) leaves the
+	 * token rotated, which is the safe direction: the next notification carries it.
+	 */
+	rotateForPointerMove(reason: string): (moved: Omit<StateRepointed, 'coherence' | 'kind'>) => void {
+		const coherence = this.rotate(`a pointer move: ${reason}`);
+		return (moved) => this.deliver({...moved, kind: 'repointed', coherence});
 	}
 
 	/**
