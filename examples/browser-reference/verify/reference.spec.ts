@@ -1,3 +1,5 @@
+import {readFileSync, writeFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import {expect, test, type Page} from '@playwright/test';
 import {installFakeWallet, type FakeChainOptions} from './wallet.js';
 
@@ -20,8 +22,13 @@ const APP_CHAIN = 1;
 /** What the page exposes on `window.__reference`, as far as these tests reach into it. */
 type Reference = {
 	indexer: {
-		progress(): Promise<{host: string; scope: string; phase: string}>;
-		generations(): Promise<{record: {stream: string}; canonical: boolean}[]>;
+		progress(): Promise<{
+			host: string;
+			scope: string;
+			phase: string;
+			hotUpdate?: {count: number; report: {outcome: string; generation?: {processor: string}}};
+		}>;
+		generations(): Promise<{record: {stream: string; processor: string}; canonical: boolean}[]>;
 		checkTxInclusion(q: {txHash: string}[]): Promise<Record<string, {status: string; basis: string}>>;
 	};
 	onRedeploy(next: unknown): Promise<{stream: string}>;
@@ -205,4 +212,77 @@ test('says whether the indexed state already accounts for a transaction', async 
 	// emitted no indexed event can never hit, so `absent` here means "not in the
 	// window" and NOT "did not happen".
 	expect(verdicts[`0x${'ff'.repeat(32)}`].status).toBe('absent');
+});
+
+/**
+ * AXIS ONE: an edited processor, taken by the WORKER without a page reload, and
+ * folded BESIDE the live state.
+ *
+ * The edit is a real one: `src/processor.ts` is rewritten on disk, the dev server
+ * the run is served from sees it, and what reaches the worker is whatever Vite's
+ * HMR delivers (put back afterwards, whatever happens). So every link is the
+ * shipped one: the worker entry's own `import.meta.hot.accept`, the host's
+ * `reconfigureFromHotUpdate`, the verdict on the progress push, and the tab's own
+ * accept that keeps the save from reloading the page.
+ *
+ * Asserted as facts: the page is the SAME page (a marker set from outside it
+ * survives), the tab was told `registered`, the generation that answers becomes
+ * the one the verdict named, the count is the edited handler's, and the number on
+ * screen never went below the incumbent's while the edit caught up.
+ */
+test('an edited processor is swapped in by the worker, beside the live state, without a reload', async ({page}) => {
+	const processorFile = fileURLToPath(new URL('../src/processor.ts', import.meta.url));
+	const original = readFileSync(processorFile, 'utf8');
+	const edited = original.replace('(counter?.value ?? 0) + 1', '(counter?.value ?? 0) + 2');
+	expect(edited).not.toBe(original);
+
+	const {errors} = await open(page);
+	await expect(page.locator('#transfers')).toHaveText('5');
+	const incumbent = await page.evaluate(async () => {
+		const app = (window as never as {__reference: Reference}).__reference;
+		return (await app.indexer.generations()).find((generation) => generation.canonical)?.record.processor;
+	});
+	// A reload would lose both of these.
+	await page.evaluate(() => {
+		const shown: string[] = [];
+		new MutationObserver(() => shown.push(document.getElementById('transfers')?.textContent ?? '')).observe(
+			document.getElementById('transfers')!,
+			{childList: true, characterData: true, subtree: true},
+		);
+		Object.assign(window, {__survivor: 'not-reloaded', __transfersShown: shown});
+	});
+
+	try {
+		writeFileSync(processorFile, edited);
+
+		await expect(page.locator('#reload')).toContainText('processor edited: folding beside the live state');
+		const verdict = await page.evaluate(async () => {
+			const app = (window as never as {__reference: Reference}).__reference;
+			return (await app.indexer.progress()).hotUpdate;
+		});
+		expect(verdict?.report.outcome).toBe('registered');
+		expect(verdict?.report.generation?.processor).not.toBe(incumbent);
+
+		// the edit catches up and becomes the generation that answers, under the edited handler
+		await expect
+			.poll(async () =>
+				page.evaluate(async () => {
+					const app = (window as never as {__reference: Reference}).__reference;
+					return (await app.indexer.generations()).find((generation) => generation.canonical)?.record.processor;
+				}),
+			)
+			.toBe(verdict?.report.generation?.processor);
+		await expect(page.locator('#transfers')).toHaveText('10');
+
+		const after = await page.evaluate(() => ({
+			survivor: (window as never as {__survivor?: string}).__survivor,
+			shown: (window as never as {__transfersShown: string[]}).__transfersShown,
+		}));
+		expect(after.survivor).toBe('not-reloaded');
+		// NEVER A BLANK APP: the incumbent answered until the edit had caught up
+		expect(after.shown.map(Number).every((value) => value >= 5)).toBe(true);
+		expect(errors).toEqual([]);
+	} finally {
+		writeFileSync(processorFile, original);
+	}
 });

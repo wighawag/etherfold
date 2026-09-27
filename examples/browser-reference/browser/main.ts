@@ -20,7 +20,7 @@ import {abi, tokenProcessor} from '../src/processor.js';
  * a block: it holds a PORT to the worker (ADR-0082), hands it the wallet and the
  * settings, and reads what the worker indexed.
  *
- * Four things in here are load-bearing and easy to get wrong. Each is marked
+ * Three things in here are load-bearing and easy to get wrong. Each is marked
  * HAZARD where it appears, and two of them are bugs that actually shipped in
  * this repository and were caught only by driving a real browser.
  */
@@ -220,24 +220,70 @@ async function start() {
 	 * AXIS ONE: the developer edited the reducer.
 	 *
 	 * The processor is CODE, and code runs where the fold runs: it is imported by
-	 * `indexer.worker.ts` and cannot be sent across the port (ADR-0082). So there is
-	 * no handler for it here, and none is needed. A save that edits
-	 * `src/processor.ts` reaches no module that accepts it, so the dev server
-	 * RELOADS the page, and the worker it starts imports the edited processor.
+	 * `indexer.worker.ts`, and the edit is taken THERE. Under Vite a module worker
+	 * is an HMR client of its own, so the worker's own `import.meta.hot.accept`
+	 * is handed the edited module and folds it as a new generation BESIDE the live
+	 * one, which goes on answering every read until the edit has caught up. No page
+	 * reload, and no blank app while it catches up.
 	 *
-	 * There is nothing to remember and no `version` to bump (ADR-0086). A module a
-	 * dev server hands the worker has no bytes to hash, so it is named by a
-	 * derivation over its HANDLER SOURCES: an edited handler is a different fold,
-	 * which the worker builds and folds from the start block, and a save that
-	 * changed nothing is the same fold, whose warm state is kept. The core cannot
-	 * know which part of the state an edit invalidated, and "all of it" is the only
-	 * answer that cannot be wrong.
-	 *
-	 * What a reload does not keep is the page: the warm swap without one
-	 * (`updateProcessor`, `reconfigureFromHotUpdate`) is the MAIN-THREAD hook's,
-	 * because only there does the fold share a heap with the module the bundler
-	 * hands over. See the guide, "Hot reload: two independent axes".
+	 * HAZARD 3 -- AN IMPORTER THAT DOES NOT ACCEPT. This tab imports the processor
+	 * module too (for the ABI and the entity declarations the reads are typed
+	 * from), and Vite propagates an update through EVERY importer: one that does
+	 * not accept it turns the save into a full page reload, and the worker never
+	 * gets its warm swap (measured:
+	 * `work/notes/findings/a-module-worker-receives-hmr-under-vite.md`). So the tab
+	 * ACCEPTS it and does nothing with it, because the fold is not here. (The reads
+	 * go on using the declarations this tab loaded with, which is right as long as
+	 * the edit is to a handler; an edited entity declaration needs a page reload.)
 	 */
+	if (import.meta.hot) {
+		import.meta.hot.accept('../src/processor.js', () => {
+			// the worker takes it; see `indexer.worker.ts`
+		});
+	}
+
+	/**
+	 * HAZARD 3's QUIETER SIBLING: A SWITCH NOBODY ANNOUNCES. When the new generation
+	 * catches up and the pointer moves to it, the reads answer from it at once, but
+	 * a pointer move names no block, so `onStateMoved` stays silent until the fold
+	 * next applies one. On a chain that has gone quiet (a local node between
+	 * transactions) that is never, and the page keeps showing the old answer. What
+	 * DOES move on the switch is the progress push, so while a generation is
+	 * catching up this tab asks, on each push, whether it answers yet, and re-reads
+	 * once it does. (`reconfigure` below waits the same way.)
+	 */
+	let switchingTo: {stream: string; processor: string} | undefined;
+	async function rereadOnceSwitched(): Promise<void> {
+		const waitingFor = switchingTo;
+		if (!waitingFor) return;
+		const canonical = (await indexer.generations()).find((generation) => generation.canonical)?.record;
+		if (canonical?.stream !== waitingFor.stream || canonical.processor !== waitingFor.processor) return;
+		if (switchingTo === waitingFor) switchingTo = undefined;
+		await render();
+	}
+
+	/**
+	 * What the worker's hot update DID, which reaches this tab on the progress push
+	 * because the tab did not make the call: the same three verdicts the main
+	 * thread's `reconfigureFromHotUpdate` answers. Rendered in section 6.
+	 */
+	function renderHotUpdate(report: NonNullable<HostProgress['hotUpdate']>['report']) {
+		switch (report.outcome) {
+			case 'registered':
+				switchingTo = report.generation;
+				el('reload').textContent =
+					`processor edited: folding beside the live state, which keeps answering until the edit catches up ` +
+					`(${report.generation.processor})`;
+				return;
+			case 'unchanged':
+				el('reload').textContent =
+					'nothing changed: the handlers are the fold already running, so the warm state was kept.';
+				return;
+			case 'failed':
+				el('reload').textContent = `that save did not build, and nothing changed: ${report.message}`;
+				return;
+		}
+	}
 
 	/**
 	 * AXIS TWO: the contract was redeployed.
@@ -263,8 +309,8 @@ async function start() {
 	 * changed what its events MEAN while keeping their signatures -- does not,
 	 * because it cannot happen without a PROCESSOR change. New meaning has to be
 	 * implemented by new handler code, and writing that is the developer's job.
-	 * So it travels AXIS ONE: edit the handler, and the worker re-indexes under it.
-	 * There is nothing for this function to detect.
+	 * So it travels AXIS ONE: edit the handler, and the worker folds the edit
+	 * beside the live state. There is nothing for this function to detect.
 	 *
 	 *   - ABI changed at the same address .......... reconfigure({source})
 	 *   - event MEANING changed ..................... edit the processor's handler
@@ -290,6 +336,7 @@ async function start() {
 		const {generation, added} = await indexer.reconfigure({
 			source: {chainId: String(CHAIN.id), contracts: [next]},
 		});
+		if (added) switchingTo = generation.record;
 		// `follows` says what the new generation COSTS: a generation that follows
 		// re-folds logs already stored, and one that does not asks the node for its
 		// history again (a new event is a new topic, so its logs were never fetched).
@@ -326,10 +373,12 @@ async function start() {
 	 * `onProgress` is how far the fold has got (a STATE, handed to you at once on
 	 * subscribing) and drives the progress line and the pending verdicts.
 	 * `onStateMoved` is WHAT MOVED (an EVENT, silent until the fold next applies a
-	 * block, a reorg retracts one, or a promotion changes which generation
-	 * answers): it is the signal to RE-READ. Because it is silent on attaching, the
-	 * first read is made once, by hand, right after it.
+	 * block or a reorg retracts one): it is the signal to RE-READ. Because it is
+	 * silent on attaching, the first read is made once, by hand, right after it. A
+	 * generation switch is the one re-read it does not announce, which is what
+	 * `rereadOnceSwitched` in section 5 is for.
 	 */
+	let hotUpdatesShown = 0;
 	indexer.onProgress((progress: HostProgress) => {
 		el('progress').textContent =
 			progress.lastToBlock !== undefined && progress.latestBlock !== undefined && progress.latestBlock > 0
@@ -337,6 +386,12 @@ async function start() {
 				: 'waiting for the node...';
 		// A host that STOPPED says why, rather than leaving a number that stopped moving.
 		if (progress.failure) el('error').textContent = `${progress.failure.name}: ${progress.failure.message}`;
+		// A hot update the WORKER took (axis one), counted so a repeated verdict is news.
+		if (progress.hotUpdate && progress.hotUpdate.count !== hotUpdatesShown) {
+			hotUpdatesShown = progress.hotUpdate.count;
+			renderHotUpdate(progress.hotUpdate.report);
+		}
+		void rereadOnceSwitched();
 		void refreshPending();
 	});
 

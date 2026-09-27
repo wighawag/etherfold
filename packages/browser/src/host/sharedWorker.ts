@@ -170,7 +170,7 @@ export function sharedWorkerHost(create: () => SharedWorker): HostAccess {
  */
 export function hostIndexerInThisSharedWorker<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined>(
 	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
-): IndexerHost {
+): IndexerHost<ABI, ProcessResultType, ProcessorConfig> {
 	const scope = thisSharedWorker();
 	// An entry that built its own provider takes none from a tab, so the tabs' are not
 	// pooled: their connects reach the host as they were sent, and the host refuses a

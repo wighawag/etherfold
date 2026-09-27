@@ -22,6 +22,7 @@ import type {
 	Abi,
 	GenerationRecord,
 	IndexingSource,
+	ReconfigureReport,
 	StateMoved,
 	TxInclusionQuery,
 	TxInclusionVerdict,
@@ -230,6 +231,35 @@ export type HostProgress = {
 	 * `failure`.
 	 */
 	readonly streamSeed?: StreamSeedState;
+	/**
+	 * WHAT THE LAST HOT UPDATE THIS HOST TOOK DID, or ABSENT where it has taken none.
+	 *
+	 * A worker host takes an edited processor from the worker entry's OWN
+	 * `import.meta.hot.accept` (`IndexerHost.reconfigureFromHotUpdate`): the module
+	 * arrives inside the worker, so the call is made there and no tab made it. This
+	 * is how a tab learns the verdict anyway, on the push it already listens to.
+	 * See `HostHotUpdate`.
+	 */
+	readonly hotUpdate?: HostHotUpdate;
+};
+
+/**
+ * THE LAST HOT UPDATE A HOST TOOK, as a tab is told it.
+ *
+ * `report` is the `ReconfigureReport` the call answered, BY VALUE: the same
+ * three verdicts the main thread's `reconfigureFromHotUpdate` answers, because
+ * the host answers it with that very function, and a tab's reload indicator
+ * branches on one contract whichever thread the fold runs on (ADR-0085).
+ *
+ * `count` is how many hot updates this host has taken, so two saves that answer
+ * the same verdict (`unchanged` twice, or the same `failed`) are two things that
+ * happened rather than one push suppressed as a repeat. It counts from this
+ * host's start, and a restarted host starts again from nothing, as it starts its
+ * generations again.
+ */
+export type HostHotUpdate = {
+	readonly count: number;
+	readonly report: ReconfigureReport;
 };
 
 /**
@@ -780,7 +810,9 @@ export function sameProgress(a: HostProgress, b: HostProgress): boolean {
 		// Small plain values that change a handful of times per boot, so comparing
 		// their serialisations is exact and cheap.
 		JSON.stringify(a.publication) === JSON.stringify(b.publication) &&
-		JSON.stringify(a.streamSeed) === JSON.stringify(b.streamSeed)
+		JSON.stringify(a.streamSeed) === JSON.stringify(b.streamSeed) &&
+		// A count per hot update, so a repeated verdict is still news.
+		a.hotUpdate?.count === b.hotUpdate?.count
 	);
 }
 

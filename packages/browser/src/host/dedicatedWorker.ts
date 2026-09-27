@@ -143,7 +143,7 @@ export function dedicatedWorkerHost(create: () => Worker): HostAccess {
  */
 export function hostIndexerInThisWorker<ABI extends Abi, ProcessResultType, ProcessorConfig = undefined>(
 	spec: HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig>,
-): IndexerHost {
+): IndexerHost<ABI, ProcessResultType, ProcessorConfig> {
 	return serveIndexerHost(spec, thisDedicatedWorker());
 }
 

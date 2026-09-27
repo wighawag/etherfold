@@ -1,0 +1,147 @@
+[
+  {
+    "scenario": "worker-accepts",
+    "log": [
+      {
+        "side": "tab",
+        "event": "started",
+        "hot": "object"
+      },
+      {
+        "side": "worker",
+        "event": "started",
+        "hot": "object",
+        "value": 1
+      },
+      {
+        "side": "worker",
+        "event": "accepted",
+        "value": 2
+      }
+    ],
+    "reloaded": false,
+    "console": [
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] hot updated: /processor.js via /worker.js?worker_file&type=module"
+    ]
+  },
+  {
+    "scenario": "tab-accepts",
+    "log": [
+      {
+        "side": "tab",
+        "event": "started",
+        "hot": "object"
+      },
+      {
+        "side": "worker",
+        "event": "started",
+        "hot": "object",
+        "value": 2
+      }
+    ],
+    "reloaded": true,
+    "console": [
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected."
+    ]
+  },
+  {
+    "scenario": "worker-accepts-tab-imports",
+    "log": [
+      {
+        "side": "tab",
+        "event": "started",
+        "hot": "object"
+      },
+      {
+        "side": "worker",
+        "event": "started",
+        "hot": "object",
+        "value": 2
+      }
+    ],
+    "reloaded": true,
+    "console": [
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected."
+    ]
+  },
+  {
+    "scenario": "both-accept",
+    "log": [
+      {
+        "side": "tab",
+        "event": "started",
+        "hot": "object"
+      },
+      {
+        "side": "worker",
+        "event": "started",
+        "hot": "object",
+        "value": 1
+      },
+      {
+        "side": "worker",
+        "event": "accepted",
+        "value": 2
+      },
+      {
+        "side": "tab",
+        "event": "accepted",
+        "value": 2,
+        "url": "http://localhost:5173/processor.js"
+      }
+    ],
+    "reloaded": false,
+    "console": [
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] connecting...",
+      "[vite] connected.",
+      "[vite] hot updated: /processor.js via /worker.js?worker_file&type=module",
+      "[vite] hot updated: /processor.js via /main.js"
+    ]
+  },
+  {
+    "scenario": "shared-worker-accepts",
+    "log": [
+      {
+        "side": "tab",
+        "event": "started",
+        "hot": "object"
+      },
+      {
+        "side": "worker",
+        "event": "started",
+        "hot": "object",
+        "value": 1
+      },
+      {
+        "side": "worker",
+        "event": "accepted",
+        "value": 2
+      }
+    ],
+    "reloaded": false,
+    "console": [
+      "[vite] connecting...",
+      "[vite] connected."
+    ]
+  }
+]
