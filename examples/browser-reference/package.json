@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"license": "AGPL-3.0-only",
-	"description": "The minimal reference wiring for indexing one contract in a browser tab: EIP-1193 from the user's wallet, IndexedDB, results as stores, and both hot-reload axes.",
+	"description": "The minimal reference wiring for indexing one contract in a browser app: the indexer in a dedicated worker, EIP-1193 from the user's wallet handed to it as a port, IndexedDB, results read across the port, and both hot-reload axes.",
 	"dependencies": {
 		"@etherfold/browser": "workspace:*",
 		"@etherfold/processor-entities": "workspace:*",
