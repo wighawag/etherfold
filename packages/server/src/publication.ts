@@ -16,7 +16,12 @@ import {
 	type EntityDeclaration,
 	type SnapshotHead,
 } from '@etherfold/processor-entities';
-import {produceStateSnapshot, VersionedStateStore} from '@etherfold/state-store-sqlite';
+import {
+	HistoryNotRetainedError,
+	produceStateSnapshot,
+	VersionedStateStore,
+	type SnapshotHistory,
+} from '@etherfold/state-store-sqlite';
 import type {RemoteSQL} from 'remote-sql';
 import {generationRegistryPortOnSQL, readHeldGenerations} from './generations.js';
 
@@ -87,7 +92,11 @@ export type PublishedStateSnapshot = {
 	readonly contentHash: string;
 	/** The block the rows are AS OF: the highest recorded block at or below the cut. */
 	readonly takenAt: BlockPointer;
-	/** The history floor the installed store reports. Equal to `takenAt.number` (history `none`). */
+	/**
+	 * The history floor the installed store reports: the body carries the rows live
+	 * at it and every later block's changes up to `takenAt`. Equal to
+	 * `takenAt.number` for history `none`.
+	 */
 	readonly floor: number;
 	/** The cut: `tip - finality`, and the `lastToBlock` of the resume position the body carries. */
 	readonly cut: number;
@@ -129,6 +138,8 @@ export type ProducedPublication = {
 	readonly tip: number;
 	readonly finality: number;
 	readonly cut: number;
+	/** The history the snapshot was asked to carry below the cut. */
+	readonly history: SnapshotHistory;
 	/** The snapshot's head: the first line of its body. */
 	readonly head: SnapshotHead;
 	/** Every body to write. Write them BEFORE the index that names them. */
@@ -152,7 +163,9 @@ export type PublicationRefusalReason =
 	/** The entity declarations to read the generation's tables with could not be had. */
 	| 'no-declarations'
 	/** An existing publication index cannot be read, so rewriting it would forget its entries. */
-	| 'unreadable-index';
+	| 'unreadable-index'
+	/** The history asked for reaches below what the database retains: its versions there were pruned. */
+	| 'history-not-retained';
 
 /** A publication this producer will not make. Nothing was written when it is thrown. */
 export class PublicationRefusedError extends Error {
@@ -201,6 +214,14 @@ export type ProducePublicationOptions = {
 		readonly id: GenerationId;
 		readonly indexer: string;
 	}) => Promise<Iterable<EntityDeclaration>>;
+	/**
+	 * How much history the snapshot carries below the cut (ADR-0095): `'none'` (the
+	 * default) puts its floor at the cut, a depth `N` puts it `N` blocks below, and
+	 * `'all'` at the first block the generation recorded. A floor below what the
+	 * database retains is refused (`history-not-retained`), naming both blocks,
+	 * rather than silently raised.
+	 */
+	readonly history?: SnapshotHistory;
 	readonly savedAt?: string;
 };
 
@@ -218,14 +239,15 @@ export async function readGenerationBundle(
 
 /**
  * PRODUCE THE PUBLICATION OF A DATABASE'S CANONICAL GENERATION: a format-2 state
- * snapshot at `tip - finality`, history `none`, and the index entry naming it.
+ * snapshot at `tip - finality`, carrying the history asked for (`none` by
+ * default), and the index entry naming it.
  *
  * A pure READ of the database: it opens no registry (opening one sweeps, which is
  * a write), claims no store and writes no file. Refuses, with a
  * `PublicationRefusedError` naming why, a database with no canonical generation, a
  * canonical generation that is not `expectedProcessor`, a stream config the
- * generation was not folded under, and a generation that has folded nothing up to
- * the cut.
+ * generation was not folded under, a generation that has folded nothing up to
+ * the cut, and a history reaching below what the database retains.
  */
 export async function producePublication(
 	db: RemoteSQL,
@@ -279,12 +301,22 @@ export async function producePublication(
 	}
 
 	const resume: LastSync<Abi> = syncedThrough(stored, cut);
-	const produced = await produceStateSnapshot(store, {
-		at: cut,
-		processor: generation.processor,
-		cursor: {key: SYNC_CURSOR_KEY, value: serializeLastSync(resume)},
-		...(options.savedAt === undefined ? {} : {savedAt: options.savedAt}),
-	});
+	const history = options.history ?? 'none';
+	let produced: Awaited<ReturnType<typeof produceStateSnapshot>>;
+	try {
+		produced = await produceStateSnapshot(store, {
+			at: cut,
+			processor: generation.processor,
+			history,
+			cursor: {key: SYNC_CURSOR_KEY, value: serializeLastSync(resume)},
+			...(options.savedAt === undefined ? {} : {savedAt: options.savedAt}),
+		});
+	} catch (err) {
+		if (err instanceof HistoryNotRetainedError) {
+			throw new PublicationRefusedError('history-not-retained', err.message);
+		}
+		throw err;
+	}
 	const bytes = new Uint8Array(await new Response(produced.document).arrayBuffer());
 	const contentHash = await contentHashOf(bytes);
 	const body: PublicationBody = {name: stateSnapshotBodyName(contentHash), contentHash, bytes};
@@ -297,6 +329,7 @@ export async function producePublication(
 		tip,
 		finality,
 		cut,
+		history,
 		head: produced.head,
 		bodies: [body],
 		entries: {

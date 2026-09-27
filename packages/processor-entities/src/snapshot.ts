@@ -282,8 +282,10 @@ type Candidate = {readonly location: SnapshotLocation; readonly head: SnapshotHe
  * (`SnapshotAwareStateStore.bootstrap`), so the whole document is never held. A
  * download that fails PART-WAY therefore throws rather than failing over, because
  * the install has started: for a snapshot without history that leaves only the
- * floor marker over an empty store, and the next boot (`openAndBootstrap`, which
- * finds no cursor) bootstraps again.
+ * floor marker over an empty store, and with history the floor and some later
+ * blocks with no cursor (it rides the last block). Either way the next boot
+ * (`openAndBootstrap`, which finds no cursor) bootstraps again, and the install
+ * replaces what the interrupted one left (`SnapshotAwareStateStore.bootstrap`).
  */
 export async function bootstrapFromSnapshot(
 	store: SnapshotAwareStateStore,

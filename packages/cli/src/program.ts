@@ -303,7 +303,7 @@ export function createProgram(deps: ProgramDependencies = {}): Command {
 				'the publication index (publication.json) in --out, which keeps the latest snapshot of EVERY generation ' +
 				'ever published there. It folds nothing and deletes nothing (ADR-0095)',
 		)
-		.usage('--db <libsql url> --out <dir> [-p <the bundle it is meant to publish>]');
+		.usage('--db <libsql url> --out <dir> [-p <the bundle it is meant to publish>] [--history <all|blocks|none>]');
 	registerInputs(publishCommand, 'publish');
 	// `-p` is the same INPUT as everywhere, and here it names what the publication must BE
 	const meant = publishCommand.options.find((option) => option.long === '--processor');

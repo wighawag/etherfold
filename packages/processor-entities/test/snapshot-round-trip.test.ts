@@ -8,7 +8,7 @@ import {
 	SnapshotProcessorMismatchError,
 	type NormalizedEntity,
 } from '@etherfold/state-store';
-import {produceStateSnapshot, VersionedStateStore} from '@etherfold/state-store-sqlite';
+import {produceStateSnapshot, VersionedStateStore, type SnapshotHistory} from '@etherfold/state-store-sqlite';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {beforeAll, describe, expect, it} from 'vitest';
 import {
@@ -244,6 +244,124 @@ describe.each(BACKENDS)('installed into a fresh $name store', (backend) => {
 			.catch((error: unknown) => error);
 		expect(refusal).toBeInstanceOf(SnapshotProcessorMismatchError);
 		expect(await store.getCurrent('token', {id: '1'})).toBeUndefined();
+	});
+});
+
+/**
+ * THE HISTORY OPTION (ADR-0095): the same database, published with its floor
+ * below the cut, installs into every backend by replaying the blocks between.
+ */
+describe('a snapshot that carries the history it was asked for', () => {
+	/** A cut above every recorded block but the tip's: its pointer is block 20. */
+	const HISTORY_CUT = 21;
+	const HISTORIES: readonly {history: SnapshotHistory; floor: number}[] = [
+		{history: 'none', floor: 20},
+		// 21 - 9 = 12 carries no logs: the floor points at 11, the highest recorded block below it
+		{history: 9, floor: 11},
+		{history: 'all', floor: 10},
+	];
+
+	async function publishedWith(history: SnapshotHistory): Promise<Uint8Array<ArrayBuffer>> {
+		const produced = await produceStateSnapshot(source, {
+			at: HISTORY_CUT,
+			processor: IDENTITY,
+			history,
+			cursor: {
+				key: SYNC_CURSOR_KEY,
+				value: serializeLastSync(
+					lastSync({lastFromBlock: HISTORY_CUT - 5, lastToBlock: HISTORY_CUT, latestBlock: TIP}),
+				),
+			},
+		});
+		return new Uint8Array(await new Response(produced.document).arrayBuffer());
+	}
+
+	/** Every read of every ledger id at the tip: what a store that keeps only the tip can be compared on. */
+	async function tipOf(store: {getCurrent(entity: string, id: Record<string, string>): Promise<unknown>}) {
+		const out: Record<string, unknown> = {};
+		for (const entity of source.declarations.values()) {
+			for (const id of LEDGER[entity.name]) {
+				out[`${entity.name} ${JSON.stringify(id)}`] = declared(entity, await store.getCurrent(entity.name, id));
+			}
+		}
+		return out;
+	}
+
+	async function sourceAsOf(at: number) {
+		return tipOf({getCurrent: (entity, id) => source.getAsOf(entity, id, at)});
+	}
+
+	describe.each(BACKENDS)('installed into a fresh $name store', (backend) => {
+		for (const {history, floor} of HISTORIES) {
+			it(`(history ${history}) answers as of every block from the floor to the cut as the source does`, async () => {
+				const store = await openSnapshotAware(await backend.open(burning.entities));
+				await store.bootstrap(await publishedWith(history), {processor: IDENTITY});
+
+				expect(store.snapshotOrigin).toBe(floor);
+				expect(await localPosition(store)).toBe(HISTORY_CUT);
+				// the live state is the source's as of the cut, on every backend, the tip-only one included
+				expect(await tipOf(store)).toEqual(await sourceAsOf(HISTORY_CUT));
+				if (!store.capabilities.asOf) return;
+				for (let at = floor; at <= HISTORY_CUT; at++) {
+					expect(await tipOf({getCurrent: (entity, id) => store.getAsOf(entity, id, at)}), `as of ${at}`).toEqual(
+						await sourceAsOf(at),
+					);
+				}
+				await expect(store.getAsOf('token', {id: '1'}, floor - 1)).rejects.toBeInstanceOf(BlockNotRetainedError);
+			});
+		}
+
+		it('reverts to a block inside its history, re-applies the same blocks to the same state, and refuses under it', async () => {
+			const store = await openSnapshotAware(await backend.open(burning.entities));
+			await store.bootstrap(await publishedWith('all'), {processor: IDENTITY});
+			const before = await tipOf(store);
+
+			await store.revertTo(11);
+			expect(await tipOf(store)).toEqual(await sourceAsOf(11));
+			for (const at of [13, 20]) {
+				const mutations = [];
+				for await (const mutation of source.changesAt(at)) mutations.push(mutation);
+				await store.applyBlock((await source.getBlock(at))!, mutations);
+			}
+
+			expect(await tipOf(store)).toEqual(before);
+			await expect(store.revertTo(9)).rejects.toBeInstanceOf(RevertBeyondSnapshotError);
+		});
+
+		it('installs completely on the next boot after a download that failed part-way through the history', async () => {
+			const bytes = await publishedWith('all');
+			const url = 'https://mirror.example/history.ndjson.gz';
+			// the download stops where the LAST block (the one the cursor rides) would have
+			// begun: every block before it has been inflated and applied by then. Cut on a
+			// line boundary so the failure is the same one whatever the platform's inflate
+			// buffers, which a byte-level cut would not be.
+			const lines = (await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text())
+				.split('\n')
+				.filter((line) => line.length > 0);
+			const lastBlock = lines.findLastIndex((line) => line.startsWith('{"block":'));
+			const stopped = new Uint8Array(
+				await new Response(
+					new Blob([lines.slice(0, lastBlock).join('\n') + '\n']).stream().pipeThrough(new CompressionStream('gzip')),
+				).arrayBuffer(),
+			);
+			const cutShort = (async () => new Response(stopped)) as unknown as typeof globalThis.fetch;
+			const first = await backend.open(burning.entities);
+			await expect(openAndBootstrap(first, url, {processor: IDENTITY, fetch: cutShort})).rejects.toThrow();
+			// the interrupted install left its floor and blocks above it, but no cursor
+			expect(await first.getCurrent('counter', {name: 'transfers'})).toBeDefined();
+			expect(await localPosition(first)).toBeUndefined();
+
+			const fetch = (async () => new Response(bytes)) as unknown as typeof globalThis.fetch;
+			const {store, outcome} = await openAndBootstrap(await backend.reopen(first, burning.entities), url, {
+				processor: IDENTITY,
+				fetch,
+			});
+
+			expect(outcome).toEqual({status: 'bootstrapped', at: 20, from: url});
+			expect(store.snapshotOrigin).toBe(10);
+			expect(await tipOf(store)).toEqual(await sourceAsOf(HISTORY_CUT));
+			expect(await localPosition(store)).toBe(HISTORY_CUT);
+		});
 	});
 });
 

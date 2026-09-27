@@ -335,7 +335,9 @@ Everything a deployment is configured with -- the chain, the source, the databas
 etherfold publish --db file:./etherfold.db --out ./web/static/indexed-states -p ./dist/processor.bundle.js
 ```
 
-**It READS a database `build`, `run` or `index` wrote, and writes files; it folds nothing and deletes nothing** (ADR-0095). What it writes is the CANONICAL generation's state as a format-2 state snapshot, the document `bootstrapFromSnapshot` / `openAndBootstrap` already install, with history `none`: the live rows at one block and the resume position that belongs to them.
+**It READS a database `build`, `run` or `index` wrote, and writes files; it folds nothing and deletes nothing** (ADR-0095). What it writes is the CANONICAL generation's state as a format-2 state snapshot, the document `bootstrapFromSnapshot` / `openAndBootstrap` already install: by default (history `none`) the live rows at one block and the resume position that belongs to them.
+
+**`--history` chooses how much history it carries below the cut.** `none` (the default) is the live rows at the cut; a depth `N` in BLOCKS puts the snapshot's FLOOR `N` blocks below the cut, clamped at the first block the generation recorded; `all` puts it there. The body then carries the rows live at the floor and every later block's changes, and a tab that installs it can read as of, and revert to, any block from the floor up (and refuses under it). A floor below what the database still retains (the versions its folding deployment's `--retention` pruned) is REFUSED, naming both blocks, rather than silently shortened.
 
 **It cuts at `tip - finality`, not at the tip.** `tip` is the block the canonical generation has folded through and `finality` is the stream config's (`STREAM_FINALITY`, the same variable the folding commands read, and it must be the one the database was folded under: a different one is refused, naming both config hashes). A snapshot inside the reorg window could not absorb a reorg reaching under it. The rows are the database's own as-of read at the cut; the store records only blocks that carry logs, so the snapshot points at the highest recorded block at or below the cut (identical rows), while the resume position it carries is the cut itself, narrowed from the stored cursor, so a tab that installs it re-reads exactly the blocks it must and applies none twice.
 
@@ -343,13 +345,14 @@ etherfold publish --db file:./etherfold.db --out ./web/static/indexed-states -p 
 
 **`-p` names what the publication must BE.** Optional; given, a database whose canonical generation is another processor is REFUSED, naming both identities. A `build` whose final promotion failed (it is fail-soft) otherwise leaves the previous processor canonical, and publishing that under an app shipping the new bundle would leave every tab without an entry. Without `-p`, the declarations the tables were made from are read from the bundle the generation stores beside its state (ADR-0092).
 
-**It refuses, writing nothing and exiting `1` with the reason**, a database with no canonical generation, one whose canonical generation has folded nothing up to the cut, one that is not the processor `-p` names, and an `--out` holding a `publication.json` it cannot read (rewriting it would forget its entries). On success it prints what it wrote, one `key: value` per line, including the body's `contentHash`, which a release may pin.
+**It refuses, writing nothing and exiting `1` with the reason**, a database with no canonical generation, one whose canonical generation has folded nothing up to the cut, one that is not the processor `-p` names, a `--history` reaching below what the database retains, and an `--out` holding a `publication.json` it cannot read (rewriting it would forget its entries). On success it prints what it wrote, one `key: value` per line, including the body's `contentHash`, which a release may pin.
 
 | input | |
 | --- | --- |
 | `--db <url>` | REQUIRED (or `DB`). The database to publish. A `file:` URL naming no file is refused rather than created |
 | `--out <dir>` | REQUIRED. The directory the publication is written into, created if absent. Point it at the same directory every time |
 | `-p, --processor <bundle>` | optional. The bundle the publication is meant to be of |
+| `--history <all\|blocks\|none>` | optional, default `none`. How much history the snapshot carries below its cut |
 
 Everything a FOLD is configured with (the chain, the source, the store, the promotion policy, the port) belongs to the command that folded the database, so each of those flags is refused here with the reason; `--indexer` is refused too, because the name is learned from the rows, as `serve` learns it.
 
