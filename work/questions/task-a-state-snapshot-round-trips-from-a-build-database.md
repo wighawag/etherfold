@@ -1,0 +1,11 @@
+<!-- dorfl-sidecar: item=task:a-state-snapshot-round-trips-from-a-build-database type=task slug=a-state-snapshot-round-trips-from-a-build-database allAnswered=false -->
+
+## Q1
+
+**'task:a-state-snapshot-round-trips-from-a-build-database' was bounced — how should we proceed?**
+
+> Acceptance criterion 2 ("The install streams: it never materialises the whole row set, asserted with a document larger than one chunk") contradicts ADR-0095 and the store seam. ADR-0095 says installing format 2 "is replaying those blocks through applyBlock ... so no backend gains an install path". But `StateStoreBackend.applyBlock` (packages/state-store/src/store.ts) applies "one block ... plus every mutation, as ONE atomic unit", and every backend refuses a second call at the same block number: MemoryStateStore, state-store-indexeddb (store.ts:364) and state-store-patch (store.ts:232) with blockAlreadyRecorded, state-store-sqlite (store.ts:415) with blockNotAboveTip. With history `none`, which is the only mode this task builds, the whole live row set is ONE block (the floor), so replaying through applyBlock means holding every live row at once. A streaming applyBlock does not fix it either: an IndexedDB transaction cannot stay open across network reads, and the SQLite store sends a block as one pre-built batch. Suggested re-scope, choose one: (a) reword the criterion to "the install streams the DOCUMENT (gunzip and NDJSON parsed incrementally, never holding the whole body) and holds at most ONE block's mutations at a time", accepting that a `none` snapshot's floor block is held whole, which is what ADR-0095 as written implies; or (b) if the whole row set must truly never be in memory, amend ADR-0095 to allow a snapshot-install path that writes the floor block in several parts on every backend (IndexedDB, SQLite, patch, memory, plus a conformance case), and decide how that stays atomic or crash-safe. Under the current write-the-origin-marker-first order, a crash mid-install leaves partial rows that a later bootstrap from a DIFFERENT snapshot would not clear. Once decided, the rest of the task (format-2 head, columnar per-entity NDJSON+gzip body, as-of producer over the SQLite backend, removing format 1, migrating the conformance and bootstrap suites) can go ahead as written.
+
+<!-- q1 fields: id=q1 kind=stuck -->
+
+**Your answer** (write below this line):
