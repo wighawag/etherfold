@@ -122,17 +122,18 @@ const indexer = createIndexerState(
 		// SHA-256 of the bytes, and instantiates the processor FROM those bytes.
 		processorBundle: {url: '/processor.bundle.js'},
 		// `published` is the snapshot the index names for THIS generation, when it
-		// names one: exactly the two arguments the existing bootstrap takes. Open
-		// through `openAndBootstrap` either way: it opens snapshot-aware first (which
-		// is what recovers a floor an earlier run recorded) and downloads nothing
-		// when this tab has already synced.
+		// names one: the arguments the existing bootstrap takes. Open through
+		// `openAndBootstrap` either way: it opens snapshot-aware first (which is what
+		// recovers a floor an earlier run recorded) and downloads nothing when this
+		// tab has already synced, unless the hook asks for the local state to be
+		// REPLACED (`replaceLocal`, see "A returning tab" below). Forward it.
 		createState: async (context, {signal}, bundle, published) => {
 			const {store, outcome} = await openAndBootstrap(
 				await createBrowserStateStore(definitionOf(bundle).entities, {
 					databaseName: `app-${CHAIN.id}-${context.stream}`,
 				}),
 				published?.locations ?? [],
-				{processor: published?.processor ?? 'none', finalityDepth: 12},
+				{processor: published?.processor ?? 'none', replaceLocal: published?.replaceLocal, finalityDepth: 12},
 			);
 			// A refusal is DATA rather than a throw: {status: 'bootstrapped', at, from} |
 			// {status: 'kept-local', at} | {status: 'not-bootstrapped', reason}.
@@ -167,6 +168,25 @@ From there it is an ordinary indexer: it starts at the cursor the snapshot carri
 | `no-entry` | nothing was published for your processor: the job has not run with this bundle yet |
 | `no-processor-identity` | the generation had no identity before its state was built: it runs a MODULE, not a `processorBundle` |
 | `unreachable` / `unreadable-format` | no location answered, or what answered is not an index this build reads (an app or a publisher out of date) |
+
+### A returning tab: catching up within a budget, or starting from the snapshot
+
+A tab that already holds state from an earlier visit does not take the snapshot on arrival: it catches up from its own cursor, which after a short absence is a few requests. After a long one it is not, and two things can go wrong, so the tab switches to the published snapshot MID-RUN instead ([ADR-0096](../../adr/0096-a-returning-tab-catches-up-within-a-time-budget-or-starts-from-the-snapshot.md)):
+
+- **The node refuses the catch-up** as needing archive access (`ArchiveRefusedError`), which a public node does for history it does not keep. No retry fixes that, so a tab whose publication names a snapshot further along than its own state switches to it. With no usable snapshot the refusal stops the tab exactly as it always did.
+- **The catch-up would take too long.** After every advance the tab estimates how long the rest of the gap to the tip will take, from the blocks its advances have covered so far and the time they took, and if that exceeds `catchUpWithinSeconds` it abandons the catch-up. The default is **30 seconds** (`DEFAULT_CATCH_UP_WITHIN_SECONDS`): it is a wait a user sits through looking at stale state, and a snapshot is sized by your state rather than your history, so installing one takes a few seconds.
+
+Switching is the ordinary install and nothing else: the hook builds the generation again and calls your `createState` with `published.replaceLocal` set to `true`, and `openAndBootstrap` then wipes the local state and installs the snapshot, as it does for a fresh tab. That is why the example above forwards `replaceLocal`: a `createState` that does not forward it keeps its local state, and the tab carries on as though no snapshot were published. After the switch the tab indexes forward from the snapshot's cursor, and `syncing.publication` says so: `{status: 'switched', reason, from, snapshot, at, left}`, where `reason` is `archive-refused` or `over-budget`, `left` is the block the local state had reached, and an `over-budget` switch also carries `estimateSeconds` and `budgetSeconds`.
+
+```ts
+createIndexerState(spec, {
+	publication: {locations: PUBLICATION},
+	// seconds, or 'always'
+	catchUpWithinSeconds: chainInfo.slowLogs ? 10 : 30,
+});
+```
+
+**`'always'`** means always catch up yourself, however long it takes: the snapshot is then taken only when the node refuses the catch-up. **The value is one number, and choosing it per chain is yours**: a chain with fast blocks or a rate-limited node wants a smaller one, and the natural place to decide is wherever your app already keeps its chain info (its deployment tooling, say). The library carries no per-chain table. A fresh tab is unaffected (it starts from the snapshot anyway), and so is a tab whose own state is already at or ahead of the snapshot, which has nothing better to switch to.
 
 **A refused bundle is the other outcome to handle.** A bundle that cannot run (not self-contained, bytes that do not load, a Content-Security-Policy that forbids instantiating from bytes) raises `ProcessorBundleRefusedError` from `init` naming the reason, and folds nothing.
 

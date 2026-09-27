@@ -454,4 +454,36 @@ describe('the boot path', () => {
 		expect(outcome).toEqual({status: 'kept-local', at: 5});
 		expect(asked).toEqual([]);
 	});
+
+	it('installs over a store that has already synced when asked to REPLACE local state, and it is behind', async () => {
+		const inner = await BACKENDS[0].open(processor.entities);
+		await inner.migrate();
+		await inner.writeCursor(SYNC_CURSOR_KEY, JSON.stringify(lastSync({lastToBlock: 5})));
+		const {fetch, asked} = network({'https://a.example/state.json': await published(SNAPSHOT_BLOCK)});
+
+		const {store, outcome} = await openAndBootstrap(inner, 'https://a.example/state.json', {
+			processor: 'proc-v1',
+			fetch,
+			replaceLocal: true,
+		});
+
+		expect(outcome).toMatchObject({status: 'bootstrapped', at: SNAPSHOT_BLOCK});
+		expect(asked).toEqual(['https://a.example/state.json']);
+		expect(await localPosition(store)).toBe(SNAPSHOT_BLOCK);
+	});
+
+	it('still keeps a store at or ahead of the snapshot when asked to replace local state', async () => {
+		const inner = await BACKENDS[0].open(processor.entities);
+		await inner.migrate();
+		await inner.writeCursor(SYNC_CURSOR_KEY, JSON.stringify(lastSync({lastToBlock: SNAPSHOT_BLOCK})));
+		const {fetch} = network({'https://a.example/state.json': await published(SNAPSHOT_BLOCK)});
+
+		const {outcome} = await openAndBootstrap(inner, 'https://a.example/state.json', {
+			processor: 'proc-v1',
+			fetch,
+			replaceLocal: true,
+		});
+
+		expect(outcome).toEqual({status: 'kept-local', at: SNAPSHOT_BLOCK});
+	});
 });

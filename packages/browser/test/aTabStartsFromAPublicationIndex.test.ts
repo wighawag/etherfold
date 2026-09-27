@@ -317,7 +317,13 @@ describe('a tab starts from a publication index', () => {
 		const body = `https://publications.example/app/${Object.values(index.snapshots)[0].body}`;
 
 		expect(tab.handed).toEqual([
-			{locations: [body], processor: NEW_PROCESSOR, entry: Object.values(index.snapshots)[0], index: INDEX},
+			{
+				locations: [body],
+				processor: NEW_PROCESSOR,
+				entry: Object.values(index.snapshots)[0],
+				index: INDEX,
+				replaceLocal: false,
+			},
 		]);
 		expect(tab.outcomes).toEqual([{status: 'bootstrapped', at: 102, from: body}]);
 		expect(publicationOf(tab)).toEqual({status: 'found', from: INDEX, snapshot: body, at: 102});
