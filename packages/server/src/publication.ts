@@ -1,5 +1,8 @@
 import {
 	generationDigestOf,
+	isPublicationIndex,
+	PUBLICATION_INDEX_FORMAT,
+	PUBLICATION_INDEX_NAME,
 	storedStreamOf,
 	streamConfigHashOf,
 	streamDigestOfSourceHashes,
@@ -12,6 +15,9 @@ import {
 	type LastSync,
 	type LogEvent,
 	type ProvidedStreamConfig,
+	type PublicationIndex,
+	type PublishedStateSnapshot,
+	type PublishedStreamSeed,
 	type StoredLogEvent,
 	type StreamSeed,
 	type StreamSeedCoverage,
@@ -22,7 +28,6 @@ import {
 	serializeLastSync,
 	syncedThrough,
 	SYNC_CURSOR_KEY,
-	type BlockPointer,
 	type EntityDeclaration,
 	type SnapshotHead,
 } from '@etherfold/processor-entities';
@@ -75,90 +80,11 @@ import {storedEmissionReplaySource} from './streamReader.js';
 // skipped and none applied twice.
 // ---------------------------------------------------------------------------------------------------
 
-/** The name of the publication index inside a publication (ADR-0095). Deliberately not a "head". */
-export const PUBLICATION_INDEX_NAME = 'publication.json';
-
-/**
- * The version of the publication index DOCUMENT.
- *
- * An index of another format is refused rather than rewritten: rewriting it would
- * forget the entries this build cannot read, and the whole point of the index is
- * that nothing a publication named is forgotten.
- */
-export const PUBLICATION_INDEX_FORMAT = 1;
-
-/**
- * ONE STATE SNAPSHOT a publication names: the latest one published for ONE
- * generation, keyed in the index by that generation's digest.
- *
- * Carries the generation's two halves apart (`stream`, `processor`) so a tab can
- * find the entry for its own processor on ANOTHER stream and say why it cannot use
- * it, rather than silently finding nothing.
- */
-export type PublishedStateSnapshot = {
-	/** The stream digest of the generation that computed the rows: its source and stream config. */
-	readonly stream: string;
-	/** The processor identity of that generation (ADR-0086): the SHA-256 of its bundle's bytes. */
-	readonly processor: string;
-	/** The body's file name, relative to the index. Content-addressed, so it never changes. */
-	readonly body: string;
-	/** `sha256:<hex>` over the DECOMPRESSED document, as ADR-0066 defines a content hash. */
-	readonly contentHash: string;
-	/** The block the rows are AS OF: the highest recorded block at or below the cut. */
-	readonly takenAt: BlockPointer;
-	/**
-	 * The history floor the installed store reports: the body carries the rows live
-	 * at it and every later block's changes up to `takenAt`. Equal to
-	 * `takenAt.number` for history `none`.
-	 */
-	readonly floor: number;
-	/** The cut: `tip - finality`, and the `lastToBlock` of the resume position the body carries. */
-	readonly cut: number;
-	/** When it was produced. Informational. */
-	readonly savedAt: string;
-};
-
-/**
- * ONE STREAM SEED a publication names: the latest one published for ONE STREAM,
- * keyed in the index by that stream's digest.
- *
- * Keyed by stream and not by generation, because a seed belongs to a stream and
- * not to a processor: an old build on the same stream still takes the newest seed
- * (ADR-0095). The body is core's seed envelope (`StreamSeed`, ADR-0063 to
- * ADR-0066), gzipped.
- */
-export type PublishedStreamSeed = {
-	/** The stream digest the seed is for, as a client recomputes it (ADR-0064). Also its key. */
-	readonly stream: string;
-	/** The body's file name, relative to the index. Content-addressed, so it never changes. */
-	readonly body: string;
-	/**
-	 * `sha256:<hex>` over the DECOMPRESSED payload (ADR-0066): the value
-	 * `streamSeedContentHash` computes and an install's `expectedContentHash` pins.
-	 */
-	readonly contentHash: string;
-	/** How far the seed reaches: the stream's start block up to the cut the state snapshot was taken at. */
-	readonly coverage: StreamSeedCoverage;
-	/** How many stored events it carries. Informational: what a tab downloads is proportional to it. */
-	readonly events: number;
-	/** When it was produced. Informational, and NOT inside the body, so the body stays deterministic. */
-	readonly savedAt: string;
-};
-
-/**
- * THE PUBLICATION INDEX (`publication.json`): the latest state snapshot PER
- * GENERATION, keyed by `generationDigestOf`, and the latest stream seed PER
- * STREAM, keyed by stream digest (absent until a publication was asked for one).
- *
- * Entries are never removed: an OLD build of an app runs the old processor and
- * finds the last snapshot of its own generation here, stale but valid (ADR-0095).
- * Keys this build does not know are carried through a republication untouched.
- */
-export type PublicationIndex = {
-	readonly format: number;
-	readonly snapshots: Readonly<Record<string, PublishedStateSnapshot>>;
-	readonly seeds?: Readonly<Record<string, PublishedStreamSeed>>;
-};
+// THE INDEX DOCUMENT ITSELF is `@etherfold/core`'s (`publication.ts`), because a
+// browser tab reads what this module writes and one contract has one definition.
+// Re-exported so this package's surface still names everything its producer answers.
+export {PUBLICATION_INDEX_FORMAT, PUBLICATION_INDEX_NAME};
+export type {PublicationIndex, PublishedStateSnapshot, PublishedStreamSeed};
 
 /** What a publication asked for a seed (`seed: true`) says about the one it produced. */
 export type ProducedStreamSeed = {
@@ -681,19 +607,8 @@ export function parsePublicationIndex(text: string): PublicationIndex {
 	} catch {
 		parsed = undefined;
 	}
-	const candidate = parsed as {format?: unknown; snapshots?: unknown; seeds?: unknown} | undefined;
-	if (
-		!candidate ||
-		typeof candidate !== 'object' ||
-		Array.isArray(candidate) ||
-		candidate.format !== PUBLICATION_INDEX_FORMAT ||
-		!candidate.snapshots ||
-		typeof candidate.snapshots !== 'object' ||
-		Array.isArray(candidate.snapshots) ||
-		// absent until a publication asks for a seed; present, it is a map like `snapshots`
-		(candidate.seeds !== undefined &&
-			(!candidate.seeds || typeof candidate.seeds !== 'object' || Array.isArray(candidate.seeds)))
-	) {
+	if (!isPublicationIndex(parsed)) {
+		const candidate = parsed as {format?: unknown} | undefined;
 		throw new PublicationRefusedError(
 			'unreadable-index',
 			`the existing ${PUBLICATION_INDEX_NAME} is not a publication index of format ${PUBLICATION_INDEX_FORMAT} ` +
@@ -702,7 +617,7 @@ export function parsePublicationIndex(text: string): PublicationIndex {
 				`forgets one. Move it aside, or publish into another directory.`,
 		);
 	}
-	return candidate as PublicationIndex;
+	return parsed;
 }
 
 /**

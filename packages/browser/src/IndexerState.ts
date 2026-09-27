@@ -31,6 +31,7 @@ import {
 	openMemoryGenerationRegistry,
 	resolveStreamConfig,
 	sameGeneration,
+	streamDigestOf,
 } from '@etherfold/core';
 import {pruneBudget, type StateStore, type WritableStateStore} from '@etherfold/state-store';
 import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
@@ -47,6 +48,15 @@ import {
 	type InstantiatedProcessorBundle,
 	type ProcessorBundleSource,
 } from './processorBundle.js';
+import {
+	publishedSeedLocationsFor,
+	publishedSnapshotFor,
+	readPublicationIndex,
+	type BrowserPublicationOptions,
+	type PublicationSnapshot,
+	type PublicationState,
+	type ReadPublication,
+} from './publication.js';
 import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import {withClaimPatience, type ClaimPatience} from './utils/claim.js';
 import {createRootStore, createStore} from './utils/stores.js';
@@ -310,6 +320,19 @@ export type SyncingState<ABI extends Abi> = {
 	 */
 	streamSeed?: StreamSeedState;
 	/**
+	 * WHAT THE PUBLICATION INDEX this hook was pointed at GAVE the generation it built
+	 * at `init`, or ABSENT where no `publication` option was given (ADR-0095).
+	 *
+	 * `found` names the snapshot `createState` was handed; `refused` says why there
+	 * was none (no entry for this generation, an entry only for ANOTHER stream, or no
+	 * index reachable at any location), and the tab indexes from the chain exactly as
+	 * it does with no snapshot. Its own field and not `error`, on the ground
+	 * `streamSeed` is: it is an ordinary outcome and never gates the boot. It reports
+	 * the LOOKUP; the install is the app's `openAndBootstrap` outcome, and the seed's
+	 * is `streamSeed`. See `PublicationState`.
+	 */
+	publication?: PublicationState;
+	/**
 	 * THIS TAB IS NO LONGER A WRITER, and WHY -- or ABSENT while it still is.
 	 *
 	 * The visible half of the demotion (`demoteToReader`): a writer whose mutation
@@ -473,6 +496,16 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 		 * processor declares rather than from a second copy the app imported.
 		 */
 		bundle?: InstantiatedProcessorBundle,
+		/**
+		 * THE STATE SNAPSHOT A PUBLICATION INDEX NAMES FOR THIS GENERATION, present
+		 * exactly when the hook was given a `publication` option, this is the generation
+		 * built at `init`, and the index has an entry for it (ADR-0095). It is the two
+		 * arguments the existing bootstrap takes, so the factory starts from it through
+		 * `openAndBootstrap(backend, published.locations, {processor: published.processor})`,
+		 * the snapshot-only mode. Absent, the factory opens its store as it would with no
+		 * snapshot, and why is on `SyncingState.publication`.
+		 */
+		published?: PublicationSnapshot,
 	) => WritableStateStore | Promise<WritableStateStore>;
 	/**
 	 * The fold, over that state. The FACTORY, not its result: `processorIdentity` NAMES the generation.
@@ -704,6 +737,23 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * caller's own source and no location makes it right.
 		 */
 		seed?: BrowserStreamSeedOptions;
+		/**
+		 * START FROM A PUBLICATION INDEX (`publication.json`, ADR-0095): the list of
+		 * locations a build publishes one at, failed over between in order.
+		 *
+		 * At `init` the hook reads the first index any location serves and picks the
+		 * STATE SNAPSHOT entry for the generation it builds, by that generation's stream
+		 * digest AND processor identity: the entry is handed to `createState` (its fourth
+		 * argument), which starts from it through the existing bootstrap. An entry for
+		 * this processor over another stream is refused by name and nothing is
+		 * installed. The STREAM SEED the index lists for this stream is installed into
+		 * `keepStream` ONLY when `seed` asks for it; by default only the index and the
+		 * snapshot are fetched. What the lookup gave is on `syncing.publication`.
+		 *
+		 * The snapshot entry is chosen by identity before the state is built, so the
+		 * generation needs one by then: run the published bundle (`processorBundle`).
+		 */
+		publication?: BrowserPublicationOptions;
 		/**
 		 * WHEN the canonical pointer moves to a generation added beside the live one.
 		 *
@@ -982,6 +1032,8 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		processorConfig?: ProcessorConfig,
 		arrival?: {processorIdentity?: string; processorBundle?: ProcessorBundleSource},
 		source?: IndexingSource<ABI>,
+		/** The publication index `init` read, for the ONE generation `init` builds. See `publication`. */
+		publication?: ReadPublication,
 	) {
 		const processorIdentity = arrival?.processorIdentity;
 		const processorBundle = arrival?.processorBundle;
@@ -1003,7 +1055,19 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				// THE BUNDLE ARRIVES FIRST, before any state is built: a refused bundle
 				// (`ProcessorBundleRefusedError`) then claims no store and folds nothing.
 				const bundle = processorBundle ? await arriveFromBundle(processorBundle) : undefined;
-				return withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience, bundle));
+				// THE ENTRY FOR THIS GENERATION, chosen by the identity it WILL be registered
+				// under: the bundle's bytes, or an identity the arrival handed over. A module
+				// arrival has none yet (it is derived from the fold, built after this), so it
+				// is refused by name rather than matched on half its generation.
+				const chosen = publication
+					? publishedSnapshotFor(publication, {
+							stream: context.stream,
+							processor: bundle?.identity ?? processorIdentity,
+						})
+					: undefined;
+				if (chosen) setSyncing({publication: chosen.state});
+				const published = chosen?.snapshot;
+				return withClaimPatience(claimWithinSeconds, (patience) => createState(context, patience, bundle, published));
 			},
 			createProcessor: async (state: unknown, context: GenerationContext) => {
 				// The SAME arrival the state waited on (one load per source), so the bytes this
@@ -1204,11 +1268,42 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		const config = {...{}, keepStream: options?.keepStream, ...(indexerSetup.config || {})};
 		const source = indexerSetup.source;
 
+		// THE PUBLICATION INDEX, read BEFORE the seed install and the generation: the seed
+		// it lists (when asked for) is installed below, and the snapshot entry is chosen
+		// when the generation's state is built, by the identity it is registered under.
+		const publication = options?.publication;
+		let published: ReadPublication | undefined;
+		let seed = options?.seed;
+		if (publication) {
+			if (publication.seed && seed) {
+				throw new Error(
+					`both a \`seed\` and a \`publication\` asking for its seed were given: a boot installs ONE stream seed, ` +
+						`from one place. Drop \`seed\` to take the one the publication lists, or drop \`publication.seed\`.`,
+				);
+			}
+			setSyncing({publication: {status: 'reading'}});
+			published = await readPublicationIndex(publication.locations, publication.fetch);
+			if (published.status !== 'read') {
+				// Terminal already: no index means no entry for any generation.
+				setSyncing({publication: {status: 'refused', reason: published.status}});
+			}
+			if (publication.seed) {
+				// ONLY when asked (ADR-0095). The locations are the index's entry for THIS
+				// stream, or none, which the install itself reports as `no-locations`.
+				const stream = streamDigestOf(source, resolveStreamConfig(config.stream));
+				seed = {
+					...(publication.seed === true ? {} : publication.seed),
+					locations: publishedSeedLocationsFor(published, stream),
+					...(publication.fetch === undefined ? {} : {fetch: publication.fetch}),
+				};
+			}
+		}
+
 		// BEFORE the generation is built, and therefore before it loads: a fold that
 		// starts first would find an empty subtree, index into it, and the install would
 		// then be refused as `subtree-not-empty` -- loudly and as data, but too late.
-		if (options?.seed) {
-			await installSeed(options.seed, source, config);
+		if (seed) {
+			await installSeed(seed, source, config);
 		}
 
 		let provider: EIP1193ProviderWithoutEvents = indexerSetup.provider;
@@ -1264,7 +1359,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			source,
 			config,
 			...(options?.promotion ? {promotion: options.promotion} : {}),
-			generations: [generationSpecFor(spec.createState, spec.createProcessor, processorConfig, spec)],
+			generations: [
+				generationSpecFor(spec.createState, spec.createProcessor, processorConfig, spec, undefined, published),
+			],
 			createGeneration: options?.createIndexer,
 		});
 		indexer.onPromoted = onPromoted;
@@ -1863,6 +1960,8 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			// runs its own (or none), so carrying the previous one across a dispose would
 			// report a stream a second container may never have been pointed at.
 			streamSeed: undefined,
+			// The same: the lookup reported is the one THIS container's `init` made.
+			publication: undefined,
 		});
 		setStatus({state: 'Idle'});
 		publishToPort();
