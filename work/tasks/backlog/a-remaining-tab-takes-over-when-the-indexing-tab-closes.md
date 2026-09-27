@@ -1,40 +1,42 @@
 ---
 title: 'A remaining tab takes over indexing when the indexing tab closes'
 slug: a-remaining-tab-takes-over-when-the-indexing-tab-closes
+spec: one-tab-indexes-and-the-others-read
 blockedBy: [a-promotion-tells-readers-the-state-moved]
-covers: []
-needsAnswers: true
+covers: [1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 ---
 
 ## What to build
 
-With the app open in several tabs, each tab (main-thread or dedicated-worker host) builds its own indexer and takes its store's writer claim; the NEWEST claim wins (ADR-0075, ADR-0077) and an older tab, refused on its next write, demotes itself to a reader (ADR-0078). Nothing ever hands the write duty back: when the indexing tab closes, the remaining tabs are readers of a store nobody updates and go stale until reloaded. ADR-0078 deliberately rejected re-claiming automatically inside a demoted indexer, and names the recovery (`dispose()` plus a fresh `init()` over a store built fresh), but no one triggers it, and the guide leaves "electing one indexing tab" to the app. ADR-0082's "non-leader workers" presumes an election that was never built. Also, every new tab starts fetching before it wins or loses, a short duplicate fetch. Decided with the maintainer on 2026-09-27: build the election.
+The spec `one-tab-indexes-and-the-others-read`, with its tasking decisions D1 to D4 (the note at the top of the spec; they override the spec's text where they differ). Today every tab (main-thread or dedicated-worker host) builds its own indexer, the newest writer claim wins (ADR-0075, ADR-0077) and older tabs demote to readers (ADR-0078); nothing hands the write duty back when the indexing tab closes, so the remaining tabs go stale, and every new tab fetches until it loses.
 
-Use the Web Locks API (`navigator.locks`, available on the main thread and in workers on every current engine): ONE exclusive lock per store (scoped exactly as the writer claim is, so two apps on one origin never share one), held by the tab that indexes for as long as it indexes. A tab that does not hold it opens as a READER at once (no claim, no fetch, reads the shared store, follows the state-moved signal), and queues for the lock. The browser releases a lock when its holder's tab or worker dies, so the next tab in the queue gets it and becomes the writer through ADR-0078's recovery path (a fresh start over a store built fresh, taking the claim). The writer claim stays the correctness guarantee underneath: if two tabs ever both write (a tab without the lock, an older build), the claim still demotes the loser exactly as today.
+A first attempt stopped because the host API could not express the election (recorded in this task's history): a host cannot open a tab as a reader, because `createState` always returns a CLAIMED store and reads come from the processor over it; the claim is scoped to a database name the APP chooses inside `createState`, per generation, so the host cannot name a lock; and one lock per store does not match one indexing tab. The decisions answer each:
 
-- Applies to the main-thread and dedicated-worker hosts; a SharedWorker host is already one indexer for all its tabs (take the lock there too only if it is simpler than not).
-- Where `navigator.locks` is absent, behave exactly as today.
-- An app can opt out (keep today's behaviour) and an explicit `demoteToReader` keeps working; decide how a tab that demoted on purpose interacts with the queue and record it.
-- Report the role on the existing status surface (reader waiting for the lock, writer), and the takeover when it happens.
-- Record the decision as a new ADR citing ADR-0075, ADR-0077, ADR-0078 and ADR-0082, and update the guide's "When another tab takes the store" section.
+1. **D1, the election identity.** A host option (for example `tabElection: {name}`) names ONE Web Lock (`navigator.locks`) per APP, held by the tab that indexes for as long as it indexes, covering every generation that tab's host holds. Two apps on one origin supply different names and never contend.
+2. **D2, the reader factory.** Beside `createState`, the generation spec gains a factory for a READER (for example `openState(context, bundle?)`, returning a store opened with `openForReading`, and what reads need over it). A tab that does not hold the lock is built from it at once: no claim, no fetch, its reads answer the shared store, it follows the state-moved signal (ADR-0083, including the `repointed` announcement), and its sync progress comes from the leader's publication (the spec's "a leader publishes; it is not polled"). It queues for the lock; when the browser releases it (the holder's tab or worker closed or crashed), the next tab takes it and becomes the writer through ADR-0078's recovery path: a fresh start through `createState`, taking the claim, indexing forward from the stored cursor.
+3. **D3, opt-in and documented default.** The election is on when the app supplies both the name and the reader factory; otherwise, and where `navigator.locks` is absent, behaviour is exactly today's. The guide ("When another tab takes the store") and `examples/browser-reference` use it.
+4. **D4, scope.** The foreground-takes-the-lease-from-a-backgrounded-tab case is out; say so in the ADR.
+
+The writer claim stays the correctness guarantee underneath: if two tabs both write anyway, the loser demotes exactly as today (the spec's "election is for cost, never for correctness"). Decide whether the lock is taken by the tab or inside a worker host, and for a SharedWorker host (already one indexer) whether it takes the lock at all; record both. Report the role (reader waiting, writer) and a takeover on the existing status surface, over the port for worker hosts. Write a new ADR recording D1 to D4 and amending ADR-0077 and ADR-0082 where they now read differently, and amend ADR-0024's criterion 3 as the spec asks.
 
 ## Acceptance criteria
 
-- [ ] With two tabs open, exactly one indexes (fetches and writes); the other reads the same state and fetches nothing, from the start (no duplicate fetch while it waits).
-- [ ] Closing the indexing tab makes the other take over and index forward from the stored cursor, without a reload; its reads keep answering throughout.
-- [ ] The same with a dedicated-worker host per tab (the lock taken inside the worker, or by the tab for its worker: decide and record).
-- [ ] Without `navigator.locks`, or with the opt-out, behaviour is exactly today's (existing suites unchanged).
-- [ ] If two writers happen anyway, the claim still demotes the loser as today.
-- [ ] Tests run in a real browser where the Web Locks semantics matter (the repo's Playwright setup), plus unit tests where they suffice; the ADR and guide are written; changesets for every published package changed (0.x: patch or minor).
+- [ ] Real tabs (the repo's Playwright multi-tab harness, not a mocked lock): under N tabs of one app, exactly one fetches and writes, from the start; all N answer reads identically; the readers render progress.
+- [ ] Closing the leader makes another tab take over and index forward with no gap in the recorded blocks, without a reload; the same after a CRASH (the tab or worker killed, not closed cleanly).
+- [ ] The same with a dedicated-worker host per tab.
+- [ ] Two tabs forced to both believe they lead leave the store correct, the loser demoting as today (asserted explicitly).
+- [ ] Two apps with different election names on one origin never contend.
+- [ ] Without the opt-in, or without `navigator.locks`, behaviour is exactly today's (existing suites unchanged).
+- [ ] The ADR, the guide and the browser reference are written or updated; ADR-0024 amended; changesets for every published package changed (0.x: patch or minor).
 
 ## Blocked by
 
-- `a-promotion-tells-readers-the-state-moved` (both touch the browser hosts; serialised to keep the rebase trivial).
+- `a-promotion-tells-readers-the-state-moved` (landed).
 
 ## Prompt
 
-> Goal: leader election across tabs with Web Locks, so a remaining tab takes over when the indexing tab closes (see What to build). Look at `packages/browser/src/IndexerState.ts` (`demoteToReader`, the claim with `claimWithinSeconds`), `packages/browser/src/host/` (`mainThread.ts`, `dedicatedWorker.ts`, `serve.ts`), `packages/browser/src/stateMovedAcrossTabs.ts`, ADR-0075, ADR-0077, ADR-0078, ADR-0082, and the guide section "When another tab takes the store: your tab becomes a reader".
+> Goal: leader election across tabs with Web Locks, per the spec `one-tab-indexes-and-the-others-read` and its decisions D1 to D4 (see What to build). Look at the spec, `packages/browser/src/IndexerState.ts` (`BrowserGenerationSpec`, `createState`, `demoteToReader`), `packages/browser/src/host/` (`mainThread.ts`, `dedicatedWorker.ts`, `serve.ts`), `packages/browser/src/stateMovedAcrossTabs.ts`, the multi-tab Playwright harness, ADR-0024, ADR-0075, ADR-0077, ADR-0078, ADR-0082 and ADR-0083. `jolly-roger`'s `web/src/lib/core/tab-leader/` is prior art the spec mentions (read-only, and read only that folder).
 >
-> FIRST, check this task against current reality: if an election exists after all, route to needs-attention naming it.
+> FIRST, check this task against current reality: if the reader factory or an election already exists, adjust or route to needs-attention naming it.
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.

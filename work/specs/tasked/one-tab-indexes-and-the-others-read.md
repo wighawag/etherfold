@@ -6,6 +6,8 @@ taskedAfter: [a-second-writer-writes-nothing]
 
 > Launch snapshot — records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks.
 
+> **Tasked 2026-09-27**, as `a-remaining-tab-takes-over-when-the-indexing-tab-closes`, with four decisions made with the maintainer that OVERRIDE the text below where they differ (recorded in the ADR that task writes): **D1** the lock is named PER APP, by a name the app supplies (a host option such as `tabElection: {name}`, as a SharedWorker's `name` is), not by a store's storage identity, because the election decides which TAB indexes and one host holds several generations with a store each; **D2** a READER FACTORY sits beside `createState` (a store opened with `openForReading`, and the processor over it for reads), which a tab without the lock is built from, and a tab that wins the lock makes ADR-0078's fresh start through `createState`; **D3** the election is OPT-IN (on when the app supplies both the name and the reader factory, so existing entry points are unchanged) and it is the DOCUMENTED DEFAULT (the guide and the browser reference use it); **D4** the first cut leaves out "a foreground tab may take the lease from a backgrounded one", deferred to a later task (without it a backgrounded leader indexes slowly, a cost and not a correctness problem).
+
 ## Problem Statement
 
 Nothing decides which tab indexes. Every tab that opens an app runs its own indexer against the same store, so they duplicate every `eth_getLogs` call, they compete for the same block heights, and (before the writer guard) they corrupt each other.
