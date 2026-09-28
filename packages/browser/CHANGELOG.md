@@ -1,5 +1,11 @@
 # ethereum-indexer-browser
 
+## 0.11.0
+
+### Minor Changes
+
+- 2bb20de: A visible tab takes the indexing lease from a backgrounded leader (ADR-0097, D4 as amended). With the tab election on, a reader whose tab has stayed visible for the settle time (`DEFAULT_FOREGROUND_SETTLE_MS`, two seconds) while the leader is hidden, or has never been heard (a frozen tab), takes the Web Lock with `steal`. The displaced leader stops, abandons its in-flight batch, demotes (`lease-lost` on the main thread), reads the store the new leader writes and queues for the lock again; the new leader makes ADR-0078's fresh start from the stored cursor. A visible leader is never displaced, and a switch shorter than the settle time moves nothing. It is on by default whenever the election is on; `tabElection: {name, foregroundTakeover: false}` keeps the first cut's behaviour, and `foregroundTakeover: {settleMs}` changes the settle time. The seat reports it: `TabElectionState` gains `takeoverReason` (`leader-gone` | `leader-backgrounded`), `displaced` and `visibility`. A dedicated-worker host learns its tab's visibility over the port (a new `visibility` case, sent by `connectToIndexerHost` from any scope with a `document`); a SharedWorker host does not take part.
+
 ## 0.10.0
 
 ### Minor Changes
