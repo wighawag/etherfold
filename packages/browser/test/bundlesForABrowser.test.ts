@@ -88,7 +88,9 @@ describe('a tab that only reads across the port', () => {
 	/** The whole package, as an app that imports everything would get it. */
 	const EVERYTHING = `export * from './src/index.js';`;
 
-	async function bundled(contents: string): Promise<{text: string; modules: string[]; errors: unknown[]}> {
+	async function bundled(
+		contents: string,
+	): Promise<{text: string; modules: string[]; contributing: string[]; errors: unknown[]}> {
 		const result = await build({
 			stdin: {
 				contents,
@@ -107,9 +109,17 @@ describe('a tab that only reads across the port', () => {
 			write: false,
 			logLevel: 'silent',
 		});
+		// the modules that put at least one byte into the output: `inputs` also lists
+		// every module esbuild resolved and then tree-shook away
+		const contributing = Object.values(result.metafile.outputs).flatMap((output) =>
+			Object.entries(output.inputs)
+				.filter(([, input]) => input.bytesInOutput > 0)
+				.map(([path]) => path),
+		);
 		return {
 			text: result.outputFiles[0].text,
 			modules: Object.keys(result.metafile.inputs),
+			contributing,
 			errors: result.errors,
 		};
 	}
@@ -127,8 +137,19 @@ describe('a tab that only reads across the port', () => {
 		// ...including the richer tier this repo DOES have: `createQuerySurface`'s two
 		// caller-supplied-SQL reads sit above the seam, on the server, and a tab that
 		// reads across the port must not carry them.
-		for (const absent of ['queryCurrent', 'queryAsOf']) {
-			expect(tab.text).not.toContain(absent);
+		//
+		// This looks for the tier's IMPLEMENTATION, not its method names. The bare
+		// strings `queryCurrent` and `queryAsOf` legitimately reach every tab: they are
+		// in `@etherfold/state-store`'s `READ_SURFACE_NAMES`, the names no relation's
+		// `as` may take, and that declaration check runs in every tab. So the canary is
+		// two-fold: no module of `@etherfold/state-store-sqlite` (where
+		// `createQuerySurface` lives) puts a byte into the bundle, and nothing in the
+		// bundle DEFINES or CALLS either read (`queryCurrent:` as a property, or
+		// `.queryCurrent(` as a call), which is what the tier's code is, whichever
+		// package it moves to. A name inside a quoted list matches neither.
+		expect(tab.contributing.filter((path) => /state-store-sqlite|query-surface/.test(path))).toEqual([]);
+		for (const name of ['queryCurrent', 'queryAsOf']) {
+			expect(tab.text).not.toMatch(new RegExp(`\\b${name}\\s*:|\\.${name}\\s*\\(`));
 		}
 
 		// And the same question one layer down, which is the honest form of "costs

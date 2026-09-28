@@ -1,6 +1,7 @@
 import {
 	createReadSurface,
 	declaredRow,
+	type CollectionsOf,
 	normalizeEntity,
 	type EntityReads,
 	type EntityRow,
@@ -62,9 +63,13 @@ export type EntityQueries<E extends EntityDeclaration> = EntityReads<VersionedSt
 	queryAsOf(at: BlockAddress, options?: QueryOptions): Promise<EntityRow<E>[]>;
 };
 
-/** The declared entities, each with both tiers, keyed by the declared name. */
+/**
+ * The declared entities, each with both tiers, keyed by the declared name, and a
+ * parent with a collection per declared child beside them (ADR-0098), exactly as
+ * `createReadSurface` types it, since that is where the collection comes from.
+ */
 export type QuerySurface<D extends readonly EntityDeclaration[]> = {
-	readonly [E in D[number] as E['name']]: EntityQueries<E>;
+	readonly [E in D[number] as E['name']]: EntityQueries<E> & CollectionsOf<VersionedStateStore, D, E>;
 };
 
 /**
@@ -89,6 +94,9 @@ export function createQuerySurface<const D extends readonly EntityDeclaration[]>
 	const surface: Record<string, EntityQueries<EntityDeclaration>> = {};
 	for (const declaration of declarations) {
 		const entity: NormalizedEntity = normalizeEntity(declaration);
+		// the spread carries a parent's relation collections too; none can be
+		// overwritten below, because `queryCurrent` and `queryAsOf` are reserved
+		// read-surface names no `as` may take (`normalizeEntities`)
 		surface[entity.name] = {
 			...bounded[entity.name],
 			queryCurrent: async (options) => project(entity, await store.queryCurrent(entity.name, options)),

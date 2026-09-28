@@ -201,6 +201,25 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 
 	const server = serve({fetch: app.fetch, port, hostname});
 
+	// WAIT FOR THE SOCKET before reading it. With a hostname Node resolves it and
+	// binds asynchronously, so `address()` straight after `serve` is still `null` and
+	// the port would be reported as the `0` that was asked for. And a bind that fails
+	// (`EADDRINUSE`) is a rejection of this call, rather than an `error` event nobody
+	// listens to.
+	await new Promise<void>((resolve, reject) => {
+		if (server.listening) return resolve();
+		const onError = (err: Error) => {
+			server.off('listening', onListening);
+			reject(err);
+		};
+		const onListening = () => {
+			server.off('error', onError);
+			resolve();
+		};
+		server.once('error', onError);
+		server.once('listening', onListening);
+	});
+
 	// port 0 means "any free port", and the caller cannot know which one it got
 	// unless we read it back off the listening socket
 	const address = server.address();

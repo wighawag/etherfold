@@ -49,6 +49,14 @@ const REFUSED: Record<string, readonly EntityDeclaration[]> = {
 		ARRIVAL,
 		{...MOVE, parent: {entity: 'arrival', as: 'listCurrent'}},
 	],
+	'an `as` the server-side query tier uses at the tip': [
+		ARRIVAL,
+		{...MOVE, parent: {entity: 'arrival', as: 'queryCurrent'}},
+	],
+	'an `as` the server-side query tier uses as of a block': [
+		ARRIVAL,
+		{...MOVE, parent: {entity: 'arrival', as: 'queryAsOf'}},
+	],
 };
 
 /** What the seam says about a declaration set, as the message a backend must repeat. */

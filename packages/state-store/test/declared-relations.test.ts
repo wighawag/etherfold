@@ -114,6 +114,14 @@ describe('a declared relation', () => {
 		}
 	});
 
+	it('refuses an `as` the server-side query tier uses, since it spreads the collections and would overwrite one', () => {
+		// `createQuerySurface` (`@etherfold/state-store-sqlite`) puts these two beside
+		// the four on the same parent, so the refusal is here, on every backend alike
+		for (const read of ['queryCurrent', 'queryAsOf']) {
+			expect(declaring([PLACEMENT, child({parent: {entity: 'placement', as: read}})])).toThrow(/read surface/);
+		}
+	});
+
 	it('refuses an `as` or a parent name that is not an identifier', () => {
 		expect(declaring([PLACEMENT, child({parent: {entity: 'placement', as: 'the players'}})])).toThrow(/identifier/);
 		expect(declaring([PLACEMENT, child({parent: {entity: 'placement', as: '_players'}})])).toThrow(/reserved/);
