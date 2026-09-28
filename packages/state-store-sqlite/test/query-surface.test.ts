@@ -1,5 +1,5 @@
-import {declareEntities} from '@etherfold/state-store';
-import {describe, expect, it} from 'vitest';
+import {declareEntities, type ChildrenReads} from '@etherfold/state-store';
+import {describe, expect, expectTypeOf, it} from 'vitest';
 import {BlockNotRetainedError, NoSuchBlockError, VersionedStateStore, createQuerySurface} from '../src/index.js';
 import {createTestDB} from './utils/db.js';
 import {block} from './utils/fixtures.js';
@@ -125,5 +125,58 @@ describe('the types come off the declaration on this tier as well', () => {
 
 		// @ts-expect-error a listing takes a prefix and a limit, on every backend, planner or no planner
 		await surface.placement.listCurrent({epoch: 7}, 10, {where: "player = '0xalice'"});
+	});
+});
+
+/**
+ * A parent and its children through a declared relation (ADR-0098), on the tier
+ * that spreads the bounded one: the collection is the bounded tier's, so it is
+ * typed here as it is there, with no cast.
+ */
+const related = declareEntities([
+	{name: 'arrival', id: ['window', 'ordinal'], fields: {epoch: 'integer'}},
+	{
+		name: 'move',
+		id: ['window', 'ordinal', 'moveOrdinal'],
+		fields: {address: 'text'},
+		parent: {entity: 'arrival', as: 'moves'},
+	},
+]);
+
+async function relatedStore(): Promise<VersionedStateStore> {
+	const store = new VersionedStateStore(createTestDB(), related);
+	await store.migrate();
+	await store.applyBlock(block(100), [
+		{type: 'upsert', entity: 'arrival', id: {window: 1, ordinal: 0}, values: {epoch: 7}},
+		{type: 'upsert', entity: 'move', id: {window: 1, ordinal: 0, moveOrdinal: 2}, values: {address: '0xbob'}},
+		{type: 'upsert', entity: 'move', id: {window: 1, ordinal: 0, moveOrdinal: 1}, values: {address: '0xalice'}},
+		{type: 'upsert', entity: 'move', id: {window: 1, ordinal: 1, moveOrdinal: 1}, values: {address: '0xcarol'}},
+	]);
+	return store;
+}
+
+describe("a parent's children are on this tier too, typed off the declaration", () => {
+	it('offers the collection with no cast, typed as the bounded tier types it', async () => {
+		const store = await relatedStore();
+		const surface = createQuerySurface(store, related);
+
+		expectTypeOf(surface.arrival.moves).toEqualTypeOf<
+			ChildrenReads<VersionedStateStore, (typeof related)[0], (typeof related)[1]>
+		>();
+		const {rows} = await surface.arrival.moves.listCurrent({window: 1, ordinal: 0}, 10);
+		const address: string | null = rows[0]!.address;
+		expect(address).toBe('0xalice');
+		expect(rows.map((row) => row.moveOrdinal)).toEqual(['1', '2']);
+		// and the query tier is still beside it, on the same parent
+		expect(await surface.arrival.queryCurrent()).toEqual([{window: '1', ordinal: '0', epoch: 7}]);
+	});
+
+	it('refuses a name that is not a declared relation', async () => {
+		const surface = createQuerySurface(await relatedStore(), related);
+
+		// @ts-expect-error `players` is not the `as` any child declares on `arrival`
+		expect(surface.arrival.players).toBeUndefined();
+		// @ts-expect-error a collection lives on its parent, never on the child
+		expect(surface.move.moves).toBeUndefined();
 	});
 });

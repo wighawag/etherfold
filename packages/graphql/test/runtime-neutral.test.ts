@@ -34,6 +34,20 @@ function sourceFiles(dir: string): string[] {
 	});
 }
 
+/**
+ * Every `import ... from` and `export ... from` in a source, with its specifier.
+ *
+ * `[^'";]*?` rather than `.*?`, because `.` stops at a newline and an import whose
+ * braces span several lines (the house style past a few names) would never be
+ * checked; and `export` beside `import`, because a re-export is a dependency too.
+ * The same form is in every package's import guard.
+ */
+const IMPORT_OR_REEXPORT = /^\s*(?:import|export)\s+(?:type\s+)?[^'";]*?from\s+'([^']+)'/gm;
+
+function specifiersIn(source: string): string[] {
+	return [...source.matchAll(IMPORT_OR_REEXPORT)].map((match) => match[1]!);
+}
+
 describe('@etherfold/graphql is runtime-neutral', () => {
 	for (const platform of ['browser', 'node'] as const) {
 		it(`builds for a ${platform} target with nothing external`, async () => {
@@ -64,6 +78,27 @@ describe('@etherfold/graphql is runtime-neutral', () => {
 		expect(inputs.filter((input) => /packages\/browser\/|@etherfold\/browser|src\/worker\//.test(input))).toEqual([]);
 	});
 
+	it('sees an import or a re-export whose braces span several lines', () => {
+		// the matcher over a fixture, rather than a forbidden import planted in src/
+		const fixture = [
+			'import {',
+			'\tfirst,',
+			'\ttype Second,',
+			"} from '@etherfold/browser/a';",
+			'export {',
+			'\tthird,',
+			"} from '@etherfold/browser/b';",
+			"export * from '@etherfold/browser/c';",
+			"import type {Only} from './local.js';",
+		].join('\n');
+		expect(specifiersIn(fixture)).toEqual([
+			'@etherfold/browser/a',
+			'@etherfold/browser/b',
+			'@etherfold/browser/c',
+			'./local.js',
+		]);
+	});
+
 	it('imports nothing but graphql, Pothos and the two seams', () => {
 		const allowed = new Set(['graphql', '@pothos/core', '@etherfold/accessor', '@etherfold/state-store']);
 		// the suite reads the seams and runs under vitest; it never imports a backend
@@ -77,7 +112,7 @@ describe('@etherfold/graphql is runtime-neutral', () => {
 			const inWorker = file.startsWith(WORKER);
 			const source = readFileSync(file, 'utf-8');
 			const allowedHere = inConformance ? allowedInConformance : inWorker ? allowedInWorker : allowed;
-			for (const match of source.matchAll(/^\s*(?:import|export)\s+(?:type\s+)?[^'";]*?from\s+'([^']+)'/gm)) {
+			for (const match of source.matchAll(IMPORT_OR_REEXPORT)) {
 				const specifier = match[1]!;
 				if (specifier.startsWith('.')) {
 					if (!inConformance) expect(specifier, `${file} reaches the conformance suite`).not.toMatch(/conformance/);

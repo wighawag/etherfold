@@ -399,11 +399,25 @@ function asBytes(value: unknown): unknown {
 }
 
 /**
- * The names the generated read surface already gives EVERY entity
- * (`createReadSurface`), which a relation's `as` may therefore not take: the
- * parent-side collection is offered beside them, on the parent (ADR-0098).
+ * The names the generated read surface already gives EVERY entity, which a
+ * relation's `as` may therefore not take: the parent-side collection is offered
+ * beside them, on the parent (ADR-0098).
+ *
+ * The first four are the bounded tier's (`createReadSurface`). The last two are
+ * the server-side tier's (`createQuerySurface` in `@etherfold/state-store-sqlite`),
+ * which spreads the bounded tier, collections included, and adds its own two on
+ * the same object: an `as` taking either would be silently overwritten there.
+ * They are refused HERE, on every backend, so a declaration means the same thing
+ * wherever it is read rather than losing a collection on one backend only.
  */
-const READ_SURFACE_NAMES: readonly string[] = ['getCurrent', 'getAsOf', 'listCurrent', 'listAsOf'];
+const READ_SURFACE_NAMES: readonly string[] = [
+	'getCurrent',
+	'getAsOf',
+	'listCurrent',
+	'listAsOf',
+	'queryCurrent',
+	'queryAsOf',
+];
 
 /**
  * The SHAPE of one declared relation, which is all one declaration can check on

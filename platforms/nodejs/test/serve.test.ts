@@ -103,6 +103,22 @@ describe('the node adapter serves the app over real HTTP', () => {
 		expect(running.port).toBeGreaterThan(0);
 		expect(running.url).toContain(String(running.port));
 	});
+
+	it('reports the port it bound when given a hostname too, where Node binds asynchronously', async () => {
+		running = await startServer({db: ':memory:', hostname: '127.0.0.1', port: 0});
+		expect(running.port).toBeGreaterThan(0);
+		expect(running.url).toBe(`http://127.0.0.1:${running.port}`);
+
+		const res = await fetch(`${running.url}/status`);
+		expect(res.status).toBe(200);
+	});
+
+	it('refuses, rather than hanging, when the port is already taken', async () => {
+		running = await startServer({db: ':memory:', hostname: '127.0.0.1', port: 0});
+		await expect(startServer({db: ':memory:', hostname: '127.0.0.1', port: running.port})).rejects.toThrow(
+			/EADDRINUSE/,
+		);
+	});
 });
 
 describe('the adapter starts on a database handle its caller built', () => {
