@@ -442,6 +442,9 @@ importers:
         specifier: ^16.14.2
         version: 16.14.2
     devDependencies:
+      '@etherfold/state-store-indexeddb':
+        specifier: workspace:*
+        version: link:../state-store-indexeddb
       '@etherfold/state-store-sqlite':
         specifier: workspace:*
         version: link:../state-store-sqlite
@@ -457,6 +460,9 @@ importers:
       esbuild:
         specifier: ^0.28.0
         version: 0.28.1
+      fake-indexeddb:
+        specifier: ^6.2.2
+        version: 6.2.5
       remote-sql-libsql:
         specifier: ^0.0.7
         version: 0.0.7(@libsql/core@0.17.4)
