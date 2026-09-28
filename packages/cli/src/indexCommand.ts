@@ -446,6 +446,9 @@ export async function index<ABI extends Abi = Abi, ProcessResultType = unknown>(
 			// tier owns none and is given none. ONE entry per generation held, in the
 			// same field a host mid-upgrade fills with two.
 			getCursorReport: () => foldingStatusReport(container, stateOf),
+			// NO `graphql`: this command exposes the write path and not the query API, and
+			// that asymmetry is the point (a split deployment is `index` plus `serve`), so
+			// `/graphql` answers `501 graphql-not-configured` here (ADR-0099).
 		});
 
 		// RECLAIM WHAT THE RETENTION NO LONGER COVERS, on a clock, because this

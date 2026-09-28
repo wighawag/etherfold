@@ -8,6 +8,14 @@ import {getStatusAPI, recordError} from './api/status.js';
 import {getIngestAPI} from './api/ingest.js';
 import {getFeedAPI} from './api/feed.js';
 /**
+ * THE QUERY SURFACE (ADR-0099): GraphQL over HTTP at `/graphql`, answered from
+ * the canonical generation through the SQLite accessor by the one schema module
+ * (`@etherfold/graphql`) every executor shares, so `httpExecutor` against it
+ * answers byte for byte what the in-process executor does. See `api/graphql.ts`.
+ */
+import {getGraphQLAPI} from './api/graphql.js';
+export {GRAPHQL_PATH} from './api/graphql.js';
+/**
  * THE STATE-MOVED SIGNAL over the network (ADR-0083): `GET /{indexer}/state-moved`,
  * server-sent events, carrying the SAME value a browser tab is handed over its
  * port so an app writes one handler for both.
@@ -36,7 +44,7 @@ import {getAdminAPI} from './api/admin.js';
 export {MAX_UPLOAD_BYTES, UPLOAD_CONTENT_TYPE} from './api/admin.js';
 
 export type {Env, ServerOptions};
-export type {CursorReporter, FetcherLimitsReporter, PromotionReporter} from './types.js';
+export type {CursorReporter, FetcherLimitsReporter, GraphQLServing, PromotionReporter} from './types.js';
 export {indexerEntryOn, indexerRegistry, singleContextEntry} from './registry.js';
 export type {IndexerRegistryEntry, IndexerResolver, ReconfigureReport} from './registry.js';
 /**
@@ -274,6 +282,7 @@ export function createServer<CustomEnv extends Env>(options: ServerOptions<Custo
 		.route('/', getStatusAPI(options))
 		.route('/', getIngestAPI(options))
 		.route('/', getFeedAPI(options))
+		.route('/', getGraphQLAPI(options))
 		.route('/', getStateMovedAPI(options))
 		.route('/', getAdminAPI(options))
 		.onError((err, c) => {

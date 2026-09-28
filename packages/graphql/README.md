@@ -12,6 +12,7 @@ const execute = localExecutor(schema, {
 	accessor: store.accessor(),
 	generation, // generationDigestOf(...) from @etherfold/core: reported, never parsed
 	tip: async () => highestBlockTheStoreHolds(), // the pin, and the reorg guard
+	asOf: store.capabilities.asOf, // required: a revert-only store answers every read at the tip
 });
 
 const {data, errors, extensions} = await execute({
@@ -38,7 +39,7 @@ The query semantics (null, ordering, text as UTF-8 bytes, a `u256` numerically) 
 
 ## One block per operation
 
-An operation reads the tip when it begins and PINS that block: every field is read as of it, so a block applied while the resolvers run changes nothing it reads, and a parent and its children always come from one block. The tip is read again at the end: if a reorg took it BELOW the pin the operation is run once more, and refused with `tip-moved-during-operation` if it happens again. A `block` above the pin is refused (`block-not-yet-indexed`). On a store that answers no as-of read (`asOf: false` in the context), reads are at the tip and any move of the tip during the operation is retried once, then refused.
+An operation reads the tip when it begins and PINS that block: every field is read as of it, so a block applied while the resolvers run changes nothing it reads, and a parent and its children always come from one block. The tip is read again at the end: if a reorg took it BELOW the pin the operation is run once more, and refused with `tip-moved-during-operation` if it happens again. A `block` above the pin is refused (`block-not-yet-indexed`). On a store that answers no as-of read (`asOf: false` in the context, which is required and copied from the store's `capabilities.asOf`), reads are at the tip and any move of the tip during the operation is retried once, then refused.
 
 A host whose canonical pointer can move passes a FUNCTION as the context, answering one per operation, so a query cannot straddle a promotion.
 
@@ -46,7 +47,16 @@ A host whose canonical pointer can move passes a FUNCTION as the context, answer
 
 A `QueryExecutor` is `(request: {query, variables?, operationName?}) => Promise<QueryResult>`, and it never rejects. Every executor answers the same JSON: the same serialisation (`U256` as a decimal string, `Bytes` as hex), the same error codes through the one formatter (`formatQueryError`), and `extensions: {generation, block}` on every answer. When the transport itself fails (an HTTP 500, a body that is not JSON, a network error, a closed port, a dead worker host), the executor normalises it to ONE shape, `transportFailure(reason, message, {status?})`: no `data`, no `extensions`, one error coded `transport-failure` naming the `reason`. `isTransportFailure(result)` tells one apart from an answer.
 
-`localExecutor` is the in-process executor. The HTTP executor, the worker executor (on a `@etherfold/graphql/worker` subpath, so this root entry never imports a browser package) and the `fetch` shim implement the same contract.
+`localExecutor` is the in-process executor. `httpExecutor(url, {fetch?, headers?})` is the HTTP one, for a remote indexer's `/graphql` (`etherfold serve`, `run` and `node` serve it): it `POST`s the request as JSON and hands the answer back exactly as the server wrote it, and normalises a non-`2xx` (`http-status`, with `status`), a body that is not a GraphQL result (`invalid-body`) and a network error (`network`) to the one shape. The worker executor (on a `@etherfold/graphql/worker` subpath, so this root entry never imports a browser package) implements the same contract.
+
+`executorToFetch(executor)` turns ANY executor into a `fetch`, for a client library that only takes one (urql's `fetch`, Apollo's `HttpLink`, graphql-request):
+
+```ts
+const fetch = executorToFetch(httpExecutor('https://indexer.example/graphql')); // or the worker executor
+const client = new Client({url: '/graphql', fetch, exchanges: [fetchExchange]}); // urql
+```
+
+It reads a `POST` with a JSON body or a `GET` with query parameters, and answers the executor's result as a `200` whatever it is, a transport failure included, so the client reads it as errors rather than discarding the body as a network error. A request it cannot read as GraphQL is answered `400` with one `invalid-query` error.
 
 ## Error codes
 
@@ -71,7 +81,7 @@ import {describeQueryConformance} from '@etherfold/graphql/conformance';
 
 await describeQueryConformance('the in-process executor over IndexedDB', (declarations) => {
 	const store = new IndexedDBStateStore(declarations, {databaseName});
-	const executor = localExecutor(buildQuerySchema(declarations), {accessor: store.accessor({rowsExaminedBound: 60}), generation, tip});
+	const executor = localExecutor(buildQuerySchema(declarations), {accessor: store.accessor({rowsExaminedBound: 60}), generation, tip, asOf: store.capabilities.asOf});
 	return {store, executor, generation};
 }, {rowsExaminedBound: 60});
 ```
@@ -80,7 +90,7 @@ The factory hands over a store (the suite WRITES blocks through it, and reverts 
 
 The rows-examined bound is a documented difference between deployments, not a parity rule (ADR-0099), so it is asserted PER EXECUTOR from what the deployment declares (`{rowsExaminedBound}`): declaring a bound, the three queries a bounded IndexedDB accessor cannot serve (a scan past it, one parent's children past it, an as-of query whose delta of churn since its block is past it) are refused with `rows-examined-bound`, naming the entity and the bound; declaring none (SQLite), the same three are answered at a size past the browser's default bound. An executor with a transport declares how to break it (`{transportFailures: {reason: breakIt}}`) and is held to the one transport-failure shape for each. `runQueryConformance` runs the cases without a test runner, so a deliberately wrong executor can be checked to fail.
 
-This package runs it against the in-process executor over SQLite and over IndexedDB, once per retention claim each.
+This package runs it against the in-process executor over SQLite and over IndexedDB, once per retention claim each, and against `httpExecutor` over the `fetch` shim (the round trip through JSON text, and each transport failure). `@etherfold/server` runs it against `/graphql` once per retention claim, and `etherfold` against a real `etherfold serve`.
 
 ## Testing with vitest
 

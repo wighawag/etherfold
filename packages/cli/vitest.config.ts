@@ -11,5 +11,17 @@ export default defineConfig({
 		// pass, since it is only reached on failure. See ADR-0032.
 		testTimeout: 60_000,
 		hookTimeout: 60_000,
+		server: {
+			deps: {
+				// graphql 16 ships CJS (`main`) and ESM (`module`) with no `exports` map, and
+				// vitest runs the workspace's `@etherfold/graphql` through vite (which hands
+				// it the ESM build) while Node loads Pothos's `import 'graphql'` as CJS: two
+				// instances, and graphql-js refuses a schema one built inside the other.
+				// Inlining Pothos puts its import through vite too. Node alone loads one copy
+				// (the CJS one, for both), so this is a test-runner concern only; the same
+				// setting is in `@etherfold/graphql`'s own config.
+				inline: [/@pothos\/core/],
+			},
+		},
 	},
 });

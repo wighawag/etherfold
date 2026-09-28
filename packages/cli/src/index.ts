@@ -91,7 +91,8 @@ export {
 	type RunningReceiver,
 } from './indexCommand.js';
 export {node, nodeMain, run, runMain, type RunDependencies, type RunningIndexer} from './run.js';
-export {serve, type ServeDependencies, type StartedServer} from './serve.js';
+export {serve, type ServeDependencies, type ServeStartOptions, type StartedServer} from './serve.js';
+export {declarationsOfStoredBundle, graphqlServing, type StoredDeclarations} from './graphqlServing.js';
 export {
 	describePublication,
 	nodePublicationFiles,

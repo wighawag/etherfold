@@ -33,13 +33,20 @@ export type QueryContext = {
 	 */
 	tip(): Promise<number | undefined>;
 	/**
-	 * Whether the store answers as-of reads (`StateStoreCapabilities.asOf`),
-	 * `true` when absent. When it does, the pin is PASSED to every read, so a
-	 * block applied mid-operation changes nothing the operation reads. When it
-	 * does not (a `revert-only` store), every read is at the tip and ANY move of
-	 * the tip during the operation is a tear: it is retried once, then refused.
+	 * Whether the store answers as-of reads: its `StateStoreCapabilities.asOf`,
+	 * read off the store the accessor reads. When it does, the pin is PASSED to
+	 * every read, so a block applied mid-operation changes nothing the operation
+	 * reads. When it does not (a `revert-only` store), every read is at the tip
+	 * and ANY move of the tip during the operation is a tear: it is retried once,
+	 * then refused.
+	 *
+	 * REQUIRED, with no default: a default of `true` made a host over a
+	 * `revert-only` store that left it out pin the tip and pass it to every read,
+	 * which that store refuses, so EVERY query was refused
+	 * (`block-not-retained`), even one asking no `block`. A host copies the
+	 * store's claim instead, which is one line.
 	 */
-	readonly asOf?: boolean;
+	readonly asOf: boolean;
 };
 
 /**
@@ -109,7 +116,7 @@ export async function executeQuery(
 	const invalid = validate(schema, document);
 	if (invalid.length > 0) return unpinned(invalid);
 
-	const asOf = context.asOf ?? true;
+	const {asOf} = context;
 	try {
 		let started: number | undefined;
 		let ended: number | undefined;

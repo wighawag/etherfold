@@ -28,6 +28,8 @@ export const app = createServer<MyEnv>({
 	}),
 	// OPTIONAL: where this deployment's pipeline has got to, if it owns a store
 	getCursorReport: async (c) => ({value: {lastToBlock: await myStore.howFar()}}),
+	// OPTIONAL: what `/graphql` needs, the declarations a generation's tables were made from
+	graphql: {declarationsOf: async ({db, indexer, id}) => declarationsFromTheStoredBundle(db, indexer, id)},
 });
 ```
 
@@ -49,6 +51,8 @@ It is optional because an indexer-server is useful before it ingests anything: `
 
 `getPromotionPolicy` is optional on the same ground once more, and one level IN rather than out: it reports WHEN this deployment moves its canonical pointer onto a successor on its own, which is a decision a GENERATION CONTAINER (`@etherfold/core`) makes and this package holds none of -- a route holds a registry entry. A read tier reads a pointer something else moves, so `etherfold serve` injects none and `/status` carries no `promotion` field rather than a claim about a decision it does not make. What it carries is `{reported: true, policy, dropOnPromotion}`, or `{reported: false, reason}` when a reporter cannot answer, and the value is the RESOLVED one rather than what was configured, so an operator reads what will actually happen including the half nobody mentioned. TYPED here for `getFetcherLimits`'s reason: it is `@etherfold/core`'s `UsedPromotionConfig`, a three-valued string and a boolean, hiding behind no seam. It is reported because the policy is otherwise observable only as BEHAVIOUR -- whether a successor takes over as soon as it exists, when it has caught up, or only when asked -- and an operator watching a rebuild on this page can see the successor without being able to see what is going to happen to it.
 
+`graphql` is optional on the ground every capability here is: `/graphql` (below) resolves WHICH generation answers, and its state, from the rows of `getDB`'s database, but a column's type is not recoverable from a table (a `u256` and a plain blob are both BLOBs), so the declarations are the host's to supply: from the processor it holds, or from the bundle the generation stores beside its state (ADR-0092, `readGenerationBundle`), as `producePublication`'s `declarationsOf` does. It also carries the `retention` (and `finalityDepth`) the FOLDING process enforces, so the query surface claims what the writer keeps; a read tier is told none and claims `unbounded`. Absent, `/graphql` answers `501 graphql-not-configured`.
+
 **What a reporter owes the server: a SMALL, JSON-serialisable summary, and never the store's raw serialized cursor.** That value is a serialized `LastSync` carrying an unconfirmed window of DECODED EVENTS, so handing it over whole would put an unbounded blob on the one page an operator refreshes while something is wrong. The constraint lives on the seam because `/status` reports what the reporter returns VERBATIM: the server does not parse it (the cursor is opaque behind the storage seam, ADR-0027, and only the processor knows what one means), so it cannot bound it afterwards either.
 
 ## The routes
@@ -57,6 +61,7 @@ It is optional because an indexer-server is useful before it ingests anything: `
 | --- | --- |
 | `GET /status` | health, database reachability, the fixed-schema version against the one this build expects, the reorg counters, the injected cursor report, what the fetcher (if this host holds one) has learned about its node, and the last error this PROCESS saw. `503` when the database is unreachable or the schema is not the expected version |
 | `POST /admin/setup` | apply the fixed-table schema |
+| `GET` / `POST /graphql` | GraphQL over HTTP (ADR-0099): the one schema built from the declarations (`@etherfold/graphql`), answered from the CANONICAL generation of the host's database through the SQLite accessor. Every GraphQL answer is a `200`. `501` with no `graphql` capability or over a database holding several named indexers, `503` while no generation answers reads or its declarations cannot be had |
 | `POST /{indexer}/ingest` | a `WireBatch` from a log-fetcher (ADR-0004), for ONE named indexer |
 | `POST /{indexer}/ingest/expected-from-block` | where the next batch must start, as one `{context, expectedFromBlock}` per LIVE wire context that named indexer holds |
 | `GET /{indexer}/feed` | the RETRACTION-AWARE view over the stored emission stream: `seq`-ordered, `removed` entries included, resumed from an opaque `cursor` the caller holds, `limit` entries at a time |
@@ -175,7 +180,7 @@ The read rides the partial index `_emissions_canonical` (`(indexer, stream, bloc
 
 `/status` reports reverts concluded from ABSENCE separately from those concluded from a hash CONTRADICTION, because absence is an inference and a rising rate of it means truncation or misconfiguration rather than chain activity. It does not make the server unhealthy: it is a signal to investigate, not a fault.
 
-**`/status` is the WHOLE query surface for now, deliberately, and the `cursor` field is the whole observability story.** A richer query layer (GraphQL over entity declarations) is decided in principle and is explicitly NOT in this milestone, so a running deployment is watched here or nowhere. The field is an OBJECT and never a bare value (ADR-0047):
+**`/status` is the whole OBSERVABILITY surface, and the `cursor` field is the whole observability story**; the STATE is queried at `/graphql` (below). The field is an OBJECT and never a bare value (ADR-0047):
 
 ```json
 {"cursor": {"reported": true, "value": {"lastToBlock": 4242}}}
@@ -212,6 +217,14 @@ const report = await compactEmissionPairs(db, {
 **One call does BOUNDED work** (ADR-0022): at most `maxPairs * 2` candidate rows read and `maxPairs` pairs deleted, every row named by its `seq`, in statements chunked to 100 bound parameters inside one batch. `complete` says whether the scan reached the end, so an amortised policy (a small budget, often) and a whole sweep (loop while `complete` is false) are both expressible without this package inventing a cadence.
 
 **A pair goes together or not at all**, and `seq` is never renumbered: the holes left behind are legal by contract and both cursors already tolerate them. An unmatched row is left alone, and a LIVE row is never a candidate however old.
+
+## GraphQL at `/graphql`
+
+The query surface (ADR-0099): the SAME GraphQL document an app runs against a browser worker runs here, with the same answer byte for byte. GraphQL Yoga (on Hono) speaks HTTP (a `GET` or a `POST`, JSON or form); it does not parse, validate or execute. A plugin hands every request to `executeQuery` (`@etherfold/graphql`), so the one-block pin, the reorg guard, the error formatter and the codes are the in-process executor's rather than a second pipeline's, and a request Yoga refuses on its own (a body that is not JSON, no `query`) is reformatted by the same formatter (`invalid-query`, with the status Yoga chose).
+
+WHICH generation answers is read from the database's canonical pointer on every request, so a promotion or a revert is answered from the next request on; the schema and the store over its table namespace are built once per canonical generation. Every answer reports that generation's digest and the block it was pinned to in `extensions`. `httpExecutor` (`@etherfold/graphql`) is the client side: a non-`2xx`, a body that is not a GraphQL result and a network error each reach an app as the one transport-failure shape, and `executorToFetch` hands any executor to a client library that only takes a `fetch`.
+
+The refusals before GraphQL are HTTP statuses, since nothing GraphQL answered: `501 graphql-not-configured` (no `graphql` capability), `501 several-named-indexers` (an unnamed `/graphql` would be picking a tenant, ADR-0036), `503 no-canonical-generation` (ADR-0058: refused rather than answered with empty lists) and `503 no-declarations`.
 
 ## The state-moved stream
 

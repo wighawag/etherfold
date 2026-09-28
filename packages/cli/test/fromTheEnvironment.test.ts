@@ -3,7 +3,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {describe, expect, it} from 'vitest';
 import {prepareIndexing} from '../src/index.js';
-import {serve} from '../src/serve.js';
+import {serve, type ServeStartOptions} from '../src/serve.js';
 import type {Options} from '../src/types.js';
 import {abi, ALICE, CONTRACT, entityModule, fakeChain, noChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
 import {bundleOf, identityOf} from './utils/processorIdentity.js';
@@ -129,7 +129,9 @@ describe('`serve`, configured from the environment', () => {
 		const started: {db: string; port: number; hostname?: string; autoSetup: boolean}[] = [];
 		return {
 			started,
-			startServer: async (options: {db: string; port: number; hostname?: string; autoSetup: boolean}) => {
+			startServer: async ({graphql, ...options}: ServeStartOptions) => {
+				// every read tier serves `/graphql` (ADR-0099); what is recorded is the rest
+				expect(typeof graphql.declarationsOf).toBe('function');
 				started.push(options);
 				// the HANDLE the adapter opened comes back too, because the read tier resolves
 				// the canonical pointer over it to say which generation answers (ADR-0053)

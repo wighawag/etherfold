@@ -279,11 +279,19 @@ describe('the receiver runs, folds what is pushed to it, and keeps running', () 
 		}
 	});
 
-	it('answers no query API beyond /status, because that is the whole query surface', async () => {
+	it("answers no query API beyond /status: querying is `serve`'s, and `/graphql` says so with a 501", async () => {
 		running = await index(RECEIVING, depsFor());
 
 		expect((await globalThis.fetch(`${running.url}/status`)).status).toBe(200);
-		for (const route of ['/graphql', '/query', '/sql', '/entities/nft', '/nft/1']) {
+		// the query surface is a route every server has (ADR-0099), and a host that was
+		// given no `graphql` capability REFUSES it as one it lacks, as the ingest routes
+		// do on a host with no registry, rather than pretending it is missing
+		for (const init of [{}, {method: 'POST', headers: AUTHENTICATED, body: '{"query":"{ nft(first: 1) { id } }"}'}]) {
+			const answered = await globalThis.fetch(`${running.url}/graphql`, init);
+			expect(answered.status).toBe(501);
+			expect(((await answered.json()) as {error: string}).error).toBe('graphql-not-configured');
+		}
+		for (const route of ['/query', '/sql', '/entities/nft', '/nft/1']) {
 			expect((await globalThis.fetch(`${running.url}${route}`)).status).toBe(404);
 			expect(
 				(await globalThis.fetch(`${running.url}${route}`, {method: 'POST', headers: AUTHENTICATED, body: '{}'})).status,

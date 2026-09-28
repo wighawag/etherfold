@@ -1,18 +1,30 @@
 import {generationDigestOf} from '@etherfold/core';
 import type {EnvRecord} from '@etherfold/fetcher-host';
+import type {GraphQLServing} from '@etherfold/server';
 import type {RemoteSQL} from 'remote-sql';
 import {resolveCommandConfig} from './config.js';
+import {graphqlServing} from './graphqlServing.js';
 import {heldGenerationsIn} from './readTier.js';
 import type {Options, ServeConfig} from './types.js';
 
 /** What a `startServer` call gives back, narrowed to what this command reads off it. */
 export type StartedServer = {url: string; port: number; db: RemoteSQL};
 
+/** What `serve` starts the read tier with. */
+export type ServeStartOptions = {
+	db: string;
+	port: number;
+	hostname?: string;
+	autoSetup: boolean;
+	/** What `/graphql` answers with (ADR-0099): declarations from the stored bundle, and no retention claim. */
+	graphql: GraphQLServing<any>;
+};
+
 export type ServeDependencies = {
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
 	/** Starts the read tier. Defaults to the Node platform adapter's `startServer`, imported lazily. */
-	startServer?: (options: {db: string; port: number; hostname?: string; autoSetup: boolean}) => Promise<StartedServer>;
+	startServer?: (options: ServeStartOptions) => Promise<StartedServer>;
 	/** Where the startup lines go. Defaults to the console. */
 	log?: (...args: unknown[]) => void;
 };
@@ -65,9 +77,15 @@ export async function serve(options: Options, deps: ServeDependencies = {}): Pro
 		port: config.serving.port,
 		...(config.serving.hostname === undefined ? {} : {hostname: config.serving.hostname}),
 		autoSetup: config.serving.autoSetup,
+		// THE QUERY SURFACE (ADR-0099): `/graphql` over the canonical generation, its
+		// schema built from the declarations its stored bundle carries (ADR-0092). A
+		// read tier folds nothing and is told no retention (`--retention` is refused
+		// here), so it claims none: `unbounded`, as `publish` reads a database.
+		graphql: graphqlServing(),
 	});
 	log(`etherfold server listening on ${running.url}`);
 	log(`  status: ${running.url}/status`);
+	log(`  graphql: ${running.url}/graphql`);
 	log(`  ${await answeringFrom(running.db, config.destination.db)}`);
 }
 
@@ -106,12 +124,7 @@ async function answeringFrom(db: RemoteSQL, describedAs: string): Promise<string
 	}
 }
 
-async function defaultStartServer(options: {
-	db: string;
-	port: number;
-	hostname?: string;
-	autoSetup: boolean;
-}): Promise<StartedServer> {
+async function defaultStartServer(options: ServeStartOptions): Promise<StartedServer> {
 	// Imported lazily so that `etherfold build` never pays for the server's
 	// dependency tree (hono, libSQL, the node HTTP adapter). The one-shot
 	// indexing path is the common one and it should stay cheap to start.
