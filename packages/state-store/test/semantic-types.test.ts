@@ -17,8 +17,9 @@ import {
  * beside the bare storage classes, and a semantic type owns a canonical
  * encoding, a decode, an equality and an ordering. `u256` is the first member.
  *
- * These are the registry's own cases and the declaration-time refusals. No
- * backend uses a semantic type yet: that is `every-backend-stores-a-u256-canonically`.
+ * These are the registry's own cases and the declaration-time refusals. What
+ * every backend does with one (stores the encoding, answers the value) is the
+ * shared conformance chapter `a declared u256 is a bigint at the seam`.
  */
 
 const MAX = 2n ** 256n - 1n;
@@ -132,7 +133,7 @@ describe('a field declared with a semantic type', () => {
 
 	it('is not mistaken for an enum by the write-time enum check', () => {
 		const entity = normalizeEntity(withAmount({storage: 'blob', type: 'u256'}));
-		expect(() => assertFieldValues(entity, {amount: u256.encode(1n)})).not.toThrow();
+		expect(() => assertFieldValues(entity, {amount: 1n})).not.toThrow();
 	});
 
 	it('is typed unknown by a derived row until a backend stores it canonically, and a bare field is unchanged', () => {

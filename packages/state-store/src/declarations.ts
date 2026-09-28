@@ -15,14 +15,13 @@ import type {EntityDeclaration, FieldDeclaration} from './types.js';
  *
  * ## Nothing here decodes anything
  *
- * A field's TypeScript type is the declared storage class and nothing more:
+ * A field's TypeScript type is what the declaration describes and nothing more:
  * `text` is a `string`, and if that string is the decimal form of a `uint256`
- * this surface still hands back the string. It cannot do otherwise, because the
- * declaration has no way to SAY a text column is a u256 (`FieldType` is
- * `text | integer | real | blob`, the intersection of what the backends hold).
- * Decoding on a guess -- "text that parses as digits is a BigInt" -- is exactly
- * the ambiguity `tagged-bigint-codec-across-storage-adapters` exists to remove
- * elsewhere in this repo. See ADR-0025.
+ * this surface still hands back the string. Decoding on a guess -- "text that
+ * parses as digits is a BigInt" -- would make one declaration mean two things.
+ * A field that IS a u256 says so, with the semantic type `{storage: 'blob',
+ * type: 'u256'}` (ADR-0098), and the seam then answers a `bigint` for it on every
+ * backend. See ADR-0025 and its amendment.
  *
  * ## Why a helper rather than `as const`
  *
@@ -73,17 +72,18 @@ export type EntityNamed<D extends readonly EntityDeclaration[], Name> = Extract<
  * `blob` is a `Uint8Array` because that is what the backends hand back for one;
  * `integer` and `real` are both `number`, which is the honest reading of a
  * 64-bit SQLite INTEGER (and the reason a u256 is not an integer field: it does
- * not fit, so it is decimal `text`, undecoded -- see the module note).
+ * not fit, so it is a semantic type, ADR-0098).
  *
  * An enum (ADR-0098) is the UNION of its declared values, which is true rather
  * than hopeful because every backend refuses any other value at write time.
  * Under an annotated declaration its values are not literal, and it reads as
  * `string`, which is still true.
  *
- * A semantic type (`{storage, type}`, ADR-0098) is `unknown` for now, because no
- * backend stores one canonically yet, so no narrower type would be true; it
- * becomes the type's value (a `bigint` for a `u256`) once the seam answers one
- * (`every-backend-stores-a-u256-canonically`, `the-read-surface-decodes-a-u256`).
+ * A semantic type (`{storage, type}`, ADR-0098) is still `unknown` here. Every
+ * backend now stores one canonically and the seam answers the type's value (a
+ * `bigint` for a `u256`), so narrowing it is true at run time; the TYPE and the
+ * type-level tests that pin it, in process and across the worker port, are
+ * `the-read-surface-decodes-a-u256`.
  */
 export type FieldValue<T extends FieldDeclaration> = T extends {readonly enum: readonly (infer V extends string)[]}
 	? V

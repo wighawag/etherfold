@@ -40,7 +40,6 @@ import {
 	PLACEMENT_WINDOW,
 	SINGLETON,
 	stratagemsEntities,
-	u256,
 	WINDOW,
 	wide,
 } from './entities.js';
@@ -165,17 +164,17 @@ export const stratagemsProcessor: EntityProcessor<StratagemsABI> = {
 		await stratagemsContract.forceSimpleCells(Number(event.args.epoch), event.args.cells as never);
 	},
 
-	// The three reward handlers are the flat case and port one-to-one, apart from
-	// the u256 fields: there is no column type that holds one, so each is written
-	// as decimal TEXT through `u256` and read back through `BigInt()`. 16,046 of
-	// the 31,332 real events are these three, so the canonical encoding is
+	// The three reward handlers are the flat case and port one-to-one, the u256
+	// fields included: each is DECLARED a `u256` (ADR-0098), so the handler writes
+	// the event's `bigint` as it is and every backend holds it canonically. 16,046
+	// of the 31,332 real events are these three, so the canonical encoding is
 	// load-bearing on this workload rather than a footnote.
 	onAccounFixedRewardUpdated(state, event) {
 		state.set(
 			'fixedRate',
 			{account: event.args.account},
 			{
-				toWithdraw: u256(event.args.fixedRateStatus.toWithdraw),
+				toWithdraw: event.args.fixedRateStatus.toWithdraw,
 				lastTime: Number(event.args.fixedRateStatus.lastTime),
 			},
 		);
@@ -186,9 +185,9 @@ export const stratagemsProcessor: EntityProcessor<StratagemsABI> = {
 			'sharedRate',
 			{account: event.args.account},
 			{
-				points: u256(event.args.sharedRateStatus.points),
-				totalRewardPerPointAccounted: u256(event.args.sharedRateStatus.totalRewardPerPointAccounted),
-				rewardsToWithdraw: u256(event.args.sharedRateStatus.rewardsToWithdraw),
+				points: event.args.sharedRateStatus.points,
+				totalRewardPerPointAccounted: event.args.sharedRateStatus.totalRewardPerPointAccounted,
+				rewardsToWithdraw: event.args.sharedRateStatus.rewardsToWithdraw,
 			},
 		);
 	},
@@ -196,8 +195,8 @@ export const stratagemsProcessor: EntityProcessor<StratagemsABI> = {
 	onGlobalRewardUpdated(state, event) {
 		state.set('globalRate', SINGLETON, {
 			lastUpdateTime: Number(event.args.globalStatus.lastUpdateTime),
-			totalRewardPerPointAtLastUpdate: u256(event.args.globalStatus.totalRewardPerPointAtLastUpdate),
-			totalPoints: u256(event.args.globalStatus.totalPoints),
+			totalRewardPerPointAtLastUpdate: event.args.globalStatus.totalRewardPerPointAtLastUpdate,
+			totalPoints: event.args.globalStatus.totalPoints,
 		});
 	},
 };

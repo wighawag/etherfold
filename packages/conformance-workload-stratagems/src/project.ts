@@ -107,41 +107,41 @@ export async function projectToData(store: StateStore, touched: TouchedIds): Pro
 		data.computedPoints[owner] = Number(row.points);
 	}
 
-	// The u256 contortion, on the read side: decimal TEXT back through `BigInt()`.
-	// Nothing in the declaration says these columns are u256, so this projection is
-	// where the knowledge lives, and it is the reason the encoding has to be
-	// canonical (ADR-0025: the declaration describes a storage class, not a type).
+	// The u256 fields are DECLARED `u256` (ADR-0098), so the seam answers each as a
+	// `bigint` and nothing here decodes it: the projection copies it across. A
+	// backend answering anything else (a string, the stored bytes) fails the
+	// comparison, because the golden state holds bigints.
 	const globalRate = await store.getCurrent<{
 		lastUpdateTime: number;
-		totalRewardPerPointAtLastUpdate: string;
-		totalPoints: string;
+		totalRewardPerPointAtLastUpdate: bigint;
+		totalPoints: bigint;
 	}>('globalRate', SINGLETON);
 	if (globalRate) {
 		data.points.global = {
 			lastUpdateTime: Number(globalRate.lastUpdateTime),
-			totalRewardPerPointAtLastUpdate: BigInt(globalRate.totalRewardPerPointAtLastUpdate),
-			totalPoints: BigInt(globalRate.totalPoints),
+			totalRewardPerPointAtLastUpdate: globalRate.totalRewardPerPointAtLastUpdate,
+			totalPoints: globalRate.totalPoints,
 		};
 	}
 
-	for (const [account, row] of await liveRows<{toWithdraw: string; lastTime: number}>(
+	for (const [account, row] of await liveRows<{toWithdraw: bigint; lastTime: number}>(
 		store,
 		'fixedRate',
 		touched,
 		'account',
 	)) {
-		data.points.fixed[account] = {toWithdraw: BigInt(row.toWithdraw), lastTime: Number(row.lastTime)};
+		data.points.fixed[account] = {toWithdraw: row.toWithdraw, lastTime: Number(row.lastTime)};
 	}
 
 	for (const [account, row] of await liveRows<{
-		points: string;
-		totalRewardPerPointAccounted: string;
-		rewardsToWithdraw: string;
+		points: bigint;
+		totalRewardPerPointAccounted: bigint;
+		rewardsToWithdraw: bigint;
 	}>(store, 'sharedRate', touched, 'account')) {
 		data.points.shared[account] = {
-			points: BigInt(row.points),
-			totalRewardPerPointAccounted: BigInt(row.totalRewardPerPointAccounted),
-			rewardsToWithdraw: BigInt(row.rewardsToWithdraw),
+			points: row.points,
+			totalRewardPerPointAccounted: row.totalRewardPerPointAccounted,
+			rewardsToWithdraw: row.rewardsToWithdraw,
 		};
 	}
 

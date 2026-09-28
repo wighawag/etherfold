@@ -120,6 +120,18 @@ await surface.token.queryCurrent({where: 'transferCount > ?', args: [1]}); // th
 
 `createQuerySurface` is `createReadSurface` (`@etherfold/state-store`, the four seam reads, typed off the declaration) plus the two reads that need a query planner. **The asymmetry is placement, not caution**: the bounded tier is what a HANDLER is held to and a handler runs once per event on every backend, so it gets the one shape that is an indexed range scan everywhere (ADR-0021); a server-side reader runs per request with SQLite underneath it, so it may take predicates. Both tiers project rows to the declared columns and type them off the same declarations, so renaming a field breaks a `queryCurrent` consumer exactly as it breaks a `getCurrent` one. The predicate text is the one part no type can check, because it is SQL: pass values through `args`, never by interpolation.
 
+### A `u256` field in the raw-SQL tier
+
+A field declared `{storage: 'blob', type: 'u256'}` (ADR-0098) is stored as its canonical encoding, 32 big-endian bytes in a `BLOB` column, and every read of this backend answers it as a `bigint`: the four seam reads, `queryCurrent` / `queryAsOf`, `createQuerySurface` and the snapshot producer alike. A PREDICATE, though, is SQL and runs against what the column holds, so a value compared with a `u256` column must be bound as that encoding, through `u256Arg`:
+
+```ts
+import {u256Arg} from '@etherfold/state-store-sqlite';
+
+await surface.pool.queryCurrent({where: 'amount >= ?', args: [u256Arg(10n ** 18n)], orderBy: 'amount'});
+```
+
+Binding a decimal string or a number instead is NOT an error, it is a comparison with a BLOB it can never equal, so the query is silently empty. The bytewise order of the encoding is the numeric order, so `<`, `>` and `ORDER BY` on such a column are numeric (`9` before `10`).
+
 ## Addressing state: hash, height, or time
 
 All three axes resolve to a block number through the canonical `_blocks` table, and then run the one as-of predicate, so they answer identically when they identify the same block. There is one addressing mechanism, not three.

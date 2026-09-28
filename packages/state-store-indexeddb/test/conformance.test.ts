@@ -1,5 +1,9 @@
 import 'fake-indexeddb/auto';
-import {describeStateStoreConformance, type TwoWriters} from '@etherfold/state-store-conformance';
+import {
+	describeStateStoreConformance,
+	type StateStoreConformanceOptions,
+	type TwoWriters,
+} from '@etherfold/state-store-conformance';
 import {IndexedDBStateStore} from '../src/index.js';
 import {freshDatabaseName} from './utils/database.js';
 
@@ -33,6 +37,13 @@ import {freshDatabaseName} from './utils/database.js';
  * addressed apart, which must keep writing at the same time.
  */
 
+/**
+ * This store's non-seam read of a row as it holds it, so the suite can check a
+ * `u256` is held canonically (ADR-0098).
+ */
+const storedCurrent: StateStoreConformanceOptions['storedCurrent'] = (store, entity, id) =>
+	(store as IndexedDBStateStore).storedCurrent(entity, id);
+
 /** Two stores on one database name, or on two: the whole of the scoping question here. */
 const twoWriters: TwoWriters = {
 	sharingStorage(declarations) {
@@ -53,7 +64,7 @@ const twoWriters: TwoWriters = {
 await describeStateStoreConformance(
 	'IndexedDBStateStore, keeping everything',
 	(declarations) => new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName()}),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
@@ -64,7 +75,7 @@ await describeStateStoreConformance(
 			retention: {blocks: 128},
 			finalityDepth: 64,
 		}),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
@@ -75,7 +86,7 @@ await describeStateStoreConformance(
 			retention: 'revert-only',
 			finalityDepth: 64,
 		}),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );
 
 /**
@@ -92,5 +103,5 @@ await describeStateStoreConformance(
 	'IndexedDBStateStore, refusing two transactions at once',
 	(declarations) =>
 		new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName(), oneTransactionAtATime: true}),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );

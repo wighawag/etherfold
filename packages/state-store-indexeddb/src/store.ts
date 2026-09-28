@@ -1,11 +1,12 @@
 import {
-	assertFieldValues,
 	assertListingLimit,
 	assertRetained,
 	blockAlreadyRecorded,
 	blockHashAlreadyRecorded,
 	blockNotAboveTip,
 	boundedListing,
+	decodeFieldValues,
+	encodeFieldValues,
 	idValues,
 	mustGet,
 	normalizeBlockHash,
@@ -346,8 +347,10 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const planned = mutations.map((mutation) => {
 			const entity = mustGet(this.entities, mutation.entity);
 			const id = idValues(entity, mutation.id);
-			if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
-			return {mutation, entity, key: rowKey(entity, mutation.id), id};
+			// checked AND encoded before the transaction opens: a semantic field is
+			// held in its canonical encoding (ADR-0098) and decoded on the way out.
+			const stored = mutation.type === 'upsert' ? encodeFieldValues(entity, mutation.values) : undefined;
+			return {mutation, entity, key: rowKey(entity, mutation.id), id, stored};
 		});
 
 		const db = await this.database();
@@ -380,7 +383,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 			throw abort(tx, settled, blockNotAboveTip(block.number, tip));
 		}
 
-		for (const {mutation, entity, key, id} of planned) {
+		for (const {mutation, entity, key, id, stored} of planned) {
 			const previous = (await request(current.get(key))) as CurrentRecord | undefined;
 			// close the live version AT this block: the range is half-open, so the
 			// version that was live is readable as of every block below this one.
@@ -391,7 +394,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 				);
 			}
 			if (mutation.type === 'upsert') {
-				const values = completeRow(entity, id, mutation.values);
+				const values = completeRow(entity, id, stored);
 				current.put({lower: block.number, values}, key);
 				versions.put({lower: block.number, upper: null, values}, versionKey(key, block.number));
 			} else if (previous) {
@@ -503,7 +506,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const settled = this.commitIfSerialising(tx);
 		const record = (await request(tx.objectStore(CURRENT).get(rowKey(declaration, id)))) as CurrentRecord | undefined;
 		await settled;
-		return record && ({...record.values, _lower: record.lower, _upper: null} as T);
+		return record && (decodeFieldValues(declaration, {...record.values, _lower: record.lower, _upper: null}) as T);
 	}
 
 	/**
@@ -530,7 +533,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		if (!cursor) return undefined;
 		const version = cursor.value as VersionRecord;
 		if (version.upper !== null && version.upper <= at) return undefined;
-		return {...version.values, _lower: version.lower, _upper: version.upper} as T;
+		return decodeFieldValues(declaration, {...version.values, _lower: version.lower, _upper: version.upper}) as T;
 	}
 
 	/**
@@ -560,7 +563,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		// guess a caller has to make from `rows.length`.
 		await walk(tx.objectStore(CURRENT).openCursor(range), (cursor) => {
 			const record = cursor.value as CurrentRecord;
-			rows.push({...record.values, _lower: record.lower, _upper: null} as T);
+			rows.push(decodeFieldValues(declaration, {...record.values, _lower: record.lower, _upper: null}) as T);
 			return rows.length > limit ? 'stop' : 'continue';
 		});
 		await settled;
@@ -594,7 +597,9 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		await walk(tx.objectStore(VERSIONS).openCursor(range), (cursor) => {
 			const version = cursor.value as VersionRecord;
 			if (version.lower <= at && (version.upper === null || at < version.upper)) {
-				rows.push({...version.values, _lower: version.lower, _upper: version.upper} as T);
+				rows.push(
+					decodeFieldValues(declaration, {...version.values, _lower: version.lower, _upper: version.upper}) as T,
+				);
 				if (rows.length > limit) return 'stop';
 			}
 			return 'continue';
@@ -765,6 +770,23 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const record = (await request(tx.objectStore(BLOCKS).get(number))) as BlockRecord | undefined;
 		await settled;
 		return record;
+	}
+
+	/**
+	 * The live row of one entity AS THIS STORE HOLDS IT: a semantic field in its
+	 * canonical encoding (ADR-0098) rather than decoded, and no version columns.
+	 *
+	 * Not part of the seam, which answers values and never their encoding. This is
+	 * here so a test can see the stored form, as `getBlock` lets one see a block.
+	 */
+	async storedCurrent(entity: string, id: EntityId): Promise<Record<string, unknown> | undefined> {
+		const declaration = mustGet(this.entities, entity);
+		const db = await this.database();
+		const tx = db.transaction(CURRENT, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const record = (await request(tx.objectStore(CURRENT).get(rowKey(declaration, id)))) as CurrentRecord | undefined;
+		await settled;
+		return record && {...record.values};
 	}
 
 	// -- internals -----------------------------------------------------------

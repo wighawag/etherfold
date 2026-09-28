@@ -1,5 +1,5 @@
 import {UnknownEntityError} from './errors.js';
-import {isSemanticTypeName, SEMANTIC_TYPES} from './semantic-types.js';
+import {isSemanticTypeName, SEMANTIC_TYPES, type SemanticType} from './semantic-types.js';
 import type {
 	EntityId,
 	EnumField,
@@ -288,17 +288,56 @@ function enumFieldsOf(entity: NormalizedEntity): readonly (readonly [string, Enu
 }
 
 /**
+ * Each entity's semantic fields with their types, built once per normalized
+ * entity and kept off it, for the same reason as `enumSets`.
+ */
+const semanticSets = new WeakMap<NormalizedEntity, readonly (readonly [string, SemanticField, AnySemanticType])[]>();
+
+type AnySemanticType = SemanticType<unknown, unknown>;
+
+function semanticFieldsOf(entity: NormalizedEntity): readonly (readonly [string, SemanticField, AnySemanticType])[] {
+	let known = semanticSets.get(entity);
+	if (!known) {
+		known = Object.entries(entity.fields).flatMap(([field, declared]) =>
+			typeof declared === 'string' || !('type' in declared)
+				? []
+				: [[field, declared, SEMANTIC_TYPES[declared.type]] as const],
+		);
+		semanticSets.set(entity, known);
+	}
+	return known;
+}
+
+/**
  * Refuse an upsert's values that its declaration does not admit, before a
- * backend writes anything: today, a value of an enum field outside its declared
- * set (ADR-0098). Every backend calls it where it plans a block, beside
+ * backend writes anything: a value of an enum field outside its declared set,
+ * and a value of a semantic field its type does not admit (a `u256` that is
+ * negative, wider than 256 bits or not a `bigint`), ADR-0098. Every backend
+ * calls it where it plans a block (through `encodeFieldValues`), beside
  * `idValues`, so a refused value leaves the store as it was, and the refusal is
  * the same sentence on every backend.
  *
  * NULL (or an unlisted field, which a whole-row write stores as NULL) is
- * admitted, as it is for every field. An entity with no enum field pays one
- * cached empty-list check.
+ * admitted, as it is for every field. An entity with no enum and no semantic
+ * field pays two cached empty-list checks.
  */
 export function assertFieldValues(entity: NormalizedEntity, values: Record<string, unknown> | undefined): void {
+	encodeFieldValues(entity, values);
+}
+
+/**
+ * The values an upsert STORES: checked as `assertFieldValues` checks them, with
+ * each semantic field in its type's canonical encoding (a `u256` as its 32
+ * big-endian bytes), ADR-0098. The one write-side conversion every backend
+ * makes, so no backend chooses an encoding of its own.
+ *
+ * Returns `values` itself when the entity declares no semantic field, and a
+ * shallow copy otherwise: the caller's object is never changed.
+ */
+export function encodeFieldValues(
+	entity: NormalizedEntity,
+	values: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
 	for (const [field, declared, allowed] of enumFieldsOf(entity)) {
 		const value = values?.[field];
 		if (value === null || value === undefined) continue;
@@ -309,6 +348,54 @@ export function assertFieldValues(entity: NormalizedEntity, values: Record<strin
 			);
 		}
 	}
+	const semantic = semanticFieldsOf(entity);
+	if (semantic.length === 0) return values;
+	const stored: Record<string, unknown> = {...values};
+	for (const [field, declared, type] of semantic) {
+		const value = values?.[field];
+		if (value === null || value === undefined) continue;
+		try {
+			stored[field] = type.encode(value);
+		} catch (error) {
+			throw new Error(
+				`entity ${entity.name} field ${field} is declared as a ${declared.type} (${describeField(declared)}), and ` +
+					`was written a value it does not admit: ${(error as Error).message}. The value is refused rather than stored.`,
+			);
+		}
+	}
+	return stored;
+}
+
+/**
+ * A row as a backend's storage holds it, with each semantic field DECODED back
+ * to its value (a `u256` to a `bigint`): the one read-side conversion every
+ * backend makes, so the seam answers the value and never its encoding
+ * (ADR-0098). Every other column, the version columns included, passes through.
+ *
+ * A stored form that is bytes in another wrapper (an `ArrayBuffer`, or another
+ * view, which is what some SQL drivers hand back for a BLOB) is read as the
+ * bytes it holds. A stored form that is not the canonical encoding THROWS rather
+ * than being answered, since it is not a value this store could have written.
+ *
+ * Returns `row` itself when the entity declares no semantic field.
+ */
+export function decodeFieldValues<T extends Record<string, unknown>>(entity: NormalizedEntity, row: T): T {
+	const semantic = semanticFieldsOf(entity);
+	if (semantic.length === 0) return row;
+	const decoded: Record<string, unknown> = {...row};
+	for (const [field, , type] of semantic) {
+		const stored = row[field];
+		if (stored === null || stored === undefined) continue;
+		decoded[field] = type.decode(asBytes(stored));
+	}
+	return decoded as T;
+}
+
+function asBytes(value: unknown): unknown {
+	if (value instanceof Uint8Array) return value;
+	if (value instanceof ArrayBuffer) return new Uint8Array(value);
+	if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+	return value;
 }
 
 /**

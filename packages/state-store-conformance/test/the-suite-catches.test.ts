@@ -48,6 +48,11 @@ import {runStateStoreConformance, type StateStoreFactory} from '../src/index.js'
  * - `EagerEnforcementStore` is the same mistake the other way round: a store
  *   with no floor claiming a pass at one. Nothing is deleted on such a store by
  *   contract, so the claim is about a pass that could not have happened.
+ * - `DecimalU256Store` answers a declared `u256` as the decimal string it used
+ *   to be stored as, before the declaration could say `u256` (ADR-0098). It is
+ *   the half-migrated backend: every value is RIGHT, `BigInt()` of it would even
+ *   compare equal, and a server and a browser now read one declaration as two
+ *   different types.
  * - `AccommodatingStore` takes a block at any height by REWINDING to make room
  *   for it. It is what a store does when it treats a stale writer's offer as
  *   something to fit in rather than something to refuse, and it is the shape a
@@ -246,6 +251,29 @@ class AccommodatingStore extends Decorated {
 	}
 }
 
+/** Answers a `u256` (any `bigint`) as its decimal string: the value right, the type wrong. */
+class DecimalU256Store extends Decorated {
+	override async getCurrent<T = Record<string, unknown>>(entity: string, id: EntityId): Promise<T | undefined> {
+		return decimal(await this.inner.getCurrent<Record<string, unknown>>(entity, id)) as T | undefined;
+	}
+
+	override async listCurrent<T = Record<string, unknown>>(
+		entity: string,
+		prefix: EntityIdPrefix,
+		limit: number,
+	): Promise<Listing<T>> {
+		const listing = await this.inner.listCurrent<Record<string, unknown>>(entity, prefix, limit);
+		return {...listing, rows: listing.rows.map((row) => decimal(row) as T)};
+	}
+}
+
+function decimal(row: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	if (!row) return row;
+	return Object.fromEntries(
+		Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? value.toString() : value]),
+	);
+}
+
 describe('the conformance suite', () => {
 	it('passes an honest backend, so a failure below means something', async () => {
 		expect(await failedCases(honest)).toEqual([]);
@@ -299,6 +327,34 @@ describe('the conformance suite', () => {
 		// takes any height, and a revert makes a height applicable again.
 		expect(failures.join('\n')).not.toMatch(/EMPTY store admits any height/);
 		expect(failures.join('\n')).not.toMatch(/admits a height again once a revert/);
+	});
+
+	it('fails a backend that answers a declared u256 as a decimal string rather than a bigint', async () => {
+		const failures = await failedCases((declarations) => new DecimalU256Store(new MemoryStateStore(declarations)));
+
+		expect(failures.join('\n')).toMatch(/a bigint written is the bigint read, at the tip and in a listing/);
+		expect(failures.join('\n')).toMatch(/snapshot-document round trip and install/);
+	});
+
+	it('fails a backend that holds a u256 as anything but its canonical encoding', async () => {
+		const result = await runStateStoreConformance(honest, {
+			// the honest store, reporting its stored form as the decimal text a u256
+			// used to be kept in: the shape a backend that skipped the encoding has
+			storedCurrent: async (store, entity, id) =>
+				decimal(await (store as MemoryStateStore).getCurrent<Record<string, unknown>>(entity, id)),
+		});
+		const failures = result.failures.map((failure) => `${failure.group} > ${failure.name}`);
+
+		expect(failures).toEqual([
+			'a declared u256 is a bigint at the seam > the stored form is the canonical encoding: 32 big-endian bytes, the same for equal values',
+		]);
+	});
+
+	it('passes the honest store handing over its real stored form', async () => {
+		const result = await runStateStoreConformance(honest, {
+			storedCurrent: (store, entity, id) => (store as MemoryStateStore).storedCurrent(entity, id),
+		});
+		expect(result.failures).toEqual([]);
 	});
 
 	it('fails a backend whose cursor can end up ahead of the block it describes', async () => {
