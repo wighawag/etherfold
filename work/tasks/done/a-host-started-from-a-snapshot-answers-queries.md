@@ -35,3 +35,22 @@ The accessor's type lives in `@etherfold/accessor`, which depends on `@etherfold
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
 >
 > CI: dorfl's gate runs vitest only. The real-browser suites run in CI's `browser (chromium)`, `browser (firefox)` and `browser (webkit)` jobs; the PR is done only when those three are green too.
+
+## Decisions
+
+- **How the accessor wrapper finds the reads that take a block.** It is a `Proxy` that follows the seam's own rule: every accessor read takes one query object, and a read as of a block puts it in that object's `at` (`ReadAt`). Any method whose first argument has an `at` is checked before it runs. Non-function properties such as `rowsExaminedBound` read through unchanged.
+  - Why: a method the accessor gains later is covered as soon as it takes a `ReadAt`, with nothing in the wrapper to update.
+  - Alternative: an explicit `find`/`children` list, which would silently answer a new method's historical reads below the floor.
+  - Limit: a future read that took `at` as a separate positional argument would not be checked. Nothing in the seam does that today.
+  - The check runs on every call, because the handler builds its accessor once per store while the floor can be cleared by a wipe and set by a later bootstrap.
+  - Touches: only `@etherfold/state-store`.
+- **How the suite's one-time capability read stays stable.** The store underneath keeps a 1-block window (`finalityDepth: 1`), and the snapshot carries exactly one block of history above its floor. So the narrowed claim is `{window, blocks: 1}` from install onward, at every tip the suite reaches.
+  - Alternative: a suite option stating a floor. I rejected it because it needs new floor-aware retention cases.
+  - Consequence: in the conformance run the inner window, not the snapshot floor, is what refuses. Refusal at the snapshot floor is covered by the separate floor test (on a store that keeps everything) and by the reader test.
+- **New suite option `QueryConformanceOptions.snapshotTakenAt`.** One case, "a store holding no block answers every list empty, pinned to no block", can never be honest for a bootstrapped store, because installing a snapshot records blocks. It was the only failure.
+  - With the option set, that one case (the only one that writes nothing) is asked with the same request and the same empty lists, pinned to the snapshot's cut instead of `null`. Nothing is skipped and no other case changes.
+  - The suite refuses a value that is not a block below 10, the lowest block any case writes. The name follows `SnapshotHead.takenAt`.
+  - Alternatives: skip the case (that weakens the suite), or have `tip()` lie. Rejected.
+  - Touches: the public `@etherfold/graphql/conformance` API, which is why graphql gets a minor changeset. This goes beyond "keep your change in the store"; the task did name a suite option as allowed, so I recorded it here rather than stopping.
+- **`workerHosts.ts` gained an additive `open(store, role)` hook** instead of new tests reaching into its unexported helpers. It is small and additive, but it does touch a file the parallel `the-tab-bundle-carries-no-graphql-for-the-worker-executor` task may also edit.
+- **Typing.** `accessor` and `tip` are typed loosely, the same as `ClaimedStateStore`'s (`(options?: never) => unknown`), because `@etherfold/accessor` depends on this package. `tip()` does not update the wrapper's own tracked tip (`knownTip`). A reader's handle can therefore report a narrower window than it can actually answer, which is the safe direction; its floor stays exact.

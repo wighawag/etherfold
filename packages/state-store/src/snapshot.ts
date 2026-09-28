@@ -217,6 +217,27 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	private origin: number | undefined;
 	/** The highest block this handle knows about. See the note on the class. */
 	private knownTip: number | undefined;
+	/**
+	 * THE QUERY LAYER'S TWO READS (ADR-0099), present only when the store underneath
+	 * has them, detected as `ClaimedStateStore` detects them (`typeof ... ===
+	 * 'function'`), so a store without them still gets the query handler's clear
+	 * refusal rather than a failure at call time. Neither is part of the seam, and
+	 * both are typed loosely for the reason the claimed handle's are: the
+	 * accessor's type lives in `@etherfold/accessor`, which depends on this package.
+	 *
+	 * `accessor` keeps THIS handle's as-of rule, which is the whole reason it is not
+	 * a plain forward: every accessor read that carries a block (`at`) is checked
+	 * against the NARROWED claim first, with the same `assertReadable` `getAsOf` and
+	 * `listAsOf` use, so a block below the snapshot's floor is refused with
+	 * `BlockNotRetainedError` and never answered from rows that have no history
+	 * below it (ADR-0095, ADR-0028). A tip read (no `at`) goes straight through, and
+	 * a store that was never bootstrapped is a pass-through, as its other reads are.
+	 * See `floored`.
+	 *
+	 * `tip` is the store underneath's, unchanged.
+	 */
+	readonly accessor?: (options?: never) => unknown;
+	readonly tip?: () => Promise<number | undefined>;
 
 	/** Use `openSnapshotAware`, which recovers a previously recorded origin. */
 	constructor(
@@ -225,6 +246,15 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	) {
 		this.origin = origin;
 		this.knownTip = origin;
+		const queryable = inner as {accessor?: (options?: never) => unknown; tip?: () => Promise<number | undefined>};
+		if (typeof queryable.accessor === 'function') {
+			const accessor = queryable.accessor;
+			this.accessor = (options) => this.floored(accessor.call(inner, options));
+		}
+		if (typeof queryable.tip === 'function') {
+			const tip = queryable.tip;
+			this.tip = () => tip.call(inner);
+		}
 	}
 
 	/** The block this store's contents came from, or `undefined` if it computed them itself. */
@@ -512,6 +542,44 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	private async assertReadable(at: number): Promise<void> {
 		if (this.origin === undefined) return;
 		await assertRetained(this.capabilities, at, () => this.knownTip);
+	}
+
+	/**
+	 * The accessor the store underneath returned, with this handle's floor in front
+	 * of every read that carries a block.
+	 *
+	 * ## How it finds the reads that take a block
+	 *
+	 * By the SEAM'S CONVENTION rather than by a list of names: every accessor read
+	 * takes one query object, and a read as of a block carries it as that object's
+	 * `at` (`ReadAt` in `@etherfold/accessor`, shared by `find` and `children`). So
+	 * the wrapper is a `Proxy` that, for ANY method, checks the first argument's
+	 * `at` when it is present and delegates unchanged when it is not. A method the
+	 * accessor gains later is floored the moment it takes a `ReadAt`, with nothing
+	 * here to update; a list of names would have answered a new method's historical
+	 * reads below the floor, silently, until somebody remembered this file.
+	 *
+	 * Everything else about the accessor (a property such as the IndexedDB one's
+	 * `rowsExaminedBound`) reads through unchanged. The check runs on every call,
+	 * not once when the accessor is built, because the floor moves: a wipe clears it
+	 * and a later `bootstrap` sets it, and the query handler builds its accessor
+	 * once per store.
+	 */
+	private floored(accessor: unknown): unknown {
+		if (typeof accessor !== 'object' || accessor === null) return accessor;
+		const assertReadable = (at: number) => this.assertReadable(at);
+		return new Proxy(accessor, {
+			get(target, key) {
+				const value: unknown = Reflect.get(target, key, target);
+				if (typeof value !== 'function') return value;
+				return (...args: unknown[]): unknown => {
+					const query = args[0];
+					const at = typeof query === 'object' && query !== null ? (query as {at?: unknown}).at : undefined;
+					if (at === undefined) return Reflect.apply(value, target, args);
+					return assertReadable(at as number).then(() => Reflect.apply(value, target, args));
+				};
+			},
+		});
 	}
 }
 
