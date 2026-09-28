@@ -3,6 +3,7 @@ title: 'The reader-tab spike records a stable generation, so a local browser run
 slug: reader-tab-spike-results-record-a-stable-generation
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
