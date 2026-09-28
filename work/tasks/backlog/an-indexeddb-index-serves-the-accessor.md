@@ -2,13 +2,24 @@
 title: 'An IndexedDB index serves the accessor, measured first and checked against the scan'
 slug: an-indexeddb-index-serves-the-accessor
 spec: the-same-query-runs-against-a-worker-and-a-server
-blockedBy: [a-browser-app-queries-its-worker-with-graphql]
+needsAnswers: true
+blockedBy:
+  - a-browser-app-queries-its-worker-with-graphql
+  - port-stratagems-to-the-etherfold-packages
 covers: [16, 21]
 ---
 
+<!-- open-questions -->
+
+## Open questions
+
+1. How does a declaration mark a field as indexed for rung 2 (for example `indexed: true` on the field, or a list on the entity)? It changes the declaration, which is ADR-0098 territory, so the maintainer decides before this is built (it runs after the stratagems port).
+
+<!-- /open-questions -->
+
 ## What to build
 
-Rung 2 of the IndexedDB accessor (ADR-0099): one `multiEntry` index on the current rows over a computed array of `[field, value]` subkeys, so a `where` is an index range and an `orderBy` rides the index order (`docs/spikes/a-multientry-index-over-computed-field-keys/` measured this viable on all three engines). It costs one package-level `versionchange`, which `keys.ts` sanctions. It is GATED on a write-path measurement FIRST: measure the fold's write cost with and without the index on the real workload (the stratagems conformance workload through the shipped backend, not a raw probe), record it as a finding under `work/notes/findings/`, and if the cost is unacceptable, stop and route to needs-attention with the numbers instead of shipping. If it ships: rung 1 stays as the fallback for fields nobody indexed and as the reference, and the SAME queries answer identically through rung 1 and rung 2 (a test that runs both). Choose how a declaration marks a field filterable and record it. This is the last task of the spec: REMOVE ADR-0099's `accepted, not yet implemented` status line in the same change and update its Status section to say where it is built.
+Rung 2 of the IndexedDB accessor (ADR-0099): one `multiEntry` index on the current rows over a computed array of `[field, value]` subkeys, so a `where` is an index range and an `orderBy` rides the index order (`docs/spikes/a-multientry-index-over-computed-field-keys/` measured this viable on all three engines). It costs one package-level `versionchange`, which `keys.ts` sanctions. It is GATED on a write-path measurement FIRST: measure the fold's write cost with and without the index on the real workload (the stratagems conformance workload through the shipped backend, not a raw probe), record it as a finding under `work/notes/findings/`, and if the cost is unacceptable, do not ship the index: rewrite ADR-0099's Status section (and ADR-0098's, whose `the-browser-index-orders-a-u256-numerically` then cannot be built) to say rung 2 was measured and declined, with the numbers, removing both `accepted, not yet implemented` lines, and route to needs-attention so the maintainer confirms. If it ships: rung 1 stays as the fallback for fields nobody indexed and as the reference, and the SAME queries answer identically through rung 1 and rung 2 (a test that runs both). Mark a field indexed the way the open question above is answered. This is the last task of the spec: REMOVE ADR-0099's `accepted, not yet implemented` status line in the same change and update its Status section to say where it is built.
 
 ## Acceptance criteria
 
@@ -19,6 +30,7 @@ Rung 2 of the IndexedDB accessor (ADR-0099): one `multiEntry` index on the curre
 ## Blocked by
 
 - `a-browser-app-queries-its-worker-with-graphql`
+- `port-stratagems-to-the-etherfold-packages`: the maintainer drives this index only after the stratagems port.
 
 ## Prompt
 

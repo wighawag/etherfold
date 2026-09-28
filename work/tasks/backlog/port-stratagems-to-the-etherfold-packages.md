@@ -39,6 +39,7 @@ Move the two consumers we own off the seven `ethereum-indexer*` names, which wer
 ## Blocked by
 
 - `a-build-published-app-starts-from-its-own-publication`: the last task of the spec `a-build-publishes-what-a-browser-app-starts-from`, which proves `build --publish`, the bundle arrival and the publication-index option end to end in the shape this port needs (history `none`, no seed). Everything else is ready: `publish-etherfold-and-deprecate-old-names` is done and every `@etherfold/*` package is on npm.
+- `a-browser-app-queries-its-worker-with-graphql`: the last of the query work (ADR-0098, ADR-0099) the maintainer wants before the port, because `web/` iterates the whole state (`state.cells`, `state.owners`) and the store seam alone cannot enumerate an entity.
 
 ## Prompt
 
@@ -47,5 +48,7 @@ Move the two consumers we own off the seven `ethereum-indexer*` names, which wer
 > FIRST, check this task against current reality: the imports and the workflow were read on 2026-09-26 and either repository may have moved since. Re-derive which `ethereum-indexer*` packages each one resolves (`grep` the `package.json` files and the lockfile) before planning anything.
 >
 > For the processor rewrite, read ADR-0037 (why the JS-object path is gone) and `examples/event-processor-nfts` in etherfold (an `EntityProcessor` and its CLI bundle). An entity processor declares its entities up front and its only set read is a PREFIX of a declared id with a required limit (ADR-0021), so a query `web/` makes by scanning a JS object may need a second entity keyed the way the question is asked, as that example's `ownership` entity is. Keep the old snapshot as the oracle: the port is right when the new fold answers `web/`'s questions the same way over the same history.
+>
+> `web/` reads its state through GraphQL on its worker host (`workerExecutor` from `@etherfold/graphql`, the worker entry passing the query handler, ADR-0099), for example all cells, or the cells in the viewport with a `where` on position fields the ported `cell` entity declares, rather than adding prefix-keyed entities only to make a set readable. Re-query on the state-moved signal.
 >
 > Record every non-obvious choice in a `## Decisions` block at the end of your final report.

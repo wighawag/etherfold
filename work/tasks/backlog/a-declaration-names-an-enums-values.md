@@ -8,11 +8,11 @@ covers: [15, 18]
 
 ## What to build
 
-A field may declare an enum: a declared set of values over a storage class (text), checked at WRITE time on every backend for the cost of a set lookup, refusing a value outside the set with an error naming the field and the allowed values (ADR-0098). The read surface types the field as the union of its values. A field without an enum means exactly what it means today. Conformance cases lead and run on every backend. Do NOT remove ADR-0098's `accepted, not yet implemented` line: `the-browser-index-orders-a-u256-numerically` lands last and removes it.
+A field may declare an enum, `{storage: 'text', enum: ['a', 'b']}`: a declared set of values over text, each a legal GraphQL enum name (refused at declaration time otherwise, since ADR-0099's schema maps them one to one), checked at WRITE time on every backend for the cost of a set lookup, refusing a value outside the set with an error naming the field and the allowed values (ADR-0098). The read surface types the field as the union of its values. A field without an enum means exactly what it means today. Conformance cases lead and run on every backend. Do NOT remove ADR-0098's `accepted, not yet implemented` line: `the-browser-index-orders-a-u256-numerically` lands last and removes it.
 
 ## Acceptance criteria
 
-- [ ] A declared enum field accepts its values and refuses any other at write time on memory, SQLite, IndexedDB and patch, identically (conformance).
+- [ ] A declared enum field accepts its values and refuses any other at write time on memory, SQLite, IndexedDB and patch, identically (conformance); a value that is not a legal GraphQL enum name is refused at declaration time.
 - [ ] The read surface types the field as the union of its declared values (type-level test).
 - [ ] Existing declarations are unchanged; changesets for every published package changed.
 

@@ -1,5 +1,5 @@
 ---
-title: 'The read surface decodes a u256 to a bigint, typed off the declaration'
+title: 'The read surface types a u256 as a bigint, in process and across the port'
 slug: the-read-surface-decodes-a-u256
 spec: a-declaration-a-schema-can-be-built-from
 blockedBy: [every-backend-stores-a-u256-canonically]
@@ -8,11 +8,11 @@ covers: [9, 10]
 
 ## What to build
 
-The generated read surface (in process and over the port) returns a `u256` field as a `bigint`, typed as `bigint` off the declaration, which ADR-0025 said follows "for free" once the declaration describes it. Assert it with type-level tests, since that claim is exactly what would rot. Crossing the worker port keeps it a `bigint` (structured clone carries it). Do NOT remove ADR-0098's `accepted, not yet implemented` line: `the-browser-index-orders-a-u256-numerically` lands last and removes it.
+Since `every-backend-stores-a-u256-canonically`, the store seam answers a `u256` as a `bigint`. The generated read surface (`createReadSurface`, and `createPortReadSurface` over a worker host's port) TYPES such a field as `bigint`, derived from the declaration, which ADR-0025 said follows "for free" once the declaration describes it; assert it with type-level tests, since that claim is exactly what would rot. Crossing the worker port keeps it a `bigint` at run time (structured clone carries it; check the port's row codec does not stringify it). Do NOT remove ADR-0098's `accepted, not yet implemented` line: `the-browser-index-orders-a-u256-numerically` lands last and removes it.
 
 ## Acceptance criteria
 
-- [ ] A `u256` field reads as a `bigint` from the read surface in process and over the port.
+- [ ] A `u256` field reads as a `bigint` from the read surface in process and over the port (run time).
 - [ ] Type-level tests: the field is typed `bigint`, derived from the declaration.
 - [ ] Changesets for every published package changed.
 

@@ -8,11 +8,13 @@ covers: [2, 13, 14, 19, 25]
 
 ## What to build
 
-A worker host (dedicated and SharedWorker, and the main-thread host through the same port surface) answers GraphQL: the schema and the `graphql` runtime live in the worker, built from the host's declarations over the IndexedDB accessor, and `workerExecutor(port)` in the tab sends documents over the host port (a new port case). Parsed and validated documents are cached in the worker. A READER tab under tab election (ADR-0097) answers queries from the shared store the same way. The worker executor joins the query conformance suite. Measure and record the gzipped cost the GraphQL runtime adds to a worker bundle, and state it in the package README, since an app decides from it whether to take GraphQL or stay on the read surface. Do NOT remove ADR-0099's `accepted, not yet implemented` line: `an-indexeddb-index-serves-the-accessor` lands last and removes it.
+A worker host (dedicated and SharedWorker, and the main-thread host through the same port surface) answers GraphQL: the schema and the `graphql` runtime live in the worker, built from the host's declarations over the IndexedDB accessor, and `workerExecutor(port)` in the tab sends documents over the host port. It stays OPT-IN in the worker bundle (ADR-0099): `@etherfold/browser` gains a GENERIC query case on the host port whose handler the app's worker entry injects (for example a `query` option on `hostIndexerInThisWorker`), and never imports GraphQL; `@etherfold/graphql` provides that handler and `workerExecutor`, so the dependency points from graphql to browser. A worker bundle for an app that does not pass the handler contains no `graphql` (assert it). `workerExecutor` normalises a closed port or a dead host to the contract's transport-failure shape. Parsed and validated documents are cached in the worker. A READER tab under tab election (ADR-0097) answers queries from the shared store the same way. The worker executor joins the query conformance suite. Measure and record the gzipped cost the GraphQL runtime adds to a worker bundle, and state it in the package README, since an app decides from it whether to take GraphQL or stay on the read surface. Do NOT remove ADR-0099's `accepted, not yet implemented` line: `an-indexeddb-index-serves-the-accessor` lands last and removes it.
 
 ## Acceptance criteria
 
 - [ ] `workerExecutor` against a dedicated-worker host and a SharedWorker host passes the query conformance suite byte for byte; a reader tab under tab election answers the same queries.
+- [ ] A closed port and a terminated worker host each yield the contract's transport-failure shape, asserted in the suite.
+- [ ] A worker bundle built without the query handler contains no `graphql` module.
 - [ ] Parsed documents are cached (asserted: a repeated document is not re-parsed).
 - [ ] The bundle cost is measured and stated; changesets for every published package changed.
 

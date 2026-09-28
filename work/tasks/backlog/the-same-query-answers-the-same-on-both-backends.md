@@ -8,12 +8,12 @@ covers: [1, 5, 6, 7, 8, 12, 22, 23]
 
 ## What to build
 
-A query conformance suite in `@etherfold/graphql`, parameterised by an executor factory, exactly parallel to `@etherfold/state-store-conformance`: one list of `{query, variables, expected}` cases run against an executor over a SQLite-backed accessor and one over an IndexedDB-backed accessor, asserting identical rows and identical SERIALISATION (the four parity rules of ADR-0099: `bigint`/`u256`, error codes, transport-failure shape, `extensions.generation`). Every capability the browser cannot serve, the bound refusal and `BlockNotRetainedError` appear as asserted refusals with the same code on both. Include nested relations, enums, `u256` ordering and an as-of query. Do NOT remove ADR-0099's `accepted, not yet implemented` line: `an-indexeddb-index-serves-the-accessor` lands last and removes it.
+A query conformance suite in `@etherfold/graphql`, parameterised by an executor factory, exactly parallel to `@etherfold/state-store-conformance`: one list of `{query, variables, expected}` cases run against an executor over a SQLite-backed accessor and one over an IndexedDB-backed accessor, asserting identical rows and identical SERIALISATION (the four parity rules of ADR-0099: `bigint`/`u256`, error codes, transport-failure shape, `extensions.generation`). `BlockNotRetainedError` is asserted with the same code on both. Every capability the browser cannot serve, and the rows-examined bound, are asserted PER EXECUTOR: the IndexedDB-backed executor refuses with the accessor's code, the SQLite-backed one answers (ADR-0099: a documented difference between deployments, not a parity rule). This task also delivers story 12 of the spec `a-declaration-a-schema-can-be-built-from` (the same nested query works in the browser and against a server). Include nested relations, enums, `u256` ordering and an as-of query. Do NOT remove ADR-0099's `accepted, not yet implemented` line: `an-indexeddb-index-serves-the-accessor` lands last and removes it.
 
 ## Acceptance criteria
 
 - [ ] The suite passes against both executors with byte-identical results for every case, including nested relations, enums, `u256` and as-of.
-- [ ] Every refusal (bound, retention, unservable capability) is asserted with the same code on both.
+- [ ] The retention refusal is asserted with the same code on both; the bound and every browser-only refusal are asserted per executor (IndexedDB refuses with the accessor's code, SQLite answers).
 - [ ] Changesets for every published package changed.
 
 ## Blocked by
