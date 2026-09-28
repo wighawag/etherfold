@@ -1,4 +1,5 @@
 import {UnknownEntityError} from './errors.js';
+import {isSemanticTypeName, SEMANTIC_TYPES} from './semantic-types.js';
 import type {
 	EntityId,
 	EnumField,
@@ -7,6 +8,7 @@ import type {
 	EntityDeclaration,
 	EntityRelation,
 	NormalizedEntity,
+	SemanticField,
 } from './types.js';
 
 /**
@@ -179,13 +181,17 @@ function fieldOf(name: string, field: string, type: unknown): FieldDeclaration {
 		throw new Error(`entity ${name} declares field ${field} with unknown type ${JSON.stringify(type)}`);
 	}
 	const declared = type as Record<string, unknown>;
-	const extra = Object.keys(declared).filter((key) => key !== 'storage' && key !== 'enum');
-	if (extra.length > 0 || !('enum' in declared)) {
+	const keys = Object.keys(declared);
+	const isEnum = keys.every((key) => key === 'storage' || key === 'enum') && 'enum' in declared;
+	const isSemantic = keys.every((key) => key === 'storage' || key === 'type') && 'type' in declared;
+	if (!isEnum && !isSemantic) {
 		throw new Error(
 			`entity ${name} declares field ${field} as ${JSON.stringify(type)}: a field is a storage class ` +
-				`(${FIELD_TYPES.join(', ')}) or an enum, {storage: 'text', enum: [...]}.`,
+				`(${FIELD_TYPES.join(', ')}), an enum, {storage: 'text', enum: [...]}, or a semantic type beside its ` +
+				`storage class, {storage, type} (known: ${Object.keys(SEMANTIC_TYPES).join(', ')}).`,
 		);
 	}
+	if (isSemantic) return semanticFieldOf(name, field, declared.storage, declared.type);
 	if (declared.storage !== 'text') {
 		throw new Error(
 			`entity ${name} declares field ${field} as an enum over ${JSON.stringify(declared.storage)}: an enum is a ` +
@@ -221,6 +227,29 @@ function fieldOf(name: string, field: string, type: unknown): FieldDeclaration {
 	return Object.freeze({storage: 'text', enum: Object.freeze([...(values as string[])])});
 }
 
+/**
+ * A `{storage, type}` field, checked against the semantic-type registry: the
+ * type must be one it holds, and the storage class one the type can be encoded
+ * in (ADR-0098). Both are facts about the declaration, so both are refused here,
+ * at declaration time, on every backend.
+ */
+function semanticFieldOf(name: string, field: string, storage: unknown, type: unknown): SemanticField {
+	if (!isSemanticTypeName(type)) {
+		throw new Error(
+			`entity ${name} declares field ${field} with the unknown semantic type ${JSON.stringify(type)} ` +
+				`(known: ${Object.keys(SEMANTIC_TYPES).join(', ')}).`,
+		);
+	}
+	const semantic = SEMANTIC_TYPES[type];
+	if (!semantic.storage.includes(storage as FieldType)) {
+		throw new Error(
+			`entity ${name} declares field ${field} as a ${type} in ${String(storage)}: a ${type} is encoded in ` +
+				`${semantic.storage.join(' or ')}, so its storage is ${semantic.storage.map((s) => `'${s}'`).join(' or ')}.`,
+		);
+	}
+	return Object.freeze({storage: storage as FieldType, type});
+}
+
 /** The storage class of a declared field, whichever way it was declared: all a backend's layout needs. */
 export function fieldStorage(field: FieldDeclaration): FieldType {
 	return typeof field === 'string' ? field : field.storage;
@@ -228,14 +257,15 @@ export function fieldStorage(field: FieldDeclaration): FieldType {
 
 /**
  * A declared field as one string, for comparing two declarations and for
- * naming them in a refusal: `text`, or `text enum(open, closed)`.
+ * naming them in a refusal: `text`, `text enum(open, closed)`, or `blob u256`.
  *
  * The values are in DECLARED order, and two enums listing the same values in
  * another order describe themselves differently: a declaration is compared as
  * written, exactly as its id columns are.
  */
 export function describeField(field: FieldDeclaration): string {
-	return typeof field === 'string' ? field : `${field.storage} enum(${field.enum.join(', ')})`;
+	if (typeof field === 'string') return field;
+	return 'type' in field ? `${field.storage} ${field.type}` : `${field.storage} enum(${field.enum.join(', ')})`;
 }
 
 /**
@@ -250,7 +280,7 @@ function enumFieldsOf(entity: NormalizedEntity): readonly (readonly [string, Enu
 	let known = enumSets.get(entity);
 	if (!known) {
 		known = Object.entries(entity.fields).flatMap(([field, declared]) =>
-			typeof declared === 'string' ? [] : [[field, declared, new Set(declared.enum)] as const],
+			typeof declared === 'string' || !('enum' in declared) ? [] : [[field, declared, new Set(declared.enum)] as const],
 		);
 		enumSets.set(entity, known);
 	}

@@ -1,0 +1,6 @@
+---
+'@etherfold/state-store': minor
+'@etherfold/processor-entities': patch
+---
+
+A field can declare a semantic type beside its storage class (ADR-0098): `{storage: 'blob', type: 'u256'}` (new types `SemanticField` and `SemanticTypeName`; `FieldDeclaration` now also admits a `SemanticField`, and `FieldType` stays the four storage classes). The new registry `SEMANTIC_TYPES` (with `SemanticType`, `semanticTypeOf` and `isSemanticTypeName`) defines each semantic type's canonical encode, decode, equality and ordering. `u256` is the first and only member: a `bigint`, encoded as 32 big-endian bytes, so the bytewise order of the encoding is the numeric order; encode refuses a negative value, one wider than 256 bits and a non-`bigint`, and decode refuses anything but 32 bytes. `normalizeEntity` refuses, at declaration time, an unknown semantic type and a storage class the type cannot be encoded in (a `u256` is `blob` only), and `describeField` describes one as `blob u256`. No backend uses a semantic type yet (`every-backend-stores-a-u256-canonically`); until then the derived row type (`FieldValue` / `EntityRow`) types such a field as `unknown`. Existing declarations are unchanged. `@etherfold/processor-entities` re-exports `SemanticField` and `SemanticTypeName`.

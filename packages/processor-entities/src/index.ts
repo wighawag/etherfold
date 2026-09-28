@@ -33,6 +33,8 @@ export type {
 	WritableStateStore,
 	Retention,
 	RetentionSetting,
+	SemanticField,
+	SemanticTypeName,
 } from '@etherfold/state-store';
 
 /**
