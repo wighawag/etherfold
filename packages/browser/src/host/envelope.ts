@@ -673,6 +673,17 @@ export type PortCases = {
 		};
 		readonly response: Listing<PortRow>;
 	};
+	/**
+	 * ONE QUERY, handed to the handler the host's entry injected, and its answer
+	 * (ADR-0099). GENERIC: the request and the answer are opaque here, because this
+	 * package carries the case and never the query language (`host/query.ts`). The
+	 * GraphQL executor on this port is `workerExecutor` in `@etherfold/graphql/worker`,
+	 * which owns its own serialisation, so its answers are the bytes every other
+	 * executor answers.
+	 *
+	 * A host whose entry passed no handler REFUSES it, naming the missing handler.
+	 */
+	readonly query: {readonly request: {readonly request: unknown}; readonly response: unknown};
 };
 
 /**

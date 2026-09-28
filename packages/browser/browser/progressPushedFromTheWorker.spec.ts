@@ -92,6 +92,7 @@ test('pushes progress from the worker to its own tab, and stops when the tab let
 			'onStateMoved',
 			'progress',
 			'promotion',
+			'query',
 			'reads',
 			'reconfigure',
 			'startIndexing',

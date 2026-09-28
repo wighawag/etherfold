@@ -21,8 +21,7 @@ import {indexedDBExecutor, sqliteExecutor} from './executors.js';
  * round trip through JSON text is checked to lose nothing, and the transport
  * chapter is asked of it: its `fetch` is broken three ways. Against a real
  * `/graphql` it is asked in `@etherfold/server` and by `etherfold serve`. The
- * worker executor (`a-worker-host-answers-graphql-over-its-port`) joins as it
- * lands.
+ * worker executor is asked in `worker.test.ts`, over the browser hosts.
  */
 
 /** Small, so the refusal cases stay cheap; the accessor's default (25,000) is its own package's to assert. */

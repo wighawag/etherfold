@@ -1,7 +1,7 @@
 {
 	"name": "@etherfold/graphql",
 	"version": "0.0.0",
-	"description": "One GraphQL schema built from the entity declarations, answered through the accessor seam, with every operation pinned to one block; and the QueryExecutor contract every transport implements. Runtime-neutral. Its query conformance suite, which every executor must pass byte for byte, is the `./conformance` subpath.",
+	"description": "One GraphQL schema built from the entity declarations, answered through the accessor seam, with every operation pinned to one block; and the QueryExecutor contract every transport implements. Runtime-neutral. The worker executor (`workerExecutor`, and the host's `graphqlQueryHandler`) is the `./worker` subpath, the only part that knows `@etherfold/browser`. Its query conformance suite, which every executor must pass byte for byte, is the `./conformance` subpath.",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -16,6 +16,10 @@
 		"./conformance": {
 			"types": "./dist/conformance/index.d.ts",
 			"import": "./dist/conformance/index.js"
+		},
+		"./worker": {
+			"types": "./dist/worker/index.d.ts",
+			"import": "./dist/worker/index.js"
 		},
 		"./package.json": "./package.json"
 	},
@@ -35,14 +39,21 @@
 		"graphql": "^16.14.2"
 	},
 	"peerDependencies": {
+		"@etherfold/browser": "workspace:*",
 		"vitest": ">=3"
 	},
 	"peerDependenciesMeta": {
+		"@etherfold/browser": {
+			"optional": true
+		},
 		"vitest": {
 			"optional": true
 		}
 	},
 	"devDependencies": {
+		"@etherfold/browser": "workspace:*",
+		"@etherfold/core": "workspace:*",
+		"@etherfold/processor-entities": "workspace:*",
 		"@etherfold/state-store-indexeddb": "workspace:*",
 		"@etherfold/state-store-sqlite": "workspace:*",
 		"@libsql/client": "^0.17.3",

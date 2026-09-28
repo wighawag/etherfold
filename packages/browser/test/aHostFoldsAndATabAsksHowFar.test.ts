@@ -149,6 +149,7 @@ describe('an indexer hosted behind a port', () => {
 				'onStateMoved',
 				'progress',
 				'promotion',
+				'query',
 				'reads',
 				'reconfigure',
 				'startIndexing',

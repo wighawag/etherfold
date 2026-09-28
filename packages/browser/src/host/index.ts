@@ -53,6 +53,7 @@ export * from './envelope.js';
 export * from './errors.js';
 export * from './port.js';
 export * from './progress.js';
+export type {HostQueryContext, HostQueryHandler, HostQueryOptions} from './query.js';
 // The tab-side handover and the settings rule are the port's and the host's own;
 // what an app names is the provider it hands over, the settings, and the refusal.
 export type {IndexerProvider} from './provider.js';

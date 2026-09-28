@@ -16,6 +16,7 @@ import {
 	checkTxInclusion as checkTxInclusionAgainst,
 	isRetryable,
 	openIndexer,
+	generationDigestOf,
 	openMemoryGenerationRegistry,
 	sameGeneration,
 } from '@etherfold/core';
@@ -41,6 +42,7 @@ import {executionScopeName, type HostAccess} from './endpoint.js';
 import {cursorsOf, pacingAfterCycle} from './pacing.js';
 import type {HostGeneration, HostHotUpdate, HostProgress, HostReconfigure, SyncPhase} from './envelope.js';
 import {portErrorOf, type PortError} from './errors.js';
+import type {HostQueryContext, HostQueryHandler} from './query.js';
 import {HostSettingsConflictError, hostSettingsOf, settleHostSettings, type HostSettings} from './settings.js';
 import {sameProgress} from './envelope.js';
 import {openStateMovedChannel, type StateMovedAcrossTabs} from '../stateMovedAcrossTabs.js';
@@ -51,6 +53,7 @@ import {
 	leaderIsDisplaceable,
 	openReader,
 	readerContextOf,
+	readerGenerationOf,
 	readerProgress,
 	standForElection,
 	tabElectionName,
@@ -181,6 +184,16 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 		 * visibility (and is never displaced) and never takes the lease.
 		 */
 		tabElection?: TabElection;
+		/**
+		 * THE QUERY HANDLER this host answers the port's `query` case with (ADR-0099),
+		 * or absent for a host that answers no query. OPT-IN, so a worker bundle that
+		 * does not query carries no query language: for GraphQL, pass
+		 * `graphqlQueryHandler()` from `@etherfold/graphql/worker`, and hold
+		 * `workerExecutor(port)` in the tab. See `HostQueryHandler`.
+		 *
+		 * Code, so it is the entry's to pass and never a tab's to send.
+		 */
+		query?: HostQueryHandler;
 	};
 
 /**
@@ -433,6 +446,8 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	/** The reader this host is built from while another host holds the lock. */
 	let reading: ReaderState<ProcessResultType> | undefined;
 	let leaderProgress: HostProgress | undefined;
+	/** The generation the leader last named on the state-moved signal, which a reader's queries report. */
+	let leaderGeneration: string | undefined;
 	let publishedAsLeader: HostProgress | undefined;
 	let stopFollowing: (() => void) | undefined;
 	let seatTaken: Promise<void> | undefined;
@@ -536,6 +551,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		announceReader?.(seat.store);
 		const channel = electionChannel!;
 		const detachMoved = channel.onStateMoved((moved) => {
+			leaderGeneration = moved.generation;
 			for (const handler of [...stateMovedHandlers]) handler(moved);
 		});
 		const detachProgress = channel.onProgress((heard) => {
@@ -547,6 +563,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			detachMoved();
 			detachProgress();
 			leaderProgress = undefined;
+			leaderGeneration = undefined;
 		};
 		publish();
 		settle?.reconsider();
@@ -838,12 +855,29 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * the writable handle and nothing here can reach the mutating half.
 	 */
 	async function storeForReads(): Promise<StateStore> {
-		if (election && role === 'reader') return reading ? reading.store : readerReady;
+		return (await servedState()).store;
+	}
+
+	/**
+	 * WHAT A QUERY IS ANSWERED FROM: the store a read is, and the generation it
+	 * belongs to, resolved in ONE step so they cannot disagree across a promotion.
+	 * A reader names the generation its leader named (`readerGenerationOf`).
+	 */
+	async function queryContext(): Promise<HostQueryContext> {
+		const served = await servedState();
+		if (served.generation !== undefined) return {store: served.store, generation: served.generation};
+		const generation = await readerGenerationOf(leaderGeneration, readerContextOf(spec.source, spec.config), spec);
+		return {store: served.store, generation};
+	}
+
+	/** The store reads are answered from, with its generation's digest where this host holds a container. */
+	async function servedState(): Promise<{store: StateStore; generation?: string}> {
+		if (election && role === 'reader') return {store: reading ? reading.store : await readerReady};
 		if (election && !container) {
 			// A READER answers from the shared store it opened for reading (ADR-0097),
 			// until this host holds a container of its own.
 			const store = await Promise.race([readerReady, firstState.then(() => undefined)]);
-			if (store && !container) return store;
+			if (store && !container) return {store};
 		}
 		await firstState;
 		const canonical = container?.canonical.record;
@@ -854,7 +888,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 					`generation's store is built by the factory this host was given, and the canonical generation's was not.`,
 			);
 		}
-		return state;
+		return {store: state, generation: generationDigestOf(canonical)};
 	}
 
 	/**
@@ -1394,6 +1428,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		promotion,
 		checkTxInclusion,
 		storeForReads,
+		queryContext,
 		connect,
 		reportVisibility,
 		onStateMoved(handler) {
@@ -1403,7 +1438,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			};
 		},
 	};
-	served = serveHostCases(access, backing);
+	served = serveHostCases(access, backing, {query: entry.query});
 
 	// An entry that holds a provider and a source starts with them now, exactly as it
 	// always did; one that left either out waits for a tab's `connect`.

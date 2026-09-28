@@ -91,6 +91,7 @@ test('a tab starts, stops and reconfigures the indexer across the port', async (
 			'onStateMoved',
 			'progress',
 			'promotion',
+			'query',
 			'reads',
 			'reconfigure',
 			'startIndexing',

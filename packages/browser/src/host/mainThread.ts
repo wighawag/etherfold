@@ -1,5 +1,6 @@
 import {executionScopeName, type HostAccess, type MessageEndpoint} from './endpoint.js';
 import {serveHostCases, type HostBacking, type ServedCases} from './cases.js';
+import type {HostQueryOptions} from './query.js';
 
 /**
  * THE MAIN-THREAD HOSTING SHAPE, which like its two siblings is a way of
@@ -61,6 +62,7 @@ export type MainThreadHosting = {
 export function hostOnThisThread(
 	backing: HostBacking,
 	onStopped?: (wire: MainThreadHosting) => void,
+	options: HostQueryOptions = {},
 ): MainThreadHosting {
 	if (typeof MessageChannel === 'undefined') {
 		throw new Error(
@@ -102,6 +104,10 @@ export function hostOnThisThread(
 	// The HOST's end is the other one. Both halves of this shape are in this file,
 	// as they are in `dedicatedWorker.ts` and `sharedWorker.ts`, and the difference
 	// is that here they are two ends of one channel rather than two contexts.
-	served = serveHostCases({host: 'main-thread', endpoint: channel.port1 as unknown as MessageEndpoint}, backing);
+	served = serveHostCases(
+		{host: 'main-thread', endpoint: channel.port1 as unknown as MessageEndpoint},
+		backing,
+		options,
+	);
 	return wire;
 }

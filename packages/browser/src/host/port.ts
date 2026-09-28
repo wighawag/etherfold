@@ -28,6 +28,7 @@ import type {PortStateReads} from './reads.js';
 import {
 	backoffFor,
 	IndexerHostDiedError,
+	IndexerPortClosedError,
 	resolvePortOptions,
 	type HostDeath,
 	type IndexerPortOptions,
@@ -317,6 +318,17 @@ export type IndexerPort = {
 	 * and what crosses is four reads (ADR-0077, ADR-0082).
 	 */
 	readonly reads: PortStateReads;
+	/**
+	 * ONE QUERY, answered by the query handler the host's entry injected (ADR-0099).
+	 *
+	 * Opaque here, because this package carries the case and never the query
+	 * language: what an app holds is an EXECUTOR over this, `workerExecutor(port)`
+	 * from `@etherfold/graphql/worker`, which sends a GraphQL request and normalises
+	 * a closed port (`IndexerPortClosedError`) or a dead host (`IndexerHostDiedError`)
+	 * to the one transport-failure shape. A host whose entry passed no handler
+	 * refuses it, naming the missing handler.
+	 */
+	query(request: unknown): Promise<unknown>;
 	/**
 	 * Stop holding the host.
 	 *
@@ -772,9 +784,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 		transfer?: Transferable[],
 	): Promise<PortResponseValue<Case>> {
 		if (closed) {
-			return Promise.reject(
-				new Error(`this indexer port is closed, so the '${name}' call was not sent. Connect to the host again.`),
-			);
+			return Promise.reject(new IndexerPortClosedError(name, false));
 		}
 		if (dead && lastDeath) {
 			// REFUSED NOW, and by the same type the calls in flight got. A call made while
@@ -904,6 +914,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 		generations: () => request('generations', undefined),
 		promotion: () => request('promotion', undefined),
 		checkTxInclusion: (queries) => request('checkTxInclusion', {queries}),
+		query: (asked) => request('query', {request: asked}),
 		reads: {
 			declarations: () => request('declarations', undefined),
 			getCurrent: (entity, id) => request('getCurrent', {entity, id}),
@@ -942,10 +953,9 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 			clearTimeout(watchTimer);
 			clearTimeout(restartTimer);
 			clearTimeout(settleTimer);
-			const closing = new Error(`the indexer port was closed while this call was in flight.`);
 			for (const [id, waiting] of pending) {
 				pending.delete(id);
-				waiting.reject(closing);
+				waiting.reject(new IndexerPortClosedError(waiting.case, true));
 			}
 			if (released) {
 				stopListening();

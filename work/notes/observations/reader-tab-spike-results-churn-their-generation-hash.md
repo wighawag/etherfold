@@ -1,0 +1,3 @@
+# Reader-tab spike results churn their generation hash on every local run
+
+2026-09-28. Running `pnpm --filter @etherfold/browser test:browser` locally rewrites the committed `docs/spikes/a-reader-tab-learns-from-the-indexing-tab/results/two-tabs-one-database-*.json` with a different `generation` value (e.g. `de92321b...` became `0f48ccab...`) and nothing else, so the recorded evidence churns on every run. The recorder in `packages/browser/browser/readerTabLearnsFromTheIndexingTab.spec.ts` probably wants to stabilise that field the way `sharedWorkerServesSeveralTabs.spec.ts` stabilises its body. Seen while fixing the port-surface list for a-worker-host-answers-graphql-over-its-port; the churn was reverted, not committed.

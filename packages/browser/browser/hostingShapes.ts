@@ -246,7 +246,7 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
 	},
 	{
 		group: 'the port surface',
-		name: 'hands the tab the same thirteen verbs, and nothing that could write',
+		name: 'hands the tab the same fourteen verbs, and nothing that could write',
 		async run(port) {
 			same('the port surface', Object.keys(port).sort(), [
 				'checkTxInclusion',
@@ -258,6 +258,7 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
 				'onStateMoved',
 				'progress',
 				'promotion',
+				'query',
 				'reads',
 				'reconfigure',
 				'startIndexing',

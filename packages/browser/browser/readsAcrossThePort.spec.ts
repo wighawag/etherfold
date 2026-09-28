@@ -68,6 +68,7 @@ test('reads the store across a port to a real worker, and matches a same-thread 
 			'onStateMoved',
 			'progress',
 			'promotion',
+			'query',
 			'reads',
 			'reconfigure',
 			'startIndexing',
