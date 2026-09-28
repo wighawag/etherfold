@@ -1,0 +1,5 @@
+---
+'@etherfold/graphql': minor
+---
+
+The query conformance suite (ADR-0099), on a new `@etherfold/graphql/conformance` subpath (vitest is an optional peer; the root entry never imports it): `describeQueryConformance(label, factory, options)` and `runQueryConformance`, parameterised by an executor factory as `@etherfold/state-store-conformance` is by a store factory. One shared list of requests (`QUERY_PARITY_CASES`: nested relations bounded per parent, enums, `u256` ordering and filtering, every scalar and null, as-of queries, a reorg, an empty store, every error code) must answer the expected JSON byte for byte on every executor, key order included; the retention refusal is asserted with the same code and message wherever the store's claim implies it; the rows-examined bound is asserted per executor from what its deployment declares (`rowsExaminedBound`: refused with `rows-examined-bound` when declared, answered when not); and an executor with a transport declares how to break it (`transportFailures`) and is held to the one transport-failure shape. The in-process executor passes it over SQLite and over IndexedDB.

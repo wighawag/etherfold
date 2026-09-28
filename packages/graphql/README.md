@@ -62,6 +62,26 @@ A `QueryExecutor` is `(request: {query, variables?, operationName?}) => Promise<
 | `internal-error` | anything unexpected; the message is masked |
 | `transport-failure` | the transport failed, carrying `reason` (and `status` for HTTP) |
 
+## The query conformance suite
+
+"The same query answers the same" is checked, not asserted: `@etherfold/graphql/conformance` is a suite every executor must pass, parameterised by an executor factory exactly as `@etherfold/state-store-conformance` is by a store factory. It is on its own subpath because it imports vitest; the root entry never reaches it.
+
+```ts
+import {describeQueryConformance} from '@etherfold/graphql/conformance';
+
+await describeQueryConformance('the in-process executor over IndexedDB', (declarations) => {
+	const store = new IndexedDBStateStore(declarations, {databaseName});
+	const executor = localExecutor(buildQuerySchema(declarations), {accessor: store.accessor({rowsExaminedBound: 60}), generation, tip});
+	return {store, executor, generation};
+}, {rowsExaminedBound: 60});
+```
+
+The factory hands over a store (the suite WRITES blocks through it, and reverts them) and an executor answering from the same storage, and names the generation it reports. The suite then asks one shared list of requests (`QUERY_PARITY_CASES`: nested relations bounded per parent, enums, `u256` ordering and filtering, every scalar and every null, as-of queries, a reorg, an empty store, and every error code the query layer raises) and requires the expected answer BYTE FOR BYTE, compared as the JSON text, key order included, since that is what crosses a transport. As-of and retention cases are selected against what the store's capabilities CLAIM: the retention refusal (`block-not-retained`) has one code and one message on every executor.
+
+The rows-examined bound is a documented difference between deployments, not a parity rule (ADR-0099), so it is asserted PER EXECUTOR from what the deployment declares (`{rowsExaminedBound}`): declaring a bound, the three queries a bounded IndexedDB accessor cannot serve (a scan past it, one parent's children past it, an as-of query whose delta of churn since its block is past it) are refused with `rows-examined-bound`, naming the entity and the bound; declaring none (SQLite), the same three are answered at a size past the browser's default bound. An executor with a transport declares how to break it (`{transportFailures: {reason: breakIt}}`) and is held to the one transport-failure shape for each. `runQueryConformance` runs the cases without a test runner, so a deliberately wrong executor can be checked to fail.
+
+This package runs it against the in-process executor over SQLite and over IndexedDB, once per retention claim each.
+
 ## Testing with vitest
 
 `graphql` 16 ships CommonJS and ESM builds with no `exports` map, so under vitest Pothos (loaded by Node, as CommonJS) and your source (transformed by vite, as ESM) can load two instances, and graphql-js refuses a schema built by one inside the other. Inline Pothos (`test.server.deps.inline: [/@pothos\/core/]`), as this package's own `vitest.config.ts` does. Node alone and every bundler resolve one instance and are unaffected.

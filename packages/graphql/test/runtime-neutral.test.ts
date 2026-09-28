@@ -12,11 +12,17 @@ import {describe, expect, it} from 'vitest';
  * quietly through a later edit. The worker transport is a later subpath
  * (`@etherfold/graphql/worker`), never the root entry.
  *
+ * The query conformance suite is the `./conformance` subpath and imports
+ * vitest, as every suite in this repository does: it is a TEST's import and
+ * never the root's, so it is held to its own list, and the root entry is held
+ * to never reaching it.
+ *
  * (This test reads the filesystem; the published source it inspects does not.)
  */
 
 const SRC = new URL('../src/', import.meta.url).pathname;
 const ENTRY = new URL('../src/index.ts', import.meta.url).pathname;
+const CONFORMANCE = new URL('../src/conformance/', import.meta.url).pathname;
 
 function sourceFiles(dir: string): string[] {
 	return readdirSync(dir, {withFileTypes: true}).flatMap((entry) => {
@@ -43,14 +49,22 @@ describe('@etherfold/graphql is runtime-neutral', () => {
 
 	it('imports nothing but graphql, Pothos and the two seams', () => {
 		const allowed = new Set(['graphql', '@pothos/core', '@etherfold/accessor', '@etherfold/state-store']);
+		// the suite reads the seams and runs under vitest; it never imports a backend
+		const allowedInConformance = new Set([...allowed, 'vitest', '@etherfold/accessor/conformance']);
 		const files = sourceFiles(SRC);
 		expect(files.length).toBeGreaterThan(0);
 		for (const file of files) {
+			const inConformance = file.startsWith(CONFORMANCE);
 			const source = readFileSync(file, 'utf-8');
 			for (const match of source.matchAll(/^\s*(?:import|export)\s+(?:type\s+)?[^'";]*?from\s+'([^']+)'/gm)) {
 				const specifier = match[1]!;
-				if (specifier.startsWith('.')) continue;
-				expect(allowed.has(specifier), `${file} imports ${specifier}`).toBe(true);
+				if (specifier.startsWith('.')) {
+					if (!inConformance) expect(specifier, `${file} reaches the conformance suite`).not.toMatch(/conformance/);
+					continue;
+				}
+				expect((inConformance ? allowedInConformance : allowed).has(specifier), `${file} imports ${specifier}`).toBe(
+					true,
+				);
 			}
 			expect(source, file).not.toMatch(/from '(node|bun|cloudflare):/);
 			expect(source, file).not.toMatch(/\bconsole\./);

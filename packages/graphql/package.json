@@ -1,7 +1,7 @@
 {
 	"name": "@etherfold/graphql",
 	"version": "0.0.0",
-	"description": "One GraphQL schema built from the entity declarations, answered through the accessor seam, with every operation pinned to one block; and the QueryExecutor contract every transport implements. Runtime-neutral.",
+	"description": "One GraphQL schema built from the entity declarations, answered through the accessor seam, with every operation pinned to one block; and the QueryExecutor contract every transport implements. Runtime-neutral. Its query conformance suite, which every executor must pass byte for byte, is the `./conformance` subpath.",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -12,6 +12,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./conformance": {
+			"types": "./dist/conformance/index.d.ts",
+			"import": "./dist/conformance/index.js"
 		},
 		"./package.json": "./package.json"
 	},
@@ -30,12 +34,22 @@
 		"@pothos/core": "^4.15.1",
 		"graphql": "^16.14.2"
 	},
+	"peerDependencies": {
+		"vitest": ">=3"
+	},
+	"peerDependenciesMeta": {
+		"vitest": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
+		"@etherfold/state-store-indexeddb": "workspace:*",
 		"@etherfold/state-store-sqlite": "workspace:*",
 		"@libsql/client": "^0.17.3",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
 		"esbuild": "^0.28.0",
+		"fake-indexeddb": "^6.2.2",
 		"remote-sql-libsql": "^0.0.7",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.3",
