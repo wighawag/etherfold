@@ -97,6 +97,17 @@ export type StartOptions = {
 	 * one.
 	 */
 	getPromotionPolicy?: ServerOptions<NodeEnv>['getPromotionPolicy'];
+	/**
+	 * What `/graphql` needs to answer (ADR-0099): the declarations of the canonical
+	 * generation's tables, and the retention the folding process enforces, handed to
+	 * the app unchanged.
+	 *
+	 * Passthrough for the fifth time: which declarations a generation's tables were
+	 * made from is its processor's, and this adapter loads no processor. Absent by
+	 * default, and then `/graphql` answers `501` rather than a schema invented from
+	 * nothing.
+	 */
+	graphql?: ServerOptions<NodeEnv>['graphql'];
 };
 
 export type RunningServer = {
@@ -142,7 +153,7 @@ export async function ensureFixedSchema(db: RemoteSQL, describedAs?: string): Pr
  * Start the indexer-server on Node.
  *
  * This is the whole adapter: it decides what `getDB`, `getEnv`, `getIndexer`,
- * `getCursorReport`, `getFetcherLimits` and `getPromotionPolicy` return and hands
+ * `getCursorReport`, `getFetcherLimits`, `getPromotionPolicy` and `graphql` return and hands
  * them to the platform-agnostic app. No route, no chain logic and no storage decision lives
  * here, and the capabilities are carried through untouched because only a HOST
  * can build them and only this file can reach the app on Node.
@@ -185,6 +196,7 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		getCursorReport: options.getCursorReport,
 		getFetcherLimits: options.getFetcherLimits,
 		getPromotionPolicy: options.getPromotionPolicy,
+		graphql: options.graphql,
 	});
 
 	const server = serve({fetch: app.fetch, port, hostname});

@@ -1,4 +1,5 @@
-import type {FetcherLimits, UsedPromotionConfig} from '@etherfold/core';
+import type {FetcherLimits, GenerationId, UsedPromotionConfig} from '@etherfold/core';
+import type {EntityDeclaration, VersionedStateStoreOptions} from '@etherfold/state-store-sqlite';
 import type {Context} from 'hono';
 import type {Bindings} from 'hono/types';
 import type {RemoteSQL} from 'remote-sql';
@@ -38,6 +39,43 @@ export type FetcherLimitsReporter<Env extends Bindings = Bindings> = (
 export type PromotionReporter<Env extends Bindings = Bindings> = (
 	c: Context<{Bindings: Env}>,
 ) => UsedPromotionConfig | undefined | Promise<UsedPromotionConfig | undefined>;
+
+/**
+ * What a host supplies for `/graphql` to answer (ADR-0099): the one thing the
+ * rows of a database cannot say, and what the process that folded it chose.
+ *
+ * WHICH generation answers is read from the database on every request (its
+ * canonical pointer, ADR-0053), and so is its state. What the rows cannot give
+ * back is the DECLARATIONS its tables were created from, since a column's type
+ * is not recoverable from a table (a `u256` and a plain blob are both BLOBs):
+ * the host answers from the processor it holds, or from the bundle the
+ * generation stores beside its state (ADR-0092, `readGenerationBundle`), exactly
+ * as `producePublication`'s `declarationsOf` does.
+ */
+export type GraphQLServing<Env extends Bindings = Bindings> = {
+	/**
+	 * The entity declarations the generation's tables were created from. Called
+	 * once per canonical generation (the schema is kept while it stays
+	 * canonical); a throw is answered `503 no-declarations`, and asked again on
+	 * the next request. `db` is the handle the generation was resolved from
+	 * (`getDB`), which is where its stored bundle is.
+	 */
+	declarationsOf(
+		generation: {readonly id: GenerationId; readonly indexer: string; readonly db: RemoteSQL},
+		c: Context<{Bindings: Env}>,
+	): Promise<Iterable<EntityDeclaration>>;
+	/**
+	 * The retention the FOLDING process enforces on this database, so what
+	 * `/graphql` claims to answer is what the writer keeps: a `revert-only`
+	 * database answers every read at the tip and refuses every `block`, a window
+	 * refuses a `block` below it. `run` and `node` pass their `--retention`.
+	 * Absent means `unbounded`, which is what a read tier (`serve`) passes, since
+	 * it folds nothing and is told no retention.
+	 */
+	readonly retention?: VersionedStateStoreOptions['retention'];
+	/** The finality depth beside it, which a retention window is validated against (`RetentionOptions`). */
+	readonly finalityDepth?: number;
+};
 
 export type ServerOptions<Env extends Bindings = Bindings> = {
 	/**
@@ -215,4 +253,15 @@ export type ServerOptions<Env extends Bindings = Bindings> = {
 	 * never a failed request and never an unhealthy server.
 	 */
 	getPromotionPolicy?: PromotionReporter<Env>;
+	/**
+	 * THE QUERY SURFACE (ADR-0099): what `GET` / `POST /graphql` needs to answer
+	 * GraphQL over the canonical generation of this host's database (`getDB`).
+	 *
+	 * Injected like every capability this package does not construct: which
+	 * declarations a generation's tables were made from is its processor's, and
+	 * this package loads no processor. OPTIONAL, and absent the route answers
+	 * `501 graphql-not-configured` rather than a schema invented from nothing.
+	 * `etherfold serve`, `run` and `node` inject it; `index` exposes the write path only and does not.
+	 */
+	graphql?: GraphQLServing<Env>;
 };

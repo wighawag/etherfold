@@ -44,6 +44,7 @@
 	},
 	"devDependencies": {
 		"@etherfold/browser": "workspace:*",
+		"@etherfold/graphql": "workspace:*",
 		"@libsql/client": "^0.17.3",
 		"@types/fs-extra": "^11.0.4",
 		"@types/node": "^25.9.1",

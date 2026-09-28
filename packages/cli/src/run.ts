@@ -1,18 +1,20 @@
 import {
 	generationDigestOf,
+	resolveStreamConfig,
 	type Abi,
 	type EventProcessor,
 	type ReceivingIndexer,
 	type StreamWriter,
 } from '@etherfold/core';
-import type {FetcherHost, RunSummary} from '@etherfold/fetcher-host';
+import type {EnvRecord, FetcherHost, RunSummary} from '@etherfold/fetcher-host';
 import type {RunningServer, StartOptions} from '@etherfold/platform-nodejs';
 import {stopOnSignals} from '@etherfold/platform-nodejs-fetcher';
 import type {WritableStateStore} from '@etherfold/processor-entities';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import type {StreamFetchers} from './fetchers.js';
-import {foldingStatusReport} from './folding.js';
+import {foldingStatusReport, streamConfigFor} from './folding.js';
+import {graphqlServing} from './graphqlServing.js';
 import {prepareIndexing, type IndexingDependencies} from './index.js';
 import type {Options} from './types.js';
 import {printMessage} from './printMessage.js';
@@ -337,6 +339,15 @@ async function startServing<ABI extends Abi, ProcessResultType>(
 			// resolved answer rather than the CLI's parsed flag, so what is read back is
 			// what the thing that moves the pointer will actually do, default included.
 			getPromotionPolicy: () => prepared.container.promotion,
+			// THE QUERY SURFACE (ADR-0099): `/graphql` over the canonical generation of this
+			// database, its schema built from the declarations that generation's stored
+			// bundle carries, and claiming the retention THIS process enforces, so a
+			// `--retention revert-only` run answers every read at the tip rather than
+			// promising history it drops.
+			graphql: graphqlServing({
+				retention: destination.retention,
+				finalityDepth: resolveStreamConfig(streamConfigFor(deps.env ?? (process.env as EnvRecord))).finality,
+			}),
 		});
 
 		const close = async () => {
@@ -384,6 +395,7 @@ async function startServing<ABI extends Abi, ProcessResultType>(
 		// reason -- the surface a deployment exists to be reached on belongs on the line
 		// an operator already reads.
 		log(`  feed:   ${server.url}/${indexer}/feed`);
+		log(`  graphql: ${server.url}/graphql`);
 		logger.info(`${command}: listening on ${server.url}, folding into ${destination.db}`);
 
 		return {

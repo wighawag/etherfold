@@ -1,5 +1,6 @@
 export {buildQuerySchema} from './schema.js';
 export {executeQuery, localExecutor, type QueryContext, type QueryContextSource} from './execute.js';
+export {executorToFetch, httpExecutor, type FetchFunction, type HttpExecutorOptions} from './http.js';
 export {
 	isTransportFailure,
 	transportFailure,

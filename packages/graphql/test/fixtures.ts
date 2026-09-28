@@ -55,6 +55,7 @@ export async function sqliteSubject(options: VersionedStateStoreOptions = {}) {
 		accessor,
 		generation: GENERATION,
 		tip,
+		asOf: store.capabilities.asOf,
 	});
 	return {store, tip, context};
 }

@@ -26,8 +26,11 @@
 	},
 	"dependencies": {
 		"@etherfold/core": "workspace:*",
+		"@etherfold/graphql": "workspace:*",
 		"@etherfold/processor-entities": "workspace:*",
 		"@etherfold/state-store-sqlite": "workspace:*",
+		"graphql": "^16.14.2",
+		"graphql-yoga": "^5.24.1",
 		"hono": "^4.13.3",
 		"named-logs": "^0.4.1",
 		"remote-sql": "^0.0.7"

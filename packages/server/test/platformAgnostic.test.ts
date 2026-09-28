@@ -69,8 +69,11 @@ describe('the server package names no runtime', () => {
 		// driver), and the Worker platform already runs that backend over D1.
 		expect(Object.keys(pkg.dependencies).sort()).toEqual([
 			'@etherfold/core',
+			'@etherfold/graphql',
 			'@etherfold/processor-entities',
 			'@etherfold/state-store-sqlite',
+			'graphql',
+			'graphql-yoga',
 			'hono',
 			'named-logs',
 			'remote-sql',

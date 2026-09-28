@@ -1,7 +1,6 @@
 import type {EnvRecord} from '@etherfold/fetcher-host';
-import type {EntityProcessor} from '@etherfold/processor-entities';
 import type {ProducedPublication, PublicationIndex} from '@etherfold/server';
-import {loadProcessorArtifact, processorArtifactIdentity} from '@etherfold/utils';
+import {processorArtifactIdentity} from '@etherfold/utils';
 import {existsSync} from 'node:fs';
 import {mkdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -9,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 import type {RemoteSQL} from 'remote-sql';
 import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
 import {streamConfigFor} from './folding.js';
+import {declarationsOfStoredBundle} from './graphqlServing.js';
 import type {BuildPublication, Options, PublishConfig} from './types.js';
 
 // ---------------------------------------------------------------------------------------------------
@@ -192,23 +192,14 @@ export async function publishDatabase(
 		// checked to BE the generation's), or else the one the generation stores beside
 		// its state (ADR-0092), through the same loader every arrival goes through.
 		declarationsOf: async ({id, indexer}) => {
-			const bundle = expected?.bundle ?? (await server.readGenerationBundle(db, indexer, id));
-			if (bundle === undefined) {
+			const read = await declarationsOfStoredBundle(db, indexer, id, expected?.bundle);
+			if (!read.ok) {
 				throw new server.PublicationRefusedError(
 					'no-declarations',
-					`the canonical generation's processor ${id.processor} stores no bundle beside its state, so there is ` +
-						`nothing to read its entity declarations from. Give the bundle it was folded with as -p.`,
+					expected?.bundle === undefined ? `${read.why}. Give the bundle it was folded with as -p.` : read.why,
 				);
 			}
-			const outcome = await loadProcessorArtifact<any, unknown, EntityProcessor<any, any>>(bundle);
-			if (outcome.status === 'refused') {
-				throw new server.PublicationRefusedError(
-					'no-declarations',
-					`the bundle of the canonical generation (${outcome.identity}) could not be instantiated to read its ` +
-						`entity declarations: ${outcome.reason}, ${outcome.why}`,
-				);
-			}
-			return outcome.processor.entities;
+			return read.entities;
 		},
 	});
 
