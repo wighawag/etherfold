@@ -1,0 +1,52 @@
+{
+	"name": "@etherfold/graphql",
+	"version": "0.0.0",
+	"description": "One GraphQL schema built from the entity declarations, answered through the accessor seam, with every operation pinned to one block; and the QueryExecutor contract every transport implements. Runtime-neutral.",
+	"publishConfig": {
+		"access": "public"
+	},
+	"type": "module",
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"typedoc": {
+		"entryPoint": "src/index.ts"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/wighawag/etherfold.git",
+		"directory": "packages/graphql"
+	},
+	"dependencies": {
+		"@etherfold/accessor": "workspace:*",
+		"@etherfold/state-store": "workspace:*",
+		"@pothos/core": "^4.15.1",
+		"graphql": "^16.14.2"
+	},
+	"devDependencies": {
+		"@etherfold/state-store-sqlite": "workspace:*",
+		"@libsql/client": "^0.17.3",
+		"@types/node": "^25.9.1",
+		"as-soon": "^0.1.5",
+		"esbuild": "^0.28.0",
+		"remote-sql-libsql": "^0.0.7",
+		"tsx": "^4.21.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.8"
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsc",
+		"prepack": "cp ../../LICENSE LICENSE",
+		"typecheck": "tsc -p tsconfig.typecheck.json",
+		"dev": "as-soon -w src pnpm build",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	}
+}

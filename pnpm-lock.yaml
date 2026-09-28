@@ -427,6 +427,49 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@25.9.1)(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0))
 
+  packages/graphql:
+    dependencies:
+      '@etherfold/accessor':
+        specifier: workspace:*
+        version: link:../accessor
+      '@etherfold/state-store':
+        specifier: workspace:*
+        version: link:../state-store
+      '@pothos/core':
+        specifier: ^4.15.1
+        version: 4.15.1(graphql@16.14.2)
+      graphql:
+        specifier: ^16.14.2
+        version: 16.14.2
+    devDependencies:
+      '@etherfold/state-store-sqlite':
+        specifier: workspace:*
+        version: link:../state-store-sqlite
+      '@libsql/client':
+        specifier: ^0.17.3
+        version: 0.17.4
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
+      as-soon:
+        specifier: ^0.1.5
+        version: 0.1.6
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.1
+      remote-sql-libsql:
+        specifier: ^0.0.7
+        version: 0.0.7(@libsql/core@0.17.4)
+      tsx:
+        specifier: ^4.21.0
+        version: 4.22.4
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@25.9.1)(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0))
+
   packages/processor-entities:
     dependencies:
       '@etherfold/core':
@@ -1983,6 +2026,11 @@ packages:
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
 
+  '@pothos/core@4.15.1':
+    resolution: {integrity: sha512-G0riOIbF6zer2SU7V1MmivkSdoKk+gYRf+Ru8JVcy3p9GhyJ8OzQj92RgCfCpEvkTgl6EdH8VueLe1Lm7lY4aA==}
+    peerDependencies:
+      graphql: ^16.10.0 || ^17.0.0
+
   '@rolldown/binding-android-arm64@1.0.3':
     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -3160,6 +3208,10 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+
+  graphql@16.14.2:
+    resolution: {integrity: sha512-Chq1s4CY7jmh8gO2qvLIJyfCDIN+EHLFW/9iShnp1z8FjBQMoodWP1kDC36VAMXXIvAjj4ARa7ntfAV2BrjsbA==}
+    engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
 
   har-schema@2.0.0:
     resolution: {integrity: sha512-Oqluz6zhGX8cyRaTQlFMPw80bSJVG2x/cFb8ZPhUILGgHka9SsokCCOQgpveePerqidZOrT14ipqfJb7ILcW5Q==}
@@ -5806,6 +5858,10 @@ snapshots:
 
   '@poppinss/exception@1.2.3': {}
 
+  '@pothos/core@4.15.1(graphql@16.14.2)':
+    dependencies:
+      graphql: 16.14.2
+
   '@rolldown/binding-android-arm64@1.0.3':
     optional: true
 
@@ -6933,6 +6989,8 @@ snapshots:
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
+
+  graphql@16.14.2: {}
 
   har-schema@2.0.0: {}
 
