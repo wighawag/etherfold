@@ -7,7 +7,9 @@
  * the `graphql` runtime live THERE: the app's worker entry passes
  * `graphqlQueryHandler()` as the host's `query` handler, and the tab holds
  * `workerExecutor(port)`. Opt-in on both ends, so a worker bundle that does not
- * pass the handler carries no GraphQL at all (asserted).
+ * pass the handler carries no GraphQL at all, and a tab that imports only
+ * `workerExecutor` (its own module, `./executor.ts`, re-exported here) carries
+ * none either (both asserted).
  *
  * ```ts
  * // indexer.worker.ts
@@ -32,7 +34,7 @@ import type {GraphQLSchema} from 'graphql';
 import {DocumentCache} from '../documents.js';
 import {QUERY_ERROR_CODES, UNEXPECTED_ERROR_MESSAGE} from '../errors.js';
 import {executeQuery} from '../execute.js';
-import {transportFailure, type QueryExecutor, type QueryRequest, type QueryResult} from '../executor.js';
+import type {QueryRequest, QueryResult} from '../executor.js';
 import {buildQuerySchema} from '../schema.js';
 
 /** What `graphqlQueryHandler` may be told. */
@@ -125,46 +127,4 @@ export function graphqlQueryHandler(options: GraphqlQueryHandlerOptions = {}): H
 	};
 }
 
-/** What `workerExecutor` needs of a port: its `query`, and nothing else. */
-export type PortWithQuery = {query(request: unknown): Promise<unknown>};
-
-/**
- * THE WORKER EXECUTOR: a `QueryExecutor` over a port to a host whose entry
- * passed `graphqlQueryHandler()`.
- *
- * It answers what the host answered, unchanged, and it never rejects: a CLOSED
- * port (`IndexerPortClosedError`, this tab let go) is the transport failure
- * `port-closed`, a host that DIED under the call or before it
- * (`IndexerHostDiedError`) is `host-gone`, and anything else the host answered
- * that is not a GraphQL result (a refusal: a host whose entry passed no handler,
- * say) is `invalid-body`, since something answered and it was not an answer.
- */
-export function workerExecutor(port: PortWithQuery): QueryExecutor {
-	return async (request) => {
-		const asked: {query: string; variables?: QueryRequest['variables']; operationName?: string | null} = {
-			query: request.query,
-		};
-		if (request.variables !== undefined) asked.variables = request.variables;
-		if (request.operationName !== undefined) asked.operationName = request.operationName;
-		let answered: unknown;
-		try {
-			answered = await port.query(asked);
-		} catch (error) {
-			const name = (error as {name?: unknown})?.name;
-			const message = String((error as Error)?.message ?? error);
-			if (name === 'IndexerPortClosedError') return transportFailure('port-closed', message);
-			if (name === 'IndexerHostDiedError') return transportFailure('host-gone', message);
-			return transportFailure('invalid-body', `the indexer host refused the query: ${message}`);
-		}
-		if (!isResult(answered)) {
-			return transportFailure('invalid-body', `the indexer host answered something that is not a GraphQL result`);
-		}
-		return answered;
-	};
-}
-
-function isResult(value: unknown): value is QueryResult {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-	const result = value as Record<string, unknown>;
-	return 'data' in result || Array.isArray(result.errors);
-}
+export {workerExecutor, type PortWithQuery} from './executor.js';
