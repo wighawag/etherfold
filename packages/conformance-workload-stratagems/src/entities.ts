@@ -160,10 +160,16 @@ export const stratagemsEntities = declareEntities([
 	/**
 	 * `state.placements[i].cells[position].players[]`.
 	 *
-	 * Keyed by `(arrival of the placement, position, arrival of the move)`, which
+	 * Keyed by `(the placement's whole key, position, arrival of the move)`, which
 	 * makes every question the projection and the cascade ask a prefix listing:
-	 * every player of an arrival is `{ordinal}`, every player of one cell is
-	 * `{ordinal, position}`, and both come back in push order.
+	 * every player of an arrival is `{window, ordinal}`, every player of one cell
+	 * is `{window, ordinal, position}`, and both come back in push order.
+	 *
+	 * It is DECLARED a child of `placement` (ADR-0098), and that is why `window` is
+	 * in its id: a child's leading id columns must be its parent's WHOLE id, so an
+	 * id starting at `ordinal` (the parent's key minus `window`) is refused at
+	 * declaration time. With a single window the extra column changes no answer,
+	 * and the golden comparison is what says so.
 	 *
 	 * There is deliberately NO `placementCell` entity. In the original a cell is
 	 * created only in order to push a player into it, so it never exists empty,
@@ -174,8 +180,9 @@ export const stratagemsEntities = declareEntities([
 	 */
 	{
 		name: 'placementPlayer',
-		id: ['ordinal', 'position', 'moveOrdinal'],
+		id: ['window', 'ordinal', 'position', 'moveOrdinal'],
 		fields: {color: 'integer', address: 'text'},
+		parent: {entity: 'placement', as: 'players'},
 	},
 
 	/**

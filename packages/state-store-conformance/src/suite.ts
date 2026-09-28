@@ -2,6 +2,7 @@ import type {StateStoreCapabilities} from '@etherfold/state-store';
 import {blockAtomicityCases} from './cases/block-atomicity.js';
 import {boundedListingCases} from './cases/bounded-listing.js';
 import {declaredCapabilityCases} from './cases/declared-capabilities.js';
+import {declaredRelationCases} from './cases/declared-relations.js';
 import {openingForWritingCases} from './cases/opening-for-writing.js';
 import {portableDeclarationCases} from './cases/portable-declarations.js';
 import {readYourWritesCases} from './cases/read-your-writes.js';
@@ -52,7 +53,8 @@ import type {
  * writes nothing on a backend that claims it can enforce one (the same
  * claim-driven selection again, and the one chapter that needs a second handle
  * the factory cannot give -- see `StateStoreConformanceOptions`), and that a
- * DECLARATION means the same thing here as it does on every other backend.
+ * DECLARATION means the same thing here as it does on every other backend,
+ * a declared relation (ADR-0098) included.
  *
  * ## ONE shape, asked once
  *
@@ -103,6 +105,7 @@ function factoryDrivenCases(
 		...seamRecordCases(factory, options),
 		...snapshotBootstrapCases(factory, capabilities),
 		...portableDeclarationCases(factory),
+		...declaredRelationCases(factory),
 	];
 }
 

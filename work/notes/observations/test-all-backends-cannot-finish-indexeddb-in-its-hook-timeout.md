@@ -1,0 +1,3 @@
+# `test:all-backends` cannot finish the IndexedDB replay inside its own hook timeout
+
+Observed 2026-09-28 while building `a-declaration-names-a-childs-parent`: in `packages/conformance-workload-stratagems/test/alpha1.test.ts` the `beforeAll` that replays the launched game has a 600,000 ms timeout, but on `fake-indexeddb` that replay costs about half an hour (as the file's own note and ADR-0026 say), so `pnpm test:all-backends` fails on `'indexeddb'` with `Hook timed out in 600000ms` regardless of the change under test. The same replay with the hook timeout raised to 5,400,000 ms passed both cases (golden state and the revert) in 2,599 s on this machine.

@@ -33,13 +33,46 @@ export type EntityDeclaration = {
 	id: string | readonly string[];
 	/** data fields, excluding the business key, and their storage class */
 	fields: Readonly<Record<string, FieldType>>;
+	/**
+	 * The entity this one is a CHILD of, if any (ADR-0098). Optional: a declaration
+	 * without it means exactly what it always meant.
+	 */
+	parent?: EntityRelation;
 };
 
-/** An entity declaration after validation, with `id` always a list. */
+/**
+ * A declared relation, written ONCE, on the child (ADR-0098).
+ *
+ * It is DESCRIPTIVE: the child's leading id columns must BE the parent's whole id,
+ * by name and in order, so the relation says what the ids already encode rather
+ * than adding a second fact that could disagree with them. The parent's children
+ * are then the bounded id-prefix listing with the parent's key as the prefix
+ * (ADR-0021), and the relation costs nothing at write time: no referential check
+ * and no write order.
+ *
+ * Checked at DECLARATION time, for every backend (`normalizeEntities`).
+ */
+export type EntityRelation = {
+	/** The declared name of the parent entity. */
+	readonly entity: string;
+	/**
+	 * The name of the parent-side collection of these children: the one thing the
+	 * id does not supply, so it is declared rather than guessed by pluralising.
+	 */
+	readonly as: string;
+};
+
+/**
+ * An entity declaration after validation, with `id` always a list.
+ *
+ * `parent` is ABSENT, not `undefined`, on an entity that declares none, so a
+ * normalized entity without a relation is the same object it always was.
+ */
 export type NormalizedEntity = {
 	name: string;
 	id: readonly string[];
 	fields: Readonly<Record<string, FieldType>>;
+	parent?: EntityRelation;
 };
 
 /** A business-key value: the columns named by the entity's `id`. */

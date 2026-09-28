@@ -1,5 +1,5 @@
 import {UnknownEntityError} from './errors.js';
-import type {EntityId, FieldType, EntityDeclaration, NormalizedEntity} from './types.js';
+import type {EntityId, FieldType, EntityDeclaration, EntityRelation, NormalizedEntity} from './types.js';
 
 /**
  * Validation of a declaration, once, for every backend.
@@ -143,7 +143,106 @@ export function normalizeEntity(declaration: EntityDeclaration): NormalizedEntit
 		columns.set(fold(column), column);
 	}
 
-	return Object.freeze({name, id: Object.freeze([...id]), fields: Object.freeze({...fields})});
+	const parent = relationOf(name, declaration.parent);
+	return Object.freeze({
+		name,
+		id: Object.freeze([...id]),
+		fields: Object.freeze({...fields}),
+		...(parent ? {parent} : {}),
+	});
+}
+
+/**
+ * The names the generated read surface already gives EVERY entity
+ * (`createReadSurface`), which a relation's `as` may therefore not take: the
+ * parent-side collection is offered beside them, on the parent (ADR-0098).
+ */
+const READ_SURFACE_NAMES: readonly string[] = ['getCurrent', 'getAsOf', 'listCurrent', 'listAsOf'];
+
+/**
+ * The SHAPE of one declared relation, which is all one declaration can check on
+ * its own: whether it matches the ids is a question about TWO declarations, and
+ * `normalizeEntities` asks it once every entity is known.
+ */
+function relationOf(name: string, parent: EntityDeclaration['parent']): EntityRelation | undefined {
+	if (parent === undefined) return undefined;
+	if (parent === null || typeof parent !== 'object') {
+		throw new Error(`entity ${name} declares its parent as ${JSON.stringify(parent)}: expected {entity, as}`);
+	}
+	assertIdentifier(parent.entity, `parent of entity ${name}`);
+	assertIdentifier(parent.as, `the collection entity ${name} declares on its parent`);
+	const taken = READ_SURFACE_NAMES.find((read) => fold(read) === fold(parent.as));
+	if (taken !== undefined) {
+		throw new Error(
+			`entity ${name} names its collection on parent ${parent.entity} ${JSON.stringify(parent.as)}, which the ` +
+				`generated read surface already uses (${READ_SURFACE_NAMES.join(', ')}). Choose another \`as\`.`,
+		);
+	}
+	return Object.freeze({entity: parent.entity, as: parent.as});
+}
+
+/**
+ * Every declared relation, checked against the ids of BOTH declarations it joins.
+ *
+ * The child's leading id columns must be the parent's WHOLE id, by name and in
+ * order (ADR-0098): a child carrying part of its parent's key belongs to no
+ * single parent, so the relation would be a claim the ids do not make. The child
+ * must also add at least one id column of its own, since a child keyed exactly
+ * by its parent's id is at most one row per parent (and an entity naming ITSELF
+ * as parent is that case). Then the parent-side name: `as` is a field of the
+ * parent in every surface generated from it, so it may not collide with a column
+ * of the parent or with another relation's `as` on the same parent, compared as
+ * the identifier rules compare the columns of one row (`fold`).
+ */
+function assertRelations(entities: ReadonlyMap<string, NormalizedEntity>): void {
+	const collections = new Map<string, Map<string, string>>();
+	for (const child of entities.values()) {
+		const relation = child.parent;
+		if (!relation) continue;
+		const parent = entities.get(relation.entity);
+		if (!parent) {
+			throw new Error(
+				`entity ${child.name} declares parent ${relation.entity}, which is not declared ` +
+					`(declared: ${[...entities.keys()].join(', ')}). A relation names an entity of the same set.`,
+			);
+		}
+
+		const leading = child.id.slice(0, parent.id.length);
+		if (leading.length !== parent.id.length || leading.some((column, index) => column !== parent.id[index])) {
+			throw new Error(
+				`entity ${child.name} declares its id as (${child.id.join(', ')}) and parent ${parent.name}, whose id is ` +
+					`(${parent.id.join(', ')}). A child's leading id columns must be its parent's whole id, by name and in ` +
+					`order, so that each child belongs to exactly one parent: declare ${child.name}'s id as ` +
+					`(${parent.id.join(', ')}, ...).`,
+			);
+		}
+		if (child.id.length === parent.id.length) {
+			throw new Error(
+				`entity ${child.name} declares parent ${parent.name} and adds no id column to its id ` +
+					`(${parent.id.join(', ')}). A child needs at least one id column of its own after its parent's whole id, ` +
+					`or every parent has at most one child and the relation is not a collection.`,
+			);
+		}
+
+		const clash = [...parent.id, ...Object.keys(parent.fields)].find((column) => fold(column) === fold(relation.as));
+		if (clash !== undefined) {
+			throw new Error(
+				`entity ${child.name} names its collection on parent ${parent.name} ${JSON.stringify(relation.as)}, which ` +
+					`collides with ${parent.name}'s ${parent.id.includes(clash) ? 'id column' : 'field'} ` +
+					`${JSON.stringify(clash)}. Choose another \`as\`.`,
+			);
+		}
+		const named = collections.get(parent.name) ?? new Map<string, string>();
+		const sibling = named.get(fold(relation.as));
+		if (sibling !== undefined) {
+			throw new Error(
+				`entities ${sibling} and ${child.name} both name their collection on parent ${parent.name} ` +
+					`${JSON.stringify(relation.as)}. One parent's collections need one name each.`,
+			);
+		}
+		named.set(fold(relation.as), child.name);
+		collections.set(parent.name, named);
+	}
 }
 
 export function normalizeEntities(declarations: Iterable<EntityDeclaration>): Map<string, NormalizedEntity> {
@@ -161,6 +260,7 @@ export function normalizeEntities(declarations: Iterable<EntityDeclaration>): Ma
 		folded.set(fold(entity.name), entity.name);
 		entities.set(entity.name, entity);
 	}
+	assertRelations(entities);
 	return entities;
 }
 

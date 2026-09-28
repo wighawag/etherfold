@@ -176,7 +176,7 @@ function listing<T>(entity: NormalizedEntity, found: Listing<Record<string, unkn
  * The reader and the store must be reading the SAME declaration.
  *
  * Compared on the whole shape (id columns in order, fields and their storage
- * classes) rather than on the name alone, because a surface generated from a
+ * classes, and the declared relation if there is one) rather than on the name alone, because a surface generated from a
  * stale copy would type its rows off columns the store does not have and project
  * them to `null` -- a plausible wrong answer, which is the failure mode this
  * seam refuses everywhere else.
@@ -211,5 +211,6 @@ function shapeOf(entity: NormalizedEntity): string {
 	const fields = Object.entries(entity.fields)
 		.map(([field, type]) => `${field}: ${type}`)
 		.sort();
-	return `id(${entity.id.join(', ')}) {${fields.join(', ')}}`;
+	const parent = entity.parent ? ` under ${entity.parent.entity} as ${entity.parent.as}` : '';
+	return `id(${entity.id.join(', ')}) {${fields.join(', ')}}${parent}`;
 }
