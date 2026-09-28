@@ -1,0 +1,220 @@
+--- a/packages/browser/src/IndexerState.ts
++++ b/packages/browser/src/IndexerState.ts
+@@ -80,6 +80,11 @@
+ import {logs} from 'named-logs';
+ import {wait} from './utils/time.js';
+ const namedLogger = logs('@etherfold/browser');
++// FFL-TRACE (temporary instrumentation, docs/spikes/the-frozen-leader-takeover-flake)
++let fflHooks = 0;
++function fflTrace(who: string, what: string): void {
++	((globalThis as any).__fflTrace as string[] | undefined)?.push(`${performance.now().toFixed(1).padStart(8)}ms ${who} ${what}`);
++}
+ 
+ export type ExtendedLastSync<ABI extends Abi> = LastSync<ABI> & {
+ 	numBlocksProcessedSoFar: number;
+@@ -907,6 +912,7 @@
+ 	 * so a fresh start that was displaced before it finished knows it is stale.
+ 	 */
+ 	let tenure = 0;
++	const fflWho = `hook#${++fflHooks}`;
+ 
+ 	/**
+ 	 * THIS TAB'S SEAT, as `syncing.election` reports it: the role and why, plus the
+@@ -1199,6 +1205,8 @@
+ 				onDisplaced: () => void stepDown(standing, indexerSetup, processorConfig),
+ 			});
+ 			candidacy = standing;
++			const fflAtOnce = await standing.atOnce;
++			fflTrace(fflWho, `init: lock ${fflAtOnce ? 'FREE, leads from the start' : 'held, seats as a reader'}`);
+ 			if (!(await standing.atOnce)) {
+ 				if (candidacy !== standing) return;
+ 				seating = seatAsReader(indexerSetup, processorConfig);
+@@ -1267,6 +1275,7 @@
+ 		reason: TakeoverReason = 'leader-gone',
+ 	): Promise<void> {
+ 		const mine = ++tenure;
++		fflTrace(fflWho, `takeOver(${reason}) entered, tenure=${mine}`);
+ 		await seating?.catch(() => undefined);
+ 		// Disposed (or re-initialised) while queued: this is somebody else's election now.
+ 		// Displaced again while the seat was being built: the lease is not this tab's.
+@@ -1283,7 +1292,9 @@
+ 			setSeat('writer', {tookOver: true, takeoverReason: reason});
+ 			// Heard by the other tabs at once, before the container opens.
+ 			publishToPort();
++			fflTrace(fflWho, `seat=writer published (syncing.election.role='writer'); fresh start begins: reading=${reading !== undefined} indexer=${indexer !== undefined} isReading()=${isReading()}`);
+ 			await initAsWriter(indexerSetup, processorConfig);
++			fflTrace(fflWho, `fresh start done (initAsWriter resolved): reading=${reading !== undefined} indexer=${indexer !== undefined} tenure=${tenure} mine=${mine}`);
+ 			if (tenure !== mine) {
+ 				// DISPLACED DURING THE FRESH START: what it built is let go at once.
+ 				letGoOfTheWriter();
+@@ -1320,6 +1331,7 @@
+ 	): void {
+ 		if (candidacy !== standing) return;
+ 		tenure++;
++		fflTrace(fflWho, `stepDown (lock stolen from this tab)`);
+ 		const wasIndexing = $syncing.autoIndexing || wantsAutoIndexing;
+ 		// The reader seat FIRST, synchronously: from here this tab publishes nothing as the
+ 		// leader, so a stale report of its own cannot reach the other tabs.
+@@ -1527,6 +1539,7 @@
+ 			createGeneration: options?.createIndexer,
+ 		});
+ 		publishedStart.containerOpened();
++		fflTrace(fflWho, `container open (indexer set), isReading()=${isReading()}`);
+ 		indexer.onPromoted = onPromoted;
+ 		// ONE subscription to the fold, taken as the container is built so that a tab
+ 		// which subscribed before `init` hears this fold's very first block. Fanned out
+@@ -1831,6 +1844,7 @@
+ 		if (demotion) {
+ 			return demotion;
+ 		}
++		fflTrace(fflWho, `demote(${reason})`);
+ 		demotion = demoteToReader(
+ 			{
+ 				stopFolding() {
+@@ -1889,6 +1903,7 @@
+ 		// A READER of the tab election answers nothing too: another tab is indexing, and
+ 		// this one advances nothing until it holds the lock (ADR-0097).
+ 		if (demotion || isReading()) {
++			fflTrace(fflWho, `whileWriting answers undefined WITHOUT running the step: demotion=${demotion?.reason} isReading()=${isReading()} (reading=${reading !== undefined} indexer=${indexer !== undefined}) seat=${$syncing.election?.role}`);
+ 			return undefined;
+ 		}
+ 		try {
+@@ -1897,6 +1912,7 @@
+ 			if (!isStoreWriterChanged(err)) {
+ 				throw err;
+ 			}
++			fflTrace(fflWho, `a write was REFUSED (writer changed)`);
+ 			demote('write-refused');
+ 			return undefined;
+ 		}
+--- a/packages/browser/src/tabElection.ts
++++ b/packages/browser/src/tabElection.ts
+@@ -6,6 +6,10 @@
+ import {arriveFromBundle, type InstantiatedProcessorBundle, type ProcessorBundleSource} from './processorBundle.js';
+ 
+ const namedLogger = logs('@etherfold/browser');
++// FFL-TRACE (temporary instrumentation)
++function fflTrace(what: string): void {
++	((globalThis as any).__fflTrace as string[] | undefined)?.push(`${performance.now().toFixed(1).padStart(8)}ms election ${what}`);
++}
+ 
+ /**
+  * ## ONE TAB INDEXES AND THE OTHERS READ (ADR-0097)
+@@ -285,6 +289,7 @@
+ 			() => undefined,
+ 			(error) => {
+ 				if (!tenure() || resigned) return;
++				fflTrace(`a held lock request REJECTED (${(error as Error)?.name}): this holder is told it was displaced`);
+ 				holding = false;
+ 				giveBack = undefined;
+ 				if ((error as Error | undefined)?.name !== 'AbortError') {
+@@ -317,6 +322,7 @@
+ 			if (resigned || queued !== leaving) return;
+ 			queued = undefined;
+ 			mine = true;
++			fflTrace(`lock GRANTED from the queue (${name})`);
+ 			const held = hold();
+ 			takeOver('leader-gone');
+ 			await held;
+@@ -333,6 +339,7 @@
+ 				return;
+ 			}
+ 			const held = hold();
++			fflTrace(`lock GRANTED at once, ifAvailable (${name})`);
+ 			answer(true);
+ 			await held;
+ 		})
+@@ -365,6 +372,7 @@
+ 		},
+ 		takeFromBackgroundedLeader() {
+ 			if (resigned || holding || stealing) return;
++			fflTrace(`steal requested (settle time elapsed)`);
+ 			stealing = true;
+ 			queued?.abort();
+ 			queued = undefined;
+@@ -373,6 +381,7 @@
+ 				stealing = false;
+ 				if (resigned) return;
+ 				mine = true;
++				fflTrace(`lock GRANTED by STEAL (${name})`);
+ 				const held = hold();
+ 				namedLogger.info(`this tab took the lease of election "${election.name}" from a backgrounded leader`);
+ 				takeOver('leader-backgrounded');
+--- a/packages/browser/test/aVisibleTabTakesTheLeaseFromABackgroundedLeader.test.ts
++++ b/packages/browser/test/aVisibleTabTakesTheLeaseFromABackgroundedLeader.test.ts
+@@ -102,11 +102,19 @@
+ 	};
+ }
+ 
+-function tabOf(databaseName: string, election: TabElection) {
++// FFL-TRACE (temporary instrumentation)
++const fflTrace = (what: string) =>
++	((globalThis as any).__fflTrace as string[] | undefined)?.push(`${performance.now().toFixed(1).padStart(8)}ms test ${what}`);
++
++function tabOf(databaseName: string, election: TabElection, label = '?') {
+ 	return createIndexerState<TestABI, EntityStateView>(
+ 		{
+-			createState: async (_context, {signal}) =>
+-				openForWriting(await createBrowserStateStore(processor.entities, {databaseName}), {signal}),
++			createState: async (_context, {signal}) => {
++				fflTrace(`${label}: createState called (writer claim begins)`);
++				const claimed = await openForWriting(await createBrowserStateStore(processor.entities, {databaseName}), {signal});
++				fflTrace(`${label}: writer claim LANDED (openForWriting resolved)`);
++				return claimed;
++			},
+ 			createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
+ 			openState: async () => {
+ 				const store = openForReading(await createBrowserStateStore(processor.entities, {databaseName}));
+@@ -135,6 +143,9 @@
+ 
+ const disposers: (() => void)[] = [];
+ afterEach(() => {
++	const fflLines = (globalThis as any).__fflTrace as string[] | undefined;
++	if (fflLines) process.stderr.write(`FFL-TRACE\n${fflLines.join('\n')}\nFFL-TRACE-END\n`);
++	delete (globalThis as any).__fflTrace;
+ 	for (const dispose of disposers.splice(0)) dispose();
+ 	vi.unstubAllGlobals();
+ });
+@@ -229,6 +240,7 @@
+ 	});
+ 
+ 	it('a FROZEN leader, which never answers and never learns, is displaced within the settle time, and the store stays correct when both write', async () => {
++		(globalThis as any).__fflTrace = [];
+ 		const database = fresh('frozen-db');
+ 		const election = {name: fresh('frozen'), foregroundTakeover: {settleMs: SETTLE_MS}};
+ 		const {chain, providerFor} = sharedChain();
+@@ -241,7 +253,7 @@
+ 			close() {}
+ 		}
+ 		const leaderTab = tabDocument('hidden');
+-		const leader = tabOf(database, election);
++		const leader = tabOf(database, election, 'FROZEN leader (hook#1)');
+ 		disposers.push(() => leader.dispose());
+ 		vi.stubGlobal('document', leaderTab.document);
+ 		vi.stubGlobal('BroadcastChannel', SilentChannel);
+@@ -259,20 +271,24 @@
+ 		}
+ 		await initialising;
+ 		await indexToTip(leader);
++		fflTrace('frozen leader indexed to its tip');
+ 
+ 		const readerTab = tabDocument('visible');
+-		const reader = tabOf(database, election);
++		const reader = tabOf(database, election, 'visible reader (hook#2)');
+ 		disposers.push(() => reader.dispose());
+ 		const started = Date.now();
+ 		await asTab(readerTab, () => reader.init({provider: providerFor('reader'), source: SOURCE, config: CONFIG}));
+ 		expect(reader.syncing.$state.election?.role).toBe('reader');
+ 		await until('the takeover', () => reader.syncing.$state.election?.role === 'writer');
++		fflTrace(`until('the takeover') satisfied: reader seat=${reader.syncing.$state.election?.role} lastSync=${reader.syncing.$state.lastSync?.lastToBlock}`);
+ 		// The bound is the settle time (plus the fresh start's own scheduling).
+ 		expect(Date.now() - started).toBeLessThan(SETTLE_MS + 1500);
+ 		expect(reader.syncing.$state.election).toMatchObject({takeoverReason: 'leader-backgrounded'});
+ 
+ 		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
++		fflTrace('indexToTip(reader) called');
+ 		await indexToTip(reader);
++		fflTrace('indexToTip(reader) returned');
+ 		// THE FROZEN LEADER THAWS and writes, still believing it leads: BOTH WRITE. Its
+ 		// write is refused by the new leader's claim, and it demotes as today.
+ 		expect(await leader.indexMore()).toBeUndefined();

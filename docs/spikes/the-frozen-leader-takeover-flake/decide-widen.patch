@@ -1,0 +1,27 @@
+--- a/packages/browser/test/aVisibleTabTakesTheLeaseFromABackgroundedLeader.test.ts
++++ b/packages/browser/test/aVisibleTabTakesTheLeaseFromABackgroundedLeader.test.ts
+@@ -102,11 +102,13 @@
+ 	};
+ }
+ 
+-function tabOf(databaseName: string, election: TabElection) {
++function tabOf(databaseName: string, election: TabElection, claimDelayMs = 0) {
+ 	return createIndexerState<TestABI, EntityStateView>(
+ 		{
++			// DECIDER (widen): a slower fresh start, as a loaded machine's IndexedDB open is.
+ 			createState: async (_context, {signal}) =>
+-				openForWriting(await createBrowserStateStore(processor.entities, {databaseName}), {signal}),
++				(await new Promise((resolve) => setTimeout(resolve, claimDelayMs)),
++				openForWriting(await createBrowserStateStore(processor.entities, {databaseName}), {signal})),
+ 			createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
+ 			openState: async () => {
+ 				const store = openForReading(await createBrowserStateStore(processor.entities, {databaseName}));
+@@ -261,7 +263,7 @@
+ 		await indexToTip(leader);
+ 
+ 		const readerTab = tabDocument('visible');
+-		const reader = tabOf(database, election);
++		const reader = tabOf(database, election, 50);
+ 		disposers.push(() => reader.dispose());
+ 		const started = Date.now();
+ 		await asTab(readerTab, () => reader.init({provider: providerFor('reader'), source: SOURCE, config: CONFIG}));
