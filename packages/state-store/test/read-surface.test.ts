@@ -219,3 +219,198 @@ describe('the types are derived from the declaration', () => {
 		await expect(surface.token.getAsOf({id: '1'}, {hash: '0x64'})).rejects.toBeInstanceOf(InvalidBlockNumberError);
 	});
 });
+
+/**
+ * A declared relation (ADR-0098) on the read surface: the parent's children,
+ * under the name the child declared (`as`), on the PARENT's reads.
+ *
+ * It is the bounded id-prefix listing with the parent's key as the prefix
+ * (ADR-0021), so every case below is asserted as an EQUALITY with that listing
+ * rather than as a second description of what it should return.
+ */
+const related = declareEntities([
+	{name: 'placement', id: ['window', 'ordinal'], fields: {epoch: 'integer'}},
+	{
+		name: 'placementPlayer',
+		id: ['window', 'ordinal', 'position', 'moveOrdinal'],
+		fields: {address: 'text'},
+		parent: {entity: 'placement', as: 'players'},
+	},
+	{name: 'token', id: 'id', fields: {owner: 'text'}},
+]);
+
+/** Two placements in window 1, with players, and a third in window 2 sharing ordinal 0. */
+async function relatedStore(): Promise<MemoryStateStore> {
+	const store = new MemoryStateStore(related);
+	await store.migrate();
+	await store.applyBlock(block(100), [
+		{type: 'upsert', entity: 'placement', id: {window: 1, ordinal: 0}, values: {epoch: 7}},
+		{type: 'upsert', entity: 'placement', id: {window: 1, ordinal: 1}, values: {epoch: 7}},
+		{type: 'upsert', entity: 'placement', id: {window: 2, ordinal: 0}, values: {epoch: 8}},
+		{
+			type: 'upsert',
+			entity: 'placementPlayer',
+			id: {window: 1, ordinal: 0, position: 3, moveOrdinal: 0},
+			values: {address: '0xalice'},
+		},
+		{
+			type: 'upsert',
+			entity: 'placementPlayer',
+			id: {window: 1, ordinal: 0, position: 4, moveOrdinal: 0},
+			values: {address: '0xbob'},
+		},
+		{
+			type: 'upsert',
+			entity: 'placementPlayer',
+			id: {window: 1, ordinal: 1, position: 3, moveOrdinal: 0},
+			values: {address: '0xcarol'},
+		},
+		{
+			type: 'upsert',
+			entity: 'placementPlayer',
+			id: {window: 2, ordinal: 0, position: 3, moveOrdinal: 0},
+			values: {address: '0xzoe'},
+		},
+	]);
+	await store.applyBlock(block(101), [
+		{
+			type: 'upsert',
+			entity: 'placementPlayer',
+			id: {window: 1, ordinal: 0, position: 5, moveOrdinal: 0},
+			values: {address: '0xdan'},
+		},
+	]);
+	return store;
+}
+
+describe("a parent's children, derived from the declared relation", () => {
+	it("lists a parent's children at the tip, identical to the prefix listing, and nobody else's", async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		const children = await surface.placement.players.listCurrent({window: 1, ordinal: 0}, 10);
+		expect(children).toEqual(await surface.placementPlayer.listCurrent({window: 1, ordinal: 0}, 10));
+		expect(children.rows.map((row) => row.address)).toEqual(['0xalice', '0xbob', '0xdan']);
+		// window 2's ordinal 0 is another parent: the WHOLE parent key is the prefix
+		expect((await surface.placement.players.listCurrent({window: 2, ordinal: 0}, 10)).rows).toHaveLength(1);
+	});
+
+	it('is bounded by a REQUIRED limit and says whether it stopped short, as the listing does', async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		const bounded = await surface.placement.players.listCurrent({window: 1, ordinal: 0}, 2);
+		expect(bounded).toEqual(await surface.placementPlayer.listCurrent({window: 1, ordinal: 0}, 2));
+		expect(bounded.truncated).toBe(true);
+		expect(bounded.rows).toHaveLength(2);
+	});
+
+	it("lists a parent's children as of an earlier block, identical to the prefix listing then", async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		const then = await surface.placement.players.listAsOf({window: 1, ordinal: 0}, 100, 10);
+		expect(then).toEqual(await surface.placementPlayer.listAsOf({window: 1, ordinal: 0}, 100, 10));
+		expect(then.rows).toHaveLength(2);
+	});
+
+	it('answers an empty listing for a parent with no children, which is not a refusal', async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		expect(await surface.placement.players.listCurrent({window: 9, ordinal: 9}, 10)).toEqual({
+			rows: [],
+			truncated: false,
+		});
+	});
+
+	it('refuses a parent key missing a column, naming the parent rather than listing a wider prefix', async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		await expect(
+			surface.placement.players.listCurrent({window: 1} as unknown as {window: number; ordinal: number}, 10),
+		).rejects.toThrow(/placement[\s\S]*ordinal/);
+	});
+
+	it('ignores anything beyond the parent key, so a child column cannot narrow the collection', async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+		const withExtra = {window: 1, ordinal: 0, position: 3} as {window: number; ordinal: number};
+
+		expect((await surface.placement.players.listCurrent(withExtra, 10)).rows).toHaveLength(3);
+	});
+
+	it('leaves the four reads of every entity as they were, and adds nothing to an entity with no children', async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		expect(Object.keys(surface.placement).sort()).toEqual([
+			'getAsOf',
+			'getCurrent',
+			'listAsOf',
+			'listCurrent',
+			'players',
+		]);
+		expect(Object.keys(surface.placementPlayer).sort()).toEqual(['getAsOf', 'getCurrent', 'listAsOf', 'listCurrent']);
+		expect(Object.keys(surface.token).sort()).toEqual(['getAsOf', 'getCurrent', 'listAsOf', 'listCurrent']);
+	});
+
+	it('offers no collection when the parent is not part of the surface', async () => {
+		// a surface may be generated from a SUBSET of the store's declarations; the
+		// collection lives on the parent's reads, so without the parent it has nowhere to be
+		const surface = createReadSurface(await relatedStore(), declareEntities([related[1]]));
+
+		expect(Object.keys(surface)).toEqual(['placementPlayer']);
+	});
+});
+
+/**
+ * What would rot: the collection's NAME and its KEY are both read off the
+ * declaration, so renaming the parent's id column or the child's `as` stops a
+ * consumer compiling. `pnpm typecheck` runs these.
+ */
+describe("a parent's children are typed off the declaration", () => {
+	it("types the children as the child entity's rows", async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+		const [first] = (await surface.placement.players.listCurrent({window: 1, ordinal: 0}, 1)).rows;
+
+		const address: string | null = first!.address;
+		const position: string = first!.position;
+		expect([address, position]).toEqual(['0xalice', '3']);
+		// @ts-expect-error `epoch` is the PARENT's field, not a column of its children
+		expect(first!.epoch).toBeUndefined();
+	});
+
+	it('refuses a collection the declaration does not name, so a renamed `as` breaks the consumer', async () => {
+		const renamedAs = declareEntities([
+			related[0],
+			{...related[1], parent: {entity: 'placement', as: 'participants'}},
+			related[2],
+		]);
+		const store = new MemoryStateStore(renamedAs);
+		await store.migrate();
+		const surface = createReadSurface(store, renamedAs);
+
+		expect((await surface.placement.participants.listCurrent({window: 1, ordinal: 0}, 1)).rows).toEqual([]);
+		// @ts-expect-error the collection is now `participants`: the old name is a compile error, not `undefined`
+		expect(surface.placement.players).toBeUndefined();
+		// @ts-expect-error a child has no collection of its own, and a collection is never on the child
+		expect(surface.placementPlayer.players).toBeUndefined();
+		// @ts-expect-error `token` is nobody's parent
+		expect(surface.token.players).toBeUndefined();
+	});
+
+	it("takes the parent's WHOLE key, so a renamed parent key column breaks the consumer", async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		// @ts-expect-error the parent key is (window, ordinal): `slot` is not one of its columns
+		await expect(surface.placement.players.listCurrent({window: 1, slot: 0}, 10)).rejects.toThrow(/ordinal/);
+		// @ts-expect-error the parent's WHOLE key, not a leading run of it
+		await expect(surface.placement.players.listCurrent({window: 1}, 10)).rejects.toThrow(/ordinal/);
+	});
+
+	it('keeps the bound: a REQUIRED limit, and nowhere to hang a predicate', async () => {
+		const surface = createReadSurface(await relatedStore(), related);
+
+		// @ts-expect-error the limit is required, here as at the seam
+		await expect(surface.placement.players.listCurrent({window: 1, ordinal: 0})).rejects.toThrow(/limit/i);
+		// @ts-expect-error there is nowhere to hang a predicate, a sort or an offset
+		await surface.placement.players.listCurrent({window: 1, ordinal: 0}, 10, {orderBy: 'address'});
+		// @ts-expect-error this store's as-of reads take a block number
+		await expect(surface.placement.players.listAsOf({window: 1, ordinal: 0}, {hash: '0x64'}, 10)).rejects.toThrow();
+	});
+});

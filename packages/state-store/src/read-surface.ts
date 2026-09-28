@@ -1,9 +1,9 @@
 import type {EntityIdOf, EntityPrefixOf, EntityRow} from './declarations.js';
-import {normalizeEntity} from './entities.js';
+import {idValues, normalizeEntity} from './entities.js';
 import {UnknownEntityError} from './errors.js';
-import type {Listing} from './listing.js';
+import type {EntityIdPrefix, Listing} from './listing.js';
 import type {StateStore} from './store.js';
-import type {EntityDeclaration, NormalizedEntity} from './types.js';
+import type {EntityDeclaration, EntityId, NormalizedEntity} from './types.js';
 
 /**
  * ## The read surface, generated from the entity declarations
@@ -29,6 +29,22 @@ import type {EntityDeclaration, NormalizedEntity} from './types.js';
  * block, and the bounded listing (a PREFIX of the declared id plus a REQUIRED
  * limit) in both flavours. No predicate, no caller-supplied ordering, no offset.
  *
+ * ## A parent's children, from the declared relation
+ *
+ * A child that declares `parent: {entity, as}` (ADR-0098) gives its parent a
+ * collection named `as`, beside the parent's four reads:
+ *
+ * ```ts
+ * const players = await surface.placement.players.listCurrent({window: 1, ordinal: 0}, 50);
+ * ```
+ *
+ * It is not a fifth read. It is the child's bounded listing with the parent's
+ * whole key as the prefix, the one shape the child's id already encodes, so it
+ * answers exactly what `surface.placementPlayer.listCurrent({window: 1,
+ * ordinal: 0}, 50)` answers, bounded by the same required limit. Both its name
+ * and its key are read off the declaration, so renaming `as` or a parent's id
+ * column stops a consumer compiling.
+ *
  * The asymmetry is deliberate and it is about WHERE THE CALLER RUNS. This tier
  * is the one a handler is held to, and a handler runs once per event on every
  * backend, including the ones with no query planner, so it gets the one shape
@@ -53,8 +69,8 @@ import type {EntityDeclaration, NormalizedEntity} from './types.js';
  * programmatically, no SDL and no deploy-time codegen) builds its object types
  * by walking the SAME `declareEntities` array -- a field per declared column,
  * `FieldValue` giving the scalar -- and resolves each one through the surface
- * below: `getCurrent` for a node, `listCurrent` for a `@derivedFrom`-style
- * child collection, `getAsOf` / `listAsOf` for a block argument. It is an
+ * below: `getCurrent` for a node, a declared relation's collection for a
+ * `@derivedFrom`-style child collection, `getAsOf` / `listAsOf` for a block argument. It is an
  * ADDITION over this surface rather than a refactor of it, which is the property
  * this task exists to guarantee.
  */
@@ -96,9 +112,43 @@ export type EntityReads<S extends StateStore, E extends EntityDeclaration> = {
 	listAsOf(prefix: EntityPrefixOf<E>, at: AsOfAddress<S>, limit: number): Promise<Listing<EntityRow<E>>>;
 };
 
-/** The declared entities, each with its four reads, keyed by the declared name. */
+/**
+ * The children of ONE parent through a declared relation (ADR-0098): the child
+ * entity's bounded listing, with the parent's WHOLE key as the prefix.
+ *
+ * It is the listing and nothing else, so it has the listing's two reads under
+ * the listing's two names, each taking the parent's key where the listing takes
+ * a prefix. The key is the parent's id rather than a leading run of it, because
+ * a run shorter than the parent's key names several parents, and a collection of
+ * several parents is not one parent's children.
+ */
+export type ChildrenReads<S extends StateStore, P extends EntityDeclaration, C extends EntityDeclaration> = {
+	/** The parent's children at the tip, ascending in the child id's order, at most `limit`. */
+	listCurrent(parent: EntityIdOf<P>, limit: number): Promise<Listing<EntityRow<C>>>;
+	/** The same children as of a block. Refused, never answered from the tip, outside retention. */
+	listAsOf(parent: EntityIdOf<P>, at: AsOfAddress<S>, limit: number): Promise<Listing<EntityRow<C>>>;
+};
+
+/**
+ * Every collection a parent has in a set of declarations: one per child that
+ * names it as `parent`, keyed by that child's `as`.
+ *
+ * Read off the CHILD's declaration, because that is where the relation is
+ * declared (ADR-0098), so renaming `as` renames the key here and renaming the
+ * parent's id columns retypes the key every collection takes.
+ */
+export type CollectionsOf<S extends StateStore, D extends readonly EntityDeclaration[], P extends EntityDeclaration> = {
+	readonly [C in D[number] as C extends {parent: {entity: P['name']; as: infer A extends string}}
+		? A
+		: never]: ChildrenReads<S, P, C>;
+};
+
+/**
+ * The declared entities, each with its four reads, keyed by the declared name,
+ * and a parent with a collection per declared child beside them.
+ */
 export type ReadSurface<S extends StateStore, D extends readonly EntityDeclaration[]> = {
-	readonly [E in D[number] as E['name']]: EntityReads<S, E>;
+	readonly [E in D[number] as E['name']]: EntityReads<S, E> & CollectionsOf<S, D, E>;
 };
 
 /**
@@ -116,13 +166,70 @@ export function createReadSurface<S extends StateStore, const D extends readonly
 	store: S,
 	declarations: D,
 ): ReadSurface<S, D> {
-	const surface: Record<string, EntityReads<S, EntityDeclaration>> = {};
-	for (const declaration of declarations) {
-		const entity = normalizeEntity(declaration);
+	const entities = declarations.map(normalizeEntity);
+	const surface: Record<string, Record<string, unknown>> = {};
+	for (const entity of entities) {
 		assertDeclaredBy(store.declarations, entity);
 		surface[entity.name] = readsFor(store, entity);
 	}
+	for (const {parent, child, as} of relationsAmong(entities)) {
+		const reads = surface[child.name] as EntityReads<S, EntityDeclaration>;
+		surface[parent.name]![as] = {
+			// async, so a refused key is a rejection like every other refusal of this surface
+			listCurrent: async (id: EntityId, limit: number) => reads.listCurrent(parentPrefix(parent, id), limit),
+			listAsOf: async (id: EntityId, address: AsOfAddress<S>, limit: number) =>
+				reads.listAsOf(parentPrefix(parent, id), address, limit),
+		} satisfies ChildrenReads<S, EntityDeclaration, EntityDeclaration>;
+	}
 	return surface as ReadSurface<S, D>;
+}
+
+/** One declared relation whose parent AND child are both on a surface. */
+export type SurfaceRelation = {
+	readonly parent: NormalizedEntity;
+	readonly child: NormalizedEntity;
+	/** The collection's name on the parent's reads. */
+	readonly as: string;
+};
+
+/**
+ * The relations a surface generated from `entities` offers a collection for.
+ *
+ * Only those whose parent is among `entities`: a surface may be generated from a
+ * SUBSET of the store's declarations, and a collection lives on its parent's
+ * reads, so without the parent it has nowhere to be (and the type, which reads
+ * the same array, offers none either). The relation itself was already checked
+ * against the ids when the store was built (`normalizeEntities`) and matched
+ * against the store's by `assertDeclaredBy`, so it is trusted here.
+ *
+ * Exported so the port-side surface in `@etherfold/browser` derives the same
+ * collections by the same rule rather than a second one.
+ */
+export function relationsAmong(entities: readonly NormalizedEntity[]): SurfaceRelation[] {
+	const byName = new Map(entities.map((entity) => [entity.name, entity]));
+	const relations: SurfaceRelation[] = [];
+	for (const child of entities) {
+		const parent = child.parent && byName.get(child.parent.entity);
+		if (parent) relations.push({parent, child, as: child.parent!.as});
+	}
+	return relations;
+}
+
+/**
+ * The listing prefix that selects ONE parent's children: the parent's whole key,
+ * and nothing else.
+ *
+ * Built from the parent's DECLARED id columns rather than from the caller's
+ * object, so an extra property (a child column, say) cannot narrow the
+ * collection into something that is no longer one parent's children, and a
+ * missing column is refused naming the PARENT rather than silently listing a
+ * shorter prefix, which would be the children of several parents. The child's
+ * leading id columns are the parent's by name (ADR-0098), so the parent's key is
+ * a valid prefix of the child as it stands.
+ */
+export function parentPrefix(parent: NormalizedEntity, id: EntityId): EntityIdPrefix {
+	const values = idValues(parent, id);
+	return Object.fromEntries(parent.id.map((column, index) => [column, values[index]!]));
 }
 
 function readsFor<S extends StateStore>(store: S, entity: NormalizedEntity): EntityReads<S, EntityDeclaration> {

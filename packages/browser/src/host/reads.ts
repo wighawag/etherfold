@@ -1,6 +1,8 @@
 import {
 	assertDeclaredBy,
 	normalizeEntity,
+	parentPrefix,
+	relationsAmong,
 	type EntityDeclaration,
 	type EntityId,
 	type EntityIdPrefix,
@@ -39,6 +41,10 @@ import type {PortRow} from './envelope.js';
  * queries arrive as an EXECUTOR on this port, with its own serialisation,
  * because that surface has an HTTP twin to stay parity with. This one has none,
  * so it uses structured clone honestly.
+ *
+ * A parent's children through a declared relation (ADR-0098) are not a fifth
+ * read either: they are the child's `listCurrent` / `listAsOf` with the parent's
+ * key as the prefix, composed on the tab side, so nothing new crosses the wire.
  */
 
 /**
@@ -82,7 +88,8 @@ export type PortWithReads = {readonly reads: PortStateReads};
  * GENERATE THE READ SURFACE OF A SET OF DECLARATIONS OVER A PORT.
  *
  * The port-side twin of `createReadSurface`, with the same call shape, the same
- * result TYPE and the same four reads per entity:
+ * result TYPE, the same four reads per entity and the same collection per
+ * declared relation on its parent:
  *
  * ```ts
  * const indexer = connectToIndexerHost(dedicatedWorkerHost(worker));
@@ -129,7 +136,7 @@ export function createPortReadSurface<const D extends readonly EntityDeclaration
 	// still delivered to every read below, which is where a caller can act on it.
 	agreed.catch(() => undefined);
 
-	const surface: Record<string, unknown> = {};
+	const surface: Record<string, Record<string, unknown>> = {};
 	for (const entity of entities) {
 		surface[entity.name] = {
 			getCurrent: async (id: EntityId) => {
@@ -148,6 +155,19 @@ export function createPortReadSurface<const D extends readonly EntityDeclaration
 				await agreed;
 				return port.reads.listAsOf(entity.name, prefix, at, limit);
 			},
+		};
+	}
+	// A parent's children (ADR-0098) are the child's listing with the parent's
+	// key as the prefix, derived by the SAME rule as the same-thread surface, so
+	// they cross the port as the listing they are rather than as a case of their own.
+	for (const {parent, child, as} of relationsAmong(entities)) {
+		const reads = surface[child.name] as {
+			listCurrent(prefix: EntityIdPrefix, limit: number): Promise<Listing<PortRow>>;
+			listAsOf(prefix: EntityIdPrefix, at: number, limit: number): Promise<Listing<PortRow>>;
+		};
+		surface[parent.name]![as] = {
+			listCurrent: async (id: EntityId, limit: number) => reads.listCurrent(parentPrefix(parent, id), limit),
+			listAsOf: async (id: EntityId, at: number, limit: number) => reads.listAsOf(parentPrefix(parent, id), at, limit),
 		};
 	}
 	return surface as ReadSurface<StateStore, D>;
