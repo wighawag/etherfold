@@ -132,6 +132,19 @@ await surface.pool.queryCurrent({where: 'amount >= ?', args: [u256Arg(10n ** 18n
 
 Binding a decimal string or a number instead is NOT an error, it is a comparison with a BLOB it can never equal, so the query is silently empty. The bytewise order of the encoding is the numeric order, so `<`, `>` and `ORDER BY` on such a column are numeric (`9` before `10`).
 
+## The accessor: a query as data, for the query layer
+
+`store.accessor()` is this backend's implementation of the accessor seam ([`@etherfold/accessor`](https://github.com/wighawag/etherfold/tree/main/packages/accessor), ADR-0099), which the query layer's resolvers read through on a server and in a browser alike. Where `queryCurrent` takes SQL, the accessor takes a query as DATA: a predicate over declared fields (`eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `isNull`, `and`, `or`), one field to order by, a required limit, and optionally a block height to answer as of. The seam's planner checks it against the declarations and turns each operand into what the column stores (a `u256` into its 32 bytes, so no `u256Arg` here), and this backend generates one `SELECT` from the plan.
+
+```ts
+const accessor = store.accessor();
+
+await accessor.find({entity: 'pool', where: {field: 'amount', op: 'gte', value: 10n ** 18n}, orderBy: {field: 'amount', direction: 'desc'}, limit: 20});
+await accessor.children({entity: 'arrival', relation: 'moves', parents: [{window: 'w', ordinal: '1'}, {window: 'w', ordinal: '2'}], limit: 10, at: 1234});
+```
+
+A page of parents' children is ONE `IN` query with a `ROW_NUMBER()` window, so the limit is per PARENT (one prolific parent cannot starve the others); a page too large for one statement's parameters is split under `bounds.maxRowsPerStatement`. SQLite has a query planner, so this accessor declares NO rows-examined bound and answers what a browser would refuse (the bound is the IndexedDB accessor's alone). An as-of query outside the retention window is refused with `BlockNotRetainedError`, as every as-of read here is. `test/accessor-conformance.test.ts` runs the shared accessor suite against it under each retention claim.
+
 ## Addressing state: hash, height, or time
 
 All three axes resolve to a block number through the canonical `_blocks` table, and then run the one as-of predicate, so they answer identically when they identify the same block. There is one addressing mechanism, not three.

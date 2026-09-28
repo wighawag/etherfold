@@ -1,5 +1,7 @@
+import type {Accessor} from '@etherfold/accessor';
 import {logs} from 'named-logs';
 import type {RemoteSQL, SQLPreparedStatement, SQLResult} from 'remote-sql';
+import {sqliteAccessor} from './accessor.js';
 import {DEFAULT_BATCH_BOUNDS, planBatches, type BatchBounds} from './batching.js';
 import {
 	NoSuchBlockError,
@@ -1043,6 +1045,29 @@ export class VersionedStateStore implements StateStoreBackend {
 		if (configured === undefined) return pruned;
 		if (pruned === undefined) return configured;
 		return Math.max(configured, pruned);
+	}
+
+	/**
+	 * This store's ACCESSOR (ADR-0099): the rows of an entity matching a
+	 * predicate over its declared fields, ordered, bounded, at the tip or as of a
+	 * block, and a page of parents' children in one `IN` query bounded per parent.
+	 *
+	 * The seam the query layer's resolvers read through, beside `StateStore` and
+	 * never part of it (a handler still gets no predicate, ADR-0021). Unlike
+	 * `queryCurrent` it takes no SQL: the query is data, checked against the
+	 * declarations by the planner every backend shares, so the same query means
+	 * the same thing here and in a browser. It declares no rows-examined bound,
+	 * because SQLite plans. As-of reads keep the retention refusal of every other
+	 * as-of read here. See `accessor.ts`.
+	 */
+	accessor(): Accessor {
+		return sqliteAccessor({
+			entities: this.entities,
+			names: this.names,
+			maxParams: this.bounds.maxRowsPerStatement,
+			select: (statement) => this.select<Record<string, unknown>>(statement),
+			assertRetained: (at) => assertRetained(this.capabilities, at, () => this.tipBlockNumber()),
+		});
 	}
 
 	/** A whole entity table as it is at the tip. */

@@ -1,7 +1,7 @@
 {
-	"name": "@etherfold/state-store-sqlite",
-	"version": "0.3.0",
-	"description": "Versioned-row state store behind the @etherfold/state-store seam: entity state kept with half-open block-validity ranges on the remote-sql interface, with as-of reads and reorg revert.",
+	"name": "@etherfold/accessor",
+	"version": "0.0.0",
+	"description": "The accessor seam the query layer reads through, beside the state-store seam and never part of it: the rows of an entity matching a predicate over declared fields, ordered, bounded, at the tip or as of a block, and a page of parents' children batched per relation. Its conformance suite is the `./conformance` subpath.",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -13,6 +13,10 @@
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
+		"./conformance": {
+			"types": "./dist/conformance/index.d.ts",
+			"import": "./dist/conformance/index.js"
+		},
 		"./package.json": "./package.json"
 	},
 	"typedoc": {
@@ -22,20 +26,22 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/wighawag/etherfold.git",
-		"directory": "packages/state-store-sqlite"
+		"directory": "packages/accessor"
 	},
 	"dependencies": {
-		"@etherfold/accessor": "workspace:*",
-		"@etherfold/state-store": "workspace:*",
-		"named-logs": "^0.4.1",
-		"remote-sql": "^0.0.7"
+		"@etherfold/state-store": "workspace:*"
+	},
+	"peerDependencies": {
+		"vitest": ">=3"
+	},
+	"peerDependenciesMeta": {
+		"vitest": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
-		"@etherfold/state-store-conformance": "workspace:*",
-		"@libsql/client": "^0.17.3",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
-		"remote-sql-libsql": "^0.0.7",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.8"
