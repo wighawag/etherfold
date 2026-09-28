@@ -46,11 +46,16 @@ export function installFakeWallet(options: FakeChainOptions): void {
 	const CONTRACT = '0x0000000000000000000000000000000000000099';
 	const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 	const ACCOUNT = '0x0000000000000000000000000000000000000011';
+	// Tokens are MINTED (from the zero address) to two accounts in turn, so the
+	// holdings the query layer is asked about differ per account: the wallet's own
+	// account holds the odd ids, the other one the even ids.
+	const ZERO = '0x0000000000000000000000000000000000000000';
+	const OTHER = '0x0000000000000000000000000000000000000022';
 	const hex = (n: number) => `0x${n.toString(16)}`;
 	const topic = (address: string) => `0x${address.slice(2).toLowerCase().padStart(64, '0')}`;
 
-	// One log per block, from block 1. Deterministic, so the counter the page
-	// shows is a number the test can assert.
+	// One log per block, from block 1, minting token `i + 1`. Deterministic, so
+	// the counter and the holdings the page shows are numbers the test can assert.
 	const logs: Record<string, unknown>[] = [];
 	for (let i = 0; i < options.transfers; i++) {
 		logs.push({
@@ -60,7 +65,7 @@ export function installFakeWallet(options: FakeChainOptions): void {
 			removed: false,
 			address: CONTRACT,
 			data: `0x${(i + 1).toString(16).padStart(64, '0')}`,
-			topics: [TRANSFER_TOPIC, topic(ACCOUNT), topic(ACCOUNT)],
+			topics: [TRANSFER_TOPIC, topic(ZERO), topic(i % 2 === 0 ? ACCOUNT : OTHER)],
 			// A transaction hash the test can ask `checkTxInclusion` about.
 			transactionHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
 			logIndex: '0x0',

@@ -1,4 +1,5 @@
 import {connectToIndexerHost, createPortReadSurface, dedicatedWorkerHost, type HostProgress} from '@etherfold/browser';
+import {workerExecutor} from '@etherfold/graphql/worker';
 import {createConnection} from '@etherplay/connect';
 import {abi, tokenProcessor} from '../src/processor.js';
 
@@ -12,6 +13,7 @@ import {abi, tokenProcessor} from '../src/processor.js';
  *   1. the wallet, and WHICH object to ask for the chain (not the obvious one)
  *   2. the worker, and the port this tab holds to it
  *   3. the reads, and the two subscriptions that draw the page
+ *      (the typed reads for an entity by id, and ONE GraphQL query for a list)
  *   4. `checkTxInclusion`: whether the state already accounts for a tx you sent
  *   5. hot reload, both axes
  *
@@ -150,9 +152,51 @@ async function start() {
 	 */
 	const reads = createPortReadSurface(indexer, tokenProcessor.entities);
 
+	/**
+	 * THE QUERY LAYER (ADR-0099): what the typed reads cannot say.
+	 *
+	 * They read an entity BY ID, and that is all they do, deliberately. A list
+	 * view wants a FILTER, an ORDER and a NESTED relation, and that is one GraphQL
+	 * document, answered by the worker (its entry passes `graphqlQueryHandler()`)
+	 * over the same port. The executor is a function from `{query, variables}` to
+	 * the result, and it never rejects: a refusal is a coded error in `errors`, and
+	 * a port that closed is one too (`transport-failure`).
+	 *
+	 * THE SAME DOCUMENT runs against a hosted indexer: swap this line for
+	 * `httpExecutor('https://indexer.example/graphql')` from `@etherfold/graphql`
+	 * and nothing below it changes, the answer included, byte for byte. Which one
+	 * to inject is a deployment choice, not a code change.
+	 *
+	 * Bring your own client if you want one (urql, Apollo, graphql-request):
+	 * `executorToFetch(execute)` is a `fetch` that answers through this executor.
+	 */
+	const execute = workerExecutor(indexer);
+
+	const HOLDERS = `query Holders($min: SafeInt!) {
+		account(where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) {
+			address
+			holds
+			holdings(orderBy: {field: id, direction: asc}, first: 10) { id }
+		}
+	}`;
+
+	type Holders = {account: {address: string; holds: number; holdings: {id: string}[]}[]};
+
+	/** Accounts holding at least `min` tokens, most first, each with the tokens it holds. */
+	const holders = (min: number) => execute({query: HOLDERS, variables: {min}});
+
 	async function render() {
 		const counter = await reads.counter.getCurrent({name: 'transfers'});
 		el('transfers').textContent = String(counter?.value ?? 0);
+
+		const {data, errors} = await holders(1);
+		// A coded refusal (a filter past the scan's bound, say) is an ANSWER to show,
+		// not an exception: `errors[0].extensions.code` says which.
+		el('holders').textContent = errors
+			? `${errors[0].extensions?.code}: ${errors[0].message}`
+			: (data as Holders).account
+					.map(({address, holds, holdings}) => `${address}: ${holds} (${holdings.map((h) => h.id).join(', ')})`)
+					.join('\n') || 'nobody holds a token yet';
 	}
 
 	// =====================================================================
@@ -353,7 +397,8 @@ async function start() {
 	 * `onStateMoved` is WHAT MOVED (an EVENT, silent until the fold next applies a
 	 * block, a reorg retracts one, or the canonical pointer moves to a new
 	 * generation): it is the signal to RE-READ, and it is the ONLY one this tab
-	 * re-reads on. A generation switch is announced like the rest, at once and with
+	 * re-reads on, the GraphQL query included: there is no subscription to hold
+	 * open, you re-run the document. A generation switch is announced like the rest, at once and with
 	 * no block to wait for, so a quiet chain does not leave the page showing the
 	 * generation it replaced. Because it is silent on attaching, the first read is
 	 * made once, by hand, right after it.
@@ -381,8 +426,9 @@ async function start() {
 	void render();
 
 	// Exposed so the browser verification can drive the paths a human cannot
-	// click: a redeploy, and a transaction whose inclusion has to be checked.
-	Object.assign(window as never, {__reference: {indexer, onRedeploy, trackTransaction}});
+	// click: a redeploy, a transaction whose inclusion has to be checked, and the
+	// page's own query with another filter.
+	Object.assign(window as never, {__reference: {indexer, onRedeploy, trackTransaction, holders}});
 }
 
 /**

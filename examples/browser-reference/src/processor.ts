@@ -24,6 +24,8 @@ export const abi = [
 
 export type TokenABI = typeof abi;
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 /**
  * ## AN AUTHOR DOES NOT STATE THEIR PROCESSOR'S IDENTITY (ADR-0086)
  *
@@ -58,10 +60,27 @@ export const tokenProcessor: EntityProcessor<TokenABI> = {
 	entities: [
 		{name: 'token', id: ['id'], fields: {owner: 'text'}},
 		{name: 'counter', id: ['name'], fields: {value: 'integer'}},
+		// A RELATION (ADR-0098), which is what the GraphQL query in `browser/main.ts`
+		// reads nested: an account, and the tokens it holds. It is declared once, on
+		// the CHILD, whose leading id column is the parent's whole id, so an account's
+		// `holdings` is a projection of the holding ids and the two cannot disagree.
+		{name: 'account', id: ['address'], fields: {holds: 'integer'}},
+		{name: 'holding', id: ['address', 'id'], fields: {}, parent: {entity: 'account', as: 'holdings'}},
 	],
 	async onTransfer(state, event) {
-		state.set('token', {id: event.args.id.toString()}, {owner: event.args.to});
+		const id = event.args.id.toString();
+		state.set('token', {id}, {owner: event.args.to});
 		const counter = await state.get<{value: number}>('counter', {name: 'transfers'});
 		state.set('counter', {name: 'transfers'}, {value: (counter?.value ?? 0) + 1});
+
+		// A mint takes from nobody, so the zero address never holds anything.
+		if (event.args.from !== ZERO_ADDRESS) {
+			state.delete('holding', {address: event.args.from, id});
+			const sender = await state.get<{holds: number}>('account', {address: event.args.from});
+			state.set('account', {address: event.args.from}, {holds: (sender?.holds ?? 1) - 1});
+		}
+		state.set('holding', {address: event.args.to, id}, {});
+		const receiver = await state.get<{holds: number}>('account', {address: event.args.to});
+		state.set('account', {address: event.args.to}, {holds: (receiver?.holds ?? 0) + 1});
 	},
 };

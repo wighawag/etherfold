@@ -53,6 +53,9 @@ importers:
       '@etherfold/browser':
         specifier: workspace:*
         version: link:../../packages/browser
+      '@etherfold/graphql':
+        specifier: workspace:*
+        version: link:../../packages/graphql
       '@etherfold/processor-entities':
         specifier: workspace:*
         version: link:../../packages/processor-entities
