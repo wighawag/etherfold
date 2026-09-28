@@ -150,6 +150,12 @@ describe('what the port hands a tab', () => {
 			expect(await held.surface.transfer.listAsOf({blockNumber: 100}, 102, 10)).toEqual(
 				await here.transfer.listAsOf({blockNumber: 100}, 102, 10),
 			);
+			expect(await held.surface.block.transfers.listCurrent({blockNumber: 104}, 10)).toEqual(
+				await here.block.transfers.listCurrent({blockNumber: 104}, 10),
+			);
+			expect(await held.surface.block.transfers.listAsOf({blockNumber: 100}, 102, 1)).toEqual(
+				await here.block.transfers.listAsOf({blockNumber: 100}, 102, 1),
+			);
 		} finally {
 			held.close();
 		}
@@ -158,8 +164,17 @@ describe('what the port hands a tab', () => {
 	it('hands the tab four reads per entity and NOTHING that could mutate the store', async () => {
 		const held = await foldedHost();
 		try {
-			expect(Object.keys(held.surface).sort()).toEqual(['token', 'transfer']);
+			expect(Object.keys(held.surface).sort()).toEqual(['block', 'token', 'transfer']);
 			expect(Object.keys(held.surface.token).sort()).toEqual(['getAsOf', 'getCurrent', 'listAsOf', 'listCurrent']);
+			// a parent's children are the one thing beside them, and only on the parent (ADR-0098)
+			expect(Object.keys(held.surface.block).sort()).toEqual([
+				'getAsOf',
+				'getCurrent',
+				'listAsOf',
+				'listCurrent',
+				'transfers',
+			]);
+			expect(Object.keys(held.surface.block.transfers).sort()).toEqual(['listAsOf', 'listCurrent']);
 
 			// the writer/reader split as a fact of the TYPE: there is no store on this
 			// side at all, so there is no mutating verb to reach for. `pnpm typecheck`

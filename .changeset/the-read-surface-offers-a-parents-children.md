@@ -1,0 +1,6 @@
+---
+'@etherfold/state-store': minor
+'@etherfold/browser': minor
+---
+
+The generated read surface offers a parent's children through a declared relation (ADR-0098). For every child declaring `parent: {entity, as}`, `createReadSurface` puts a collection named `as` on the parent's reads, beside its four reads: `surface.placement.players.listCurrent({window, ordinal}, limit)` and `listAsOf(parentId, at, limit)`. It is the child's bounded id-prefix listing with the parent's whole key as the prefix, so it answers exactly what that listing answers, with the same required limit. Its name and its key are typed off the declaration (new types `ChildrenReads` and `CollectionsOf`, folded into `ReadSurface`), so renaming `as` or a parent's id column stops a consumer compiling. A parent key missing a column is refused naming the parent; extra properties are ignored rather than narrowing the collection. New helpers `relationsAmong` and `parentPrefix` are exported so other surfaces derive the same collections by the same rule. `createPortReadSurface` in `@etherfold/browser` offers the same collections, composed on the tab side from the child's listing, so nothing new crosses the port. The four existing reads are unchanged.

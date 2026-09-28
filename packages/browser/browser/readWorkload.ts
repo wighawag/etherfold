@@ -52,7 +52,16 @@ export const readEntities = declareEntities([
 	// `memo` is declared and NEVER written, which is how "an unlisted declared
 	// field reads as `null`" is asked of both surfaces: a version is a WHOLE row.
 	{name: 'token', id: 'id', fields: {owner: 'text', transferCount: 'integer', memo: 'text'}},
-	{name: 'transfer', id: ['blockNumber', 'logIndex'], fields: {token: 'text', to: 'text'}},
+	// a block that carried a transfer, so `transfer` has a declared PARENT (ADR-0098):
+	// its leading id column IS the block's whole id, and the collection of one
+	// block's transfers is `surface.block.transfers`.
+	{name: 'block', id: 'blockNumber', fields: {hash: 'text'}},
+	{
+		name: 'transfer',
+		id: ['blockNumber', 'logIndex'],
+		fields: {token: 'text', to: 'text'},
+		parent: {entity: 'block', as: 'transfers'},
+	},
 ]);
 
 /** The read surface of those declarations, however it is obtained. */
@@ -71,6 +80,7 @@ export const readProcessor: EntityProcessor<TestABI> = {
 		const id = event.args.id.toString();
 		const held = await state.get<{transferCount: number}>('token', {id});
 		state.set('token', {id}, {owner: event.args.to, transferCount: (held?.transferCount ?? 0) + 1});
+		state.set('block', {blockNumber: event.blockNumber}, {hash: event.blockHash});
 		state.set('transfer', {blockNumber: event.blockNumber, logIndex: event.logIndex}, {token: id, to: event.args.to});
 	},
 };
@@ -424,6 +434,55 @@ export const readSurfaceCases: readonly ReadSurfaceCase[] = [
 					],
 					truncated: true,
 				},
+			);
+		},
+	},
+	{
+		group: "a parent's children",
+		name: "lists one block's transfers through the declared relation, identical to the prefix listing",
+		async run(surface) {
+			same(
+				'the transfers of block 100',
+				await surface.block.transfers.listCurrent({blockNumber: 100}, 10),
+				await surface.transfer.listCurrent({blockNumber: 100}, 10),
+			);
+			same(
+				'the transfers of block 100, bounded at one',
+				await surface.block.transfers.listCurrent({blockNumber: 100}, 1),
+				await surface.transfer.listCurrent({blockNumber: 100}, 1),
+			);
+			same(
+				'how many transfers block 104 carried',
+				(await surface.block.transfers.listCurrent({blockNumber: 104}, 10)).rows.length,
+				2,
+			);
+		},
+	},
+	{
+		group: "a parent's children",
+		name: 'lists them as of an earlier block, identical to the prefix listing then',
+		async run(surface) {
+			same(
+				'the transfers of block 104, as of 102',
+				await surface.block.transfers.listAsOf({blockNumber: 104}, 102, 10),
+				{rows: [], truncated: false},
+			);
+			same(
+				'the transfers of block 100, as of 104, bounded at one',
+				await surface.block.transfers.listAsOf({blockNumber: 100}, 104, 1),
+				await surface.transfer.listAsOf({blockNumber: 100}, 104, 1),
+			);
+		},
+	},
+	{
+		group: "a parent's children",
+		name: 'REFUSES a parent key missing its column, naming the parent',
+		async run(surface) {
+			await refuses(
+				'the transfers of no block',
+				surface.block.transfers.listCurrent({} as never, 10),
+				'Error',
+				/block[\s\S]*blockNumber/,
 			);
 		},
 	},
