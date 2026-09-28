@@ -2,7 +2,7 @@ import type {Accessor, ChildrenQuery, FindQuery, Page} from '@etherfold/accessor
 import {ACCESSOR_ENTITIES, runAccessorConformance, type AccessorFactory} from '@etherfold/accessor/conformance';
 import type {RemoteSQL, SQLPreparedStatement, SQLResult} from 'remote-sql';
 import {describe, expect, it} from 'vitest';
-import {VersionedStateStore, type Mutation} from '../src/index.js';
+import {BlockNotRetainedError, VersionedStateStore, type Mutation} from '../src/index.js';
 import {createTestDB} from './utils/db.js';
 import {block} from './utils/fixtures.js';
 
@@ -101,6 +101,94 @@ describe("a page of parents' children on SQLite", () => {
 		expect(pages[0]!.rows).toEqual([{room: 'r29', seq: 's2', guest: 'g2', rank: 2}]);
 		expect(issued.length).toBeGreaterThan(1);
 		expect(issued.every((statement) => statement.params <= 10)).toBe(true);
+	});
+});
+
+/**
+ * A reader that did not write the database (a read tier opening it with no
+ * retention of its own) must still refuse a block the WRITER already pruned:
+ * the versions closed at or below the recorded floor are gone, so an answer
+ * below it would be read from partly deleted history (ADR-0099, ADR-0095).
+ */
+describe('the accessor of a store another handle pruned', () => {
+	const WINDOW = {retention: {blocks: 64}, finalityDepth: 12} as const;
+	/** 1,100 - 64: the floor the writer's pass records. */
+	const FLOOR = 1_036;
+
+	/** A writer with a window folds and prunes; the returned reader claims no retention at all. */
+	async function prunedByAnother(): Promise<VersionedStateStore> {
+		const db = createTestDB();
+		const writer = new VersionedStateStore(db, ACCESSOR_ENTITIES, WINDOW);
+		await writer.migrate();
+		await writer.applyBlock(block(1_000), visits(1, 2));
+		// rewrite one visit: its first version is CLOSED at 1,001, below the floor
+		await writer.applyBlock(block(1_001), [
+			{type: 'upsert', entity: 'visit', id: {room: 'r0', seq: 's0'}, values: {guest: 'late', rank: 9}},
+		]);
+		await writer.applyBlock(block(1_100), []);
+		expect((await writer.prune()).versionsDeleted).toBeGreaterThan(0);
+
+		const reader = new VersionedStateStore(db, ACCESSOR_ENTITIES);
+		await reader.migrate();
+		expect(reader.capabilities.retention).toEqual({kind: 'unbounded'});
+		return reader;
+	}
+
+	const find = (at: number): FindQuery => ({entity: 'visit', limit: 10, at});
+	const children = (at: number): ChildrenQuery => ({
+		entity: 'room',
+		relation: 'visits',
+		parents: [{room: 'r0'}],
+		limit: 10,
+		at,
+	});
+
+	it('refuses `find` below the recorded floor with BlockNotRetainedError, naming what is kept', async () => {
+		const accessor = (await prunedByAnother()).accessor();
+
+		const refused = await accessor.find(find(FLOOR - 1)).catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(BlockNotRetainedError);
+		expect(refused).toMatchObject({requested: FLOOR - 1, retained: {from: FLOOR, to: 1_100}});
+		await expect(accessor.find(find(1_000))).rejects.toBeInstanceOf(BlockNotRetainedError);
+
+		// at the floor the history is whole, and so is the answer
+		expect((await accessor.find(find(FLOOR))).rows).toEqual([
+			{room: 'r0', seq: 's0', guest: 'late', rank: 9},
+			{room: 'r0', seq: 's1', guest: 'g1', rank: 1},
+		]);
+	});
+
+	it("refuses a relation's children below the recorded floor, and answers them at it", async () => {
+		const accessor = (await prunedByAnother()).accessor();
+
+		await expect(accessor.children(children(FLOOR - 1))).rejects.toBeInstanceOf(BlockNotRetainedError);
+		const [page] = await accessor.children(children(FLOOR));
+		expect(page!.rows.map((row) => (row as {guest: string}).guest)).toEqual(['late', 'g1']);
+	});
+
+	it('still answers the tip, and a block above it', async () => {
+		const accessor = (await prunedByAnother()).accessor();
+
+		expect((await accessor.find({entity: 'visit', limit: 10})).rows).toHaveLength(2);
+		expect((await accessor.find(find(2_000))).rows).toHaveLength(2);
+	});
+
+	it('answers any block of a database that was never pruned, as it always did', async () => {
+		const store = new VersionedStateStore(createTestDB(), ACCESSOR_ENTITIES);
+		await store.migrate();
+		await store.applyBlock(block(1_000), visits(1, 2));
+		await store.applyBlock(block(1_100), []);
+
+		expect((await store.accessor().find(find(1_000))).rows).toHaveLength(2);
+		expect(await store.accessor().children(children(1_000))).toHaveLength(1);
+	});
+
+	it('still refuses every block on a revert-only store, as its own claim says', async () => {
+		const store = new VersionedStateStore(createTestDB(), ACCESSOR_ENTITIES, {retention: 'revert-only'});
+		await store.migrate();
+		await store.applyBlock(block(1_000), visits(1, 2));
+
+		await expect(store.accessor().find(find(1_000))).rejects.toMatchObject({reason: 'no-historical-reads'});
 	});
 });
 

@@ -23,7 +23,8 @@ import {RemoteLibSQL} from 'remote-sql-libsql';
 import {afterAll, describe, expect, it} from 'vitest';
 import {run} from '../src/run.js';
 import {serve} from '../src/serve.js';
-import {ALICE, BOB, fakeChain, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {ALICE, BOB, fakeChain, nftEntities, START_BLOCK, transfer, ZERO} from './utils/chain.js';
+import {canonicalStoreIn} from './utils/reads.js';
 
 // ---------------------------------------------------------------------------------------------------
 // `etherfold serve` ANSWERS GRAPHQL OVER HTTP (ADR-0099)
@@ -188,5 +189,131 @@ describe('`etherfold run` serves /graphql over the generation it folds', () => {
 		} finally {
 			await running.stop();
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------
+// A READ TIER REFUSES WHAT THE WRITER PRUNED (ADR-0099, ADR-0095)
+// ---------------------------------------------------------------------------------------------------
+// `serve` claims no retention of its own (`unbounded`), but the process that
+// folded the database may have pruned it: the versions closed at or below the
+// floor its pass RECORDED are gone. Below that floor `serve` must refuse, never
+// answer from partly deleted history; at it, it must answer what the writer did.
+// ---------------------------------------------------------------------------------------------------
+
+/** Eight blocks that each mint a token and rewrite ONE counter, so every write but the last closes a version. */
+const CHURN = [10, 20, 30, 40, 50, 60, 70, 80].map((offset, index) =>
+	transfer(START_BLOCK + offset, `0xa${offset}`, ZERO, ALICE, BigInt(index + 1)),
+);
+/** The last block carrying a log: the tip the writer's window is measured back from. */
+const STORE_TIP = START_BLOCK + 80;
+const WINDOW = 20;
+/** The floor a pass records: the counter versions closed at or below it are deleted. */
+const FLOOR = STORE_TIP - WINDOW;
+
+const asOf = (block: number) =>
+	`{ counter(block: ${block}, first: 1) { name value } nft(block: ${block}, first: 10) { tokenID owner } }`;
+
+/** Poll until `done`, or fail naming what never happened. */
+async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, what: string): Promise<T> {
+	const deadline = Date.now() + 10_000;
+	for (;;) {
+		const value = await read();
+		if (done(value)) return value;
+		if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}; last saw ${JSON.stringify(value)}`);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
+/**
+ * `etherfold run` folds CHURN into a database FILE with `retention`, asked what it
+ * answers at `blocks` over its own `/graphql` once it has folded (and, with a
+ * window, pruned) to the tip, then stopped: the database a read tier is then
+ * started over.
+ */
+async function foldedByRun(retention: string, blocks: readonly number[]) {
+	const directory = mkdtempSync(join(tmpdir(), 'etherfold-serve-pruned-'));
+	directories.push(directory);
+	const url = `file:${join(directory, 'folded.db')}`;
+	const chain = fakeChain().serve(CHURN, START_BLOCK + 100);
+	const running = await run(
+		{processor: NFTS_BUNDLE, nodeUrl: 'http://localhost:0', store: 'sqlite', db: url, port: '0', retention},
+		{
+			provider: chain.provider,
+			sleep: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			},
+			handleSignals: false,
+			log: () => {},
+			env: {MAX_BLOCKS_PER_FETCH: '20'},
+		},
+	);
+	try {
+		const executor = httpExecutor(`${running.url}/graphql`);
+		await until(
+			async () => (await executor({query: '{ counter(first: 1) { value } }'})).data,
+			(data) => JSON.stringify(data) === JSON.stringify({counter: [{value: CHURN.length}]}),
+			'the run to fold every transfer',
+		);
+		if (retention !== 'unbounded') {
+			const reader = createNodeDB(url);
+			databases.push(reader);
+			const store = await canonicalStoreIn(reader, nftEntities);
+			// a handle claiming no retention reports only the floor a pass RECORDED
+			await until(
+				() => store.retainedFrom(),
+				(from) => from === FLOOR,
+				'the run to prune at its floor',
+			);
+		}
+		const answered = new Map<number, unknown>();
+		for (const block of blocks) answered.set(block, await executor({query: asOf(block)}));
+		return {url, answered};
+	} finally {
+		await running.stop();
+	}
+}
+
+/** `etherfold serve` over a database file, told no retention: the read tier of a split deployment. */
+async function servedOver(url: string) {
+	let running: RunningServer | undefined;
+	await serve(
+		{db: url, port: '0'},
+		{env: {}, log: () => {}, startServer: async (options) => (running = await startServer(options))},
+	);
+	servers.push(running!);
+	databases.push(running!.db);
+	return httpExecutor(`${running!.url}/graphql`);
+}
+
+describe('`etherfold serve` over a database another process folded', () => {
+	it('refuses a block below the prune floor the writer recorded, and answers the floor as the writer did', async () => {
+		const {url, answered} = await foldedByRun(String(WINDOW), [FLOOR]);
+		const atFloor = answered.get(FLOOR) as {data: unknown; errors?: unknown};
+		// the writer answered its own floor: six transfers had been counted by then
+		expect(atFloor.errors).toBeUndefined();
+		expect(atFloor.data).toMatchObject({counter: [{name: 'transfers', value: 6}]});
+
+		const executor = await servedOver(url);
+
+		const below = await executor({query: asOf(FLOOR - 1)});
+		expect(below.errors).toHaveLength(1);
+		expect(below.errors![0]!.extensions).toMatchObject({code: 'block-not-retained'});
+		expect(below.data).toBeNull();
+		const farBelow = await executor({query: asOf(START_BLOCK + 20)});
+		expect(farBelow.errors?.[0]?.extensions.code).toBe('block-not-retained');
+		expect(farBelow.data).toBeNull();
+
+		expect(await executor({query: asOf(FLOOR)})).toEqual(atFloor);
+	});
+
+	it('answers a block far below the tip of a database that was never pruned, as the writer did', async () => {
+		const early = START_BLOCK + 20;
+		const {url, answered} = await foldedByRun('unbounded', [early]);
+		expect(answered.get(early)).toMatchObject({data: {counter: [{name: 'transfers', value: 2}]}});
+
+		const executor = await servedOver(url);
+
+		expect(await executor({query: asOf(early)})).toEqual(answered.get(early));
 	});
 });
