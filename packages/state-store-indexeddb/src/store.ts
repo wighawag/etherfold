@@ -36,6 +36,7 @@ import {
 	type CursorWrite,
 	type SeamRecordKey,
 } from '@etherfold/state-store';
+import {indexedDBAccessor, type IndexedDBAccessor, type IndexedDBAccessorOptions} from './accessor.js';
 import {committed, openDatabase, request, walk} from './idb.js';
 import {
 	above,
@@ -787,6 +788,31 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const record = (await request(tx.objectStore(CURRENT).get(rowKey(declaration, id)))) as CurrentRecord | undefined;
 		await settled;
 		return record && {...record.values};
+	}
+
+	/**
+	 * This store's ACCESSOR (ADR-0099), rung 1: the rows of an entity matching a
+	 * predicate over its declared fields, ordered, bounded, at the tip or as of a
+	 * block, and a page of parents' children, all by SCANNING a key range and
+	 * filtering in memory, refused past the rows-examined bound (default 25,000,
+	 * `rowsExaminedBound` to configure it per deployment) rather than answered
+	 * slower. As of a block it reads the current rows plus the versions closed
+	 * since, and that delta counts every entity's changes. See `accessor.ts`.
+	 *
+	 * The seam the query layer's resolvers read through, beside `StateStore` and
+	 * never part of it (a handler still gets no predicate, ADR-0021). As-of reads
+	 * keep the retention refusal of every other as-of read here.
+	 */
+	accessor(options: IndexedDBAccessorOptions = {}): IndexedDBAccessor {
+		return indexedDBAccessor(
+			{
+				entities: this.entities,
+				database: () => this.database(),
+				commitIfSerialising: (tx) => this.commitIfSerialising(tx),
+				assertRetained: (at) => assertRetained(this.capabilities, at, () => this.tipBlockNumber()),
+			},
+			options,
+		);
 	}
 
 	// -- internals -----------------------------------------------------------

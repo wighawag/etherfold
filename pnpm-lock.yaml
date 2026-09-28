@@ -626,6 +626,9 @@ importers:
 
   packages/state-store-indexeddb:
     dependencies:
+      '@etherfold/accessor':
+        specifier: workspace:*
+        version: link:../accessor
       '@etherfold/state-store':
         specifier: workspace:*
         version: link:../state-store

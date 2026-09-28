@@ -1,39 +1,9 @@
 {
   "project": "webkit",
-  "ranAt": "2026-09-10T18:28:10.097Z",
+  "ranAt": "2026-09-28T16:08:35.364Z",
   "tabs": [
     {
       "tab": 0,
-      "errors": [],
-      "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
-      "unexpected": [],
-      "readBack": 0,
-      "mismatches": 0
-    },
-    {
-      "tab": 1,
-      "errors": [],
-      "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
-      "unexpected": [],
-      "readBack": 0,
-      "mismatches": 0
-    },
-    {
-      "tab": 2,
-      "errors": [],
-      "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
-      "unexpected": [],
-      "readBack": 0,
-      "mismatches": 0
-    },
-    {
-      "tab": 3,
       "errors": [],
       "attempted": 20,
       "wrote": 20,
@@ -41,11 +11,41 @@
       "unexpected": [],
       "readBack": 20,
       "mismatches": 0
+    },
+    {
+      "tab": 1,
+      "errors": [],
+      "attempted": 20,
+      "wrote": 1,
+      "refused": 19,
+      "unexpected": [],
+      "readBack": 1,
+      "mismatches": 0
+    },
+    {
+      "tab": 2,
+      "errors": [],
+      "attempted": 20,
+      "wrote": 1,
+      "refused": 19,
+      "unexpected": [],
+      "readBack": 1,
+      "mismatches": 0
+    },
+    {
+      "tab": 3,
+      "errors": [],
+      "attempted": 20,
+      "wrote": 1,
+      "refused": 19,
+      "unexpected": [],
+      "readBack": 1,
+      "mismatches": 0
     }
   ],
   "audit": {
-    "expected": 20,
-    "found": 20,
+    "expected": 23,
+    "found": 23,
     "missing": 0,
     "surplus": 0
   }

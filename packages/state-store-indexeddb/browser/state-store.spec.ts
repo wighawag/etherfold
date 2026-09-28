@@ -71,6 +71,33 @@ test('passes the shared conformance suite, under every claim it makes', async ({
 	}
 });
 
+test("passes the shared accessor suite, the SQLite accessor's answers within the bound", async ({page}, testInfo) => {
+	const harness = await harnessFor(page);
+	try {
+		const run = await harness.run({
+			phase: 'once',
+			params: {case: 'accessor-conformance', tag: `accessor-conformance-${Date.now()}`},
+		});
+		record({
+			project: testInfo.project.name,
+			case: 'accessor-conformance',
+			env: run.env,
+			timings: run.timings,
+			results: run.results,
+			errors: run.errors,
+		});
+
+		expect(run.errors).toEqual([]);
+		// the accessor suite itself (ADR-0099), the one the SQLite accessor passes:
+		// UTF-8 text order, numeric u256 order and null order are checked against
+		// this engine's own key order and cursors, and the declared bound is held.
+		expect(run.results.failures).toEqual([]);
+		expect(run.results.passed as number).toBeGreaterThan(100);
+	} finally {
+		await harness.dispose();
+	}
+});
+
 test('runs the same processor as node, and lands on the same rows', async ({page}, testInfo) => {
 	// the SAME processor object, run here against the seam's reference store
 	const memory = new MemoryStateStore(processor.entities);

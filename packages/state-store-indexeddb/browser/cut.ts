@@ -10,6 +10,11 @@
  *   This is what "passes the conformance suite in a real browser, on Chromium,
  *   Firefox and WebKit" means: not a browser-flavoured copy of the cases, the
  *   cases themselves.
+ * - `accessor-conformance`: the SHARED accessor suite (`@etherfold/accessor`,
+ *   ADR-0099), the same one node runs, against this backend's rung-1 accessor
+ *   under the same three retention claims and a declared rows-examined bound:
+ *   the in-memory UTF-8 text order, numeric `u256` order and null order are
+ *   asserted against each engine's own key order and cursors, not a shim's.
  * - `processor`: the SAME `EntityProcessor` the spec runs in node against
  *   `MemoryStateStore`, run here against IndexedDB, so the two can be compared
  *   row for row.
@@ -39,6 +44,7 @@ import {
 	type EntityDeclaration,
 	type StateStoreBackend,
 } from '@etherfold/state-store';
+import {runAccessorConformance} from '@etherfold/accessor/conformance';
 import {runStateStoreConformance} from '@etherfold/state-store-conformance';
 import {deleteDatabase, IndexedDBStateStore} from '../src/index.js';
 import {processor, runWorkload} from './workload.js';
@@ -94,6 +100,57 @@ async function conformance(params: Params, timings: Timing[]): Promise<Record<st
 						],
 					},
 				},
+			),
+		);
+		passed += result.passed;
+		failures = failures.concat(
+			result.failures.map((failure) => ({
+				claim,
+				group: failure.group,
+				name: failure.name,
+				error: `${(failure.error as Error)?.message ?? failure.error}`,
+			})),
+		);
+		results[claim] = {passed: result.passed, failed: result.failures.length, databases: sequence};
+	}
+
+	return {passed, failed: failures.length, failures, byClaim: results};
+}
+
+/**
+ * The rows-examined bound the accessor case declares: small, so the bound
+ * chapter (a crowd of `bound + 1` rows) stays cheap on every engine.
+ */
+const ACCESSOR_BOUND = 60;
+
+/**
+ * The shared ACCESSOR suite, under each claim this backend can honestly make,
+ * with the bound its accessor was configured with declared, so the suite asks it
+ * to answer at the bound and refuse one row past it.
+ */
+async function accessorConformance(params: Params, timings: Timing[]): Promise<Record<string, unknown>> {
+	const claims: {claim: string; options: Record<string, unknown>}[] = [
+		{claim: 'unbounded', options: {}},
+		{claim: 'window-128', options: {retention: {blocks: 128}, finalityDepth: 64}},
+		{claim: 'revert-only', options: {retention: 'revert-only', finalityDepth: 64}},
+	];
+
+	const results: Record<string, unknown> = {};
+	let failures: {claim: string; group: string; name: string; error: string}[] = [];
+	let passed = 0;
+
+	for (const {claim, options} of claims) {
+		let sequence = 0;
+		const result = await timed(`accessor-conformance:${claim}`, timings, () =>
+			runAccessorConformance(
+				(declarations) => {
+					const store = new IndexedDBStateStore(declarations, {
+						databaseName: `${databaseName(params, `accessor-${claim}`)}-${sequence++}`,
+						...options,
+					});
+					return {store, accessor: store.accessor({rowsExaminedBound: ACCESSOR_BOUND})};
+				},
+				{rowsExaminedBound: ACCESSOR_BOUND},
 			),
 		);
 		passed += result.passed;
@@ -483,6 +540,9 @@ const cut: CodeUnderTest = {
 				switch (ctx.params.case) {
 					case 'conformance':
 						results = await conformance(ctx.params, timings);
+						break;
+					case 'accessor-conformance':
+						results = await accessorConformance(ctx.params, timings);
 						break;
 					case 'processor':
 						results = {...(await sameProcessor(ctx.params, timings)), reference: await reference(timings)};
