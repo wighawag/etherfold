@@ -1,0 +1,11 @@
+--- a/packages/browser/test/aVisibleTabTakesTheLeaseFromABackgroundedLeader.test.ts
++++ b/packages/browser/test/aVisibleTabTakesTheLeaseFromABackgroundedLeader.test.ts
+@@ -271,6 +271,8 @@
+ 		expect(Date.now() - started).toBeLessThan(SETTLE_MS + 1500);
+ 		expect(reader.syncing.$state.election).toMatchObject({takeoverReason: 'leader-backgrounded'});
+ 
++		// DECIDER (wait): the seat says writer before the container opens; wait for the container.
++		await until('the fresh start', () => reader.promotion !== undefined);
+ 		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+ 		await indexToTip(reader);
+ 		// THE FROZEN LEADER THAWS and writes, still believing it leads: BOTH WRITE. Its

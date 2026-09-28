@@ -32,3 +32,10 @@ Reproduce first: repeat the one test (vitest `-t '<name>'` from `packages/browse
 > The fix is `the-tab-lease-suites-stop-flaking`, which is blocked by this task and reads your README. Do not fix anything here.
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound every shell command (`timeout`, `head`), cap parallel load as stated above, and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **Spike folder path:** I used `docs/spikes/the-frozen-leader-takeover-flake/`, the path the task's acceptance criterion names, rather than the runner prompt's default `docs/spikes/the-frozen-leader-takeover-flake-is-diagnosed-under-load/`. The task is the more specific spec. This affects the fix task, which must read the README at this path. The alternative was the runner's default folder name.
+- **How the instrumentation is kept without landing:** it is kept as patch files that `repro.sh` applies with `patch -p1` for one measurement and reverses on exit, never touching git. This keeps the trace and the deciding experiments re-runnable while leaving shipped source unchanged. The alternatives were a spike-only copy of the test (it could not resolve the package's dependencies from `docs/`) or throwing the instrumentation away (the evidence could not be re-run).
+- **How load is generated:** busy-loop `node` processes as CPU burners, plus concurrent vitest processes, each capped at `nproc - 2`. No `stress` tool is needed and both are easy to bound. The alternative was parallel runs alone, which only reaches 0.5%, too rare to decide anything.
+- **Signal used by `decide-wait`:** `reader.promotion !== undefined`, because that getter answers only once the container exists and is observable without a production change. The README says it is an indirect signal and leaves the real readiness signal to the fix task.
