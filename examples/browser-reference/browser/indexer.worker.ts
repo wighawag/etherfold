@@ -1,4 +1,5 @@
 import {createBrowserStateStore, hostIndexerInThisWorker, keepStreamOnIndexedDB} from '@etherfold/browser';
+import {graphqlQueryHandler} from '@etherfold/graphql/worker';
 import {EntityStateView, fromEntityProcessor, openForReading, openForWriting} from '@etherfold/processor-entities';
 import {tokenProcessor} from '../src/processor.js';
 
@@ -80,6 +81,23 @@ const host = hostIndexerInThisWorker({
 	// nothing. Without a keeper the edit still folds beside the live one, but it
 	// fetches the whole history again first.
 	keepStream: keepStreamOnIndexedDB('reference-stream'),
+	// =====================================================================
+	// THE QUERY LAYER: GraphQL, answered HERE, where the store is (ADR-0099)
+	// =====================================================================
+	// The resolvers need the store and the store is in this worker, so the schema
+	// (built from the SAME entity declarations) and the `graphql` runtime live here
+	// too, and the tab only sends documents over its port (`workerExecutor` in
+	// `main.ts`). Each operation is answered from the store the canonical
+	// generation folds into, pinned to one block, and a READER worker answers it
+	// from the store its leader writes, the same way.
+	//
+	// OPT-IN, and this line is what it costs: about 48 KiB gzipped on this
+	// worker's bundle, off the first-paint path. An app that reads a few entities
+	// by id needs none of it (the read surface, `createPortReadSurface`, is free);
+	// leave the line out and this worker bundles no GraphQL at all. The IndexedDB
+	// scan refuses past a number of rows examined (25,000 by default); raise or
+	// lower it with `graphqlQueryHandler({accessor: {rowsExaminedBound}})`.
+	query: graphqlQueryHandler(),
 });
 
 // =====================================================================

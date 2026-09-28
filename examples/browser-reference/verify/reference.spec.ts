@@ -32,7 +32,16 @@ type Reference = {
 		checkTxInclusion(q: {txHash: string}[]): Promise<Record<string, {status: string; basis: string}>>;
 	};
 	onRedeploy(next: unknown): Promise<{stream: string}>;
+	holders(min: number): Promise<{
+		data?: {account: {address: string; holds: number; holdings: {id: string}[]}[]};
+		errors?: {message: string; extensions?: {code?: string}}[];
+		extensions?: {generation: string; block: number};
+	}>;
 };
+
+/** The two accounts the fake chain mints to, alternately (`verify/wallet.ts`). */
+const ALICE = '0x0000000000000000000000000000000000000011';
+const BOB = '0x0000000000000000000000000000000000000022';
 
 async function open(page: Page, options: Partial<FakeChainOptions> = {}) {
 	const settings: FakeChainOptions = {walletChainId: APP_CHAIN, transfers: 5, tipBlock: 10, ...options};
@@ -75,6 +84,47 @@ test('indexes in a dedicated worker, through the wallet handed over as a port', 
 	expect(progress.host).toBe('dedicated-worker');
 	expect(progress.scope).toBe('DedicatedWorkerGlobalScope');
 	expect(requests['eth_getLogs'] ?? 0).toBeGreaterThan(0);
+	expect(errors).toEqual([]);
+});
+
+/**
+ * THE QUERY LAYER (ADR-0099): one GraphQL document, answered by the WORKER.
+ *
+ * The page's own document is run (`holders` in `main.ts`), so what is asserted
+ * is the wiring a template copies: `graphqlQueryHandler()` in the worker entry,
+ * `workerExecutor(indexer)` in the tab. It is the shape the read surface cannot
+ * express: a FILTER on a declared field, an ORDER on it, and a NESTED relation
+ * (an account's holdings), in one round trip, pinned to one block.
+ *
+ * The fake chain mints tokens 1 to 5 to two accounts in turn, so Alice holds
+ * three and Bob two: ordered by holdings, Alice comes first, and a filter at
+ * three leaves only her. The answer is compared whole, because what crosses the
+ * port is exactly what a server's `/graphql` would answer for the same document.
+ */
+test('answers a GraphQL query from its worker: filtered, ordered, with a nested relation', async ({page}) => {
+	const {errors} = await open(page);
+	await expect(page.locator('#transfers')).toHaveText('5');
+
+	// the page renders it, and re-queries it when the state moves
+	await expect(page.locator('#holders')).toHaveText(`${ALICE}: 3 (1, 3, 5)\n${BOB}: 2 (2, 4)`);
+
+	const {everyone, filtered} = await page.evaluate(async () => {
+		const app = (window as never as {__reference: Reference}).__reference;
+		return {everyone: await app.holders(1), filtered: await app.holders(3)};
+	});
+
+	expect(everyone.errors).toBeUndefined();
+	expect(everyone.data).toEqual({
+		account: [
+			{address: ALICE, holds: 3, holdings: [{id: '1'}, {id: '3'}, {id: '5'}]},
+			{address: BOB, holds: 2, holdings: [{id: '2'}, {id: '4'}]},
+		],
+	});
+	// which generation answered, and the one block every field was read as of
+	expect(typeof everyone.extensions?.generation).toBe('string');
+	expect(everyone.extensions?.block).toBeGreaterThanOrEqual(5);
+
+	expect(filtered.data).toEqual({account: [{address: ALICE, holds: 3, holdings: [{id: '1'}, {id: '3'}, {id: '5'}]}]});
 	expect(errors).toEqual([]);
 });
 

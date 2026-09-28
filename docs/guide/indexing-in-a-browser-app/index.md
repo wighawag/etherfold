@@ -81,7 +81,7 @@ const indexer = connectToIndexerHost(
 const progress = createProgressReadable(indexer); // a store, like `syncing`
 ```
 
-The host starts indexing on its own as soon as it has a provider and a source. What the tab gets is the port: typed reads (`indexer.reads`, or `createPortReadSurface` over your declarations), control (`startIndexing`, `stopIndexing`, `reconfigure`), `checkTxInclusion`, and status PUSHED to it (`indexer.onProgress`, which `createProgressReadable` wraps). What the hook publishes on `syncing.publication` and `syncing.streamSeed` reaches the tab as `progress.publication` and `progress.streamSeed`, with the same values. A failure that stops the host (a refused bundle, a seed with no keeper) is `progress.failure`, beside `phase: 'refused'`, where the main thread would have rejected `init`.
+The host starts indexing on its own as soon as it has a provider and a source. What the tab gets is the port: typed reads (`indexer.reads`, or `createPortReadSurface` over your declarations), GraphQL if the worker entry opts in ([Querying the state](#querying-the-state-the-read-surface-or-graphql)), control (`startIndexing`, `stopIndexing`, `reconfigure`), `checkTxInclusion`, and status PUSHED to it (`indexer.onProgress`, which `createProgressReadable` wraps). What the hook publishes on `syncing.publication` and `syncing.streamSeed` reaches the tab as `progress.publication` and `progress.streamSeed`, with the same values. A failure that stops the host (a refused bundle, a seed with no keeper) is `progress.failure`, beside `phase: 'refused'`, where the main thread would have rejected `init`.
 
 ### The provider and the settings: from the tab, or from the entry
 
@@ -561,6 +561,125 @@ etherfold does not depend on TanStack Query, Apollo, urql or Houdini, and will n
 **One thing to know before you write the narrow half.** `entities` carries entity *names* — `'token'`, `'counter'` — which is your processor's vocabulary, and no cache library knows it. The coarse line composes with every library as it stands (`queryClient.invalidateQueries()`, Apollo's `client.refetchQueries({include: 'active'})`, urql's `reexecuteOperation`), because "invalidate everything" needs no vocabulary at all. The narrow line needs a **mapping from an entity name to that library's own unit of invalidation**, and how cheap that is depends on which library you picked: a query key you already control (TanStack Query, the example above — free, as long as you key your queries by entity name), a list of query names (Apollo), or the operations you chose to re-execute (urql). None of them offers "invalidate everything of type X" for nothing. Declare the mapping once, beside your queries; do not try to derive it. See [`work/notes/findings/what-the-state-moved-payload-costs-a-normalised-cache.md`](https://github.com/wighawag/etherfold/blob/main/work/notes/findings/what-the-state-moved-payload-costs-a-normalised-cache.md) for why the payload is entity names rather than ids, and what that buys and costs.
 
 **Do not apply the delta by hand.** The signal says *what moved* so that you re-read through the surface you already hold; it carries no rows, no mutations and no state handle, deliberately. A reader handed a delta applies it by hand, and applying a delta by hand is exactly what goes wrong at the next reorg.
+
+## Querying the state: the read surface, or GraphQL
+
+There are two ways to read what the worker indexed, and they answer different questions ([ADR-0099](../../adr/0099-one-query-runs-against-a-worker-and-a-server-through-an-accessor-seam.md)).
+
+**The read surface, for a few entities by id.** `createPortReadSurface(indexer, declarations)` is typed from your entity declarations and reads one entity by id (current, or as of a block) or lists the rows under an id prefix, a declared relation's children included, in id order. It costs your bundle nothing, and for an app that shows a counter, a balance or the row the user is looking at, it is the whole answer:
+
+```ts
+const reads = createPortReadSurface(indexer, processor.entities);
+const counter = await reads.counter.getCurrent({name: 'transfers'});
+```
+
+It has no predicate and no ordering, deliberately ([ADR-0021](../../adr/0021-the-handler-seams-only-set-read-is-a-bounded-id-prefix-listing.md)): IndexedDB has no query planner, so a read that looks cheap on it is a scan.
+
+**GraphQL, for a list.** A list view wants a FILTER on a declared field, an ORDER on it, and a NESTED relation, and that is one GraphQL document. The schema is built from the same declarations, with no SDL and no codegen, and the relation is the one you declare on the child ([ADR-0098](../../adr/0098-the-entity-declaration-carries-relations-enums-and-semantic-types.md)):
+
+```ts
+entities: [
+	{name: 'account', id: ['address'], fields: {holds: 'integer'}},
+	// the child's leading id column is the parent's whole id; `as` names the collection on the parent
+	{name: 'holding', id: ['address', 'id'], fields: {}, parent: {entity: 'account', as: 'holdings'}},
+],
+```
+
+The resolvers need the store and the store is in the worker, so GraphQL is answered THERE. The worker entry opts in with one line, and the tab holds an executor over the port it already has:
+
+```ts
+// indexer.worker.ts
+import {graphqlQueryHandler} from '@etherfold/graphql/worker';
+hostIndexerInThisWorker({createState, createProcessor, query: graphqlQueryHandler()});
+
+// the tab
+import {workerExecutor} from '@etherfold/graphql/worker';
+const execute = workerExecutor(indexer); // the port from connectToIndexerHost
+
+const {data, errors, extensions} = await execute({
+	query: `query Holders($min: SafeInt!) {
+		account(where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) {
+			address
+			holds
+			holdings(orderBy: {field: id, direction: asc}, first: 10) { id }
+		}
+	}`,
+	variables: {min: 1},
+});
+extensions; // {generation, block}: which generation answered, and the one block every field was read as of
+```
+
+Every list field takes `where` (per column `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `isNull`, combined with `_and` and `_or`), `orderBy` and a required `first`; a root field also takes `block`, to answer as of an earlier one. A nested collection is read for the whole page of parents in one batched read, bounded per parent. Every operation pins ONE block, so a parent and its children never come from two blocks, a reorg included. A `u256` arrives as a decimal string (`U256`), because JSON has no `bigint`. The reference runs exactly this query against its worker, asserted in a real browser: [`examples/browser-reference`](https://github.com/wighawag/etherfold/tree/main/examples/browser-reference).
+
+A reader tab (above) answers the same queries from the store its leader writes, so a second tab is not a broken tab.
+
+### What GraphQL costs, which is how you choose
+
+**The worker pays for it, and only if you ask.** `@etherfold/browser` never imports GraphQL: a worker entry that passes no `query` handler bundles none of it (asserted). Passing `graphqlQueryHandler()` adds 191.0 KiB minified, **48.3 KiB gzipped** to the worker bundle, measured with esbuild ([the measurement](https://github.com/wighawag/etherfold/tree/main/docs/spikes/a-worker-host-answers-graphql-over-its-port)). That is off the thread that paints and off the first-paint path, since a worker's bundle is fetched when the worker starts.
+
+**The tab pays a little too, today.** Importing `workerExecutor` from `@etherfold/graphql/worker` currently also brings about 23 KiB gzipped of the `graphql` runtime into the tab's own bundle under Vite (measured on the reference: 63.2 to 86.7 KiB gzipped), because that module also holds the handler's pipeline. It is a known gap, not the design: the executor itself needs none of it ([the observation](https://github.com/wighawag/etherfold/blob/main/work/notes/observations/importing-workerexecutor-puts-graphql-in-the-tab-bundle.md)).
+
+So the rule of thumb: an app that reads a few entities by id stays on the read surface and pays nothing; an app with a list view that filters, orders or nests takes GraphQL and pays about 48 KiB gzipped in its worker. You can use both side by side, as the reference does.
+
+### The same document, against a server
+
+Which executor you inject is a deployment choice, not a code change. A hosted indexer (`etherfold serve`, and `run` and `node`) answers GraphQL at `/graphql` from the same schema, and `httpExecutor` is its executor:
+
+```ts
+import {httpExecutor} from '@etherfold/graphql';
+import {workerExecutor} from '@etherfold/graphql/worker';
+
+const execute = LOCAL ? workerExecutor(indexer) : httpExecutor('https://indexer.example/graphql');
+```
+
+Nothing below that line changes, and neither does the answer: both executors serialise identically (`U256` as a decimal string, `Bytes` as hex), share one error formatter and one set of codes, and report `extensions: {generation, block}`. That is checked, not promised: one query conformance suite (`@etherfold/graphql/conformance`) runs the same requests against the in-process, HTTP and worker executors and requires the same JSON text byte for byte.
+
+**An executor never rejects.** A refusal is a coded error in `errors[].extensions.code`. A transport that failed (an HTTP 500, a body that is not JSON, a network error, a closed port, a worker host that died) is normalised to ONE shape: no `data`, one error coded `transport-failure` naming its `reason`, which `isTransportFailure(result)` detects. So the error handling you write once holds for the mode that can return a 500 and the mode that cannot.
+
+**Bring your own client.** etherfold does not pick urql, Apollo or Houdini for you. A client that takes a `fetch` takes `executorToFetch(execute)`, which answers any request through the executor, the worker one included:
+
+```ts
+import {executorToFetch} from '@etherfold/graphql';
+const client = new Client({url: '/graphql', fetch: executorToFetch(execute), exchanges: [fetchExchange]}); // urql
+```
+
+### Re-query when the state moves
+
+There are no subscriptions. The state-moved signal (above) is what tells you to re-read, and a GraphQL query is re-read by running the document again:
+
+```ts
+indexer.onStateMoved(() => void render()); // render() runs the document and draws the answer
+void render(); // the signal is silent on attaching, so read once by hand
+```
+
+**Draw only the latest render's answer.** Each signal starts a render, so on a busy chain several are in flight at once, and the worker answers them concurrently: the query pinned to block 4 can come back after the one pinned to block 5. Written as it lands, the older answer overwrites the newer one, and the page shows a past block until the chain moves again. Number the renders and drop an answer a later render has superseded (not by comparing `extensions.block`, which a reorg legitimately lowers):
+
+```ts
+let latestRender = 0;
+async function render() {
+	const mine = ++latestRender;
+	const {data, errors} = await execute({query: HOLDERS, variables: {min: 1}}); // HOLDERS: the document above
+	if (mine !== latestRender) return; // a later render is drawing a newer answer
+	draw(data, errors);
+}
+```
+
+A client cache wires it the same way as any other read: the coherence-token rule from [Wiring it to a cache you already use](#wiring-it-to-a-cache-you-already-use), with the entity names in `entities` mapped to the queries that read them.
+
+### The browser refuses past a bound, rather than getting slower
+
+IndexedDB has no query planner, so the browser answers a `where` or an `orderBy` by scanning a key range and filtering in memory. That scan is BOUNDED by the number of rows it examines, **25,000 by default** (the measured live set of a real deployment is about 4,000 rows), and past it the query is REFUSED with the code `rows-examined-bound`, naming the `entity` and the `bound`. It refuses rather than degrades so that a growing dataset produces an error you see in development, not a UI that gets slower every week. The bound counts rows, not milliseconds, so it refuses the same query identically on a laptop and a phone.
+
+```ts
+if (errors?.[0]?.extensions?.code === 'rows-examined-bound') {
+	// narrow the query (a tighter `where`, a smaller `first`), or raise the bound in the worker entry:
+}
+hostIndexerInThisWorker({createState, createProcessor, query: graphqlQueryHandler({accessor: {rowsExaminedBound: 100_000}})});
+```
+
+A nested collection is bounded per parent, so one prolific parent cannot starve the others. A query with `block:` is served as the current rows plus the churn since that block, under the same bound, and that churn is the whole database's rather than the queried entity's: an as-of query on a quiet entity can be refused because other entities changed a lot. A block the store no longer retains is `block-not-retained`, the same code a server answers.
+
+**This is a documented difference between deployments, not a parity rule.** A server answers through SQLite, which has a query planner and no such bound, so the same document can be answered by a server and refused by a browser. The conformance suite asserts each executor against the bound its deployment declares, so the difference is tested rather than discovered.
 
 ## Telling whether the state already accounts for your transaction
 
