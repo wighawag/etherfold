@@ -22,7 +22,7 @@ covers: [2, 3, 4, 9]
 
 ## Prompt
 
-> Goal: GraphQL over HTTP on the server, plus `httpExecutor` and `executorToFetch` (ADR-0099). Look at `@etherfold/server` (its Hono app, `createQuerySurface`), the `serve` command in the CLI, the schema module and the query conformance suite.
+> Goal: GraphQL over HTTP on the server, plus `httpExecutor` and `executorToFetch` (ADR-0099). Look at `@etherfold/server` (its Hono app), `createQuerySurface` in `@etherfold/state-store-sqlite`, the `serve` command in the CLI, the schema module and the query conformance suite.
 >
 > FIRST, check this task against current reality: it is a launch snapshot written on 2026-09-28. Read ADR-0098 and ADR-0099 and the spec `the-same-query-runs-against-a-worker-and-a-server` (in `work/specs/tasked/`), and check the tasks it is blocked by landed as it assumes. If a dependency landed differently or an ADR superseded an assumption, do not build on the stale premise: route to needs-attention with the discrepancy (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >

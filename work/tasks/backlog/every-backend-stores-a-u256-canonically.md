@@ -10,7 +10,9 @@ covers: [5, 15, 17]
 
 Memory, SQLite, IndexedDB and patch all implement the semantic type `u256`, in THIS ONE TASK (ADR-0098: a half-migrated backend set means one declaration meaning different things on a server and in a browser, which fails silently; do not split it). At the store seam a `u256` is a `bigint`: a handler writes one (`set`), `get` / `getAsOf` / the listings answer one, and each backend holds it internally in its canonical encoding (big-endian fixed-width bytes). A value that is negative, wider than 256 bits or not a `bigint` is refused at write. Two writes of the same value are equal. The seam still orders only ids, lexicographically (ADR-0021): numeric ORDERING over a `u256` field is the accessor's promise (`an-accessor-finds-rows-by-a-predicate-on-sqlite`, `an-accessor-scans-indexeddb-within-a-bound`), not this task's.
 
-The snapshot document (`packages/state-store/src/snapshot-document.ts`, format 2, ADR-0095) carries a `u256` field in its canonical encoding and installs it back as a `bigint`, so `publish` and a tab's bootstrap keep working for a declaration that uses one.
+The snapshot document (`packages/state-store/src/snapshot-document.ts`, format 2, ADR-0095) carries a `u256` field in its canonical encoding and installs it back as a `bigint`, so `publish` and a tab's bootstrap keep working for a declaration that uses one; its declaration check (`sameDeclaration`, `describe`) compares a `{storage, type}` field structurally, not by reference.
+
+The SQLite raw-SQL tier follows the same rule: `queryCurrent` / `queryAsOf` and `createQuerySurface` (`packages/state-store-sqlite/src/query-surface.ts`) answer a `u256` column as a `bigint`, and a caller comparing one binds the canonical encoding (provide the helper that produces it), so a `where` with a decimal argument is not silently empty; say so in that package's README.
 
 The task is done when shared conformance cases for the semantic type pass on all four backends, and the stratagems workload's u256 fields (for example `globalRate`) declare it with the golden comparison still green. Amend ADR-0025 in the same change: its decision is unchanged, its delegation pointer names a task that completed without doing this half, and the declaration now describes what it anticipated. Do NOT remove ADR-0098's `accepted, not yet implemented` line: `the-browser-index-orders-a-u256-numerically` lands last and removes it.
 
@@ -18,6 +20,7 @@ The task is done when shared conformance cases for the semantic type pass on all
 
 - [ ] Shared conformance cases for `u256` pass on memory, SQLite, IndexedDB and patch: a `bigint` written is the `bigint` read (current, as of a block, and in a listing), equal values are equal, invalid values are refused at write, and the stored encoding is the canonical one.
 - [ ] A `u256` field survives a snapshot-document round trip and the snapshot-bootstrap conformance case on every backend.
+- [ ] SQLite's `queryCurrent` / `queryAsOf` / `createQuerySurface` answer a `u256` as a `bigint`, and a comparison through the documented helper matches (tested).
 - [ ] The stratagems workload declares its u256 fields as `u256` and its golden comparison (`test`, `test:full`, `test:all-backends`) passes.
 - [ ] ADR-0025 is amended; changesets for every published package changed.
 

@@ -8,7 +8,7 @@ covers: [1, 2, 13, 14, 15, 18]
 
 ## What to build
 
-An entity declaration can say that it is the CHILD of another entity: `parent: {entity, as}` (ADR-0098), where `as` names the parent-side collection. The child's leading id columns must BE the parent's whole id, by name and in order, and that is checked at DECLARATION time on every backend identically (memory, SQLite, IndexedDB, patch), the way the identifier and reserved-namespace rules are: a relation whose columns are not the parent's whole leading id, or that names an entity that does not exist, is refused with a message naming both declarations. So is an `as` that collides with a field or id column of the parent, another relation's `as` on the same parent, or a name the generated read surface already uses. A relation implies nothing about writes (no referential check, no write order). A declaration without `parent` means exactly what it means today.
+An entity declaration can say that it is the CHILD of another entity: `parent: {entity, as}` (ADR-0098), where `as` names the parent-side collection. The child's leading id columns must BE the parent's whole id, by name and in order, and that is checked at DECLARATION time on every backend identically (memory, SQLite, IndexedDB, patch), the way the identifier and reserved-namespace rules are: a relation whose columns are not the parent's whole leading id, or that names an entity that does not exist, is refused with a message naming both declarations. So is an `as` that collides with a field or id column of the parent, another relation's `as` on the same parent, or a name the generated read surface already uses. A relation implies nothing about writes (no referential check, no write order). A declaration without `parent` means exactly what it means today. A declaration WITH `parent` still round-trips through the snapshot document (`packages/state-store/src/snapshot-document.ts`: its declare line and `sameDeclaration`), so `publish` and a tab's bootstrap keep working for it.
 
 The conformance cases lead: a declared relation's children read back the same on every backend through the existing bounded id-prefix listing with the parent's key as the prefix, and each refusal is asserted on every backend.
 
@@ -18,6 +18,7 @@ The promoted stratagems workload has the one shape the rule refuses: `placement`
 
 - [ ] A declaration with `parent` whose child's leading id columns are the parent's whole id is accepted on every backend, and its children read back identically through the prefix listing on every backend (conformance).
 - [ ] A relation whose columns are not the parent's whole leading id (a partial key, wrong order, wrong names), one naming a missing entity, and one whose `as` collides (a parent field or id column, another relation's `as`, a read-surface name) are refused at declaration time on every backend with the same message.
+- [ ] An entity declared with `parent` survives a snapshot-document round trip and a snapshot-bootstrap install.
 - [ ] Every existing declaration, with no `parent`, behaves exactly as before (existing suites unchanged).
 - [ ] The stratagems workload declares `placementPlayer` under `placement` with `window` in its id, and its golden comparison (`test`, `test:full`, `test:all-backends`) still passes.
 - [ ] Changesets for every published package changed.
