@@ -3,6 +3,7 @@ title: 'Small fixes from the query-layer drive: a parent''s children are typed o
 slug: query-layer-drive-small-fixes
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
