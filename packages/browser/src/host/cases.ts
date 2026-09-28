@@ -32,6 +32,7 @@ import {
 } from './envelope.js';
 import {portErrorOf} from './errors.js';
 import type {HostSettings} from './settings.js';
+import type {TabVisibility} from '../tabElection.js';
 
 const namedLogger = logs('@etherfold/browser');
 
@@ -130,6 +131,12 @@ export type HostBacking = {
 	 * them, and a port asking to replace them is REFUSED rather than ignored.
 	 */
 	connect?(settings: HostSettings, provider: MessagePort | undefined): HostProgress;
+	/**
+	 * THE TAB SAID WHETHER IT IS ON SCREEN (the `visibility` case). Absent where a
+	 * host does not take it from a tab, which is the main-thread host: it reads the
+	 * document it runs beside.
+	 */
+	reportVisibility?(visibility: TabVisibility): void;
 };
 
 /** What a shape's host holds of the cases it is being served through. */
@@ -294,6 +301,11 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 					);
 				}
 				return backing.connect(asked.settings ?? {}, asked.provider);
+			}
+			case 'visibility': {
+				const asked = request.payload as PortCases['visibility']['request'];
+				backing.reportVisibility?.(asked.visibility === 'hidden' ? 'hidden' : 'visible');
+				return undefined;
 			}
 			case 'ping':
 				// ANSWERING IS THE WHOLE ANSWER. A tab probes a host that has gone quiet,

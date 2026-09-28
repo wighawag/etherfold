@@ -51,11 +51,32 @@ function databaseOf(params: Params): string {
 }
 
 /**
+ * EMULATE THIS TAB'S VISIBILITY: `document.visibilityState` answers `state`, and
+ * `visibilitychange` is dispatched, which is what a browser does when a tab is
+ * backgrounded. A harness cannot background a tab on every engine, and several
+ * pages of one context are all "visible" to a headless browser.
+ */
+function emulateVisibility(state: 'visible' | 'hidden'): void {
+	Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => state});
+	Object.defineProperty(document, 'hidden', {configurable: true, get: () => state === 'hidden'});
+	document.dispatchEvent(new Event('visibilitychange'));
+}
+
+/** The election a tab stands in, with the foreground takeover's settle time where a spec shortens it. */
+function electionOf(params: Params) {
+	return {
+		name: electionName(params),
+		...(params.settleMs !== undefined ? {foregroundTakeover: {settleMs: Number(params.settleMs)}} : {}),
+	};
+}
+
+/**
  * A MAIN-THREAD TAB of the app: the hook, with the reader factory and (unless
  * `noElection`) the election. Its chain is held above `holdAbove`, so a leader
  * stops part way and what a takeover does next is visible in the ranges.
  */
 export async function electionMainOpenCase(params: Params): Promise<Record<string, unknown>> {
+	if (params.visibility) emulateVisibility(params.visibility as 'visible' | 'hidden');
 	const databaseName = databaseOf(params);
 	const holdAbove = Number(params.holdAbove ?? 0);
 	const chain = fakeChain();
@@ -84,7 +105,7 @@ export async function electionMainOpenCase(params: Params): Promise<Record<strin
 				return {store, state: new EntityStateView(store)};
 			},
 		},
-		params.noElection ? {} : {tabElection: {name: electionName(params)}},
+		params.noElection ? {} : {tabElection: electionOf(params)},
 	);
 	await indexer.init({
 		provider,
@@ -110,11 +131,14 @@ export async function electionMainOpenCase(params: Params): Promise<Record<strin
  * dead and the handover is another tab's.
  */
 export async function electionWorkerOpenCase(params: Params): Promise<Record<string, unknown>> {
+	if (params.visibility) emulateVisibility(params.visibility as 'visible' | 'hidden');
 	const ranges: FetchedRange[] = [];
 	const calls: string[] = [];
 	const url = new URL(
 		`./worker.js?db=${encodeURIComponent(databaseOf(params))}&fetch=${FETCH}&holdAbove=${Number(params.holdAbove ?? 0)}` +
-			`&election=${encodeURIComponent(electionName(params))}&report`,
+			`&election=${encodeURIComponent(electionName(params))}` +
+			(params.settleMs !== undefined ? `&settle=${Number(params.settleMs)}` : '') +
+			`&report`,
 		import.meta.url,
 	);
 	let worker: Worker | undefined;
@@ -176,4 +200,10 @@ export async function electionWorkerKillCase(): Promise<Record<string, unknown>>
 	if (!tab?.worker) throw new Error(`this tab holds no worker to kill`);
 	tab.worker.terminate();
 	return {killed: true};
+}
+
+/** THIS TAB GOES TO THE BACKGROUND, or comes forward: see `emulateVisibility`. */
+export async function electionVisibilityCase(params: Params): Promise<Record<string, unknown>> {
+	emulateVisibility(params.visibility as 'visible' | 'hidden');
+	return {visibility: document.visibilityState};
 }

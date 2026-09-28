@@ -33,6 +33,7 @@ import {
 	type IndexerPortOptions,
 } from './restart.js';
 import type {HostSettings} from './settings.js';
+import {followDocumentVisibility, type TabVisibility} from '../tabElection.js';
 
 /**
  * WHAT A TAB SAYS WHEN IT CONNECTS: how the port looks after the host's lifetime
@@ -380,6 +381,8 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 	let watchTimer: ReturnType<typeof setTimeout> | undefined;
 	let restartTimer: ReturnType<typeof setTimeout> | undefined;
 	let settleTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Tell a restarted host this tab's visibility, set once the port is built. */
+	let tellAgainOnRestart: (() => void) | undefined;
 
 	/**
 	 * A timer that must not hold a runtime open on its own.
@@ -738,6 +741,8 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 		dead = false;
 		heardAt = Date.now();
 		if (prepared) sendConnect(prepared);
+		// The new host is told what the dead one was: whether this tab is on screen.
+		tellAgainOnRestart?.();
 		// ALIVE LONG ENOUGH IS FORGIVEN: the budget bounds a crash LOOP, not the number
 		// of evictions a tab open all day may survive.
 		settleTimer = unattended(
@@ -817,6 +822,23 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 	}
 
 	watch();
+
+	/**
+	 * THIS TAB'S VISIBILITY, TOLD TO ITS HOST (the `visibility` case): what a worker
+	 * host needs for the tab election's foreground takeover, since a worker has no
+	 * document. Only where this scope HAS a document (a tab), and never awaited: a
+	 * host that does not take part answers and ignores it.
+	 */
+	let visibility: TabVisibility | undefined;
+	const tellVisibility = () => {
+		if (!visibility || closed || dead) return;
+		void request('visibility', {visibility}).catch(() => undefined);
+	};
+	const stopFollowingVisibility = followDocumentVisibility((now) => {
+		visibility = now;
+		tellVisibility();
+	});
+	tellAgainOnRestart = tellVisibility;
 
 	return {
 		host: access.host,
@@ -909,6 +931,7 @@ export function connectToIndexerHost(access: HostAccess, options?: IndexerConnec
 		close() {
 			if (closed) return;
 			closed = true;
+			stopFollowingVisibility?.();
 			listeners.clear();
 			movedListeners.clear();
 			deathListeners.clear();

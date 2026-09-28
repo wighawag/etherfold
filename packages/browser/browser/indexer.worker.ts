@@ -125,6 +125,8 @@ const claimWithinSeconds = Number(new URL(self.location.href).searchParams.get('
  * opt-in: a host that finds the lock held reads this database and fetches nothing.
  */
 const election = new URL(self.location.href).searchParams.get('election');
+/** The foreground takeover's settle time, in milliseconds, where a spec shortens it. */
+const settle = new URL(self.location.href).searchParams.get('settle');
 
 const reports = new URL(self.location.href).searchParams.has('report');
 const report = (message: Record<string, unknown>) => {
@@ -234,7 +236,7 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
 	...(election
 		? {
-				tabElection: {name: election},
+				tabElection: {name: election, ...(settle ? {foregroundTakeover: {settleMs: Number(settle)}} : {})},
 				openState: async (context: {stream: string}) => {
 					const store = openForReading(
 						await createBrowserStateStore(processor.entities, {databaseName: databaseFor(context.stream)}),

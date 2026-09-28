@@ -94,12 +94,16 @@ export {
 } from './stateMovedAcrossTabs.js';
 
 export {
+	DEFAULT_FOREGROUND_SETTLE_MS,
 	TAB_ELECTION_PROTOCOL,
 	tabElectionName,
+	type ForegroundTakeover,
 	type ReaderState,
 	type TabElection,
 	type TabElectionRole,
 	type TabElectionState,
+	type TabVisibility,
+	type TakeoverReason,
 } from './tabElection.js';
 
 export {simple_hash} from '@etherfold/core';

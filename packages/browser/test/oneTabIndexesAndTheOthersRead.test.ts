@@ -152,7 +152,12 @@ describe('one tab indexes and the others read (main thread)', () => {
 		leader.dispose();
 
 		await until('the takeover', () => reader.syncing.$state.election?.role === 'writer');
-		expect(reader.syncing.$state.election).toEqual({name, role: 'writer', tookOver: true});
+		expect(reader.syncing.$state.election).toEqual({
+			name,
+			role: 'writer',
+			tookOver: true,
+			takeoverReason: 'leader-gone',
+		});
 		await until(
 			'the new writer to reach the new tip',
 			() => reader.syncing.$state.lastSync?.lastToBlock === BRANCH_A_EXTENDED_TIP,
@@ -293,7 +298,7 @@ describe('one tab indexes and the others read (worker hosts)', () => {
 			const progress = await reader.port.progress();
 			return progress.lastToBlock === BRANCH_A_EXTENDED_TIP ? progress : undefined;
 		});
-		expect(took.election).toEqual({name, role: 'writer', tookOver: true});
+		expect(took.election).toEqual({name, role: 'writer', tookOver: true, takeoverReason: 'leader-gone'});
 		expect((await reads.counter.getCurrent({name: 'transfers'}))?.value).toBe(EXPECTED_A_EXTENDED.transfers);
 		expect(asked('reader').ranges[0]!.from).toBeLessThanOrEqual(BRANCH_A_TIP + 1);
 	});

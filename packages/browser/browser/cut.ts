@@ -102,7 +102,8 @@
  *   the RANGES the replacement asked the node for, because a host that re-indexed
  *   from the start block lands on exactly the same rows as one that resumed.
  * - `election-main-open` / `election-worker-open` / `election-report` /
- *   `election-worker-kill`: the TAB ELECTION (ADR-0097), in `election.ts`. They run
+ *   `election-worker-kill` / `election-visibility`: the TAB ELECTION (ADR-0097), in
+ *   `election.ts`, the last one emulating a tab going to the background. They run
  *   here because the claim is about the engine's own `navigator.locks` being
  *   released when a tab closes or a worker is killed, which no mock can stand in
  *   for: one tab of N fetches, the others read, and a remaining tab takes over.
@@ -139,7 +140,13 @@ import {
 	type StateMovedWatch,
 } from './hostingShapes.js';
 import {foldOnThisThread, readEntities, readWritableStore, runReadSurfaceCases} from './readWorkload.js';
-import {electionMainOpenCase, electionReportCase, electionWorkerKillCase, electionWorkerOpenCase} from './election.js';
+import {
+	electionMainOpenCase,
+	electionReportCase,
+	electionVisibilityCase,
+	electionWorkerKillCase,
+	electionWorkerOpenCase,
+} from './election.js';
 import {
 	BRANCH_A_LATER,
 	BRANCH_A_LATER_TIP,
@@ -2403,6 +2410,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'election-worker-kill':
 						results = await electionWorkerKillCase();
+						break;
+					case 'election-visibility':
+						results = await electionVisibilityCase(ctx.params);
 						break;
 					default:
 						throw new Error(`unknown case ${JSON.stringify(ctx.params.case)}`);

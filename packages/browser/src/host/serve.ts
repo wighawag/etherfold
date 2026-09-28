@@ -46,16 +46,22 @@ import {sameProgress} from './envelope.js';
 import {openStateMovedChannel, type StateMovedAcrossTabs} from '../stateMovedAcrossTabs.js';
 import {
 	electionFor,
+	foregroundTakeoverOf,
+	leaderAnnouncement,
+	leaderIsDisplaceable,
 	openReader,
 	readerContextOf,
 	readerProgress,
 	standForElection,
 	tabElectionName,
+	watchForBackgroundedLeader,
 	type Candidacy,
 	type ReaderState,
 	type TabElection,
 	type TabElectionRole,
 	type TabElectionState,
+	type TabVisibility,
+	type TakeoverReason,
 } from '../tabElection.js';
 
 const namedLogger = logs('@etherfold/browser');
@@ -164,6 +170,15 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 		 * the stored cursor. A SharedWorker host takes the same lock through the same
 		 * code, uncontended by its own tabs, which is what lets it and dedicated-worker
 		 * hosts of one app share one election.
+		 *
+		 * The FOREGROUND TAKEOVER (`TabElection.foregroundTakeover`, on by default) is
+		 * driven by the visibility the tab reports over the port (`connectToIndexerHost`
+		 * does, from `document`): a dedicated-worker reader whose tab stayed visible past
+		 * the settle time while the leader is hidden takes the lease, and a leader whose
+		 * lease is taken stops its driver, abandons its in-flight batch, lets go of its
+		 * container and reads again. A SHAREDWORKER host does not take part: it is one
+		 * indexer for all its tabs rather than a background tab, so it publishes no
+		 * visibility (and is never displaced) and never takes the lease.
 		 */
 		tabElection?: TabElection;
 	};
@@ -394,8 +409,11 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		served?.publish();
 		// THE LEADER PUBLISHES; it is not polled (ADR-0097). Only a host that holds the
 		// lock and a container says where the fold is, and a repeat is not posted.
-		if (electionChannel && container && role === 'writer') {
-			const report = progress();
+		if (electionChannel && role === 'writer') {
+			// Before the container is open, the SEAT alone, so a visible reader hears that a
+			// leader exists during its fresh start rather than taking the silence for a
+			// frozen tab.
+			const report = container ? progress() : leaderAnnouncement({host: access.host, scope}, electionState()!);
 			if (!publishedAsLeader || !sameProgress(publishedAsLeader, report)) {
 				publishedAsLeader = report;
 				electionChannel.publishProgress(report);
@@ -422,12 +440,40 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	let electedAlready = election === undefined;
 	let announceElected: (() => void) | undefined;
 	let refuseElected: ((error: unknown) => void) | undefined;
-	const elected = new Promise<void>((resolve, reject) => {
-		announceElected = resolve;
-		refuseElected = reject;
-	});
-	elected.catch(() => undefined);
+	/** Resolved when this host holds the lock; replaced when a visible tab takes it away. */
+	let elected!: Promise<void>;
+	function expectElection(): void {
+		elected = new Promise<void>((resolve, reject) => {
+			announceElected = resolve;
+			refuseElected = reject;
+		});
+		elected.catch(() => undefined);
+	}
+	expectElection();
 	if (electedAlready) announceElected?.();
+	/**
+	 * THE FOREGROUND TAKEOVER (ADR-0097, D4 as amended), off for a SharedWorker host:
+	 * it is one indexer for every tab it serves and is not a background tab.
+	 */
+	const foreground = access.host === 'shared-worker' ? undefined : foregroundTakeoverOf(election);
+	/** What this host's tab last reported of its visibility over the port. */
+	let ownVisibility: TabVisibility | undefined;
+	let takeoverReason: TakeoverReason | undefined;
+	/** A visible tab took the lease from this host, which now reads. */
+	let displaced = false;
+	/** Bumped on every takeover and displacement, so a drive over a lost lease knows it is stale. */
+	let tenure = 0;
+	const settle = foreground
+		? watchForBackgroundedLeader({
+				settleMs: foreground.settleMs,
+				eligible: () =>
+					role === 'reader' &&
+					reading !== undefined &&
+					ownVisibility === 'visible' &&
+					leaderIsDisplaceable(leaderProgress),
+				take: () => candidacy?.takeFromBackgroundedLeader(),
+			})
+		: undefined;
 	let announceReader: ((store: StateStore) => void) | undefined;
 	let refuseReader: ((error: unknown) => void) | undefined;
 	const readerReady = new Promise<StateStore>((resolve, reject) => {
@@ -437,7 +483,24 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	readerReady.catch(() => undefined);
 
 	function electionState(): TabElectionState | undefined {
-		return election && role ? {name: election.name, role, tookOver} : undefined;
+		return election && role
+			? {
+					name: election.name,
+					role,
+					tookOver,
+					...(tookOver && takeoverReason ? {takeoverReason} : {}),
+					...(displaced ? {displaced: true} : {}),
+					...(foreground && ownVisibility ? {visibility: ownVisibility} : {}),
+				}
+			: undefined;
+	}
+
+	/** THE TAB SAID WHETHER IT IS ON SCREEN. Ignored where the foreground takeover is off. */
+	function reportVisibility(visibility: TabVisibility): void {
+		if (!foreground || disposed || ownVisibility === visibility) return;
+		ownVisibility = visibility;
+		publish();
+		settle?.reconsider();
 	}
 
 	/**
@@ -449,7 +512,10 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		seatTaken ??= (async () => {
 			const standing = election!;
 			electionChannel = openStateMovedChannel(tabElectionName(standing));
-			candidacy = standForElection(standing, () => becomeWriter(true));
+			candidacy = standForElection(standing, {
+				onTakeover: (reason) => becomeWriter(true, reason),
+				onDisplaced: () => stepDown(),
+			});
 			if (await candidacy.atOnce) {
 				becomeWriter(false);
 				return;
@@ -457,39 +523,99 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			if (disposed || electedAlready) return;
 			role = 'reader';
 			publish();
-			const seat = await openReader(spec.openState!, readerContextOf(spec.source, spec.config), spec.processorBundle);
-			reading = seat;
-			announceReader?.(seat.store);
-			if (electedAlready || disposed) return;
-			const detachMoved = electionChannel.onStateMoved((moved) => {
-				for (const handler of [...stateMovedHandlers]) handler(moved);
-			});
-			const detachProgress = electionChannel.onProgress((heard) => {
-				leaderProgress = heard;
-				publish();
-			});
-			stopFollowing = () => {
-				detachMoved();
-				detachProgress();
-				leaderProgress = undefined;
-			};
-			publish();
+			await seatAsReader();
 		})();
 		return seatTaken;
 	}
 
+	/** READ the shared store and follow the leader, until the lock is this host's. */
+	async function seatAsReader(): Promise<void> {
+		const seat = await openReader(spec.openState!, readerContextOf(spec.source, spec.config), spec.processorBundle);
+		if (electedAlready || disposed) return;
+		reading = seat;
+		announceReader?.(seat.store);
+		const channel = electionChannel!;
+		const detachMoved = channel.onStateMoved((moved) => {
+			for (const handler of [...stateMovedHandlers]) handler(moved);
+		});
+		const detachProgress = channel.onProgress((heard) => {
+			leaderProgress = heard;
+			publish();
+			settle?.reconsider();
+		});
+		stopFollowing = () => {
+			detachMoved();
+			detachProgress();
+			leaderProgress = undefined;
+		};
+		publish();
+		settle?.reconsider();
+	}
+
 	/** THE LOCK IS THIS HOST'S: stop following, and let the driver build the writer. */
-	function becomeWriter(took: boolean): void {
+	function becomeWriter(took: boolean, reason?: TakeoverReason): void {
 		if (electedAlready || disposed) return;
 		electedAlready = true;
+		tenure++;
 		role = 'writer';
 		tookOver = took;
+		takeoverReason = took ? reason : undefined;
+		displaced = false;
+		settle?.reconsider();
 		stopFollowing?.();
 		stopFollowing = undefined;
 		announceElected?.();
 		for (const wake of [...waitingForSettings]) wake();
-		if (took) namedLogger.info(`this host TOOK OVER as the indexing host of election "${election!.name}"`);
+		if (took) {
+			namedLogger.info(
+				reason === 'leader-backgrounded'
+					? `this host TOOK THE LEASE of election "${election!.name}" from a backgrounded leader`
+					: `this host TOOK OVER as the indexing host of election "${election!.name}"`,
+			);
+		}
 		publish();
+	}
+
+	/**
+	 * A VISIBLE TAB TOOK THE LEASE: stop the driver where it stands (its in-flight
+	 * batch is abandoned, never applied), let go of the container and the cursor, and
+	 * read again. The candidacy has already queued for the lock once more, so the
+	 * driver waits for it and makes ADR-0078's fresh start when it is granted.
+	 */
+	function stepDown(): void {
+		if (disposed || !electedAlready) return;
+		tenure++;
+		electedAlready = false;
+		expectElection();
+		role = 'reader';
+		tookOver = false;
+		takeoverReason = undefined;
+		displaced = true;
+		const letGo = container;
+		container = undefined;
+		opening = undefined;
+		statesByGeneration.clear();
+		phase = 'waiting';
+		if (letGo) {
+			letGo.disableProcessing();
+			letGo.onLastSyncUpdated = undefined;
+			letGo.onStateUpdated = undefined;
+			letGo.onLoad = undefined;
+			letGo.onPromoted = undefined;
+		}
+		detachFromContainer?.();
+		detachFromContainer = undefined;
+		lastSync = undefined;
+		publishedAsLeader = undefined;
+		wakeFromRest?.();
+		namedLogger.warn(
+			`a visible tab TOOK THE LEASE of election "${election!.name}" from this backgrounded host: it has stopped ` +
+				`fetching and folding, abandoned its in-flight batch, and reads the store the new leader writes. It takes ` +
+				`over again when that tab goes away.`,
+		);
+		publish();
+		// A read arriving before the seat is open waits for it (`storeForReads`).
+		void seatAsReader().catch((error) => namedLogger.error(`a displaced host could not open its reader`, error));
 	}
 
 	/** Wait for the lock, unless a stop or a dispose comes first. */
@@ -662,7 +788,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 
 	function progress(): HostProgress {
 		const seat = electionState();
-		if (seat && role === 'reader' && !container) {
+		if (seat && role === 'reader') {
 			// A READER reports the LEADER's figures under its own name (ADR-0097).
 			return readerProgress({host: access.host, scope, indexing}, leaderProgress, seat);
 		}
@@ -712,6 +838,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * the writable handle and nothing here can reach the mutating half.
 	 */
 	async function storeForReads(): Promise<StateStore> {
+		if (election && role === 'reader') return reading ? reading.store : readerReady;
 		if (election && !container) {
 			// A READER answers from the shared store it opened for reading (ADR-0097),
 			// until this host holds a container of its own.
@@ -738,8 +865,8 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * offered is a refusal a store does not change its mind about, and retrying
 	 * that one re-fetches a chain for ever in order to be refused identically.
 	 */
-	async function withRetries<T>(step: () => Promise<T>): Promise<T | undefined> {
-		while (!disposed && !stopRequested) {
+	async function withRetries<T>(step: () => Promise<T>, alive: () => boolean = () => true): Promise<T | undefined> {
+		while (!disposed && !stopRequested && alive()) {
 			try {
 				return await step();
 			} catch (error) {
@@ -899,6 +1026,46 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		},
 	};
 
+	/** ONE TENURE AS THE WRITER: open, load, and advance until a stop, a dispose or a displacement. */
+	async function driveTenure(term: number): Promise<void> {
+		const current = () => !disposed && !stopRequested && term === tenure;
+		const opened = await openContainer();
+		if (!current()) return;
+
+		const loaded = await withRetries(() => opened.load(), current);
+		if (!current()) return;
+		if (loaded) lastSync = loaded;
+		// Loaded, and BEHIND BY AN UNKNOWN AMOUNT: no advance has answered yet, so
+		// the cursor's own numbers may still be the `0` of `0` a container publishes
+		// before it has fetched. Only an advance can say `at-tip`.
+		enter('catching-up');
+
+		while (current()) {
+			const before = cursorsOf(container);
+			// The advance, and the returning-tab switch where it applies (ADR-0096), as the
+			// main-thread host takes it. Read from `container` on every attempt, because a
+			// switch replaces it.
+			const advanced = await withRetries(() => {
+				const stamp = promotions;
+				return start!.advance(container!, switchHost, () => promotions !== stamp);
+			}, current);
+			if (!advanced || !current()) return;
+			lastSync = advanced.lastSync;
+			// The phase and the rest are ONE decision, taken in `pacing.ts` so that this
+			// driver and the main-thread one cannot answer it differently. What is left
+			// here is the part that is genuinely this driver's: a rest it can be WOKEN
+			// from, which is how a reconfigure starts its successor at once instead of
+			// paying out the remainder of an interval.
+			const {phase, rest: shouldRest} = pacingAfterCycle(container, before);
+			enter(phase);
+			if (shouldRest) {
+				// An advance straight away would be an `eth_blockNumber` per turn of the
+				// event loop against a provider a browser user is rate-limited on.
+				await rest(tipInterval);
+			}
+		}
+	}
+
 	/** THE DRIVER: load, then advance until something stops it. */
 	async function drive(): Promise<void> {
 		try {
@@ -907,45 +1074,24 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			// the wait, so neither hangs on a host no tab has connected to.
 			await untilSettledOrStopped();
 			if (disposed || stopRequested) return;
-			if (election) {
-				// ONE TAB INDEXES (ADR-0097): stand, and read until the lock is this host's.
-				await takeSeat();
-				await untilElectedOrStopped();
-				if (disposed || stopRequested) return;
-			}
-			const opened = await openContainer();
-			if (disposed || stopRequested) return;
-
-			const loaded = await withRetries(() => opened.load());
-			if (loaded) lastSync = loaded;
-			// Loaded, and BEHIND BY AN UNKNOWN AMOUNT: no advance has answered yet, so
-			// the cursor's own numbers may still be the `0` of `0` a container publishes
-			// before it has fetched. Only an advance can say `at-tip`.
-			enter('catching-up');
-
-			while (!disposed && !stopRequested) {
-				const before = cursorsOf(container);
-				// The advance, and the returning-tab switch where it applies (ADR-0096), as the
-				// main-thread host takes it. Read from `container` on every attempt, because a
-				// switch replaces it.
-				const advanced = await withRetries(() => {
-					const stamp = promotions;
-					return start!.advance(container!, switchHost, () => promotions !== stamp);
-				});
-				if (!advanced) return;
-				lastSync = advanced.lastSync;
-				// The phase and the rest are ONE decision, taken in `pacing.ts` so that this
-				// driver and the main-thread one cannot answer it differently. What is left
-				// here is the part that is genuinely this driver's: a rest it can be WOKEN
-				// from, which is how a reconfigure starts its successor at once instead of
-				// paying out the remainder of an interval.
-				const {phase, rest: shouldRest} = pacingAfterCycle(container, before);
-				enter(phase);
-				if (shouldRest) {
-					// An advance straight away would be an `eth_blockNumber` per turn of the
-					// event loop against a provider a browser user is rate-limited on.
-					await rest(tipInterval);
+			// ONE TENURE PER TURN: a host whose lease a visible tab takes goes back to
+			// waiting for the lock and, when it is granted, makes a fresh start.
+			for (;;) {
+				if (election) {
+					// ONE TAB INDEXES (ADR-0097): stand, and read until the lock is this host's.
+					await takeSeat();
+					await untilElectedOrStopped();
+					if (disposed || stopRequested) return;
 				}
+				const term = tenure;
+				try {
+					await driveTenure(term);
+				} catch (error) {
+					// DISPLACED mid-cycle: whatever the abandoned cycle met (a cancelled fetch, a
+					// write refused under the new leader's claim) is not this host's failure.
+					if (term === tenure) throw error;
+				}
+				if (disposed || stopRequested || term === tenure) return;
 			}
 		} catch (error) {
 			failure = portErrorOf(error);
@@ -1249,6 +1395,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		checkTxInclusion,
 		storeForReads,
 		connect,
+		reportVisibility,
 		onStateMoved(handler) {
 			stateMovedHandlers.add(handler);
 			return () => {
@@ -1285,6 +1432,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 			// The lock is given back at once, so a reader tab takes over now rather than
 			// when this worker is finally collected.
 			candidacy?.resign();
+			settle?.stop();
 			stopFollowing?.();
 			stopFollowing = undefined;
 			electionChannel?.close();
