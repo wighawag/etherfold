@@ -61,10 +61,11 @@ Promoting it meant rewriting it onto the idiomatic model, not copying it:
 
 Six entities became three for the same state, and the run emits **29,492 mutations where the old port emitted 38,192**. The golden state is what says the meaning survived: byte-identical after canonicalisation, on every backend.
 
-## Two contortions do NOT disappear, and are documented rather than hidden
+## One contortion does NOT disappear, and is documented rather than hidden
 
-1. **`uint256` has no column type.** The declarable classes are `text` / `integer` / `real` / `blob`, and SQLite's INTEGER is 64-bit, so every u256 is decimal TEXT read back through `BigInt()`. Equality then depends on the encoding being canonical (decimal, no leading zeros, never hex), which is a rule nothing in the model states or enforces (ADR-0025: a declaration describes a storage class, not a type). That is load-bearing on this workload rather than academic: **16,046 of the 31,332 events write nothing but u256 fields**. `u256()` in `src/entities.ts` is the single place the encoding is chosen, so it is one decision instead of nine call sites, and `src/project.ts` is the single place it is read back.
-2. **A scalar map needs its own entity.** `state.owners[position]` is one address per cell, and folding `owner` into `cell` looks obvious and is WRONG: the processor writes an owner where it does not write a cell, and `set` writes a WHOLE ROW, so the fold would silently clear the nine cell fields. Correct semantics, paid for with an extra entity and a second read on every `ownerOf`.
+1. **A scalar map needs its own entity.** `state.owners[position]` is one address per cell, and folding `owner` into `cell` looks obvious and is WRONG: the processor writes an owner where it does not write a cell, and `set` writes a WHOLE ROW, so the fold would silently clear the nine cell fields. Correct semantics, paid for with an extra entity and a second read on every `ownerOf`.
+
+A second one used to stay: **`uint256` had no column type**, so every u256 was decimal TEXT read back through `BigInt()`, and equality depended on an encoding rule (decimal, no leading zeros, never hex) nothing in the model stated or enforced. That was load-bearing rather than academic, since **16,046 of the 31,332 events write nothing but u256 fields**. It is gone: the six u256 fields are declared with the semantic type `u256` (`{storage: 'blob', type: 'u256'}`, ADR-0098), so a handler writes the event's `bigint` as it is, every read answers a `bigint`, every backend holds one canonical encoding (32 big-endian bytes), and a value the type does not admit is refused at write. The golden comparison is what says the meaning survived, on every backend.
 
 ## The goldens are FROZEN, and cannot be regenerated
 

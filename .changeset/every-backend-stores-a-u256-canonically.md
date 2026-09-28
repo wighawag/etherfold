@@ -1,0 +1,9 @@
+---
+'@etherfold/state-store': minor
+'@etherfold/state-store-conformance': minor
+'@etherfold/state-store-sqlite': minor
+'@etherfold/state-store-indexeddb': patch
+'@etherfold/state-store-patch': patch
+---
+
+Every backend stores a declared `u256` (`{storage: 'blob', type: 'u256'}`, ADR-0098) canonically, and the seam answers it as a `bigint`. A handler writes a `bigint`; `getCurrent`, `getAsOf`, `listCurrent` and `listAsOf` answer one on memory, SQLite, IndexedDB and patch alike; each backend holds the value as its canonical encoding, 32 big-endian bytes (a `BLOB` column on SQLite). A value that is negative, wider than 256 bits or not a `bigint` is refused at WRITE time, naming the entity and the field, and the block writes nothing. New seam helpers in `@etherfold/state-store`: `encodeFieldValues` (the one write-side conversion, which also runs the enum check; `assertFieldValues` now checks semantic fields too) and `decodeFieldValues` (the one read-side conversion). The snapshot document carries a `u256` field as its encoding in `0x` hex on the row and `{storage, type}` on the declare line, installs it back as a `bigint`, refuses a non-canonical width, and refuses a semantic type the build does not know. Each backend gains a non-seam `storedCurrent(entity, id)` that shows a live row as stored. `@etherfold/state-store-sqlite`: `queryCurrent`, `queryAsOf`, `createQuerySurface`, `liveRowsAsOf` and `changesAt` answer a `u256` as a `bigint`, and the new `u256Arg(value)` produces the encoding a predicate must bind to compare one (a decimal bound instead matches nothing); see the README. `@etherfold/state-store-conformance` gains the group `a declared u256 is a bigint at the seam` and the optional `StateStoreConformanceOptions.storedCurrent`, which selects the stored-encoding case.

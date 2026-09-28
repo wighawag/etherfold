@@ -1,5 +1,4 @@
 import {
-	assertFieldValues,
 	assertListingLimit,
 	assertRetained,
 	assertFinalityDepth,
@@ -9,6 +8,8 @@ import {
 	blockNotAboveTip,
 	boundedListing,
 	compareIds,
+	decodeFieldValues,
+	encodeFieldValues,
 	entityKey,
 	hasIdPrefix,
 	idValues,
@@ -251,15 +252,17 @@ export class PatchStateStore implements StateStoreBackend {
 		const planned = mutations.map((mutation) => {
 			const entity = mustGet(this.entities, mutation.entity);
 			const id = idValues(entity, mutation.id);
-			if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
-			return {mutation, entity, key: id.join(SEPARATOR), id};
+			// checked AND encoded before anything is written: a semantic field is held
+			// in its canonical encoding (ADR-0098) and decoded on the way out.
+			const stored = mutation.type === 'upsert' ? encodeFieldValues(entity, mutation.values) : undefined;
+			return {mutation, entity, key: id.join(SEPARATOR), id, stored};
 		});
 
 		const [next, , reversal] = produceWithPatches(this.state, (draft: LightState) => {
-			for (const {mutation, entity, key, id} of planned) {
+			for (const {mutation, entity, key, id, stored} of planned) {
 				const rows = draft[entity.name];
 				if (mutation.type === 'upsert') {
-					rows[key] = completeRow(entity, id, mutation.values);
+					rows[key] = completeRow(entity, id, stored);
 				} else if (key in rows) {
 					// guarded: deleting an absent key would still be recorded as a
 					// change, and its inverse would put the key back holding nothing.
@@ -313,7 +316,7 @@ export class PatchStateStore implements StateStoreBackend {
 		const row = this.state[declaration.name][entityValuesKey(declaration, id)];
 		// a copy: the stored row is immer-frozen, and a caller spreading a read
 		// back into `update` must not be handed the store's own object.
-		return row === undefined ? undefined : ({...row} as T);
+		return row === undefined ? undefined : (decodeFieldValues(declaration, {...row}) as T);
 	}
 
 	/**
@@ -352,7 +355,7 @@ export class PatchStateStore implements StateStoreBackend {
 
 		// one MORE than the limit, which is how `truncated` is a fact rather than a guess
 		return boundedListing(
-			found.slice(0, limit + 1).map(({row}) => ({...row}) as T),
+			found.slice(0, limit + 1).map(({row}) => decodeFieldValues(declaration, {...row}) as T),
 			limit,
 		);
 	}
@@ -511,6 +514,19 @@ export class PatchStateStore implements StateStoreBackend {
 	}
 
 	/**
+	 * The live row of one entity AS THIS STORE HOLDS IT: a semantic field in its
+	 * canonical encoding (ADR-0098) rather than decoded.
+	 *
+	 * Not part of the seam, which answers values and never their encoding. This is
+	 * here so a test can see the stored form, as `getBlock` lets one see a block.
+	 */
+	async storedCurrent(entity: string, id: EntityId): Promise<Record<string, unknown> | undefined> {
+		const declaration = mustGet(this.entities, entity);
+		const row = this.state[declaration.name][entityValuesKey(declaration, id)];
+		return row === undefined ? undefined : {...row};
+	}
+
+	/**
 	 * The lowest `keepUpTo` a revert can still honour, or `undefined` if none can.
 	 *
 	 * Reversals are pruned oldest-first, so the blocks without them are a PREFIX
@@ -542,7 +558,11 @@ function entityValuesKey(entity: NormalizedEntity, id: EntityId): string {
  * deltas while the author was told they were storing versions, and the
  * difference would surface as a stale field on one backend only.
  */
-function completeRow(entity: NormalizedEntity, id: readonly string[], values: Record<string, unknown>): Row {
+function completeRow(
+	entity: NormalizedEntity,
+	id: readonly string[],
+	values: Record<string, unknown> | undefined,
+): Row {
 	const row: Row = {};
 	entity.id.forEach((column, index) => (row[column] = id[index]));
 	for (const field of Object.keys(entity.fields)) {

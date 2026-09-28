@@ -1,7 +1,7 @@
 import {blockAlreadyRecorded, blockHashAlreadyRecorded, blockNotAboveTip, normalizeBlockHash} from './blocks.js';
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
-import {assertFieldValues, entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
+import {decodeFieldValues, encodeFieldValues, entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
 import {pruneRecord, retentionEnforcementOf, type RetentionEnforcement} from './enforcement.js';
 import {
 	assertListingLimit,
@@ -159,15 +159,17 @@ export class MemoryStateStore implements StateStoreBackend {
 		const planned = mutations.map((mutation) => {
 			const entity = mustGet(this.entities, mutation.entity);
 			const id = idValues(entity, mutation.id);
-			if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
-			return {mutation, entity, key: entityKey(entity, mutation.id), id};
+			// checked AND encoded here, before anything is written: a semantic field
+			// is held in its canonical encoding (ADR-0098) and decoded on the way out.
+			const stored = mutation.type === 'upsert' ? encodeFieldValues(entity, mutation.values) : undefined;
+			return {mutation, entity, key: entityKey(entity, mutation.id), id, stored};
 		});
 
 		this.blocks.set(block.number, {...block, hash});
 		this.hashes.set(hash, block.number);
 		if (this.tip === undefined || block.number > this.tip) this.tip = block.number;
 
-		for (const {mutation, entity, key, id} of planned) {
+		for (const {mutation, entity, key, id, stored} of planned) {
 			let row = this.rows.get(key);
 			if (!row) {
 				row = {entity: entity.name, id, versions: []};
@@ -184,7 +186,7 @@ export class MemoryStateStore implements StateStoreBackend {
 				// a version is a COMPLETE row: a declared field the mutation did not
 				// list is written as NULL, not left at its previous value.
 				for (const field of Object.keys(entity.fields)) {
-					values[field] = mutation.values?.[field] ?? null;
+					values[field] = stored?.[field] ?? null;
 				}
 				versions.push({values, lower: block.number, upper: null});
 			}
@@ -376,10 +378,23 @@ export class MemoryStateStore implements StateStoreBackend {
 		return block && {...block};
 	}
 
+	/**
+	 * The live row of one entity AS THIS STORE HOLDS IT: a semantic field in its
+	 * canonical encoding (ADR-0098) rather than decoded, and no version columns.
+	 *
+	 * Not part of the seam, which answers values and never their encoding. This is
+	 * here so a test can see the stored form, as `getBlock` lets one see a block.
+	 */
+	async storedCurrent(entity: string, id: EntityId): Promise<Record<string, unknown> | undefined> {
+		const declaration = mustGet(this.entities, entity);
+		const found = this.rows.get(entityKey(declaration, id))?.versions.find((version) => version.upper === null);
+		return found && {...found.values};
+	}
+
 	private read<T>(entity: string, id: EntityId, matches: (version: Version) => boolean): T | undefined {
 		const declaration = mustGet(this.entities, entity);
 		const found = this.rows.get(entityKey(declaration, id))?.versions.find(matches);
-		return found && ({...found.values, _lower: found.lower, _upper: found.upper} as T);
+		return found && (decodeFieldValues(declaration, {...found.values, _lower: found.lower, _upper: found.upper}) as T);
 	}
 
 	/**
@@ -412,7 +427,10 @@ export class MemoryStateStore implements StateStoreBackend {
 		return boundedListing(
 			found
 				.slice(0, limit + 1)
-				.map(({version}) => ({...version.values, _lower: version.lower, _upper: version.upper}) as T),
+				.map(
+					({version}) =>
+						decodeFieldValues(declaration, {...version.values, _lower: version.lower, _upper: version.upper}) as T,
+				),
 			limit,
 		);
 	}

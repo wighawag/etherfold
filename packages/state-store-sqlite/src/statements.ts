@@ -1,6 +1,6 @@
 import {
-	assertFieldValues,
 	assertListingLimit,
+	encodeFieldValues,
 	idValues,
 	mustGet,
 	normalizeBlockHash,
@@ -562,7 +562,9 @@ export function applyBlockStatements(
 		const entity = mustGet(entities, mutation.entity);
 		const table = names.entity(entity.name);
 		const values = idValues(entity, mutation.id);
-		if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
+		// checked AND encoded before a statement is built: a semantic field is held in
+		// its canonical encoding (ADR-0098), a `u256` as a 32-byte BLOB.
+		const stored = mutation.type === 'upsert' ? encodeFieldValues(entity, mutation.values) : undefined;
 
 		// (1) close the live version at this height
 		statements.push({
@@ -578,7 +580,7 @@ export function applyBlockStatements(
 				insertRowStatement(
 					table,
 					columns,
-					[...values, ...fields.map((field) => mutation.values?.[field] ?? null), block.number],
+					[...values, ...fields.map((field) => stored?.[field] ?? null), block.number],
 					guard,
 				),
 			);

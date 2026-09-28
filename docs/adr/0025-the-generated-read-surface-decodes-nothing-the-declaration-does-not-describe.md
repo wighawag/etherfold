@@ -1,5 +1,7 @@
 # The generated read surface decodes nothing the declaration does not describe
 
+> **AMENDED 2026-09-28 (ADR-0098): the declaration can now say "u256", and every backend stores one; read the amendment at the end first.** The decision here is unchanged: the read surface still decodes nothing the declaration does not describe. What changed is that the declaration describes more, as this ADR anticipated, and that the follow-on it delegated to landed elsewhere.
+
 The read surface generated from the entity declarations (`createReadSurface`, and `createQuerySurface` on the SQLite backend) hands a consumer back exactly the declared storage classes: a `text` field is a `string`, an `integer` is a `number`, a `blob` is a `Uint8Array`, and every field is nullable because `set` writes a whole row. It performs NO decoding on top of that, which in practice means a `uint256` comes back as the decimal `string` it was stored as, and the consumer calls `BigInt()` on it. The declaration is the only thing this surface is allowed to know, and the declaration cannot currently say that a text column holds a u256.
 
 ## Why not decode a u256
@@ -16,3 +18,13 @@ So the answer to "should the generated surface decode a u256" is **no, and the r
 - **The rows are PROJECTED, not cast.** The surface returns the declared id columns and declared fields, with an unlisted field as `null`, and deliberately drops the version columns (`_lower` / `_upper`) a versioned backend's `SELECT *` carries. A cast would have made the type a claim; the projection makes it true, and stops a row being spread straight back into a write.
 - **`integer` and `real` are both `number`.** That is the honest reading of a 64-bit SQLite INTEGER in JavaScript, and it is the second reason a u256 is not an integer field: it does not fit.
 - **The day the declaration can say "u256", this surface follows for free**, because its types are derived from the declaration rather than written beside it. Nothing here has to be un-decided; a field type has to be added.
+
+## Amendment, 2026-09-28 (ADR-0098): the declaration says "u256", and the seam answers a `bigint`
+
+The decision above is unchanged. Two things around it are not.
+
+**The delegation pointer named the wrong holder.** This ADR said the storage-side half (a semantic type beside the storage class, one encoding every backend agrees on, equality and ordering defined for it) "belongs with `tagged-bigint-codec-across-storage-adapters`". That task completed without doing it, because it was about something else: the `"123n"` guess in the codec that persists a `LastSync` and serves the wire, not the entity declaration. So the half this ADR waited for had no holder until ADR-0098 gave it one.
+
+**The declaration now describes what this ADR anticipated.** A field may declare a semantic type beside its storage class, `{storage: 'blob', type: 'u256'}` (ADR-0098, the registry in `packages/state-store/src/semantic-types.ts`). At the store seam a `u256` is a `bigint`: a handler writes one, and `getCurrent`, `getAsOf` and both listings answer one on memory, SQLite, IndexedDB and patch alike, each holding it in its one canonical encoding (32 big-endian bytes) and refusing at write a value that is negative, wider than 256 bits or not a `bigint` (`encodeFieldValues` / `decodeFieldValues`, and the conformance chapter `a declared u256 is a bigint at the seam`). The snapshot document carries it in that encoding. SQLite's raw-SQL tier (`queryCurrent`, `queryAsOf`, `createQuerySurface`) answers one as a `bigint` too, and a predicate compares one by binding its encoding through `u256Arg`.
+
+So the first consequence above is superseded for a DECLARED `u256`: its consumer no longer writes `BigInt(row.amount)`, and its equality no longer depends on a rule nothing enforces. A u256 still declared as bare `text` keeps exactly the behaviour described above, because nothing here decodes a field the declaration does not describe. "This surface follows for free" is being cashed in two steps: the RUN-TIME value is a `bigint` from this change on; the derived TYPE (`FieldValue`, still `unknown` for a semantic field) and the type-level tests that pin it, in process and across the worker port, are `the-read-surface-decodes-a-u256`.

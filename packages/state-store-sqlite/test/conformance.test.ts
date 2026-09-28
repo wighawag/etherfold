@@ -1,4 +1,8 @@
-import {describeStateStoreConformance, type TwoWriters} from '@etherfold/state-store-conformance';
+import {
+	describeStateStoreConformance,
+	type StateStoreConformanceOptions,
+	type TwoWriters,
+} from '@etherfold/state-store-conformance';
 import {VersionedStateStore} from '../src/index.js';
 import {createTestDB} from './utils/db.js';
 
@@ -41,6 +45,13 @@ import {createTestDB} from './utils/db.js';
  * pair that must never contend.
  */
 
+/**
+ * This store's non-seam read of a row as it holds it, so the suite can check a
+ * `u256` is held canonically (ADR-0098).
+ */
+const storedCurrent: StateStoreConformanceOptions['storedCurrent'] = (store, entity, id) =>
+	(store as VersionedStateStore).storedCurrent(entity, id);
+
 /** Two handles on one libSQL database: sharing its storage, or addressed apart. */
 const twoWriters: TwoWriters = {
 	sharingStorage(declarations) {
@@ -59,19 +70,19 @@ const twoWriters: TwoWriters = {
 await describeStateStoreConformance(
 	'VersionedStateStore, claiming unbounded history',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
 	'VersionedStateStore, claiming a 60-block window',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: {blocks: 60}, finalityDepth: 60}),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
 	'VersionedStateStore, set to revert-only',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: 'revert-only'}),
-	{twoWriters},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
@@ -82,6 +93,7 @@ await describeStateStoreConformance(
 		return new VersionedStateStore(db, declarations, {tableNamespace: 'successor'});
 	},
 	{
+		storedCurrent,
 		// under a namespace too: the token table is inside it, so a namespaced
 		// generation's claim covers its own tables and nothing else.
 		twoWriters: {

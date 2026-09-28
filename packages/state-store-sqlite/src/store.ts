@@ -12,6 +12,8 @@ import {
 	assertRetained,
 	blockNotAboveTip,
 	boundedListing,
+	decodeFieldValues,
+	u256,
 	fieldStorage,
 	mustGet,
 	normalizeEntities,
@@ -133,11 +135,22 @@ export type VersionedStateStoreOptions = RetentionOptions & {
 	retention?: RetentionSetting;
 };
 
-/** Options for a query over a whole entity table. */
+/**
+ * Options for a query over a whole entity table.
+ *
+ * A row comes back as the seam answers one, so a `u256` field (ADR-0098) is a
+ * `bigint`. The PREDICATE is SQL, though, and runs against what is stored: a
+ * `u256` column holds its canonical encoding, 32 big-endian bytes in a BLOB, so a
+ * value compared with one must be bound as that encoding, `u256Arg(value)`. A
+ * decimal or a number bound instead compares with a BLOB it can never equal, and
+ * the query is silently empty. Bytewise order of the encoding IS numeric order,
+ * so `<`, `>` and `ORDER BY` on such a column are numeric too.
+ */
 export type QueryOptions = {
 	/**
 	 * An additional SQL predicate, ANDed with the validity predicate. It is
-	 * caller-supplied SQL: pass values through `args`, never by interpolation.
+	 * caller-supplied SQL: pass values through `args`, never by interpolation, and
+	 * a `u256` through `u256Arg`.
 	 */
 	where?: string;
 	args?: unknown[];
@@ -799,8 +812,8 @@ export class VersionedStateStore implements StateStoreBackend {
 				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${idPredicate(declaration)} AND ${AS_OF_PREDICATE} LIMIT 1`,
 			)
 			.bind(...idValues(declaration, id), blockNumber, blockNumber)
-			.all<T>();
-		return result.results[0];
+			.all<Record<string, unknown>>();
+		return decodedRow<T>(declaration, result.results[0]);
 	}
 
 	/** One entity as it is at the tip: the open-row special case. */
@@ -811,8 +824,30 @@ export class VersionedStateStore implements StateStoreBackend {
 				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${idPredicate(declaration)} AND ${CURRENT_PREDICATE} LIMIT 1`,
 			)
 			.bind(...idValues(declaration, id))
-			.all<T>();
-		return result.results[0];
+			.all<Record<string, unknown>>();
+		return decodedRow<T>(declaration, result.results[0]);
+	}
+
+	/**
+	 * The live row of one entity AS THIS STORE HOLDS IT: a semantic field in its
+	 * canonical encoding (ADR-0098) rather than decoded, and no version columns.
+	 *
+	 * Not part of the seam, which answers values and never their encoding. This is
+	 * here so a test can see the stored form, as `getBlock` lets one see a block.
+	 */
+	async storedCurrent(entity: string, id: EntityId): Promise<Record<string, unknown> | undefined> {
+		const declaration = mustGet(this.entities, entity);
+		const result = await this.db
+			.prepare(
+				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${idPredicate(declaration)} AND ${CURRENT_PREDICATE} LIMIT 1`,
+			)
+			.bind(...idValues(declaration, id))
+			.all<Record<string, unknown>>();
+		const row = result.results[0];
+		if (!row) return undefined;
+		const stored: Record<string, unknown> = {};
+		for (const column of [...declaration.id, ...Object.keys(declaration.fields)]) stored[column] = row[column];
+		return stored;
 	}
 
 	/**
@@ -831,8 +866,9 @@ export class VersionedStateStore implements StateStoreBackend {
 		prefix: EntityIdPrefix,
 		limit: number,
 	): Promise<Listing<T>> {
-		const statement = listCurrentStatement(mustGet(this.entities, entity), prefix, limit, this.names);
-		return boundedListing(await this.select<T>(statement), limit);
+		const declaration = mustGet(this.entities, entity);
+		const statement = listCurrentStatement(declaration, prefix, limit, this.names);
+		return boundedListing(decodedRows<T>(declaration, await this.select<Record<string, unknown>>(statement)), limit);
 	}
 
 	/**
@@ -853,7 +889,12 @@ export class VersionedStateStore implements StateStoreBackend {
 		const blockNumber = await this.resolveForRead(at);
 		await assertRetained(this.capabilities, blockNumber, () => this.tipBlockNumber());
 		return boundedListing(
-			await this.select<T>(listAsOfStatement(declaration, prefix, blockNumber, limit, this.names)),
+			decodedRows<T>(
+				declaration,
+				await this.select<Record<string, unknown>>(
+					listAsOfStatement(declaration, prefix, blockNumber, limit, this.names),
+				),
+			),
 			limit,
 		);
 	}
@@ -880,8 +921,8 @@ export class VersionedStateStore implements StateStoreBackend {
 				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${AS_OF_PREDICATE}${filter(options)}${order(options)}${tail}`,
 			)
 			.bind(blockNumber, blockNumber, ...(options.args ?? []), ...tailArgs)
-			.all<T>();
-		return result.results;
+			.all<Record<string, unknown>>();
+		return decodedRows<T>(declaration, result.results);
 	}
 
 	/**
@@ -1013,8 +1054,8 @@ export class VersionedStateStore implements StateStoreBackend {
 				`SELECT * FROM ${this.names.entity(declaration.name)} WHERE ${CURRENT_PREDICATE}${filter(options)}${order(options)}${tail}`,
 			)
 			.bind(...(options.args ?? []), ...tailArgs)
-			.all<T>();
-		return result.results;
+			.all<Record<string, unknown>>();
+		return decodedRows<T>(declaration, result.results);
 	}
 
 	// -- the writer token ----------------------------------------------------
@@ -1088,6 +1129,22 @@ export class VersionedStateStore implements StateStoreBackend {
 	}
 }
 
+/**
+ * A `u256` as the raw-SQL tier binds it: its canonical encoding, the 32
+ * big-endian bytes the column holds (ADR-0098). Pass it in `QueryOptions.args`
+ * wherever a predicate compares a `u256` column:
+ *
+ * ```ts
+ * await store.queryCurrent('pool', {where: 'amount >= ?', args: [u256Arg(10n ** 18n)]});
+ * ```
+ *
+ * Refuses what the column could not hold (negative, wider than 256 bits, not a
+ * `bigint`), as a write does.
+ */
+export function u256Arg(value: bigint): Uint8Array {
+	return u256.encode(value);
+}
+
 /** How many rows one page of `liveRowsAsOf` reads. */
 const LIVE_ROWS_PAGE = 1_000;
 
@@ -1100,7 +1157,20 @@ function liveRow(entity: NormalizedEntity, row: Record<string, unknown>): Mutati
 		const value = row[field] ?? null;
 		values[field] = fieldStorage(type) === 'blob' && value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 	}
-	return {type: 'upsert', entity: entity.name, id, values};
+	return {type: 'upsert', entity: entity.name, id, values: decodeFieldValues(entity, values)};
+}
+
+/**
+ * A stored row as the seam answers it: each semantic field decoded from its
+ * canonical encoding (a `u256` from its 32-byte BLOB to a `bigint`, ADR-0098).
+ * Every read that hands a row out goes through here, the raw-SQL tier included.
+ */
+function decodedRow<T>(entity: NormalizedEntity, row: Record<string, unknown> | undefined): T | undefined {
+	return row === undefined ? undefined : (decodeFieldValues(entity, row) as T);
+}
+
+function decodedRows<T>(entity: NormalizedEntity, rows: readonly Record<string, unknown>[]): T[] {
+	return rows.map((row) => decodeFieldValues(entity, row) as T);
 }
 
 function assertHeightForLookup(number: number): void {

@@ -1,4 +1,4 @@
-import type {EntityDeclaration, StateStoreBackend} from '@etherfold/state-store';
+import type {EntityDeclaration, EntityId, StateStoreBackend} from '@etherfold/state-store';
 
 /**
  * How the suite gets a store to interrogate: hand it declarations, get a store.
@@ -78,6 +78,22 @@ export type StateStoreConformanceOptions = {
 	 * that honestly reports `singleWriter: false` omits it.
 	 */
 	readonly twoWriters?: TwoWriters;
+	/**
+	 * The live row of one entity AS THE BACKEND'S STORAGE HOLDS IT, read past the
+	 * seam: a semantic field in its encoding rather than decoded (ADR-0098).
+	 *
+	 * The seam answers values and never their encoding, so this is the one way the
+	 * suite can ask whether a `u256` is HELD canonically (32 big-endian bytes), which
+	 * is what makes equality on the stored form equality on the value and what the
+	 * ordering layers rely on. Each backend in this repository exposes it as its own
+	 * non-seam `storedCurrent`. Without it that one case is not selected, and every
+	 * other `u256` case still runs.
+	 */
+	readonly storedCurrent?: (
+		store: StateStoreBackend,
+		entity: string,
+		id: EntityId,
+	) => Promise<Record<string, unknown> | undefined>;
 };
 
 /**

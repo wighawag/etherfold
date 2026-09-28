@@ -21,11 +21,12 @@
  *    numeric one. The old port's hand-maintained count existed only because the
  *    child's id ended in an array index.
  *
- * Two contortions in the finding do NOT disappear, and they are documented on
- * the declarations below rather than smoothed over: `cellOwner` (a scalar map
- * needs its own entity, because `set` writes a WHOLE row) and the u256 fields
- * (there is no column type for them, so they are decimal TEXT read back through
- * `BigInt()`).
+ * One contortion in the finding does NOT disappear, and it is documented on the
+ * declaration below rather than smoothed over: `cellOwner` (a scalar map needs
+ * its own entity, because `set` writes a WHOLE row). The other one that used to
+ * stay, the u256 fields as decimal TEXT read back through `BigInt()`, is gone:
+ * they are declared `u256` (ADR-0098), so the seam takes and answers a `bigint`
+ * and every backend holds it canonically.
  */
 import {declareEntities} from '@etherfold/processor-entities';
 
@@ -188,16 +189,17 @@ export const stratagemsEntities = declareEntities([
 	/**
 	 * `state.points.global`, a SINGLETON.
 	 *
-	 * CONTORTION THAT STAYS (finding, contortion 5): `totalRewardPerPointAtLastUpdate`
-	 * and `totalPoints` are `uint256`. The declarable column types are
-	 * text/integer/real/blob and SQLite's INTEGER is 64-bit, so a u256 has to be
-	 * TEXT and every read has to `BigInt()` it back. Equality then depends on the
-	 * encoding being CANONICAL (decimal, no leading zeros, never hex), which is a
-	 * rule nothing in the model states or enforces. That is not academic on this
-	 * workload: 16,046 of the 31,332 real events write nothing but u256 fields,
-	 * so a non-canonical encoding is an equality bug waiting to happen rather
-	 * than a theoretical one. `u256` below is the single place the encoding is
-	 * chosen, so that it is one decision instead of nine call sites.
+	 * `totalRewardPerPointAtLastUpdate` and `totalPoints` are `uint256`, declared
+	 * as the semantic type `u256` beside the `blob` storage class (ADR-0098). This
+	 * was contortion 5 of the finding: with only text/integer/real/blob and a
+	 * 64-bit SQLite INTEGER, a u256 had to be decimal TEXT, read back through
+	 * `BigInt()`, and its equality depended on an encoding rule (decimal, no
+	 * leading zeros, never hex) nothing in the model stated or enforced. That is
+	 * not academic on this workload: 16,046 of the 31,332 real events write
+	 * nothing but u256 fields. Now the declaration states it: a handler writes a
+	 * `bigint`, every read answers one, every backend holds its one canonical
+	 * encoding (32 big-endian bytes), and a value the type does not admit is
+	 * refused at write rather than stored.
 	 *
 	 * The invented `'singleton'` id is a minor contortion of its own (contortion
 	 * 6), and it is what the subgraph model does too.
@@ -207,26 +209,26 @@ export const stratagemsEntities = declareEntities([
 		id: 'id',
 		fields: {
 			lastUpdateTime: 'integer',
-			totalRewardPerPointAtLastUpdate: 'text',
-			totalPoints: 'text',
+			totalRewardPerPointAtLastUpdate: {storage: 'blob', type: 'u256'},
+			totalPoints: {storage: 'blob', type: 'u256'},
 		},
 	},
 
-	/** `state.points.fixed[account]`. `toWithdraw` is a u256, so TEXT (see above). */
+	/** `state.points.fixed[account]`. `toWithdraw` is a u256 (see `globalRate`). */
 	{
 		name: 'fixedRate',
 		id: 'account',
-		fields: {toWithdraw: 'text', lastTime: 'integer'},
+		fields: {toWithdraw: {storage: 'blob', type: 'u256'}, lastTime: 'integer'},
 	},
 
-	/** `state.points.shared[account]`. Three u256s, so three TEXT columns. */
+	/** `state.points.shared[account]`. Three u256s (see `globalRate`). */
 	{
 		name: 'sharedRate',
 		id: 'account',
 		fields: {
-			points: 'text',
-			totalRewardPerPointAccounted: 'text',
-			rewardsToWithdraw: 'text',
+			points: {storage: 'blob', type: 'u256'},
+			totalRewardPerPointAccounted: {storage: 'blob', type: 'u256'},
+			rewardsToWithdraw: {storage: 'blob', type: 'u256'},
 		},
 	},
 
@@ -246,15 +248,3 @@ export const stratagemsEntities = declareEntities([
 		fields: {points: 'integer'},
 	},
 ]);
-
-/**
- * The ONE place a `uint256` is turned into a column value.
- *
- * Decimal, from `BigInt.prototype.toString()`, which has no leading zeros and no
- * `0x` form and no separators. Every u256 field in this processor goes through
- * here and every read comes back through `BigInt()`, so the canonical encoding
- * the model does not enforce is enforced HERE, once, where a reader can find it.
- */
-export function u256(value: bigint | number | string): string {
-	return BigInt(value).toString();
-}

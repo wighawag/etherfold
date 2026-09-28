@@ -1,6 +1,7 @@
 import {assertBlockNumber} from './blocks.js';
 import type {CursorWrite} from './cursor.js';
 import {describeField, fieldStorage, normalizeEntities} from './entities.js';
+import {isSemanticTypeName, semanticTypeOf} from './semantic-types.js';
 import type {
 	BlockPointer,
 	EntityDeclaration,
@@ -45,7 +46,11 @@ import type {
  *
  * A `blob` field travels as a `0x`-prefixed hex string (JSON has no bytes), and is
  * decoded back to a `Uint8Array` from the declaration: the one column type whose
- * JSON form is not its value.
+ * JSON form is not its value. A semantic field (ADR-0098) travels in its type's
+ * CANONICAL encoding, as a store holds it, written the way its storage class is
+ * written: a `u256` is its 32 big-endian bytes as `0x`-prefixed hex, and installs
+ * back as the `bigint` it encodes. A value the type does not admit is refused on
+ * both sides, and so is a stored form that is not canonical (the wrong width).
  *
  * ## Replaying, not a new install path
  *
@@ -280,7 +285,8 @@ async function* encodedLines(
 		// `parent` is written only when declared, so an entity without a relation
 		// keeps the exact line it always had (ADR-0098: existing declarations keep working).
 		// A field is written as declared: a bare storage class is the same string it
-		// always was, and an enum is its `{storage, enum}` object.
+		// always was, an enum is its `{storage, enum}` object, and a semantic field is
+		// its `{storage, type}` object.
 		yield JSON.stringify({
 			declare: entity.name,
 			id: entity.id,
@@ -347,13 +353,18 @@ function deleteAtFloor(entity: string): Error {
 function encodeRow(entity: NormalizedEntity, mutation: Extract<Mutation, {type: 'upsert'}>): unknown[] {
 	const row: unknown[] = entity.id.map((column) => String(mutation.id[column]));
 	for (const [field, type] of Object.entries(entity.fields)) {
-		row.push(encodeValue(mutation.values?.[field] ?? null, fieldStorage(type)));
+		row.push(encodeValue(mutation.values?.[field] ?? null, type));
 	}
 	return row;
 }
 
-function encodeValue(value: unknown, type: FieldType): unknown {
+function encodeValue(value: unknown, field: FieldDeclaration): unknown {
 	if (value === null || value === undefined) return null;
+	const semantic = semanticTypeOf(field);
+	return encodeStored(semantic ? semantic.encode(value) : value, fieldStorage(field));
+}
+
+function encodeStored(value: unknown, type: FieldType): unknown {
 	if (type !== 'blob') return value;
 	const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : (value as Uint8Array);
 	if (!(bytes instanceof Uint8Array)) {
@@ -364,8 +375,15 @@ function encodeValue(value: unknown, type: FieldType): unknown {
 	return hex;
 }
 
-function decodeValue(value: unknown, type: FieldType): unknown {
-	if (value === null || type !== 'blob') return value;
+function decodeValue(value: unknown, field: FieldDeclaration): unknown {
+	if (value === null) return value;
+	const stored = decodeStored(value, fieldStorage(field));
+	const semantic = semanticTypeOf(field);
+	return semantic ? semantic.decode(stored) : stored;
+}
+
+function decodeStored(value: unknown, type: FieldType): unknown {
+	if (type !== 'blob') return value;
 	if (typeof value !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(value)) {
 		throw new Error(`a snapshot's \`blob\` value must be 0x-prefixed hex, got ${JSON.stringify(value)}`);
 	}
@@ -575,15 +593,20 @@ function sameDeclaration(a: NormalizedEntity, b: NormalizedEntity | undefined): 
 }
 
 /**
- * A field as a document may carry it: a string, or an object with a string
- * `storage` and a list of string `enum` values. Whether it is a LEGAL declaration
- * is the store's question, asked by comparing it with the store's own.
+ * A field as a document may carry it: a string, an object with a string
+ * `storage` and a list of string `enum` values, or an object with a string
+ * `storage` and a semantic `type` this build knows (ADR-0098). Whether it is a
+ * LEGAL declaration is the store's question, asked by comparing it with the
+ * store's own; an unknown semantic type is refused here, because its rows could
+ * not be decoded at all, even by a reader that checks no declarations.
  */
 function isFieldShape(field: unknown): boolean {
 	if (typeof field === 'string') return true;
 	if (field === null || typeof field !== 'object') return false;
-	const {storage, enum: values} = field as {storage?: unknown; enum?: unknown};
-	return typeof storage === 'string' && Array.isArray(values) && values.every((value) => typeof value === 'string');
+	const {storage, enum: values, type} = field as {storage?: unknown; enum?: unknown; type?: unknown};
+	if (typeof storage !== 'string') return false;
+	if ('type' in field) return !('enum' in field) && isSemanticTypeName(type);
+	return Array.isArray(values) && values.every((value) => typeof value === 'string');
 }
 
 function describe(entity: NormalizedEntity): string {
@@ -599,7 +622,7 @@ function decodeRow(entity: NormalizedEntity, row: unknown[]): Mutation {
 	const values: Record<string, unknown> = {};
 	let index = entity.id.length;
 	for (const [field, type] of Object.entries(entity.fields)) {
-		values[field] = decodeValue(row[index++], fieldStorage(type));
+		values[field] = decodeValue(row[index++], type);
 	}
 	return {type: 'upsert', entity: entity.name, id, values};
 }

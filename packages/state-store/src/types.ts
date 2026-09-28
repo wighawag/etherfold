@@ -16,13 +16,14 @@
  * The storage classes an entity field may declare.
  *
  * Four, and no more, because the set is the INTERSECTION of what the backends
- * can hold rather than the union of what any one of them offers. A `uint256` is
- * therefore decimal `text` today, which is a real limitation recorded in
- * `work/notes/findings/sqlite-in-the-browser.md` (contortion 5) and left to
- * `tagged-bigint-codec-across-storage-adapters` to answer properly.
+ * can hold rather than the union of what any one of them offers. So a
+ * `uint256` has no storage class of its own (the limitation recorded in
+ * `work/notes/findings/sqlite-in-the-browser.md`, contortion 5).
  *
  * A field that means more than its storage class says so BESIDE it, with a
- * semantic type (`SemanticField`, ADR-0098), rather than as a fifth member here.
+ * semantic type (`SemanticField`, ADR-0098), rather than as a fifth member here:
+ * a `uint256` is `{storage: 'blob', type: 'u256'}`, a `bigint` at the seam and
+ * its canonical encoding in every backend.
  */
 export type FieldType = 'text' | 'integer' | 'real' | 'blob';
 

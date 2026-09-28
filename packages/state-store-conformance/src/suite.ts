@@ -4,6 +4,7 @@ import {boundedListingCases} from './cases/bounded-listing.js';
 import {declaredCapabilityCases} from './cases/declared-capabilities.js';
 import {declaredEnumCases} from './cases/declared-enums.js';
 import {declaredRelationCases} from './cases/declared-relations.js';
+import {declaredU256Cases} from './cases/declared-u256.js';
 import {openingForWritingCases} from './cases/opening-for-writing.js';
 import {portableDeclarationCases} from './cases/portable-declarations.js';
 import {readYourWritesCases} from './cases/read-your-writes.js';
@@ -55,8 +56,9 @@ import type {
  * claim-driven selection again, and the one chapter that needs a second handle
  * the factory cannot give -- see `StateStoreConformanceOptions`), and that a
  * DECLARATION means the same thing here as it does on every other backend,
- * a declared relation and a declared enum (ADR-0098) included, the enum's
- * values checked at WRITE time.
+ * a declared relation, a declared enum and a declared `u256` (ADR-0098)
+ * included: the enum's values checked at WRITE time, and the `u256` a `bigint`
+ * at the seam and its canonical encoding in storage.
  *
  * ## ONE shape, asked once
  *
@@ -109,6 +111,7 @@ function factoryDrivenCases(
 		...portableDeclarationCases(factory),
 		...declaredRelationCases(factory),
 		...declaredEnumCases(factory),
+		...declaredU256Cases(factory, capabilities, options),
 	];
 }
 

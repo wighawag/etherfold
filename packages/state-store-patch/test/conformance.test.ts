@@ -1,4 +1,4 @@
-import {describeStateStoreConformance} from '@etherfold/state-store-conformance';
+import {describeStateStoreConformance, type StateStoreConformanceOptions} from '@etherfold/state-store-conformance';
 import {PatchStateStore} from '../src/index.js';
 
 /**
@@ -22,14 +22,23 @@ import {PatchStateStore} from '../src/index.js';
  * on a dense hand-written ladder, which is precisely the fixture that makes this
  * store look like it has history; the sparse stream that shows what it really
  * has is `test/sparse-stream.test.ts`.
+ *
+ * Both runs hand over `storedCurrent`, this store's non-seam read of a row as it
+ * holds it, so the suite can check a `u256` is held canonically (ADR-0098).
  */
+
+const options: StateStoreConformanceOptions = {
+	storedCurrent: (store, entity, id) => (store as PatchStateStore).storedCurrent(entity, id),
+};
 
 await describeStateStoreConformance(
 	'PatchStateStore, with no finality depth declared',
 	(declarations) => new PatchStateStore(declarations),
+	options,
 );
 
 await describeStateStoreConformance(
 	'PatchStateStore, protecting against a 64-block reorg',
 	(declarations) => new PatchStateStore(declarations, {retention: 'revert-only', finalityDepth: 64}),
+	options,
 );
