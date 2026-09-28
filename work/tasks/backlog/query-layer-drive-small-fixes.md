@@ -3,7 +3,6 @@ title: 'Small fixes from the query-layer drive: a parent''s children are typed o
 slug: query-layer-drive-small-fixes
 blockedBy: []
 covers: []
-needsAnswers: true
 ---
 
 ## What to build
@@ -36,3 +35,7 @@ Three independent fixes, batched because they touch disjoint files and share one
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files. Tests bind only ephemeral local ports and write only to their own temp directories.
 >
 > CI: dorfl's gate runs vitest only. The real-browser suites run in CI's `browser (chromium)`, `browser (firefox)` and `browser (webkit)` jobs; the PR is done only when those three are green too.
+
+## Requeue 2026-09-28
+
+The acceptance gate failed on a real collision, not a flake. Adding `queryCurrent` and `queryAsOf` to `READ_SURFACE_NAMES` in `@etherfold/state-store` is correct: keep it. But it puts those literal strings into every tab bundle, and `packages/browser/test/bundlesForABrowser.test.ts` ("a tab that only reads across the port > pulls in NO query runtime, and no store implementation either", around line 130) asserts that the tab bundle's text contains neither name. Keep that canary's INTENT (a tab that reads across the port must not carry `createQuerySurface`'s SQL query tier), but make it detect the query tier's IMPLEMENTATION, not its reserved method names: for example, assert that no module of `@etherfold/state-store-sqlite` (or its `query-surface`) is among the metafile inputs that contribute bytes to the output, or match a string unique to the query tier's code. Never match the bare names that the reserved-name list now legitimately carries. Explain the change in the test's comment and in `## Decisions`. This touches `packages/browser`'s test directory, so add an `@etherfold/browser` patch changeset. Do not weaken the check to nothing, and do not remove the reserved names.
