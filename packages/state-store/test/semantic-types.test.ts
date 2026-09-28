@@ -136,11 +136,11 @@ describe('a field declared with a semantic type', () => {
 		expect(() => assertFieldValues(entity, {amount: 1n})).not.toThrow();
 	});
 
-	it('is typed unknown by a derived row until a backend stores it canonically, and a bare field is unchanged', () => {
+	it('is typed as its value (a u256 as a bigint) by a derived row, and a bare field is unchanged', () => {
 		const [POOL] = declareEntities([
 			{name: 'pool', id: 'id', fields: {amount: {storage: 'blob', type: 'u256'}, owner: 'text'}},
 		]);
-		expectTypeOf<EntityRow<typeof POOL>['amount']>().toEqualTypeOf<unknown>();
+		expectTypeOf<EntityRow<typeof POOL>['amount']>().toEqualTypeOf<bigint | null>();
 		expectTypeOf<EntityRow<typeof POOL>['owner']>().toEqualTypeOf<string | null>();
 	});
 

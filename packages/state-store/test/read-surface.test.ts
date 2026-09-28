@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, expectTypeOf, it} from 'vitest';
 import {
 	BlockNotRetainedError,
 	InvalidBlockNumberError,
@@ -6,6 +6,9 @@ import {
 	UnknownEntityError,
 	createReadSurface,
 	declareEntities,
+	type EntityRow,
+	type FieldValue,
+	type SemanticField,
 	type MemoryStateStoreOptions,
 } from '../src/index.js';
 import {block} from './utils/fixtures.js';
@@ -412,5 +415,58 @@ describe("a parent's children are typed off the declaration", () => {
 		await surface.placement.players.listCurrent({window: 1, ordinal: 0}, 10, {orderBy: 'address'});
 		// @ts-expect-error this store's as-of reads take a block number
 		await expect(surface.placement.players.listAsOf({window: 1, ordinal: 0}, {hash: '0x64'}, 10)).rejects.toThrow();
+	});
+});
+
+/**
+ * A declared `u256` (ADR-0098) on the read surface: the seam answers a `bigint`,
+ * and the surface's TYPE says so, derived from the declaration (ADR-0025, "this
+ * surface follows for free"). The type is the claim that would rot, so it is
+ * pinned here and `pnpm typecheck` runs it.
+ */
+describe('a declared u256 reads as a bigint, typed off the declaration', () => {
+	const pools = declareEntities([
+		{name: 'pool', id: ['epoch', 'id'], fields: {amount: {storage: 'blob', type: 'u256'}, owner: 'text'}},
+	]);
+	const MAX = 2n ** 256n - 1n;
+
+	async function poolStore(): Promise<MemoryStateStore> {
+		const store = new MemoryStateStore(pools);
+		await store.migrate();
+		await store.applyBlock(block(100), [
+			{type: 'upsert', entity: 'pool', id: {epoch: 1, id: 'a'}, values: {amount: 9n, owner: '0xalice'}},
+			{type: 'upsert', entity: 'pool', id: {epoch: 1, id: 'b'}, values: {owner: '0xbob'}},
+		]);
+		await store.applyBlock(block(101), [
+			{type: 'upsert', entity: 'pool', id: {epoch: 1, id: 'a'}, values: {amount: MAX, owner: '0xalice'}},
+		]);
+		return store;
+	}
+
+	it('answers a bigint by id, as of a block and in a listing, and null where none was written', async () => {
+		const surface = createReadSurface(await poolStore(), pools);
+
+		expect((await surface.pool.getCurrent({epoch: 1, id: 'a'}))?.amount).toBe(MAX);
+		expect((await surface.pool.getAsOf({epoch: 1, id: 'a'}, 100))?.amount).toBe(9n);
+		expect((await surface.pool.listCurrent({epoch: 1}, 10)).rows.map((row) => row.amount)).toEqual([MAX, null]);
+		expect((await surface.pool.listAsOf({epoch: 1}, 100, 10)).rows.map((row) => row.amount)).toEqual([9n, null]);
+	});
+
+	it('types the field as a bigint, so a consumer computes with it without `BigInt()`', async () => {
+		const surface = createReadSurface(await poolStore(), pools);
+		const row = (await surface.pool.getCurrent({epoch: 1, id: 'a'}))!;
+
+		expectTypeOf(row.amount).toEqualTypeOf<bigint | null>();
+		expectTypeOf<EntityRow<(typeof pools)[0]>['amount']>().toEqualTypeOf<bigint | null>();
+		const next: bigint = row.amount! + 1n;
+		expect(next).toBe(MAX + 1n);
+		// @ts-expect-error a u256 is a bigint, not the decimal string ADR-0025 used to hand back
+		const decimal: string | null = row.amount;
+		expect(decimal).toBe(MAX);
+	});
+
+	it('types a semantic field as its value even under an annotated declaration', () => {
+		expectTypeOf<FieldValue<SemanticField>>().toEqualTypeOf<bigint>();
+		expectTypeOf<FieldValue<{readonly storage: 'blob'; readonly type: 'u256'}>>().toEqualTypeOf<bigint>();
 	});
 });
