@@ -16,6 +16,8 @@ export type {
 	CursorWrite,
 	EntityDeclaration,
 	EntityId,
+	EnumField,
+	FieldDeclaration,
 	FieldType,
 	MutationContext,
 	Mutation,

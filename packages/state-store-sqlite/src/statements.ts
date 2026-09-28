@@ -1,4 +1,5 @@
 import {
+	assertFieldValues,
 	assertListingLimit,
 	idValues,
 	mustGet,
@@ -561,6 +562,7 @@ export function applyBlockStatements(
 		const entity = mustGet(entities, mutation.entity);
 		const table = names.entity(entity.name);
 		const values = idValues(entity, mutation.id);
+		if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
 
 		// (1) close the live version at this height
 		statements.push({

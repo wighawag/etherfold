@@ -12,6 +12,7 @@ import {
 	assertRetained,
 	blockNotAboveTip,
 	boundedListing,
+	fieldStorage,
 	mustGet,
 	normalizeEntities,
 	pruneBudget,
@@ -1097,7 +1098,7 @@ function liveRow(entity: NormalizedEntity, row: Record<string, unknown>): Mutati
 	const values: Record<string, unknown> = {};
 	for (const [field, type] of Object.entries(entity.fields)) {
 		const value = row[field] ?? null;
-		values[field] = type === 'blob' && value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+		values[field] = fieldStorage(type) === 'blob' && value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 	}
 	return {type: 'upsert', entity: entity.name, id, values};
 }

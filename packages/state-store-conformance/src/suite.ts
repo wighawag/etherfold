@@ -2,6 +2,7 @@ import type {StateStoreCapabilities} from '@etherfold/state-store';
 import {blockAtomicityCases} from './cases/block-atomicity.js';
 import {boundedListingCases} from './cases/bounded-listing.js';
 import {declaredCapabilityCases} from './cases/declared-capabilities.js';
+import {declaredEnumCases} from './cases/declared-enums.js';
 import {declaredRelationCases} from './cases/declared-relations.js';
 import {openingForWritingCases} from './cases/opening-for-writing.js';
 import {portableDeclarationCases} from './cases/portable-declarations.js';
@@ -54,7 +55,8 @@ import type {
  * claim-driven selection again, and the one chapter that needs a second handle
  * the factory cannot give -- see `StateStoreConformanceOptions`), and that a
  * DECLARATION means the same thing here as it does on every other backend,
- * a declared relation (ADR-0098) included.
+ * a declared relation and a declared enum (ADR-0098) included, the enum's
+ * values checked at WRITE time.
  *
  * ## ONE shape, asked once
  *
@@ -106,6 +108,7 @@ function factoryDrivenCases(
 		...snapshotBootstrapCases(factory, capabilities),
 		...portableDeclarationCases(factory),
 		...declaredRelationCases(factory),
+		...declaredEnumCases(factory),
 	];
 }
 

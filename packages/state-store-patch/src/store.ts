@@ -1,4 +1,5 @@
 import {
+	assertFieldValues,
 	assertListingLimit,
 	assertRetained,
 	assertFinalityDepth,
@@ -250,6 +251,7 @@ export class PatchStateStore implements StateStoreBackend {
 		const planned = mutations.map((mutation) => {
 			const entity = mustGet(this.entities, mutation.entity);
 			const id = idValues(entity, mutation.id);
+			if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
 			return {mutation, entity, key: id.join(SEPARATOR), id};
 		});
 

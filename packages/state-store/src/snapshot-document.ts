@@ -1,7 +1,14 @@
 import {assertBlockNumber} from './blocks.js';
 import type {CursorWrite} from './cursor.js';
-import {normalizeEntities} from './entities.js';
-import type {BlockPointer, EntityDeclaration, FieldType, Mutation, NormalizedEntity} from './types.js';
+import {describeField, fieldStorage, normalizeEntities} from './entities.js';
+import type {
+	BlockPointer,
+	EntityDeclaration,
+	FieldDeclaration,
+	FieldType,
+	Mutation,
+	NormalizedEntity,
+} from './types.js';
 
 /**
  * ## The snapshot DOCUMENT: format 2 (ADR-0095)
@@ -272,6 +279,8 @@ async function* encodedLines(
 	for (const entity of entities.values()) {
 		// `parent` is written only when declared, so an entity without a relation
 		// keeps the exact line it always had (ADR-0098: existing declarations keep working).
+		// A field is written as declared: a bare storage class is the same string it
+		// always was, and an enum is its `{storage, enum}` object.
 		yield JSON.stringify({
 			declare: entity.name,
 			id: entity.id,
@@ -338,7 +347,7 @@ function deleteAtFloor(entity: string): Error {
 function encodeRow(entity: NormalizedEntity, mutation: Extract<Mutation, {type: 'upsert'}>): unknown[] {
 	const row: unknown[] = entity.id.map((column) => String(mutation.id[column]));
 	for (const [field, type] of Object.entries(entity.fields)) {
-		row.push(encodeValue(mutation.values?.[field] ?? null, type));
+		row.push(encodeValue(mutation.values?.[field] ?? null, fieldStorage(type)));
 	}
 	return row;
 }
@@ -530,7 +539,9 @@ function declarationOf(fields: Record<string, unknown>): NormalizedEntity {
 		!Array.isArray(id) ||
 		!id.every((column) => typeof column === 'string') ||
 		!Array.isArray(pairs) ||
-		!pairs.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string') ||
+		!pairs.every(
+			(pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string' && isFieldShape(pair[1]),
+		) ||
 		(parent !== undefined &&
 			(parent === null ||
 				typeof parent !== 'object' ||
@@ -542,7 +553,7 @@ function declarationOf(fields: Record<string, unknown>): NormalizedEntity {
 	return {
 		name: fields.declare,
 		id: id as string[],
-		fields: Object.fromEntries(pairs as [string, FieldType][]),
+		fields: Object.fromEntries(pairs as [string, FieldDeclaration][]),
 		...(parent ? {parent: {entity: parent.entity as string, as: parent.as as string}} : {}),
 	};
 }
@@ -551,14 +562,34 @@ function sameDeclaration(a: NormalizedEntity, b: NormalizedEntity | undefined): 
 	if (!b) return false;
 	if (a.id.length !== b.id.length || a.id.some((column, index) => b.id[index] !== column)) return false;
 	if (a.parent?.entity !== b.parent?.entity || a.parent?.as !== b.parent?.as) return false;
+	// compared STRUCTURALLY, through the one description of a field both sides
+	// print (`describeField`): an enum is an object, and `===` would refuse every
+	// install of an entity that declares one.
 	const fields = Object.entries(a.fields);
-	return fields.length === Object.keys(b.fields).length && fields.every(([field, type]) => b.fields[field] === type);
+	return (
+		fields.length === Object.keys(b.fields).length &&
+		fields.every(
+			([field, type]) => Object.hasOwn(b.fields, field) && describeField(b.fields[field]) === describeField(type),
+		)
+	);
+}
+
+/**
+ * A field as a document may carry it: a string, or an object with a string
+ * `storage` and a list of string `enum` values. Whether it is a LEGAL declaration
+ * is the store's question, asked by comparing it with the store's own.
+ */
+function isFieldShape(field: unknown): boolean {
+	if (typeof field === 'string') return true;
+	if (field === null || typeof field !== 'object') return false;
+	const {storage, enum: values} = field as {storage?: unknown; enum?: unknown};
+	return typeof storage === 'string' && Array.isArray(values) && values.every((value) => typeof value === 'string');
 }
 
 function describe(entity: NormalizedEntity): string {
 	const parent = entity.parent ? ` under ${entity.parent.entity} as ${entity.parent.as}` : '';
 	return `(${entity.id.join(', ')}) {${Object.entries(entity.fields)
-		.map(([field, type]) => `${field}: ${type}`)
+		.map(([field, type]) => `${field}: ${describeField(type)}`)
 		.join(', ')}}${parent}`;
 }
 
@@ -568,7 +599,7 @@ function decodeRow(entity: NormalizedEntity, row: unknown[]): Mutation {
 	const values: Record<string, unknown> = {};
 	let index = entity.id.length;
 	for (const [field, type] of Object.entries(entity.fields)) {
-		values[field] = decodeValue(row[index++], type);
+		values[field] = decodeValue(row[index++], fieldStorage(type));
 	}
 	return {type: 'upsert', entity: entity.name, id, values};
 }

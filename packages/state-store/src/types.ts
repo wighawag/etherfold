@@ -23,6 +23,28 @@
  */
 export type FieldType = 'text' | 'integer' | 'real' | 'blob';
 
+/**
+ * A field declared as a value SET over text (ADR-0098): `{storage: 'text', enum: ['open', 'closed']}`.
+ *
+ * It is stored exactly as a `text` field is, on every backend, so it needs no
+ * DDL case and no per-backend query support. What it adds is a check at WRITE
+ * time, for the cost of a set lookup: a value outside the set is refused, naming
+ * the field and the allowed values (`assertFieldValues`). NULL is still a legal
+ * value, as it is for every field, because a whole-row write leaves an unlisted
+ * field NULL. Each value must be a legal GraphQL enum name, refused at
+ * declaration time otherwise, so the schema ADR-0099 builds maps them one to one.
+ */
+export type EnumField = {
+	readonly storage: 'text';
+	readonly enum: readonly string[];
+};
+
+/**
+ * What one field of a declaration may say: a bare storage class, which means
+ * exactly what it always meant, or an enum over text (ADR-0098).
+ */
+export type FieldDeclaration = FieldType | EnumField;
+
 export type EntityDeclaration = {
 	/** entity name, e.g. `token` */
 	name: string;
@@ -31,8 +53,8 @@ export type EntityDeclaration = {
 	 * Not the version key: a single business key has many versions over time.
 	 */
 	id: string | readonly string[];
-	/** data fields, excluding the business key, and their storage class */
-	fields: Readonly<Record<string, FieldType>>;
+	/** data fields, excluding the business key, and their storage class (or enum, ADR-0098) */
+	fields: Readonly<Record<string, FieldDeclaration>>;
 	/**
 	 * The entity this one is a CHILD of, if any (ADR-0098). Optional: a declaration
 	 * without it means exactly what it always meant.
@@ -71,7 +93,12 @@ export type EntityRelation = {
 export type NormalizedEntity = {
 	name: string;
 	id: readonly string[];
-	fields: Readonly<Record<string, FieldType>>;
+	/**
+	 * As declared: a bare storage class stays the same string, and an enum is a
+	 * frozen copy of its `{storage, enum}`. `fieldStorage` reads the storage class
+	 * of either, which is all a backend's layout needs.
+	 */
+	fields: Readonly<Record<string, FieldDeclaration>>;
 	parent?: EntityRelation;
 };
 
