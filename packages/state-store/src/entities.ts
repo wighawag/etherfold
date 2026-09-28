@@ -1,5 +1,13 @@
 import {UnknownEntityError} from './errors.js';
-import type {EntityId, FieldType, EntityDeclaration, EntityRelation, NormalizedEntity} from './types.js';
+import type {
+	EntityId,
+	EnumField,
+	FieldDeclaration,
+	FieldType,
+	EntityDeclaration,
+	EntityRelation,
+	NormalizedEntity,
+} from './types.js';
 
 /**
  * Validation of a declaration, once, for every backend.
@@ -118,15 +126,13 @@ export function normalizeEntity(declaration: EntityDeclaration): NormalizedEntit
 		assertIdentifier(column, `id column of entity ${name}`);
 	}
 
-	const fields = declaration.fields ?? {};
-	for (const [field, type] of Object.entries(fields)) {
+	const fields: Record<string, FieldDeclaration> = {};
+	for (const [field, type] of Object.entries(declaration.fields ?? {})) {
 		assertIdentifier(field, `field of entity ${name}`);
 		if (id.includes(field)) {
 			throw new Error(`entity ${name} declares ${field} both as an id column and as a field`);
 		}
-		if (!FIELD_TYPES.includes(type)) {
-			throw new Error(`entity ${name} declares field ${field} with unknown type ${JSON.stringify(type)}`);
-		}
+		fields[field] = fieldOf(name, field, type);
 	}
 
 	// The id columns and the fields are ONE namespace -- they are the columns of
@@ -147,9 +153,132 @@ export function normalizeEntity(declaration: EntityDeclaration): NormalizedEntit
 	return Object.freeze({
 		name,
 		id: Object.freeze([...id]),
-		fields: Object.freeze({...fields}),
+		fields: Object.freeze(fields),
 		...(parent ? {parent} : {}),
 	});
+}
+
+/**
+ * A legal GraphQL enum value: a GraphQL `Name` that is not `true`, `false` or
+ * `null`, and does not begin with `__` (the introspection namespace). Refused at
+ * declaration time, so the schema ADR-0099 builds maps a declared value to an
+ * enum value one to one rather than renaming it (ADR-0098).
+ */
+const GRAPHQL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const NOT_ENUM_VALUES: readonly string[] = ['true', 'false', 'null'];
+
+/** One field's declaration, checked, in the shape `NormalizedEntity.fields` holds. */
+function fieldOf(name: string, field: string, type: unknown): FieldDeclaration {
+	if (typeof type === 'string') {
+		if (!FIELD_TYPES.includes(type as FieldType)) {
+			throw new Error(`entity ${name} declares field ${field} with unknown type ${JSON.stringify(type)}`);
+		}
+		return type as FieldType;
+	}
+	if (type === null || typeof type !== 'object' || Array.isArray(type)) {
+		throw new Error(`entity ${name} declares field ${field} with unknown type ${JSON.stringify(type)}`);
+	}
+	const declared = type as Record<string, unknown>;
+	const extra = Object.keys(declared).filter((key) => key !== 'storage' && key !== 'enum');
+	if (extra.length > 0 || !('enum' in declared)) {
+		throw new Error(
+			`entity ${name} declares field ${field} as ${JSON.stringify(type)}: a field is a storage class ` +
+				`(${FIELD_TYPES.join(', ')}) or an enum, {storage: 'text', enum: [...]}.`,
+		);
+	}
+	if (declared.storage !== 'text') {
+		throw new Error(
+			`entity ${name} declares field ${field} as an enum over ${JSON.stringify(declared.storage)}: an enum is a ` +
+				`value set over text, so its storage is 'text'.`,
+		);
+	}
+	const values = declared.enum;
+	if (!Array.isArray(values) || values.length === 0) {
+		throw new Error(
+			`entity ${name} declares field ${field} as an enum of ${JSON.stringify(values)}: an enum declares at least ` +
+				`one value, as a list of names.`,
+		);
+	}
+	const seen = new Set<string>();
+	for (const value of values) {
+		if (
+			typeof value !== 'string' ||
+			!GRAPHQL_NAME.test(value) ||
+			NOT_ENUM_VALUES.includes(value) ||
+			value.startsWith('__')
+		) {
+			throw new Error(
+				`entity ${name} declares field ${field} with the enum value ${JSON.stringify(value)}, which is not a legal ` +
+					`GraphQL enum name: it must match ${GRAPHQL_NAME}, must not begin with "__", and must not be true, ` +
+					`false or null. The GraphQL schema maps each declared value to an enum value one to one (ADR-0098).`,
+			);
+		}
+		if (seen.has(value)) {
+			throw new Error(`entity ${name} declares field ${field} with the enum value ${JSON.stringify(value)} twice`);
+		}
+		seen.add(value);
+	}
+	return Object.freeze({storage: 'text', enum: Object.freeze([...(values as string[])])});
+}
+
+/** The storage class of a declared field, whichever way it was declared: all a backend's layout needs. */
+export function fieldStorage(field: FieldDeclaration): FieldType {
+	return typeof field === 'string' ? field : field.storage;
+}
+
+/**
+ * A declared field as one string, for comparing two declarations and for
+ * naming them in a refusal: `text`, or `text enum(open, closed)`.
+ *
+ * The values are in DECLARED order, and two enums listing the same values in
+ * another order describe themselves differently: a declaration is compared as
+ * written, exactly as its id columns are.
+ */
+export function describeField(field: FieldDeclaration): string {
+	return typeof field === 'string' ? field : `${field.storage} enum(${field.enum.join(', ')})`;
+}
+
+/**
+ * Each entity's enum fields with their value sets, built once per normalized
+ * entity and kept OFF it, so a `NormalizedEntity` stays plain data (it is
+ * compared, serialised and posted across a port) while the write-time check
+ * is a set lookup.
+ */
+const enumSets = new WeakMap<NormalizedEntity, readonly (readonly [string, EnumField, ReadonlySet<string>])[]>();
+
+function enumFieldsOf(entity: NormalizedEntity): readonly (readonly [string, EnumField, ReadonlySet<string>])[] {
+	let known = enumSets.get(entity);
+	if (!known) {
+		known = Object.entries(entity.fields).flatMap(([field, declared]) =>
+			typeof declared === 'string' ? [] : [[field, declared, new Set(declared.enum)] as const],
+		);
+		enumSets.set(entity, known);
+	}
+	return known;
+}
+
+/**
+ * Refuse an upsert's values that its declaration does not admit, before a
+ * backend writes anything: today, a value of an enum field outside its declared
+ * set (ADR-0098). Every backend calls it where it plans a block, beside
+ * `idValues`, so a refused value leaves the store as it was, and the refusal is
+ * the same sentence on every backend.
+ *
+ * NULL (or an unlisted field, which a whole-row write stores as NULL) is
+ * admitted, as it is for every field. An entity with no enum field pays one
+ * cached empty-list check.
+ */
+export function assertFieldValues(entity: NormalizedEntity, values: Record<string, unknown> | undefined): void {
+	for (const [field, declared, allowed] of enumFieldsOf(entity)) {
+		const value = values?.[field];
+		if (value === null || value === undefined) continue;
+		if (typeof value !== 'string' || !allowed.has(value)) {
+			throw new Error(
+				`entity ${entity.name} field ${field} is declared as an enum of (${declared.enum.join(', ')}), and was ` +
+					`written ${JSON.stringify(value)}, which is not one of them. The value is refused rather than stored.`,
+			);
+		}
+	}
 }
 
 /**

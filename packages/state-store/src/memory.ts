@@ -1,7 +1,7 @@
 import {blockAlreadyRecorded, blockHashAlreadyRecorded, blockNotAboveTip, normalizeBlockHash} from './blocks.js';
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
-import {entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
+import {assertFieldValues, entityKey, idValues, mustGet, normalizeEntities} from './entities.js';
 import {pruneRecord, retentionEnforcementOf, type RetentionEnforcement} from './enforcement.js';
 import {
 	assertListingLimit,
@@ -158,7 +158,9 @@ export class MemoryStateStore implements StateStoreBackend {
 
 		const planned = mutations.map((mutation) => {
 			const entity = mustGet(this.entities, mutation.entity);
-			return {mutation, entity, key: entityKey(entity, mutation.id), id: idValues(entity, mutation.id)};
+			const id = idValues(entity, mutation.id);
+			if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
+			return {mutation, entity, key: entityKey(entity, mutation.id), id};
 		});
 
 		this.blocks.set(block.number, {...block, hash});

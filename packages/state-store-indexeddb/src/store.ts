@@ -1,4 +1,5 @@
 import {
+	assertFieldValues,
 	assertListingLimit,
 	assertRetained,
 	blockAlreadyRecorded,
@@ -344,7 +345,9 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const hash = normalizeBlockHash(block.hash);
 		const planned = mutations.map((mutation) => {
 			const entity = mustGet(this.entities, mutation.entity);
-			return {mutation, entity, key: rowKey(entity, mutation.id), id: idValues(entity, mutation.id)};
+			const id = idValues(entity, mutation.id);
+			if (mutation.type === 'upsert') assertFieldValues(entity, mutation.values);
+			return {mutation, entity, key: rowKey(entity, mutation.id), id};
 		});
 
 		const db = await this.database();

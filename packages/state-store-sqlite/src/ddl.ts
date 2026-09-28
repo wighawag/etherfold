@@ -1,4 +1,4 @@
-import {normalizeEntity, type FieldType} from '@etherfold/state-store';
+import {fieldStorage, normalizeEntity, type FieldType} from '@etherfold/state-store';
 import {
 	assertStorableEntityNames,
 	assertStorableTableNamespace,
@@ -259,7 +259,7 @@ export function ddlForEntity(declaration: EntityDeclaration, names: TableNames):
 	const columns = [
 		`${ROWID} INTEGER PRIMARY KEY AUTOINCREMENT`,
 		...entity.id.map((column) => `${quoted(column)} TEXT NOT NULL`),
-		...Object.entries(entity.fields).map(([field, type]) => `${quoted(field)} ${sqlType(type)}`),
+		...Object.entries(entity.fields).map(([field, type]) => `${quoted(field)} ${sqlType(fieldStorage(type))}`),
 		`${LOWER} INTEGER NOT NULL`,
 		// nullable on purpose: NULL is how "still valid at the tip" is expressed.
 		// A sentinel such as INT64_MAX would leak into every query and every

@@ -1,5 +1,5 @@
 import type {EntityIdPrefix} from './listing.js';
-import type {EntityDeclaration, FieldType} from './types.js';
+import type {EntityDeclaration, FieldDeclaration} from './types.js';
 
 /**
  * The declaration, read as TYPES: one description of the data, for storage AND
@@ -68,20 +68,27 @@ export type IdColumnsOf<E extends EntityDeclaration> = E extends {id: infer I}
 export type EntityNamed<D extends readonly EntityDeclaration[], Name> = Extract<D[number], {name: Name}>;
 
 /**
- * What a declared storage class holds, as a TypeScript type.
+ * What a declared field holds, as a TypeScript type.
  *
  * `blob` is a `Uint8Array` because that is what the backends hand back for one;
  * `integer` and `real` are both `number`, which is the honest reading of a
  * 64-bit SQLite INTEGER (and the reason a u256 is not an integer field: it does
  * not fit, so it is decimal `text`, undecoded -- see the module note).
+ *
+ * An enum (ADR-0098) is the UNION of its declared values, which is true rather
+ * than hopeful because every backend refuses any other value at write time.
+ * Under an annotated declaration its values are not literal, and it reads as
+ * `string`, which is still true.
  */
-export type FieldValue<T extends FieldType> = T extends 'text'
-	? string
-	: T extends 'integer' | 'real'
-		? number
-		: T extends 'blob'
-			? Uint8Array
-			: never;
+export type FieldValue<T extends FieldDeclaration> = T extends {readonly enum: readonly (infer V extends string)[]}
+	? V
+	: T extends 'text'
+		? string
+		: T extends 'integer' | 'real'
+			? number
+			: T extends 'blob'
+				? Uint8Array
+				: never;
 
 /**
  * One row of a declared entity: its id columns, then its fields.

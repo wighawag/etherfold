@@ -1,5 +1,5 @@
 import type {EntityIdOf, EntityPrefixOf, EntityRow} from './declarations.js';
-import {idValues, normalizeEntity} from './entities.js';
+import {describeField, idValues, normalizeEntity} from './entities.js';
 import {UnknownEntityError} from './errors.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
 import type {StateStore} from './store.js';
@@ -316,7 +316,7 @@ export function assertDeclaredBy(declarations: ReadonlyMap<string, NormalizedEnt
 
 function shapeOf(entity: NormalizedEntity): string {
 	const fields = Object.entries(entity.fields)
-		.map(([field, type]) => `${field}: ${type}`)
+		.map(([field, type]) => `${field}: ${describeField(type)}`)
 		.sort();
 	const parent = entity.parent ? ` under ${entity.parent.entity} as ${entity.parent.as}` : '';
 	return `id(${entity.id.join(', ')}) {${fields.join(', ')}}${parent}`;
