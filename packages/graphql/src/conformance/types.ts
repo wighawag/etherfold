@@ -76,6 +76,29 @@ export type QueryConformanceOptions = {
 	readonly transportFailures?: Partial<
 		Readonly<Record<TransportFailureReason, (subject: QuerySubject) => void | Promise<void>>>
 	>;
+	/**
+	 * The block every fresh subject's store was BOOTSTRAPPED to from a snapshot
+	 * (ADR-0095): the snapshot's cut (`SnapshotHead.takenAt`), or absent for a
+	 * store that starts empty.
+	 *
+	 * A bootstrapped store is never a store holding no block, since installing a
+	 * snapshot applies its blocks, so the one case asked of a store with nothing
+	 * written (`an empty store`) cannot be honest of it as written. Declared, that
+	 * case is asked as what it means for such a store: a store holding no ROW answers
+	 * every list empty, pinned to the block the snapshot left as its tip. Nothing
+	 * else changes, and nothing is skipped.
+	 *
+	 * The snapshot must leave NO live row (its history may carry rows it later
+	 * removes), and its cut must be below block 10, the lowest block any case
+	 * writes, so every case's blocks land above it.
+	 *
+	 * The store's CLAIM is still read once from a probe, so it must not vary
+	 * between calls: a bootstrapped store's narrowed window grows with its tip
+	 * (`SnapshotAwareStateStore.capabilities`), so declare a store whose claim is
+	 * stable (one keeping a window no wider than the history above its floor, for
+	 * instance).
+	 */
+	readonly snapshotTakenAt?: number;
 };
 
 /**

@@ -13,7 +13,7 @@ import {
 import {generationDigestOf, type Abi, type IndexingSource} from '@etherfold/core';
 import {EntityEventProcessor, type EntityProcessor} from '@etherfold/processor-entities';
 import {IndexedDBStateStore, type IndexedDBStateStoreOptions} from '@etherfold/state-store-indexeddb';
-import {openForReading, openForWriting, type EntityDeclaration} from '@etherfold/state-store';
+import {openForReading, openForWriting, type EntityDeclaration, type StateStoreBackend} from '@etherfold/state-store';
 import type {QueryExecutorFactory, QuerySubject} from '../src/conformance/index.js';
 import {graphqlQueryHandler, workerExecutor} from '../src/worker/index.js';
 
@@ -65,11 +65,19 @@ export type WorkerExecutorOptions = IndexedDBStateStoreOptions & {
 	 * host whose entry passed none.
 	 */
 	readonly query?: HostQueryHandler | false;
+	/**
+	 * How the host's app opens the fresh IndexedDB store before it is handed to
+	 * `createState` (and to the suite, which writes through the same handle): by
+	 * default it is used as it is. The WRITER is the store the subject writes
+	 * and a host claims; a READER is the shared store a host under the tab
+	 * election opens for reading (`readerHostExecutor`).
+	 */
+	readonly open?: (store: IndexedDBStateStore, role: 'writer' | 'reader') => Promise<StateStoreBackend>;
 };
 
 function specOver(
 	declarations: readonly EntityDeclaration[],
-	store: IndexedDBStateStore,
+	store: StateStoreBackend,
 	query: HostQueryHandler | undefined,
 	extra: Partial<HostedIndexerSpec<PingABI, unknown>> = {},
 ): HostedIndexerSpec<PingABI, unknown> {
@@ -146,10 +154,11 @@ function freshStore(declarations: readonly EntityDeclaration[], options: Indexed
 /** The worker executor over a host of `kind` that holds the store and writes it. */
 export function workerHostExecutor(
 	kind: HostKind,
-	{rowsExaminedBound, query, ...options}: WorkerExecutorOptions = {},
+	{rowsExaminedBound, query, open, ...options}: WorkerExecutorOptions = {},
 ): QueryExecutorFactory {
 	return async (declarations) => {
-		const {store} = freshStore(declarations, options);
+		const fresh = freshStore(declarations, options).store;
+		const store = open ? await open(fresh, 'writer') : fresh;
 		await store.migrate();
 		const handler = query === false ? undefined : (query ?? graphqlQueryHandler({accessor: {rowsExaminedBound}}));
 		const {port, terminate} = hostAndPort(kind, specOver(declarations, store, handler));
@@ -165,13 +174,19 @@ export function workerHostExecutor(
  * host holds the lock and the store, a second host finds the lock held and reads
  * the shared store it opened for reading, and the executor asks the READER.
  */
-export function readerHostExecutor({rowsExaminedBound, ...options}: WorkerExecutorOptions = {}): QueryExecutorFactory {
+export function readerHostExecutor({
+	rowsExaminedBound,
+	open,
+	...options
+}: WorkerExecutorOptions = {}): QueryExecutorFactory {
 	return async (declarations) => {
-		const {store, databaseName} = freshStore(declarations, options);
+		const {store: fresh, databaseName} = freshStore(declarations, options);
+		const store = open ? await open(fresh, 'writer') : fresh;
 		await store.migrate();
 		const election = {tabElection: {name: `graphql-election-${databases}-${Math.random().toString(36).slice(2)}`}};
 		const openState = async () => {
-			const shared = new IndexedDBStateStore(declarations, {databaseName, ...options});
+			const opened = new IndexedDBStateStore(declarations, {databaseName, ...options});
+			const shared = open ? await open(opened, 'reader') : opened;
 			await shared.migrate();
 			return {store: openForReading(shared), state: undefined};
 		};
