@@ -4,7 +4,6 @@ slug: a-worker-host-answers-graphql-over-its-port
 spec: the-same-query-runs-against-a-worker-and-a-server
 blockedBy: [a-server-answers-graphql-over-http]
 covers: [2, 13, 14, 19, 25]
-needsAnswers: true
 ---
 
 ## What to build
