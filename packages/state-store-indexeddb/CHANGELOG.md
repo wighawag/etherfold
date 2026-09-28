@@ -1,5 +1,14 @@
 # @etherfold/state-store-indexeddb
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [f4b9ea2]
+- Updated dependencies [0aefa50]
+- Updated dependencies [f7a8e75]
+  - @etherfold/state-store@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

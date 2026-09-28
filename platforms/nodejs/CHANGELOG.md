@@ -1,5 +1,16 @@
 # @etherfold/platform-nodejs
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [1cdd82d]
+- Updated dependencies [f4b9ea2]
+- Updated dependencies [df8ede2]
+- Updated dependencies [a1dc9c5]
+- Updated dependencies [550ca50]
+  - @etherfold/server@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes

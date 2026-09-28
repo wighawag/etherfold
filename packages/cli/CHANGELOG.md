@@ -1,5 +1,67 @@
 # ethereum-indexer-cli
 
+## 0.9.0
+
+### Minor Changes
+
+- f4b9ea2: A published state snapshot carries the history it was asked for (ADR-0095).
+
+  `@etherfold/state-store-sqlite`: `produceStateSnapshot(store, {at, processor, history})` takes `history: 'none' | 'all' | <depth>` (a `SnapshotHistory`, default `'none'`). `none` puts the floor at the cut; a depth `N` puts it `N` blocks below the cut, clamped at the first block the generation recorded; `all` puts it there. Like the cut, a floor on a height carrying no logs points at the highest recorded block at or below it. The document then carries the rows live at the floor and every later recorded block's changes up to the cut, read off the version ranges by the new `VersionedStateStore.changesAt(block)` (a block's NET change: one upsert or delete per id it touched) over `recordedBlocksBetween(after, upTo)`. A floor below what the database still retains is refused with `HistoryNotRetainedError`, naming both blocks, rather than shortened: `VersionedStateStore.retainedFrom()` answers the higher of the handle's configured retention floor and the floor the database's last prune pass ran at, so a publisher that opens a database another process pruned is not fooled by its own `unbounded` handle. A depth that is not a whole number of blocks is refused.
+
+  `@etherfold/state-store`: `recordedPruneFloor(record)` reads the floor a prune pass recorded. `SnapshotAwareStateStore.bootstrap` over a store that already carries a snapshot origin wipes it first (`revertTo(-1)`) once the new document's head and floor are checked, so an install a download cut short part-way (the floor and some later blocks, no cursor) is replaced by the next boot's install instead of refusing it for offering blocks the store already holds.
+
+  `@etherfold/processor-entities`: documentation of what a part-way download leaves, now that a snapshot may carry several blocks.
+
+  `@etherfold/server`: `producePublication` takes `history` and reports it on the `ProducedPublication`; a history below what the database retains is refused as `history-not-retained`.
+
+  `etherfold`: `etherfold publish --history <all|blocks|none>` (default `none`) chooses how much history the published snapshot carries, and the report prints it with the floor. Every other command refuses the flag by name, and a value that is not `all`, `none` or a whole number of blocks is refused.
+
+- f77bd4d: `etherfold build --publish <dir>` publishes at the tip it stops at (ADR-0095).
+
+  After the build has folded to the tip, settled its pointer and pruned, it runs `etherfold publish`'s own implementation over the database it has just written, into `<dir>`, so a scheduled publishing job is one step and the directory holds exactly what a separate `publish` over that database writes. `--history` and `--seed` pass through to it, and are refused on `build` without `--publish`. The processor it expects is always the build's own: a build whose fail-soft final settle left the previous processor canonical is refused, naming both identities, rather than publishing the previous one. A refused publication exits `1` with the fold kept; a build stopped from outside publishes nothing. `--out` stays `publish`'s and is refused on `build`, naming `--publish`; `--publish` is refused on every other command.
+
+  The library gains `publishDatabase(db, {out, history, seed, expected?}, deps)`, the implementation both forms call, `PublicationRequest`, `BuildConfig.publish` (a `BuildPublication`), `PreparedIndexing.arrived`, `IndexingDependencies.publication`, and `describePublication(written, command?)`.
+
+- a1dc9c5: `etherfold publish` writes a build database out as the state snapshot a browser app starts from (ADR-0095).
+
+  `@etherfold/server`: `producePublication(db, {stream, expectedProcessor?, declarationsOf, indexer?, savedAt?})` produces the publication of a database's CANONICAL generation without writing anything: a format-2 state snapshot (history `none`) cut at `tip - finality`, where `tip` is the block the generation folded through and `finality` is the resolved stream config's, whose rows are the as-of read at the cut and whose resume position is the stored cursor narrowed to the cut (so a consumer neither skips a block nor applies one twice). It answers the body, named by its content hash (`state-<hex>.ndjson.gz`, `contentHash` being `sha256:<hex>` over the decompressed document), and the publication index entry keyed by the generation's digest. It refuses, with `PublicationRefusedError` and a `reason`, a database with no canonical generation, one whose canonical generation is not `expectedProcessor` (naming both), a stream config the generation was not folded under, and a generation that folded nothing up to the cut. `parsePublicationIndex` and `mergePublicationIndex` read and update `publication.json` (`PUBLICATION_INDEX_NAME`, format `PUBLICATION_INDEX_FORMAT`), replacing only a publication's own generation's entry and keeping every other entry and key; `readGenerationBundle` reads the bundle a generation stores beside its state. The package now depends on `@etherfold/processor-entities` (the cursor codec) and `@etherfold/state-store-sqlite` (the row read).
+
+  `etherfold`: a new command, `etherfold publish --db <url> --out <dir> [-p <bundle>]`, wraps it. It writes each body under its content-hash name (never overwritten) and `publication.json` last, each by a write beside the final name and a rename, deletes nothing, and prints what it wrote including the body's content hash. With `-p`, a database whose canonical generation is another processor is refused, naming both identities. `--out` is a new input every other command refuses by name.
+
+- 550ca50: `etherfold publish --seed` also writes the stream seed of the stream the canonical generation folds, keyed by stream (ADR-0095).
+
+  `@etherfold/core`: the coverage claim a fold writes beside its stored stream (`StreamCoverage.source`, written by `StreamWriter` and `StreamBuilder`) now carries the stream's FULL source identity, the per-event source hash entries `sourceHashesOf` answers (each with its `streamHash`), instead of the 32-bit whole-source wire context. `streamDigestOfSourceHashes(coverage.source, config)` is therefore the very stream digest the claim is filed under, which is what lets a stream seed be built from the database alone. No migration: a database folded before this records only the wire context, and `publish --seed` refuses it by name.
+
+  `@etherfold/server`: `producePublication(db, {seed: true})` also produces a stream seed in core's envelope (`StreamSeed`): the stored stream (`_emissions`) read back through `storedEmissionReplaySource` in bounded reads (`seedReadBudget`, default 10,000), from the stream's start block up to the SAME cut as the state snapshot, stripped by `storedStreamOf` and COMPACTED (every matched apply/retract pair dropped, ADR-0006), so it carries exactly the final chain, installs under core's unchanged coherence check, and two producers of one chain and cut publish the same bytes. Its source identity is the one the coverage claim records, and its digest is asserted to be the canonical generation's stream. The body is gzipped under `streamSeedBodyName(contentHash)`, it is reported on `ProducedPublication.seed` (`ProducedStreamSeed`), and the index gains a `seeds` map keyed by stream digest (`PublishedStreamSeed`), which `mergePublicationIndex` merges replacing only its own stream's entry and `parsePublicationIndex` refuses when it is not a map. A seed is refused as `no-stored-stream` when nothing stored reaches the cut, and as `no-stream-identity` when the database records no full source identity or one that does not digest to the generation's stream.
+
+  `etherfold`: `etherfold publish --seed` writes the seed beside the snapshot and prints its body, stream digest, coverage, event count and the content hash a release pins (`pinnedStreamSeedContentHash`, the install's `expectedContentHash`). Without `--seed` nothing about the stream is written. Every other command refuses the flag by name.
+
+### Patch Changes
+
+- 0331cbc: An app built and published with the CLI starts from its own publication, asserted end to end (ADR-0095, now implemented).
+
+  `etherfold build --publish` folds a fixture chain whose contracts come from a `--deployments` folder, and a browser tab running the same bundle file (`processorBundle`) starts from the publication index (`publication`). The test asserts the tab's source and finality hash to the publisher's stream, that the tab lands on the state of a tab that indexed the chain itself, absorbs a reorg inside the finality window, and downloads only the index and a snapshot body that does not grow with the stream. It also covers `--seed` (a processor-only change re-folds the published stream locally), `--history` (a revert inside the published history, refused under its floor) and an old build that keeps starting from its own entry after a new processor is published. No runtime change: the CLI gains `@etherfold/browser` and `fake-indexeddb` as dev dependencies for the test.
+
+- Updated dependencies [1cdd82d]
+- Updated dependencies [f4b9ea2]
+- Updated dependencies [2e0c4a2]
+- Updated dependencies [0aefa50]
+- Updated dependencies [f7a8e75]
+- Updated dependencies [4b14b61]
+- Updated dependencies [d0d90a9]
+- Updated dependencies [df8ede2]
+- Updated dependencies [a1dc9c5]
+- Updated dependencies [550ca50]
+  - @etherfold/core@0.10.0
+  - @etherfold/server@0.3.0
+  - @etherfold/state-store@0.3.0
+  - @etherfold/state-store-sqlite@0.3.0
+  - @etherfold/processor-entities@0.3.0
+  - @etherfold/utils@0.8.2
+  - @etherfold/fetcher-host@0.2.2
+  - @etherfold/platform-nodejs@0.2.2
+  - @etherfold/platform-nodejs-fetcher@0.2.2
+
 ## 0.8.1
 
 ### Patch Changes

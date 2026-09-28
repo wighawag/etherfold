@@ -1,7 +1,0 @@
----
-'@etherfold/browser': minor
----
-
-A worker-hosted tab starts from a publication, catches up within a budget or switches to the snapshot, and installs a stream seed, exactly as a main-thread one does (ADR-0082, ADR-0095, ADR-0096).
-
-`HostedIndexerSpec` (what `hostIndexerInThisWorker` and `hostIndexerInThisSharedWorker` take) gains `publication`, `catchUpWithinSeconds`, `seed` and `keepStream`, under the names and with the behaviour of `createIndexerState`'s options: everything runs inside the host, from what the worker entry passes. What they did reaches the tab on two new optional `HostProgress` fields, `publication` (`PublicationState`: `found`, `refused` with its reason, or `switched`) and `streamSeed` (`StreamSeedState`), pushed like the rest of the progress; the main-thread host's port reports them too, from the same values as `syncing.publication` and `syncing.streamSeed`. A seed with no `keepStream`, a `seed` beside `publication.seed`, and a `catchUpWithinSeconds` that cannot mean a budget stop a worker host with `phase: 'refused'` and the failure, where the main thread raises. The publication lookup, the seed install and the returning-tab switch are now one implementation shared by every host, as is how a generation is built from its factories; `createIndexerState`'s behaviour is unchanged. The browser guide leads with the dedicated worker and documents the main thread as the alternative.
