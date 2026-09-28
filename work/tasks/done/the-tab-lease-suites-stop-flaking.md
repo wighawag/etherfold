@@ -35,3 +35,25 @@ Two flakes in the tab-lease suites, both seen on PRs that did not touch the take
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), bound any load you generate, and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
 >
 > CI: dorfl's gate runs vitest only. The real-browser suites run in CI's `browser (chromium)`, `browser (firefox)` and `browser (webkit)` jobs; the PR is done only when those three are green too.
+
+## Decisions
+
+- **The FROZEN case waits on `reader.canonical !== undefined`.** This getter is only set once the store is open, which is the same moment `indexMore()` stops answering as a reader. It is a documented public getter that the first case in the same file already uses as the "not reading" signal. Alternatives considered:
+  - `reader.promotion !== undefined` (the diagnosis's `decide-wait` patch): works the same way, but the README calls it an indirect signal and advises against shipping it.
+  - Retrying `indexMore()` until it returns a cursor: this would blur a real demotion into a timeout.
+  - The product-side fix (make `indexMore()` wait for the startup to finish): larger, and it changes behaviour; the verdict does not require it.
+  
+  Touches no other command or flag.
+- **Test only, ADR-0097 D4 untouched:** the verdict was "test race", so the code that seats the new leader was not changed. The takeover-time bound (`SETTLE_MS + 1500`) was not loosened.
+- **Numbers for the FROZEN acceptance criterion:** the README's largest sample was 300 runs, so the target is 3,000 heavy-load runs with `repro.sh ITERATIONS=3000 PARALLEL=30 BURNERS=30` on 32 cores (unmodified, that load failed 36%).
+  - **Run 1 (3,000):** 1 failure, and it was not the demotion. It was the takeover-time bound, `expected 1738 to be less than 1650`, which fails before the code I added runs.
+  - **Timing run (1,500, instrumented, same load):** 0 failures. The slowest takeover was 210 ms (median about 170 ms), so the 1,738 ms was a one-off stall under CPU starvation, not a takeover window. I kept the bound and logged it in the observation note.
+  - **Run 2 (3,000, clean):** 0 failures, which meets the criterion.
+  - Across all 7,500 runs the original demotion failure never appeared.
+  - **With a forced slow startup** (the diagnosis's `decide-widen` patch, no load): the fixed test passed 30 of 30, and the original test failed 10 of 10.
+- **Firefox numbers:** `--project=firefox --repeat-each 20`, run on one test at a time (with `-g`, 4 workers).
+  - Killed-worker case: 20 of 20 passed.
+  - Main-thread close case: 20 of 20 passed.
+  
+  The race depends on timing, so I did not confirm that the unmodified test fails locally.
+- **Main-thread case:** the check that "the tab that did not take over fetched nothing" still reads the snapshot taken when the takeover was seen. Only the reading of the taker's range moved behind the poll.

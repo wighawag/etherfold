@@ -270,6 +270,16 @@ describe('a visible tab takes the lease from a backgrounded leader (main thread)
 		// The bound is the settle time (plus the fresh start's own scheduling).
 		expect(Date.now() - started).toBeLessThan(SETTLE_MS + 1500);
 		expect(reader.syncing.$state.election).toMatchObject({takeoverReason: 'leader-backgrounded'});
+		// THE SEAT IS NOT READINESS: ADR-0097 D4 has the new leader announce its seat the
+		// moment it holds the lock, before its fresh start opens the container, and until
+		// then `indexMore()` answers as the reader it still is. Wait for the container (the
+		// generation it answers reads from) before advancing it; a demotion meanwhile is
+		// the failure this case exists to catch, so it ends the wait loudly.
+		await until('the new leader to open its container', () => {
+			const demoted = reader.syncing.$state.demotion;
+			if (demoted) throw new Error(`the new leader was DEMOTED (${demoted.reason}) during its fresh start`);
+			return reader.canonical !== undefined;
+		});
 
 		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
 		await indexToTip(reader);
