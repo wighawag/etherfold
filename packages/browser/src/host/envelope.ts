@@ -18,7 +18,7 @@
  * posts to it, and a message that is not ours must be IGNORED rather than
  * answered with an error about an unknown case.
  */
-import type {TabElectionState} from '../tabElection.js';
+import type {TabElectionState, TabVisibility} from '../tabElection.js';
 import type {
 	Abi,
 	GenerationRecord,
@@ -432,6 +432,19 @@ export type PortCases = {
 	 * replace, with the cost merely moved to the other end of the wire.
 	 */
 	readonly ping: {readonly request: undefined; readonly response: undefined};
+	/**
+	 * THIS TAB IS, OR IS NOT, ON SCREEN: `document.visibilityState`, told to the host
+	 * so a worker host can take part in the tab election's FOREGROUND TAKEOVER
+	 * (ADR-0097, D4 as amended), since a worker has no document of its own.
+	 *
+	 * Sent by the port itself, from a scope that has a `document`, after the
+	 * `connect` and on every `visibilitychange` (and again to a restarted host).
+	 * Answered with nothing. A host that does not take part ignores it: the
+	 * main-thread host (it reads the document it runs beside), a SharedWorker host
+	 * (one indexer for every tab, not a background tab), and any host with the
+	 * takeover off or no election at all.
+	 */
+	readonly visibility: {readonly request: {readonly visibility: TabVisibility}; readonly response: undefined};
 	/**
 	 * WHAT THE TAB HANDS ITS HOST WHEN IT CONNECTS: the cloneable settings, and the
 	 * chain as a `MessagePort` speaking `@eip-1193/over-port` (ADR-0082, amended).
@@ -847,7 +860,11 @@ export function sameProgress(a: HostProgress, b: HostProgress): boolean {
 		// A count per hot update, so a repeated verdict is still news.
 		a.hotUpdate?.count === b.hotUpdate?.count &&
 		a.election?.role === b.election?.role &&
-		a.election?.tookOver === b.election?.tookOver
+		a.election?.tookOver === b.election?.tookOver &&
+		a.election?.takeoverReason === b.election?.takeoverReason &&
+		a.election?.displaced === b.election?.displaced &&
+		// What a visible reader decides the foreground takeover on, so a change is news.
+		a.election?.visibility === b.election?.visibility
 	);
 }
 

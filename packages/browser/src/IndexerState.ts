@@ -31,15 +31,23 @@ import {pruneBudget, type StateStore, type WritableStateStore} from '@etherfold/
 import {demoteToReader, isStoreWriterChanged, type Demotion, type DemotionReason} from './demotion.js';
 import {
 	electionFor,
+	followDocumentVisibility,
+	foregroundTakeoverOf,
+	leaderAnnouncement,
+	leaderIsDisplaceable,
 	openReader,
 	readerContextOf,
 	readerProgress,
 	standForElection,
 	tabElectionName,
+	watchForBackgroundedLeader,
 	type Candidacy,
 	type ReaderState,
 	type TabElection,
+	type TabElectionRole,
 	type TabElectionState,
+	type TabVisibility,
+	type TakeoverReason,
 } from './tabElection.js';
 import {openStateMovedChannel, type StateMovedAcrossTabs} from './stateMovedAcrossTabs.js';
 import {derivedProgress, hostGenerationOf, hostGenerationsOf, type HostBacking} from './host/cases.js';
@@ -722,6 +730,12 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * or crashed) this tab takes over: it builds its generation through
 		 * `createState`, claims, and indexes forward from the stored cursor, starting the
 		 * auto-index loop if it was asked for.
+		 *
+		 * With `foregroundTakeover` on (the default), this tab's `document.visibilityState`
+		 * decides the rest: a reader visible past the settle time while the leader is
+		 * hidden takes the lease, and a leader whose lease is taken DEMOTES
+		 * (`syncing.demotion.reason === 'lease-lost'`), abandons its in-flight batch,
+		 * reads again from `openState` and queues for the lock once more.
 		 */
 		tabElection?: TabElection;
 		// Optional factory used to construct the underlying IndexerGeneration. Receives the same
@@ -874,6 +888,49 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	let publishedAsLeader: HostProgress | undefined;
 	/** `startAutoIndexing()` was asked of a reader, so a takeover starts the loop. */
 	let wantsAutoIndexing = false;
+	/** THE FOREGROUND TAKEOVER (ADR-0097, D4 as amended): its settle time, or `undefined` where it is off. */
+	const foreground = foregroundTakeoverOf(election);
+	/** This tab's visibility, followed from `document` while the foreground takeover is on. */
+	let ownVisibility: TabVisibility | undefined;
+	let stopFollowingVisibility: (() => void) | undefined;
+	/** The settle timer a READER runs, which takes the lease from a backgrounded leader. */
+	let settle: ReturnType<typeof watchForBackgroundedLeader> | undefined;
+	/**
+	 * WHICH TENURE this tab is in: bumped on every takeover and every displacement,
+	 * so a fresh start that was displaced before it finished knows it is stale.
+	 */
+	let tenure = 0;
+
+	/**
+	 * THIS TAB'S SEAT, as `syncing.election` reports it: the role and why, plus the
+	 * visibility a leader publishes for the foreground takeover.
+	 */
+	function setSeat(
+		role: TabElectionRole,
+		how: {tookOver?: boolean; takeoverReason?: TakeoverReason; displaced?: boolean} = {},
+	): void {
+		setSyncing({election: seatOf(role, how)});
+	}
+	function seatOf(
+		role: TabElectionRole,
+		how: {tookOver?: boolean; takeoverReason?: TakeoverReason; displaced?: boolean},
+	): TabElectionState {
+		return {
+			name: election!.name,
+			role,
+			tookOver: how.tookOver ?? false,
+			...(how.takeoverReason ? {takeoverReason: how.takeoverReason} : {}),
+			...(how.displaced ? {displaced: true} : {}),
+			...(foreground && ownVisibility ? {visibility: ownVisibility} : {}),
+		};
+	}
+	/** The visibility moved: the same seat, re-reported, and the leader re-publishes it. */
+	function refreshSeat(): void {
+		const current = $syncing.election;
+		if (!current) return;
+		setSyncing({election: seatOf(current.role, current)});
+		publishToPort();
+	}
 
 	/** A reader: it holds a reader seat and no container. */
 	function isReading(): boolean {
@@ -885,8 +942,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		for (const wire of wires) wire.publish();
 		// THE LEADER PUBLISHES; it is not polled. Only a tab that holds the lock and a
 		// container says where the fold is, and a repeat is not posted.
-		if (electionChannel && indexer && $syncing.election?.role === 'writer') {
-			const report = hostProgress();
+		if (electionChannel && $syncing.election?.role === 'writer') {
+			// Before the container is open, the SEAT alone, so a visible reader hears that a
+			// leader exists during its fresh start rather than taking the silence for a
+			// frozen tab.
+			const report = indexer
+				? hostProgress()
+				: leaderAnnouncement({host: 'main-thread', scope: executionScopeName()}, $syncing.election);
 			if (!publishedAsLeader || !sameProgress(publishedAsLeader, report)) {
 				publishedAsLeader = report;
 				electionChannel.publishProgress(report);
@@ -1107,14 +1169,37 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			// start and goes on exactly as a tab with no election; one that finds it held
 			// is built from the reader factory and waits in the queue.
 			electionChannel = openStateMovedChannel(tabElectionName(election));
-			const standing = standForElection(election, () => void takeOver(standing, indexerSetup, processorConfig));
+			if (foreground) {
+				// THE TAB'S OWN VISIBILITY, read here because this IS the tab. A scope with no
+				// document reports none, and a leader reporting none is never displaced.
+				settle = watchForBackgroundedLeader({
+					settleMs: foreground.settleMs,
+					eligible: () =>
+						isReading() &&
+						$syncing.election?.role === 'reader' &&
+						ownVisibility === 'visible' &&
+						leaderIsDisplaceable(leaderProgress),
+					take: () => candidacy?.takeFromBackgroundedLeader(),
+				});
+				stopFollowingVisibility = followDocumentVisibility((visibility) => {
+					ownVisibility = visibility;
+					refreshSeat();
+					settle?.reconsider();
+				});
+			}
+			const standing = standForElection(election, {
+				onTakeover: (reason) => void takeOver(standing, indexerSetup, processorConfig, reason),
+				onDisplaced: () => void stepDown(standing, indexerSetup, processorConfig),
+			});
 			candidacy = standing;
 			if (!(await standing.atOnce)) {
 				if (candidacy !== standing) return;
 				seating = seatAsReader(indexerSetup, processorConfig);
 				return seating;
 			}
-			setSyncing({election: {name: election.name, role: 'writer', tookOver: false}});
+			tenure++;
+			setSeat('writer');
+			publishToPort();
 		}
 		return initAsWriter(indexerSetup, processorConfig);
 	}
@@ -1147,15 +1232,19 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		const detachProgress = channel.onProgress((progress) => {
 			leaderProgress = progress;
 			publishToPort();
+			settle?.reconsider();
 		});
 		stopFollowing = () => {
 			detachMoved();
 			detachProgress();
 			leaderProgress = undefined;
 		};
-		setSyncing({waitingForProvider: false, election: {name: election!.name, role: 'reader', tookOver: false}});
+		setSyncing({waitingForProvider: false});
+		// A DISPLACED leader keeps saying so while it reads, until it takes over again.
+		if ($syncing.election?.role !== 'reader') setSeat('reader');
 		announceFirstState();
 		publishToPort();
+		settle?.reconsider();
 	}
 
 	/**
@@ -1168,25 +1257,111 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		standing: Candidacy,
 		indexerSetup: Parameters<typeof initAsWriter>[0],
 		processorConfig?: ProcessorConfig,
+		reason: TakeoverReason = 'leader-gone',
 	): Promise<void> {
+		const mine = ++tenure;
 		await seating?.catch(() => undefined);
 		// Disposed (or re-initialised) while queued: this is somebody else's election now.
-		if (candidacy !== standing || indexer) return;
+		// Displaced again while the seat was being built: the lease is not this tab's.
+		if (candidacy !== standing || indexer || tenure !== mine) return;
+		settle?.reconsider();
 		stopFollowing?.();
 		stopFollowing = undefined;
 		try {
-			setSyncing({election: {name: election!.name, role: 'writer', tookOver: true}});
+			// A NEW CLAIM, so a demotion this tab met when its lease was last taken does not
+			// survive it: `createState` is called again, which is ADR-0077's "a demoted
+			// writer becomes one again by claiming again".
+			demotion = undefined;
+			setSyncing({demotion: undefined});
+			setSeat('writer', {tookOver: true, takeoverReason: reason});
+			// Heard by the other tabs at once, before the container opens.
+			publishToPort();
 			await initAsWriter(indexerSetup, processorConfig);
+			if (tenure !== mine) {
+				// DISPLACED DURING THE FRESH START: what it built is let go at once.
+				letGoOfTheWriter();
+				return;
+			}
 			reading = undefined;
 			publishToPort();
-			namedLogger.info(`this tab TOOK OVER as the indexing tab of election "${election!.name}"`);
+			namedLogger.info(
+				reason === 'leader-backgrounded'
+					? `this tab TOOK THE LEASE of election "${election!.name}" from a backgrounded leader`
+					: `this tab TOOK OVER as the indexing tab of election "${election!.name}"`,
+			);
 			if (wantsAutoIndexing) {
 				await startAutoIndexing(autoIndexingInterval);
 			}
 		} catch (error) {
+			if (tenure !== mine) return;
 			namedLogger.error(`this tab won the tab election and could not start indexing`, error);
 			setSyncing({error: {message: (error as Error)?.message ?? String(error), id: 'TAKEOVER_FAILED'}});
 		}
+	}
+
+	/**
+	 * A VISIBLE TAB TOOK THE LEASE (ADR-0097, D4 as amended): stop writing through the
+	 * ordinary demotion (the in-flight batch is abandoned, the cursor dropped, the
+	 * reason `lease-lost`), let go of the container, and read again from `openState`,
+	 * following the new leader. The candidacy has already queued for the lock again,
+	 * so this tab takes over once more when that tab goes away.
+	 */
+	function stepDown(
+		standing: Candidacy,
+		indexerSetup: Parameters<typeof initAsWriter>[0],
+		processorConfig?: ProcessorConfig,
+	): void {
+		if (candidacy !== standing) return;
+		tenure++;
+		const wasIndexing = $syncing.autoIndexing || wantsAutoIndexing;
+		// The reader seat FIRST, synchronously: from here this tab publishes nothing as the
+		// leader, so a stale report of its own cannot reach the other tabs.
+		setSeat('reader', {displaced: true});
+		if (indexer) {
+			demote('lease-lost', {keepCandidacy: true});
+			letGoOfTheWriter();
+		}
+		// Remembered, so a later takeover starts the loop again.
+		wantsAutoIndexing = wasIndexing;
+		seating = seatAsReader(indexerSetup, processorConfig).catch((error) => {
+			namedLogger.error(`a displaced leader could not open its reader`, error);
+		});
+	}
+
+	/**
+	 * LET GO OF THE CONTAINER a displaced writer held: its callbacks, its stores and
+	 * everything derived from them. Its store stays readable through the reader seat
+	 * that replaces it, which opens the same storage through `openState`.
+	 */
+	function letGoOfTheWriter(): void {
+		if (indexingTimeout) {
+			clearTimeout(indexingTimeout);
+			indexingTimeout = undefined;
+		}
+		if (indexer) {
+			indexer.disableProcessing();
+			indexer.onLoad = undefined;
+			indexer.onLastSyncUpdated = undefined;
+			indexer.onStateUpdated = undefined;
+			indexer.onPromoted = undefined;
+		}
+		detachFromContainer?.();
+		detachFromContainer = undefined;
+		indexer = undefined;
+		statesByGeneration.clear();
+		boot = undefined;
+		publishedStart.reset();
+		publishedAsLeader = undefined;
+		hostPhase = 'waiting';
+		setSyncing({
+			autoIndexing: false,
+			loading: false,
+			catchingUp: false,
+			fetchingLogs: false,
+			processingFetchedLogs: false,
+			lastSync: undefined,
+			nonCanonicalGenerations: [],
+		});
 	}
 
 	async function initAsWriter(
@@ -1645,7 +1820,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * report with a later one (a lease released AFTER a write was refused is the
 	 * ordinary order), and nothing is left to stop.
 	 */
-	function demote(reason: DemotionReason): Demotion {
+	function demote(reason: DemotionReason, how: {keepCandidacy?: boolean} = {}): Demotion {
 		if (demotion) {
 			return demotion;
 		}
@@ -1675,8 +1850,9 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		);
 		// A DEMOTED TAB GIVES THE ELECTION'S LOCK BACK (ADR-0097): it will never write
 		// again in this container, and holding the lock would stop a reader tab taking
-		// over when whoever displaced this one goes away.
-		candidacy?.resign();
+		// over when whoever displaced this one goes away. Not when the lock was TAKEN from
+		// this tab (`stepDown`): it no longer holds it, and it queues again to read.
+		if (!how.keepCandidacy) candidacy?.resign();
 		// The transient flags go with it: nothing is loading, fetching or catching up any
 		// more, and leaving one standing would leave a spinner on screen for ever.
 		setSyncing({
@@ -1951,6 +2127,11 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// tab takes over at once), the queue is left, and the channel is closed.
 		candidacy?.resign();
 		candidacy = undefined;
+		settle?.stop();
+		settle = undefined;
+		stopFollowingVisibility?.();
+		stopFollowingVisibility = undefined;
+		ownVisibility = undefined;
 		stopFollowing?.();
 		stopFollowing = undefined;
 		electionChannel?.close();
@@ -2053,9 +2234,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	async function _auto_index_cycle() {
 		setSyncing({autoIndexing: true});
 		publishToPort();
+		// The container this cycle drives: one let go of while the cycle was in flight (a
+		// displaced leader's) must not re-arm a loop over whatever replaced it.
+		const driving = indexer;
 		try {
 			const cursorsBefore = cursorsOf(indexer);
 			const lastSync = await indexMoreAndCatchupIfNeeded();
+			if (indexer !== driving) return;
 			if (!lastSync) {
 				// DEMOTED. The loop is not re-armed: this tab reads from here on, and
 				// `demote` has already stopped it, dropped the cursor and said so. Re-arming
@@ -2087,6 +2272,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 				indexingTimeout = setTimeout(_auto_index, 1);
 			}
 		} catch (err) {
+			if (indexer !== driving) return;
 			if (!isRetryable(err)) {
 				// NOT RE-ARMED, and this is the one branch that must not be a retry.
 				//

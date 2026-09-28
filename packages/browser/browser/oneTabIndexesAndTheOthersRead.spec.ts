@@ -24,6 +24,12 @@ import {BRANCH_A_TIP, EXPECTED_A} from './workload.js';
  * takes down every same-origin tab sharing the renderer process, the survivors
  * included, so it cannot show a handover either.
  *
+ * A BACKGROUNDED LEADER is emulated rather than produced: several pages of one
+ * context are all visible to a headless browser, so a tab is sent to the
+ * background by overriding `document.visibilityState` and dispatching
+ * `visibilitychange` (`election-visibility`), which is the whole of what the host
+ * reads. The lock the visible tab then takes with `steal` is the engine's own.
+ *
  * Deliberately not part of `pnpm test` (this package's convention): it needs
  * `playwright install`.
  */
@@ -34,8 +40,18 @@ const WORKER = path.join(HERE, 'indexer.worker.ts');
 /** Where a held leader stops: its fold records 100..103 and asks for nothing above. */
 const HELD_AT = 103;
 
+/** The foreground takeover's settle time in these runs (the default is two seconds). */
+const SETTLE_MS = 300;
+
 type Report = {
-	seat: {name: string; role: string; tookOver: boolean} | null;
+	seat: {
+		name: string;
+		role: string;
+		tookOver: boolean;
+		takeoverReason?: string;
+		displaced?: boolean;
+		visibility?: string;
+	} | null;
 	demotion: string | null;
 	calls: number;
 	ranges: {from: number; to: number}[];
@@ -226,3 +242,59 @@ test('two tabs that both believe they lead leave the store correct, the loser de
 		await disposeAll(tabs, context);
 	}
 });
+
+/**
+ * A VISIBLE TAB TAKES THE LEASE FROM A BACKGROUNDED LEADER (ADR-0097, D4 as
+ * amended), on both hosting shapes a tab elects with: the leader is held part way
+ * (as a throttled tab is), goes to the background, a reader comes forward past the
+ * settle time and takes the lease, and indexes on from the stored cursor.
+ */
+for (const shape of ['main', 'worker'] as const) {
+	test(`${shape === 'main' ? 'main-thread tabs' : 'a dedicated-worker host per tab'}: a reader made visible past the settle time takes the lease from a hidden leader, with no gap`, async ({
+		browser,
+	}) => {
+		const context = await browser.newContext();
+		const tabs = await openTabs(context, 2);
+		const [leader, reader] = tabs as [Tab, Tab];
+		const run = tag();
+		const open = `election-${shape}-open`;
+		try {
+			await leader.run({case: open, tag: run, holdAbove: HELD_AT, settleMs: SETTLE_MS, visibility: 'visible'});
+			await expect.poll(async () => (await report(leader)).seat?.role, {timeout: 30_000}).toBe('writer');
+			await reader.run({case: open, tag: run, settleMs: SETTLE_MS, visibility: 'hidden'});
+			await expect.poll(async () => (await report(leader)).progress.lastToBlock, {timeout: 30_000}).toBe(HELD_AT);
+			await expect.poll(async () => (await report(reader)).progress.lastToBlock, {timeout: 30_000}).toBe(HELD_AT);
+			// A HIDDEN READER never takes it, however long it waits.
+			await reader.page.waitForTimeout(SETTLE_MS * 3);
+			expect((await report(reader)).seat).toMatchObject({role: 'reader'});
+			expect((await report(reader)).calls).toBe(0);
+
+			// THE USER SWITCHES TABS.
+			await leader.run({case: 'election-visibility', visibility: 'hidden'});
+			await reader.run({case: 'election-visibility', visibility: 'visible'});
+
+			await expect.poll(async () => (await report(reader)).seat?.role, {timeout: 30_000}).toBe('writer');
+			const taker = await report(reader);
+			expect(taker.seat).toMatchObject({tookOver: true, takeoverReason: 'leader-backgrounded', visibility: 'visible'});
+			await expect.poll(async () => (await report(leader)).seat?.role, {timeout: 30_000}).toBe('reader');
+			const stepped = await report(leader);
+			expect(stepped.seat).toMatchObject({displaced: true, visibility: 'hidden'});
+			if (shape === 'main') expect(stepped.demotion).toBe('lease-lost');
+			const callsAtHandover = stepped.calls;
+
+			// NO GAP: the new leader starts at or below the block after the one the old
+			// leader recorded, and both tabs land on the whole fold.
+			await expect.poll(async () => (await report(reader)).ranges.length, {timeout: 30_000}).toBeGreaterThan(0);
+			expect((await report(reader)).ranges[0]!.from).toBeLessThanOrEqual(HELD_AT + 1);
+			for (const tab of [reader, leader]) {
+				await expect.poll(async () => (await report(tab)).state, {timeout: 30_000}).toEqual(EXPECTED_A);
+			}
+			await expect.poll(async () => (await report(leader)).progress.lastToBlock, {timeout: 30_000}).toBe(BRANCH_A_TIP);
+			// ...and the old leader asked the chain for nothing after it stepped down.
+			await leader.page.waitForTimeout(500);
+			expect((await report(leader)).calls).toBe(callsAtHandover);
+		} finally {
+			await disposeAll(tabs, context);
+		}
+	});
+}
