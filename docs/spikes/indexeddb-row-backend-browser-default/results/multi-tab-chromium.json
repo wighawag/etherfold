@@ -1,6 +1,6 @@
 {
   "project": "chromium",
-  "ranAt": "2026-09-10T18:27:32.109Z",
+  "ranAt": "2026-09-28T16:08:03.769Z",
   "tabs": [
     {
       "tab": 0,
@@ -16,20 +16,20 @@
       "tab": 1,
       "errors": [],
       "attempted": 20,
-      "wrote": 1,
-      "refused": 19,
+      "wrote": 0,
+      "refused": 20,
       "unexpected": [],
-      "readBack": 1,
+      "readBack": 0,
       "mismatches": 0
     },
     {
       "tab": 2,
       "errors": [],
       "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
+      "wrote": 1,
+      "refused": 19,
       "unexpected": [],
-      "readBack": 0,
+      "readBack": 1,
       "mismatches": 0
     },
     {

@@ -1,25 +1,25 @@
 {
   "project": "firefox",
-  "ranAt": "2026-09-10T18:27:47.955Z",
+  "ranAt": "2026-09-28T16:08:11.861Z",
   "tabs": [
     {
       "tab": 0,
       "errors": [],
       "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
+      "wrote": 1,
+      "refused": 19,
       "unexpected": [],
-      "readBack": 0,
+      "readBack": 1,
       "mismatches": 0
     },
     {
       "tab": 1,
       "errors": [],
       "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
+      "wrote": 1,
+      "refused": 19,
       "unexpected": [],
-      "readBack": 0,
+      "readBack": 1,
       "mismatches": 0
     },
     {
@@ -44,8 +44,8 @@
     }
   ],
   "audit": {
-    "expected": 21,
-    "found": 21,
+    "expected": 23,
+    "found": 23,
     "missing": 0,
     "surplus": 0
   }

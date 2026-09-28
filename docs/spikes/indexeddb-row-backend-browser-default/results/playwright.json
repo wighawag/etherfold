@@ -1,12 +1,12 @@
 {
   "config": {
     "argv": [
-      "/home/wighawag/.volta/tools/image/node/24.11.1/bin/node",
-      "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/node_modules/@playwright/test/cli.js",
+      "/nix/store/i1rgc6zsrxbxgfz97vbczz7cxcg71p5s-nodejs-slim-24.19.0/bin/node",
+      "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/node_modules/@playwright/test/cli.js",
       "test"
     ],
-    "configFile": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/playwright.config.ts",
-    "rootDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
+    "configFile": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/playwright.config.ts",
+    "rootDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
@@ -22,7 +22,7 @@
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -30,7 +30,7 @@
         },
         "id": "chromium",
         "name": "chromium",
-        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -38,7 +38,7 @@
         "timeout": 300000
       },
       {
-        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -46,7 +46,7 @@
         },
         "id": "firefox",
         "name": "firefox",
-        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -54,7 +54,7 @@
         "timeout": 300000
       },
       {
-        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -62,7 +62,7 @@
         },
         "id": "webkit",
         "name": "webkit",
-        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__two-tabs-contending-for-one-height-leave-one-winner/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -118,12 +118,16 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1422,
+                  "duration": 682,
                   "errors": [],
                   "stdout": [],
-                  "stderr": [],
+                  "stderr": [
+                    {
+                      "text": "Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.\n"
+                    }
+                  ],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:30.611Z",
+                  "startTime": "2026-09-28T16:08:03.019Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -152,12 +156,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1108,
+                  "duration": 604,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:32.253Z",
+                  "startTime": "2026-09-28T16:08:03.797Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -186,12 +190,16 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 6113,
+                  "duration": 1851,
                   "errors": [],
                   "stdout": [],
-                  "stderr": [],
+                  "stderr": [
+                    {
+                      "text": "Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.\n"
+                    }
+                  ],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:41.321Z",
+                  "startTime": "2026-09-28T16:08:09.784Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -220,12 +228,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 4052,
+                  "duration": 1403,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:48.345Z",
+                  "startTime": "2026-09-28T16:08:11.920Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -254,12 +262,16 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 2623,
+                  "duration": 2539,
                   "errors": [],
                   "stdout": [],
-                  "stderr": [],
+                  "stderr": [
+                    {
+                      "text": "Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.\n"
+                    }
+                  ],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:07.395Z",
+                  "startTime": "2026-09-28T16:08:32.756Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -288,12 +300,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 2733,
+                  "duration": 3071,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:10.230Z",
+                  "startTime": "2026-09-28T16:08:35.426Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -330,12 +342,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 4041,
+                  "duration": 2629,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:33.775Z",
+                  "startTime": "2026-09-28T16:08:04.650Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -349,6 +361,40 @@
           "column": 1
         },
         {
+          "title": "passes the shared accessor suite, the SQLite accessor's answers within the bound",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1298,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-28T16:08:07.293Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "f02749b9ada99cd0eecc-6a3077bf732412ff1394",
+          "file": "state-store.spec.ts",
+          "line": 74,
+          "column": 1
+        },
+        {
           "title": "runs the same processor as node, and lands on the same rows",
           "ok": true,
           "tags": [],
@@ -364,12 +410,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1335,
+                  "duration": 292,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:37.887Z",
+                  "startTime": "2026-09-28T16:08:08.604Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -379,7 +425,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-f6ed72897634be865e6a",
           "file": "state-store.spec.ts",
-          "line": 74,
+          "line": 101,
           "column": 1
         },
         {
@@ -398,12 +444,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 529,
+                  "duration": 275,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:39.301Z",
+                  "startTime": "2026-09-28T16:08:08.907Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -413,7 +459,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-df478fe675622ff32e5b",
           "file": "state-store.spec.ts",
-          "line": 115,
+          "line": 142,
           "column": 1
         },
         {
@@ -432,12 +478,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 604,
+                  "duration": 288,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:39.877Z",
+                  "startTime": "2026-09-28T16:08:09.191Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -447,7 +493,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-3bc6353917a9b92ba71a",
           "file": "state-store.spec.ts",
-          "line": 143,
+          "line": 170,
           "column": 1
         },
         {
@@ -466,12 +512,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 7758,
+                  "duration": 10748,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:27:52.906Z",
+                  "startTime": "2026-09-28T16:08:13.496Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -485,6 +531,40 @@
           "column": 1
         },
         {
+          "title": "passes the shared accessor suite, the SQLite accessor's answers within the bound",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "firefox",
+              "projectName": "firefox",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 5950,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-28T16:08:24.254Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "f02749b9ada99cd0eecc-eb6b5e021e33bac68af6",
+          "file": "state-store.spec.ts",
+          "line": 74,
+          "column": 1
+        },
+        {
           "title": "runs the same processor as node, and lands on the same rows",
           "ok": true,
           "tags": [],
@@ -500,12 +580,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 3054,
+                  "duration": 432,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:00.711Z",
+                  "startTime": "2026-09-28T16:08:30.217Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -515,7 +595,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-7c6870a531302988cde6",
           "file": "state-store.spec.ts",
-          "line": 74,
+          "line": 101,
           "column": 1
         },
         {
@@ -534,12 +614,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 825,
+                  "duration": 575,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:03.855Z",
+                  "startTime": "2026-09-28T16:08:30.657Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -549,7 +629,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-70818cabacb62be43f4e",
           "file": "state-store.spec.ts",
-          "line": 115,
+          "line": 142,
           "column": 1
         },
         {
@@ -568,12 +648,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 964,
+                  "duration": 610,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:04.725Z",
+                  "startTime": "2026-09-28T16:08:31.244Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -583,7 +663,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-35dda99f2d2d340b9330",
           "file": "state-store.spec.ts",
-          "line": 143,
+          "line": 170,
           "column": 1
         },
         {
@@ -602,12 +682,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 6409,
+                  "duration": 9486,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:13.459Z",
+                  "startTime": "2026-09-28T16:08:38.938Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -618,6 +698,40 @@
           "id": "f02749b9ada99cd0eecc-08927a2222cca60e9cd9",
           "file": "state-store.spec.ts",
           "line": 48,
+          "column": 1
+        },
+        {
+          "title": "passes the shared accessor suite, the SQLite accessor's answers within the bound",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "webkit",
+              "projectName": "webkit",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 5050,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-28T16:08:48.449Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "f02749b9ada99cd0eecc-dc9912044ffeea43d084",
+          "file": "state-store.spec.ts",
+          "line": 74,
           "column": 1
         },
         {
@@ -636,12 +750,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1755,
+                  "duration": 1081,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:20.024Z",
+                  "startTime": "2026-09-28T16:08:53.515Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -651,7 +765,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-cf8115ef70748bd0fc49",
           "file": "state-store.spec.ts",
-          "line": 74,
+          "line": 101,
           "column": 1
         },
         {
@@ -670,12 +784,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 799,
+                  "duration": 1409,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:21.832Z",
+                  "startTime": "2026-09-28T16:08:54.615Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -685,7 +799,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-c1eae7b37d2ec2161458",
           "file": "state-store.spec.ts",
-          "line": 115,
+          "line": 142,
           "column": 1
         },
         {
@@ -704,12 +818,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 669,
+                  "duration": 1328,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-10T18:28:22.685Z",
+                  "startTime": "2026-09-28T16:08:56.045Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -719,7 +833,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-1616f9bdf7ebaedfb4d2",
           "file": "state-store.spec.ts",
-          "line": 143,
+          "line": 170,
           "column": 1
         }
       ]
@@ -727,9 +841,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-09-10T18:27:29.701Z",
-    "duration": 53979.043000000005,
-    "expected": 18,
+    "startTime": "2026-09-28T16:08:01.773Z",
+    "duration": 55760.208999999995,
+    "expected": 21,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0

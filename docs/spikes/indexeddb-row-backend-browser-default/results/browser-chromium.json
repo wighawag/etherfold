@@ -1,6 +1,6 @@
 {
   "project": "chromium",
-  "ranAt": "2026-09-10T18:27:40.551Z",
+  "ranAt": "2026-09-28T16:08:09.488Z",
   "runs": [
     {
       "project": "chromium",
@@ -14,36 +14,83 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 977.6000000238419
+          "ms": 799.8000000119209
         },
         {
           "label": "conformance:window-128",
-          "ms": 1223.7999999523163
+          "ms": 735.2999999523163
         },
         {
           "label": "conformance:revert-only",
-          "ms": 1143.7999999523163
+          "ms": 820.5
         }
       ],
       "results": {
-        "passed": 671,
+        "passed": 504,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 227,
+            "passed": 170,
             "failed": 0,
-            "databases": 244
+            "databases": 185
           },
           "window-128": {
-            "passed": 243,
+            "passed": 178,
             "failed": 0,
-            "databases": 260
+            "databases": 193
           },
           "revert-only": {
-            "passed": 201,
+            "passed": 156,
             "failed": 0,
-            "databases": 218
+            "databases": 171
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "project": "chromium",
+      "case": "accessor-conformance",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36"
+      },
+      "timings": [
+        {
+          "label": "accessor-conformance:unbounded",
+          "ms": 268.9000000357628
+        },
+        {
+          "label": "accessor-conformance:window-128",
+          "ms": 348.9000000357628
+        },
+        {
+          "label": "accessor-conformance:revert-only",
+          "ms": 405.60000002384186
+        }
+      ],
+      "results": {
+        "passed": 101,
+        "failed": 0,
+        "failures": [],
+        "byClaim": {
+          "unbounded": {
+            "passed": 34,
+            "failed": 0,
+            "databases": 68
+          },
+          "window-128": {
+            "passed": 35,
+            "failed": 0,
+            "databases": 69
+          },
+          "revert-only": {
+            "passed": 32,
+            "failed": 0,
+            "databases": 66
           }
         }
       },
@@ -61,11 +108,11 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 34.5
+          "ms": 20.5
         },
         {
           "label": "reference",
-          "ms": 0.8000000715255737
+          "ms": 1.300000011920929
         }
       ],
       "results": {
@@ -292,15 +339,15 @@
       "timings": [
         {
           "label": "write",
-          "ms": 44.5
+          "ms": 29.80000001192093
         },
         {
           "label": "cold-start",
-          "ms": 0.7999999523162842
+          "ms": 0.5
         },
         {
           "label": "read",
-          "ms": 0.30000007152557373
+          "ms": 0.19999998807907104
         }
       ],
       "results": {

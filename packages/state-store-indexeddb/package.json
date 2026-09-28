@@ -25,6 +25,7 @@
 		"directory": "packages/state-store-indexeddb"
 	},
 	"dependencies": {
+		"@etherfold/accessor": "workspace:*",
 		"@etherfold/state-store": "workspace:*"
 	},
 	"devDependencies": {

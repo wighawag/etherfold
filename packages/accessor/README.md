@@ -39,7 +39,7 @@ A backend without a query planner (IndexedDB) answers by scanning, and REFUSES p
 ## Implementations
 
 - `@etherfold/state-store-sqlite`: `VersionedStateStore.accessor()`, generated SQL; a page of parents is one `IN` query with a per-parent window.
-- `@etherfold/state-store-indexeddb`: to come (a bounded scan, then an index).
+- `@etherfold/state-store-indexeddb`: `IndexedDBStateStore.accessor({rowsExaminedBound?})`, rung 1: a key-range scan filtered and sorted in memory, refused past 25,000 rows examined by default; as of a block, current plus the delta of versions closed since (which counts every entity's changes). An index (rung 2) is to come.
 
 ## The conformance suite
 

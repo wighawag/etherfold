@@ -1,6 +1,6 @@
 {
   "project": "webkit",
-  "ranAt": "2026-09-10T18:28:23.436Z",
+  "ranAt": "2026-09-28T16:08:57.404Z",
   "runs": [
     {
       "project": "webkit",
@@ -14,36 +14,83 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 1322
+          "ms": 2718
         },
         {
           "label": "conformance:window-128",
-          "ms": 1471
+          "ms": 2775
         },
         {
           "label": "conformance:revert-only",
-          "ms": 1378
+          "ms": 3078
         }
       ],
       "results": {
-        "passed": 671,
+        "passed": 504,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 227,
+            "passed": 170,
             "failed": 0,
-            "databases": 244
+            "databases": 185
           },
           "window-128": {
-            "passed": 243,
+            "passed": 178,
             "failed": 0,
-            "databases": 260
+            "databases": 193
           },
           "revert-only": {
-            "passed": 201,
+            "passed": 156,
             "failed": 0,
-            "databases": 218
+            "databases": 171
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "project": "webkit",
+      "case": "accessor-conformance",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": false,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15"
+      },
+      "timings": [
+        {
+          "label": "accessor-conformance:unbounded",
+          "ms": 1454
+        },
+        {
+          "label": "accessor-conformance:window-128",
+          "ms": 1369
+        },
+        {
+          "label": "accessor-conformance:revert-only",
+          "ms": 1185
+        }
+      ],
+      "results": {
+        "passed": 101,
+        "failed": 0,
+        "failures": [],
+        "byClaim": {
+          "unbounded": {
+            "passed": 34,
+            "failed": 0,
+            "databases": 68
+          },
+          "window-128": {
+            "passed": 35,
+            "failed": 0,
+            "databases": 69
+          },
+          "revert-only": {
+            "passed": 32,
+            "failed": 0,
+            "databases": 66
           }
         }
       },
@@ -61,11 +108,11 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 30
+          "ms": 65
         },
         {
           "label": "reference",
-          "ms": 1
+          "ms": 2
         }
       ],
       "results": {
@@ -292,15 +339,15 @@
       "timings": [
         {
           "label": "write",
-          "ms": 44
+          "ms": 141
         },
         {
           "label": "cold-start",
-          "ms": 0
+          "ms": 9
         },
         {
           "label": "read",
-          "ms": 0
+          "ms": 3
         }
       ],
       "results": {

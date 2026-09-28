@@ -14,6 +14,12 @@ import {codeOnly} from './utils/codeOnly.js';
  * seam, and a devDependency is not a dependency. That is exactly why this test
  * looks at `src/` and at `dependencies`, and not at the test graph.
  *
+ * It later gained `@etherfold/accessor`, the OTHER seam this package implements
+ * (ADR-0099, `store.accessor()`), on the same terms as the SQLite backend: a
+ * backend-neutral contract whose only dependency is `@etherfold/state-store`
+ * (asserted below; vitest is an optional peer for its conformance subpath, never
+ * a dependency).
+ *
  * (This test reads the filesystem; the *published* source it inspects does not.)
  */
 
@@ -34,11 +40,11 @@ describe('the store stays a primitive', () => {
 		expect(files.length).toBeGreaterThan(0);
 	});
 
-	it('imports nothing but the seam it implements', () => {
-		const allowed = new Set(['@etherfold/state-store']);
+	it('imports nothing but the seams it implements', () => {
+		const allowed = new Set(['@etherfold/state-store', '@etherfold/accessor']);
 		for (const file of files) {
 			const source = readFileSync(file, 'utf-8');
-			for (const match of source.matchAll(/^\s*import\s+(?:type\s+)?.*?from\s+'([^']+)'/gm)) {
+			for (const match of source.matchAll(/^\s*import\s+(?:type\s+)?[^;]*?from\s+'([^']+)'/gm)) {
 				const specifier = match[1];
 				if (specifier.startsWith('.')) continue;
 				expect(allowed.has(specifier), `${file} imports ${specifier}`).toBe(true);
@@ -46,9 +52,16 @@ describe('the store stays a primitive', () => {
 		}
 	});
 
-	it('declares only the seam as a runtime dependency', () => {
+	it('declares only the seams as runtime dependencies', () => {
 		const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url).pathname, 'utf-8'));
-		expect(Object.keys(pkg.dependencies)).toEqual(['@etherfold/state-store']);
+		expect(Object.keys(pkg.dependencies).sort()).toEqual(['@etherfold/accessor', '@etherfold/state-store']);
+	});
+
+	it('and the accessor seam brings nothing but the store seam with it', () => {
+		const accessor = JSON.parse(
+			readFileSync(new URL('../../accessor/package.json', import.meta.url).pathname, 'utf-8'),
+		);
+		expect(Object.keys(accessor.dependencies ?? {})).toEqual(['@etherfold/state-store']);
 	});
 
 	it('uses no runtime built-in and no console', () => {

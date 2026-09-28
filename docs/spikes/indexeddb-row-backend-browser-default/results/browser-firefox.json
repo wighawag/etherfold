@@ -1,6 +1,6 @@
 {
   "project": "firefox",
-  "ranAt": "2026-09-10T18:28:05.721Z",
+  "ranAt": "2026-09-28T16:08:31.869Z",
   "runs": [
     {
       "project": "firefox",
@@ -14,36 +14,83 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 1796
+          "ms": 3297
         },
         {
           "label": "conformance:window-128",
-          "ms": 1902
+          "ms": 3554
         },
         {
           "label": "conformance:revert-only",
-          "ms": 2044
+          "ms": 3353
         }
       ],
       "results": {
-        "passed": 671,
+        "passed": 504,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 227,
+            "passed": 170,
             "failed": 0,
-            "databases": 244
+            "databases": 185
           },
           "window-128": {
-            "passed": 243,
+            "passed": 178,
             "failed": 0,
-            "databases": 260
+            "databases": 193
           },
           "revert-only": {
-            "passed": 201,
+            "passed": 156,
             "failed": 0,
-            "databases": 218
+            "databases": 171
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "project": "firefox",
+      "case": "accessor-conformance",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0"
+      },
+      "timings": [
+        {
+          "label": "accessor-conformance:unbounded",
+          "ms": 2278
+        },
+        {
+          "label": "accessor-conformance:window-128",
+          "ms": 1975
+        },
+        {
+          "label": "accessor-conformance:revert-only",
+          "ms": 982
+        }
+      ],
+      "results": {
+        "passed": 101,
+        "failed": 0,
+        "failures": [],
+        "byClaim": {
+          "unbounded": {
+            "passed": 34,
+            "failed": 0,
+            "databases": 68
+          },
+          "window-128": {
+            "passed": 35,
+            "failed": 0,
+            "databases": 69
+          },
+          "revert-only": {
+            "passed": 32,
+            "failed": 0,
+            "databases": 66
           }
         }
       },
@@ -61,7 +108,7 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 15
+          "ms": 8
         },
         {
           "label": "reference",
@@ -292,11 +339,11 @@
       "timings": [
         {
           "label": "write",
-          "ms": 47
+          "ms": 29
         },
         {
           "label": "cold-start",
-          "ms": 3
+          "ms": 2
         },
         {
           "label": "read",

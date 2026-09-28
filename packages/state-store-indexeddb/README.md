@@ -65,6 +65,21 @@ The listing bound is the interesting one: `[]` sorts after every string in Index
 
 `prune` deserves the same note. A live version's `upper` is `null`, which is not a valid IndexedDB key, so a live version has no entry in the `upper` index at all: the row that IS the current state, however old, cannot be reached by the prune. The prototype these measurements came from scanned every version and tested a predicate (6.3 s at 62,553 versions); this walks a range. Neither the prune nor anything else drops a block record — that is what makes re-applying a height raise, and dropping it would turn "outside what I keep" into "no such block".
 
+## The accessor: a bounded scan (ADR-0099, rung 1)
+
+`store.accessor()` is this backend's implementation of the accessor seam ([`@etherfold/accessor`](https://github.com/wighawag/etherfold/tree/main/packages/accessor)), the one the query layer's resolvers read through. It sits beside the store seam and is never part of it (ADR-0021).
+
+```ts
+const accessor = store.accessor({rowsExaminedBound: 25_000}); // the default
+const page = await accessor.find({entity: 'pool', where: {field: 'kind', op: 'eq', value: 'open'}, orderBy: {field: 'amount', direction: 'desc'}, limit: 20});
+```
+
+IndexedDB has no query planner, so this accessor SCANS: the queried entity's key range in `current` (`[entity, ...]`), filtered in memory, sorted in memory in the seam's order (text as UTF-8 bytes to match SQLite, not IndexedDB's UTF-16 key order; a `u256` numerically by its canonical bytes; nulls first ascending; ties by the id), then cut to the limit. It answers exactly what the SQLite accessor answers for every query within the bound: the shared accessor suite runs in `test/accessor-conformance.test.ts` and in Chromium, Firefox and WebKit.
+
+**Past the bound it REFUSES** with the seam's `RowsExaminedBoundError` (`code: 'rows-examined-bound'`, the `entity`, the `bound`), never a slower answer. The bound counts ROWS EXAMINED, not time, so a phone and a laptop refuse the same query. It defaults to 25,000 (`DEFAULT_ROWS_EXAMINED_BOUND`) and is configured per deployment with `rowsExaminedBound`. It is this backend's alone: SQLite answers the same query. It applies, each on its own, to the tip scan of the entity, to the scan of ONE parent's children (a relation page is one bounded key-range scan per parent), and to the as-of delta below.
+
+**As of a block B** the answer is CURRENT PLUS A DELTA: the live rows that opened at or before B, plus the versions the `upper` index holds as closed above B that had opened at or before it, merged, sorted and then cut. The cost is the churn since B, not the depth of history. But the `upper` index is keyed by block across EVERY entity, so **the delta counts the whole database's changes since B, not the queried entity's**: an as-of query on an entity that has not changed can be refused because others have. ADR-0099 accepts that (an entity-scoped index would cost a `versionchange`), and the refusal says so. A block outside retention is `BlockNotRetainedError`, as for every as-of read.
+
 ## Retention
 
 `retention` is `'revert-only'`, `{blocks: N}` or `'unbounded'` (the default), in BLOCK NUMBERS and no other unit (ADR-0019), validated at construction against `finalityDepth`. Whatever is set is REPORTED, because this store enforces both halves: an as-of read outside the window throws `BlockNotRetainedError` (never the tip value), and `prune` drops the versions the window no longer covers.
@@ -86,6 +101,6 @@ pnpm --filter @etherfold/state-store-indexeddb test          # node, under fake-
 pnpm --filter @etherfold/state-store-indexeddb test:browser  # Chromium, Firefox and WebKit
 ```
 
-`test/conformance.test.ts` runs [`@etherfold/state-store-conformance`](https://github.com/wighawag/etherfold/tree/main/packages/state-store-conformance) under all three retention claims. The rest of `test/` is what only this backend can be asked: the access paths above, what a prune cannot reach, the cold start, and two connections to one database.
+`test/conformance.test.ts` runs [`@etherfold/state-store-conformance`](https://github.com/wighawag/etherfold/tree/main/packages/state-store-conformance) under all three retention claims, and `test/accessor-conformance.test.ts` runs the accessor suite the same way. The rest of `test/` is what only this backend can be asked: the access paths above, what a prune cannot reach, the cold start, and two connections to one database.
 
-The browser run is the same shared suite in a real engine, plus the four-tab case, plus persistence across a real reload, plus the same processor producing the same rows in a tab as in node. It is not in the acceptance gate (it needs three browser binaries); its output is kept in `docs/spikes/indexeddb-row-backend-browser-default/results/`.
+The browser run is the same two shared suites in a real engine, plus the four-tab case, plus persistence across a real reload, plus the same processor producing the same rows in a tab as in node. It is not in the acceptance gate (it needs three browser binaries); its output is kept in `docs/spikes/indexeddb-row-backend-browser-default/results/`.
