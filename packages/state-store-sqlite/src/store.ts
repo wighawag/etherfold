@@ -12,6 +12,7 @@ import {
 } from './blocks.js';
 import {
 	assertRetained,
+	BlockNotRetainedError,
 	blockNotAboveTip,
 	boundedListing,
 	decodeFieldValues,
@@ -1039,7 +1040,11 @@ export class VersionedStateStore implements StateStoreBackend {
 	 * store answers no historical read at all, and its reads refuse on their own.
 	 */
 	async retainedFrom(): Promise<number | undefined> {
-		const tip = await this.tipBlockNumber();
+		return this.retainedFromAt(await this.tipBlockNumber());
+	}
+
+	/** `retainedFrom` measured from a tip the caller already read, so one operation reads it once. */
+	private async retainedFromAt(tip: number | undefined): Promise<number | undefined> {
 		const configured = tip === undefined ? undefined : retentionFloor(this.provided, tip, this.finalityDepth);
 		const pruned = recordedPruneFloor(await this.readSeamRecord('retentionEnforcement'));
 		if (configured === undefined) return pruned;
@@ -1058,7 +1063,8 @@ export class VersionedStateStore implements StateStoreBackend {
 	 * declarations by the planner every backend shares, so the same query means
 	 * the same thing here and in a browser. It declares no rows-examined bound,
 	 * because SQLite plans. As-of reads keep the retention refusal of every other
-	 * as-of read here. See `accessor.ts`.
+	 * as-of read here, and ALSO refuse below the floor a prune pass recorded in
+	 * the database (`assertStorageRetains`). See `accessor.ts`.
 	 */
 	accessor(): Accessor {
 		return sqliteAccessor({
@@ -1066,8 +1072,41 @@ export class VersionedStateStore implements StateStoreBackend {
 			names: this.names,
 			maxParams: this.bounds.maxRowsPerStatement,
 			select: (statement) => this.select<Record<string, unknown>>(statement),
-			assertRetained: (at) => assertRetained(this.capabilities, at, () => this.tipBlockNumber()),
+			assertRetained: (at) => this.assertStorageRetains(at),
 		});
+	}
+
+	/**
+	 * Refuse an as-of read below what this database's STORAGE still holds, not only
+	 * below what this handle claims.
+	 *
+	 * First the handle's own claim (`assertRetained`, so a `revert-only` store still
+	 * refuses every block, in its own words), then `retainedFrom`, which also knows
+	 * the floor a prune pass RECORDED. The second is what a read tier needs: `serve`
+	 * opens the database with no retention of its own (`unbounded`), while the
+	 * process that folded it may have pruned it, and the versions closed at or below
+	 * that floor are gone whatever this handle claims. Answering below it would be
+	 * answering from partly deleted history, a plausible wrong answer; it is
+	 * `BlockNotRetainedError`, the seam's existing refusal (ADR-0099), with
+	 * `retained` naming the blocks storage still answers about.
+	 *
+	 * One tip read and one seam-record read per call, however many statements the
+	 * accessor then issues. A block ABOVE the tip is never refused, as ever.
+	 */
+	private async assertStorageRetains(at: number): Promise<void> {
+		let tip: Promise<number | undefined> | undefined;
+		const tipOnce = () => (tip ??= this.tipBlockNumber());
+		await assertRetained(this.capabilities, at, tipOnce);
+		const current = await tipOnce();
+		const from = await this.retainedFromAt(current);
+		if (from !== undefined && at < from) {
+			throw new BlockNotRetainedError(
+				at,
+				{from, to: Math.max(from, current ?? from)},
+				'outside-window',
+				this.capabilities.retention,
+			);
+		}
 	}
 
 	/** A whole entity table as it is at the tip. */

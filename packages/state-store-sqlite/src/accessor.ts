@@ -50,7 +50,11 @@ export type SqliteAccessorContext = {
 	 */
 	readonly maxParams: number;
 	select(statement: Statement): Promise<Record<string, unknown>[]>;
-	/** Refuse a block this store does not retain (`BlockNotRetainedError`), as every as-of read does. */
+	/**
+	 * Refuse a block this store does not retain (`BlockNotRetainedError`): below its
+	 * own claimed retention, or below the floor a prune pass recorded in the database.
+	 * Called once per `find` / `children`, before any of its statements.
+	 */
 	assertRetained(at: number): Promise<void>;
 };
 
