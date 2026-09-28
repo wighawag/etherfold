@@ -31,3 +31,7 @@ A worker host (dedicated and SharedWorker, and the main-thread host through the 
 > FIRST, check this task against current reality: it is a launch snapshot written on 2026-09-28. Read ADR-0098 and ADR-0099 and the spec `the-same-query-runs-against-a-worker-and-a-server` (in `work/specs/tasked/`), and check the tasks it is blocked by landed as it assumes. If a dependency landed differently or an ADR superseded an assumption, do not build on the stale premise: route to needs-attention with the discrepancy (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.
+
+## Requeue 2026-09-28
+
+Gate-3 BLOCK on PR #250: CI's real-browser jobs (not run by dorfl's vitest gate) fail on all three engines because packages/browser/browser/sharedWorkerServesSeveralTabs.spec.ts has its own PORT_SURFACE list (line 116) missing the new 'query' verb. Add it there (and grep every browser/*.spec.ts and browser/*.ts for any other hard-coded port-surface list), run 'pnpm --filter @etherfold/browser test:browser --project=chromium' if a browser is available, and change nothing else.
