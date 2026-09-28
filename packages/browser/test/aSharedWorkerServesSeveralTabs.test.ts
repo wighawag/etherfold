@@ -531,6 +531,7 @@ describe('a SharedWorker serving several tabs from one host', () => {
 				'onStateMoved',
 				'progress',
 				'promotion',
+				'query',
 				'reads',
 				'reconfigure',
 				'startIndexing',

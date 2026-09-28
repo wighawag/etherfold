@@ -525,7 +525,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 	 */
 	async getAsOf<T = Record<string, unknown>>(entity: string, id: EntityId, at: number): Promise<T | undefined> {
 		const declaration = mustGet(this.entities, entity);
-		await assertRetained(this.capabilities, at, () => this.tipBlockNumber());
+		await assertRetained(this.capabilities, at, () => this.tip());
 		const db = await this.database();
 		const tx = db.transaction(VERSIONS, 'readonly');
 		const settled = this.commitIfSerialising(tx);
@@ -589,7 +589,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		const declaration = mustGet(this.entities, entity);
 		const range = listingRange(declaration, prefix);
 		assertListingLimit(declaration, limit);
-		await assertRetained(this.capabilities, at, () => this.tipBlockNumber());
+		await assertRetained(this.capabilities, at, () => this.tip());
 
 		const db = await this.database();
 		const tx = db.transaction(VERSIONS, 'readonly');
@@ -752,7 +752,7 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		return retentionEnforcementOf(
 			this.provided,
 			this.finalityDepth,
-			await this.tipBlockNumber(),
+			await this.tip(),
 			await this.readSeamRecord('retentionEnforcement'),
 		);
 	}
@@ -809,25 +809,30 @@ export class IndexedDBStateStore implements StateStoreBackend {
 				entities: this.entities,
 				database: () => this.database(),
 				commitIfSerialising: (tx) => this.commitIfSerialising(tx),
-				assertRetained: (at) => assertRetained(this.capabilities, at, () => this.tipBlockNumber()),
+				assertRetained: (at) => assertRetained(this.capabilities, at, () => this.tip()),
 			},
 			options,
 		);
 	}
 
-	// -- internals -----------------------------------------------------------
-
 	/**
-	 * The highest recorded block, or `undefined` before the first one is applied.
+	 * The TIP: the highest recorded block, or `undefined` before the first one is
+	 * applied.
+	 *
+	 * Public for the query layer (ADR-0099): an operation pins the tip when it
+	 * begins and reads it again when it ends (`QueryContext.tip` in
+	 * `@etherfold/graphql`), and a host building that context must not open the
+	 * `blocks` object store behind this store's back. Not part of the seam, whose
+	 * sync cursor stays opaque (ADR-0027); `accessor()` is not either.
 	 *
 	 * Read from the database every time rather than cached, and that is the
 	 * multi-tab decision showing up in the smallest place: another tab may have
 	 * moved the tip since this one last wrote, and a retention window is a
 	 * distance from it, so a cached tip would refuse reads that are inside the
-	 * window (or answer ones that are not). It is only ever read when a WINDOW is
-	 * claimed, because `assertRetained` takes it as a thunk.
+	 * window (or answer ones that are not). The retention check only reads it
+	 * when a WINDOW is claimed, because `assertRetained` takes it as a thunk.
 	 */
-	private async tipBlockNumber(): Promise<number | undefined> {
+	async tip(): Promise<number | undefined> {
 		const db = await this.database();
 		const tx = db.transaction(BLOCKS, 'readonly');
 		const settled = this.commitIfSerialising(tx);
@@ -835,6 +840,8 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		await settled;
 		return cursor ? (cursor.key as number) : undefined;
 	}
+
+	// -- internals -----------------------------------------------------------
 
 	/** Whether any version is still unreachable at `floor`: one bounded probe. */
 	private async hasPrunableVersions(floor: number): Promise<boolean> {

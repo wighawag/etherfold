@@ -31,6 +31,7 @@ import {
 	type PortRow,
 } from './envelope.js';
 import {portErrorOf} from './errors.js';
+import type {HostQueryContext, HostQueryOptions} from './query.js';
 import type {HostSettings} from './settings.js';
 import type {TabVisibility} from '../tabElection.js';
 
@@ -122,6 +123,13 @@ export type HostBacking = {
 	 */
 	storeForReads(): Promise<StateStore>;
 	/**
+	 * WHAT A QUERY IS ANSWERED FROM: the store `storeForReads` answers, and the
+	 * digest of the generation it belongs to, resolved TOGETHER so the two cannot
+	 * name different generations across a promotion. Waits, and rejects, as
+	 * `storeForReads` does. See `HostQueryContext`.
+	 */
+	queryContext(): Promise<HostQueryContext>;
+	/**
 	 * TAKE WHAT A TAB HANDS OVER WHEN IT CONNECTS: its settings, and the chain as a
 	 * port. Applied SYNCHRONOUSLY (or refused, throwing), so a request that follows
 	 * the connect on the same wire finds it applied.
@@ -163,7 +171,7 @@ export type ServedCases = {
  * wire plus the name of the shape that produced it) and a `HostBacking`, and
  * everything between them is the same code in every shape.
  */
-export function serveHostCases(access: HostAccess, backing: HostBacking): ServedCases {
+export function serveHostCases(access: HostAccess, backing: HostBacking, options: HostQueryOptions = {}): ServedCases {
 	/** THE SERVING IS FINISHED: stopped, and answering nothing ever again. */
 	let stopped = false;
 	/**
@@ -390,6 +398,17 @@ export function serveHostCases(access: HostAccess, backing: HostBacking): Served
 				return served(asked.entity, async (store, entity) =>
 					listed(entity, await store.listAsOf(entity.name, asked.prefix, asked.at, asked.limit)),
 				);
+			}
+			case 'query': {
+				const asked = request.payload as PortCases['query']['request'];
+				if (!options.query) {
+					throw new Error(
+						`this indexer host answers no query: its entry passed no \`query\` handler. Pass one where the host ` +
+							`is built (for GraphQL, \`query: graphqlQueryHandler()\` from '@etherfold/graphql/worker'); it is ` +
+							`opt-in so that a worker bundle that does not query carries no query language.`,
+					);
+				}
+				return options.query(asked.request, () => backing.queryContext());
 			}
 			default:
 				throw new Error(

@@ -47,7 +47,7 @@ A host whose canonical pointer can move passes a FUNCTION as the context, answer
 
 A `QueryExecutor` is `(request: {query, variables?, operationName?}) => Promise<QueryResult>`, and it never rejects. Every executor answers the same JSON: the same serialisation (`U256` as a decimal string, `Bytes` as hex), the same error codes through the one formatter (`formatQueryError`), and `extensions: {generation, block}` on every answer. When the transport itself fails (an HTTP 500, a body that is not JSON, a network error, a closed port, a dead worker host), the executor normalises it to ONE shape, `transportFailure(reason, message, {status?})`: no `data`, no `extensions`, one error coded `transport-failure` naming the `reason`. `isTransportFailure(result)` tells one apart from an answer.
 
-`localExecutor` is the in-process executor. `httpExecutor(url, {fetch?, headers?})` is the HTTP one, for a remote indexer's `/graphql` (`etherfold serve`, `run` and `node` serve it): it `POST`s the request as JSON and hands the answer back exactly as the server wrote it, and normalises a non-`2xx` (`http-status`, with `status`), a body that is not a GraphQL result (`invalid-body`) and a network error (`network`) to the one shape. The worker executor (on a `@etherfold/graphql/worker` subpath, so this root entry never imports a browser package) implements the same contract.
+`localExecutor` is the in-process executor. `httpExecutor(url, {fetch?, headers?})` is the HTTP one, for a remote indexer's `/graphql` (`etherfold serve`, `run` and `node` serve it): it `POST`s the request as JSON and hands the answer back exactly as the server wrote it, and normalises a non-`2xx` (`http-status`, with `status`), a body that is not a GraphQL result (`invalid-body`) and a network error (`network`) to the one shape. The worker executor, `workerExecutor(port)`, implements the same contract over a port to a browser host (below).
 
 `executorToFetch(executor)` turns ANY executor into a `fetch`, for a client library that only takes one (urql's `fetch`, Apollo's `HttpLink`, graphql-request):
 
@@ -57,6 +57,26 @@ const client = new Client({url: '/graphql', fetch, exchanges: [fetchExchange]});
 ```
 
 It reads a `POST` with a JSON body or a `GET` with query parameters, and answers the executor's result as a `200` whatever it is, a transport failure included, so the client reads it as errors rather than discarding the body as a network error. A request it cannot read as GraphQL is answered `400` with one `invalid-query` error.
+
+## In a browser worker
+
+The resolvers need the store and the store is in the worker, so the schema and the `graphql` runtime live in the HOST: the app's worker entry passes `graphqlQueryHandler()` as the host's `query` handler, and the tab holds `workerExecutor(port)`. Both are on the `@etherfold/graphql/worker` subpath, the only part of this package that knows `@etherfold/browser` (for its types), so the root entry stays runtime-neutral and a server importing it pulls in no browser package.
+
+```ts
+// indexer.worker.ts (or hostIndexerInThisSharedWorker, or createIndexerState(...).mainThreadHost({query}))
+import {hostIndexerInThisWorker} from '@etherfold/browser';
+import {graphqlQueryHandler} from '@etherfold/graphql/worker';
+hostIndexerInThisWorker({createState, createProcessor, query: graphqlQueryHandler()});
+
+// the tab
+import {connectToIndexerHost, dedicatedWorkerHost} from '@etherfold/browser';
+import {workerExecutor} from '@etherfold/graphql/worker';
+const execute = workerExecutor(connectToIndexerHost(dedicatedWorkerHost(() => new Worker(url, {type: 'module'}))));
+```
+
+The handler answers every operation from the store the host's canonical generation folds into (the IndexedDB accessor, with `graphqlQueryHandler({accessor: {rowsExaminedBound}})` to set its bound), reports that generation, and caches parsed and validated documents (`DocumentCache`, 100 per schema by default), so a repeated document is not parsed again. A READER tab under the tab election answers the same way from the shared store it opened for reading, naming the generation its leader named. A closed port is the transport failure `port-closed`, a host that died is `host-gone`, and a host whose entry passed no handler refuses the query (`invalid-body`).
+
+**It is opt-in, and it costs 48.3 KiB gzipped.** `@etherfold/browser` carries a generic query case and never imports GraphQL, so a worker entry that passes no handler bundles no `graphql` at all (asserted). Passing it adds 191.0 KiB minified, **48.3 KiB gzipped** to the worker bundle (51.8 to 100.2 KiB gzipped for a bare worker entry; measured with esbuild, `docs/spikes/a-worker-host-answers-graphql-over-its-port/`). It is off the first-paint path, since it is in the worker; an app reading a few entities by id is served by the generated read surface (`createPortReadSurface`) for nothing.
 
 ## Error codes
 

@@ -22,6 +22,7 @@ import type {
 } from '@etherfold/core';
 import {
 	checkTxInclusion as checkTxInclusionAgainst,
+	generationDigestOf,
 	isRetryable,
 	openIndexer,
 	openMemoryGenerationRegistry,
@@ -37,6 +38,7 @@ import {
 	leaderIsDisplaceable,
 	openReader,
 	readerContextOf,
+	readerGenerationOf,
 	readerProgress,
 	standForElection,
 	tabElectionName,
@@ -56,6 +58,7 @@ import type {HostGeneration, HostProgress, HostReconfigure, SyncPhase} from './h
 import {sameProgress} from './host/envelope.js';
 import {portErrorOf, type PortError} from './host/errors.js';
 import {hostOnThisThread, type MainThreadHosting} from './host/mainThread.js';
+import type {HostQueryContext, HostQueryOptions} from './host/query.js';
 import {cursorsOf, pacingAfterCycle, phaseAfterCycle} from './host/pacing.js';
 import {moduleProcessorIdentity} from './moduleIdentity.js';
 import {generationSpecOf} from './generationSpec.js';
@@ -884,6 +887,10 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	let stopFollowing: (() => void) | undefined;
 	/** The leader's last report, which is what a reader's port reports. */
 	let leaderProgress: HostProgress | undefined;
+	/** The generation the leader last named on the state-moved signal, which a reader's queries report. */
+	let leaderGeneration: string | undefined;
+	/** The context a reader seat was opened for, which names its generation before the leader has. */
+	let readerContext: GenerationContext | undefined;
 	/** The last report this tab published as the leader, so a repeat is not posted. */
 	let publishedAsLeader: HostProgress | undefined;
 	/** `startAutoIndexing()` was asked of a reader, so a takeover starts the loop. */
@@ -1215,18 +1222,17 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		processorConfig?: ProcessorConfig,
 	): Promise<void> {
 		processorConfigUsed = processorConfig;
-		const seat = await openReader(
-			spec.openState!,
-			readerContextOf(indexerSetup.source, {...indexerSetup.config}),
-			spec.processorBundle,
-		);
+		const context = readerContextOf(indexerSetup.source, {...indexerSetup.config});
+		const seat = await openReader(spec.openState!, context, spec.processorBundle);
 		reading = seat;
+		readerContext = context;
 		setState(seat.state);
 		const channel = electionChannel!;
 		const detachMoved = channel.onStateMoved((moved) => {
 			// The handle is the same object; publishing it again is what tells a subscriber
 			// of `state` to re-read, exactly as a fold's own update does.
 			if (reading) setState(reading.state);
+			leaderGeneration = moved.generation;
 			for (const handler of [...stateMovedHandlers]) handler(moved);
 		});
 		const detachProgress = channel.onProgress((progress) => {
@@ -1238,6 +1244,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			detachMoved();
 			detachProgress();
 			leaderProgress = undefined;
+			leaderGeneration = undefined;
 		};
 		setSyncing({waitingForProvider: false});
 		// A DISPLACED leader keeps saying so while it reads, until it takes over again.
@@ -2370,9 +2377,14 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 * writable handle and nothing that crosses can reach the mutating half.
 	 */
 	async function storeForReads(): Promise<StateStore> {
+		return (await servedState()).store;
+	}
+
+	/** The store reads are answered from, with its generation's digest where this tab holds a container. */
+	async function servedState(): Promise<{store: StateStore; generation?: string}> {
 		await firstState;
 		// A READER answers from the shared store it opened for reading (ADR-0097).
-		if (reading && !indexer) return reading.store;
+		if (reading && !indexer) return {store: reading.store};
 		const canonical = indexer?.canonical.record;
 		const state = canonical && statesByGeneration.get(generationKey(canonical));
 		if (!state) {
@@ -2381,7 +2393,20 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 					`generation's store is built by the factory this indexer was given, and the canonical generation's was not.`,
 			);
 		}
-		return state;
+		return {store: state, generation: generationDigestOf(canonical)};
+	}
+
+	/**
+	 * WHAT A QUERY IS ANSWERED FROM (ADR-0099): the store and its generation in ONE
+	 * step, so they cannot disagree across a promotion. A reader names the
+	 * generation its leader named (`readerGenerationOf`).
+	 */
+	async function queryContext(): Promise<HostQueryContext> {
+		const served = await servedState();
+		if (served.generation !== undefined) return {store: served.store, generation: served.generation};
+		if (!readerContext) throw new Error(`this tab is not reading yet, so it has no generation to name.`);
+		const generation = await readerGenerationOf(leaderGeneration, readerContext, spec);
+		return {store: served.store, generation};
 	}
 
 	/**
@@ -2459,6 +2484,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		},
 		checkTxInclusion,
 		storeForReads,
+		queryContext,
 		onStateMoved(handler) {
 			stateMovedHandlers.add(handler);
 			return () => {
@@ -2524,9 +2550,13 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		 * subscription -- the same thing a SharedWorker does for several tabs. Letting a
 		 * port go (`close()`) releases only that wire; the indexer goes on folding,
 		 * because it belongs to the app and not to the port. `dispose()` is what stops it.
+		 *
+		 * **It answers queries only if told how** (ADR-0099): pass `{query}` (for
+		 * GraphQL, `graphqlQueryHandler()` from `@etherfold/graphql/worker`) and hold
+		 * `workerExecutor(port)`; without it the port's `query` is refused.
 		 */
-		mainThreadHost(): HostAccess {
-			const wire = hostOnThisThread(hostBacking, (released) => wires.delete(released));
+		mainThreadHost(options: HostQueryOptions = {}): HostAccess {
+			const wire = hostOnThisThread(hostBacking, (released) => wires.delete(released), options);
 			wires.add(wire);
 			return wire.access;
 		},

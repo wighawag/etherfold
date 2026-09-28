@@ -445,6 +445,15 @@ importers:
         specifier: ^16.14.2
         version: 16.14.2
     devDependencies:
+      '@etherfold/browser':
+        specifier: workspace:*
+        version: link:../browser
+      '@etherfold/core':
+        specifier: workspace:*
+        version: link:../core
+      '@etherfold/processor-entities':
+        specifier: workspace:*
+        version: link:../processor-entities
       '@etherfold/state-store-indexeddb':
         specifier: workspace:*
         version: link:../state-store-indexeddb

@@ -7,7 +7,7 @@
  * Parameterised by an executor factory, as `@etherfold/state-store-conformance`
  * is by a store factory: one list of requests, each with its history and its
  * expected answer, asked of every executor (in process over SQLite and over
- * IndexedDB here; over HTTP and over a worker port as those land) and required
+ * IndexedDB, over HTTP, and over a worker host's port) and required
  * to answer the same BYTES.
  */
 export * from './types.js';

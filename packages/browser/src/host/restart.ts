@@ -139,6 +139,31 @@ export class IndexerHostDiedError extends Error {
 	}
 }
 
+/**
+ * THE REFUSAL A CALL GETS WHEN THE TAB'S OWN PORT IS CLOSED: made after
+ * `IndexerPort.close()`, or still in flight when it was called.
+ *
+ * Its own class beside `IndexerHostDiedError` because the two mean different
+ * things to a caller: the host did not go away, this tab let go of it. The
+ * worker executor (`@etherfold/graphql/worker`) tells them apart to name a
+ * transport failure `port-closed` rather than `host-gone` (ADR-0099). Raised in
+ * the tab, so `instanceof` is exact; the `name` is pinned all the same.
+ */
+export class IndexerPortClosedError extends Error {
+	readonly name = 'IndexerPortClosedError';
+	/** WHICH CASE the refused call was on. */
+	readonly case: PortCaseName;
+
+	constructor(portCase: PortCaseName, inFlight: boolean) {
+		super(
+			inFlight
+				? `the indexer port was closed while this call was in flight (the '${portCase}' call).`
+				: `this indexer port is closed, so the '${portCase}' call was not sent. Connect to the host again.`,
+		);
+		this.case = portCase;
+	}
+}
+
 /** HOW OFTEN THE PORT CHECKS that its host is still there. */
 export type HostWatchOptions = {
 	/**

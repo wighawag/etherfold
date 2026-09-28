@@ -1,13 +1,6 @@
 import type {Accessor} from '@etherfold/accessor';
-import {
-	execute,
-	GraphQLError,
-	parse,
-	validate,
-	type DocumentNode,
-	type ExecutionResult,
-	type GraphQLSchema,
-} from 'graphql';
+import {execute, GraphQLError, type DocumentNode, type ExecutionResult, type GraphQLSchema} from 'graphql';
+import {prepareDocument, type DocumentCache} from './documents.js';
 import {formatQueryError, QUERY_ERROR_CODES, QueryRefusal, refusalJSON, UNEXPECTED_ERROR_MESSAGE} from './errors.js';
 import type {QueryExecutor, QueryRequest, QueryResult} from './executor.js';
 import {OperationReads} from './operation.js';
@@ -61,9 +54,22 @@ export type QueryContextSource = QueryContext | (() => QueryContext | Promise<Qu
  * for tests and for any host that holds the store itself. It is `executeQuery`
  * as a `QueryExecutor`, so it answers exactly what every other executor must.
  */
-export function localExecutor(schema: GraphQLSchema, context: QueryContextSource): QueryExecutor {
-	return (request) => executeQuery(schema, context, request);
+export function localExecutor(
+	schema: GraphQLSchema,
+	context: QueryContextSource,
+	options: ExecuteQueryOptions = {},
+): QueryExecutor {
+	return (request) => executeQuery(schema, context, request, options);
 }
+
+/** What `executeQuery` may be handed beside the request. */
+export type ExecuteQueryOptions = {
+	/**
+	 * Where parsed and validated documents are kept, so a repeated document is
+	 * not parsed again. Absent, every request is parsed and validated afresh.
+	 */
+	readonly documents?: DocumentCache;
+};
 
 /** How many times an operation is ATTEMPTED: once, and once more if the tip moved under it. */
 const ATTEMPTS = 2;
@@ -93,6 +99,7 @@ export async function executeQuery(
 	schema: GraphQLSchema,
 	source: QueryContextSource,
 	request: QueryRequest,
+	options: ExecuteQueryOptions = {},
 ): Promise<QueryResult> {
 	let context: QueryContext;
 	try {
@@ -106,15 +113,12 @@ export async function executeQuery(
 		extensions: {generation, block: null},
 	});
 
-	let document: DocumentNode;
-	try {
-		document = parse(request.query);
-	} catch (error) {
-		if (error instanceof GraphQLError) return unpinned([error]);
-		return unpinned([new GraphQLError(String((error as Error)?.message ?? error))]);
-	}
-	const invalid = validate(schema, document);
-	if (invalid.length > 0) return unpinned(invalid);
+	const prepared =
+		options.documents && typeof request.query === 'string'
+			? options.documents.prepare(schema, request.query)
+			: prepareDocument(schema, request.query);
+	if (prepared.errors) return unpinned(prepared.errors);
+	const document: DocumentNode = prepared.document;
 
 	const {asOf} = context;
 	try {

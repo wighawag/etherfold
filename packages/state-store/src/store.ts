@@ -564,6 +564,18 @@ export function openForReading(store: StateStore): StateStore {
 class ClaimedStateStore implements WritableStateStore {
 	/** Present only when the store underneath has it; see `WritableStateStore.applyBlocks`. */
 	readonly applyBlocks?: (updates: readonly BlockUpdate[]) => Promise<void>;
+	/**
+	 * THE QUERY LAYER'S TWO READS, present only when the store underneath has them:
+	 * its accessor (ADR-0099) and its tip. Neither is part of the seam (the
+	 * accessor is deliberately not a member of `StateStore`, ADR-0099), so they are
+	 * forwarded as `applyBlocks` is, by feature detection, so that a host holding
+	 * the CLAIMED handle can still answer queries from the store it writes
+	 * (`graphqlQueryHandler` in `@etherfold/graphql/worker` looks for them). Typed
+	 * loosely here because the accessor's type lives in `@etherfold/accessor`,
+	 * which depends on this package.
+	 */
+	readonly accessor?: (options?: never) => unknown;
+	readonly tip?: () => Promise<number | undefined>;
 
 	constructor(
 		private readonly inner: StateStoreBackend,
@@ -571,6 +583,15 @@ class ClaimedStateStore implements WritableStateStore {
 	) {
 		const packing = (inner as Partial<WritableStateStore>).applyBlocks;
 		if (typeof packing === 'function') this.applyBlocks = (updates) => packing.call(inner, updates);
+		const queryable = inner as {accessor?: (options?: never) => unknown; tip?: () => Promise<number | undefined>};
+		if (typeof queryable.accessor === 'function') {
+			const accessor = queryable.accessor;
+			this.accessor = (options) => accessor.call(inner, options);
+		}
+		if (typeof queryable.tip === 'function') {
+			const tip = queryable.tip;
+			this.tip = () => tip.call(inner);
+		}
 	}
 
 	get capabilities(): StateStoreCapabilities {

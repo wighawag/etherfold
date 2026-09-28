@@ -1,5 +1,5 @@
 import type {Abi, GenerationContext, IndexingSource, ProvidedIndexerConfig} from '@etherfold/core';
-import {resolveStreamConfig, streamDigestOf} from '@etherfold/core';
+import {generationDigestOf, resolveStreamConfig, streamDigestOf} from '@etherfold/core';
 import type {StateStore} from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import type {HostProgress} from './host/envelope.js';
@@ -498,6 +498,40 @@ export function readerContextOf<ABI extends Abi>(
 	config: ProvidedIndexerConfig<ABI> | undefined,
 ): GenerationContext {
 	return {stream: streamDigestOf(source, resolveStreamConfig(config?.stream))};
+}
+
+/**
+ * WHICH GENERATION A READER'S ANSWERS BELONG TO, for the query case (ADR-0099,
+ * `HostQueryContext.generation`): a reader holds no container, so it cannot read
+ * the canonical pointer the way a writer does.
+ *
+ * The generation the LEADER last named on the state-moved signal this reader
+ * relays wins, because it is the leader's canonical generation, which is what
+ * wrote the shared store. Before the leader has said anything (a quiet chain),
+ * the reader names the generation its OWN spec would register: its bundle's
+ * identity or its `processorIdentity`, over the stream it opened (`context`).
+ * Both ends of an app come out of one build, so that is the leader's too. A
+ * module arrival names its fold only once the fold is BUILT, which a reader never
+ * does, so a reader of one that has heard nothing REFUSES rather than invent a
+ * name.
+ */
+export async function readerGenerationOf(
+	heard: string | undefined,
+	context: GenerationContext,
+	arrival: {readonly processorIdentity?: string; readonly processorBundle?: ProcessorBundleSource},
+): Promise<string> {
+	if (heard !== undefined) return heard;
+	const processor = arrival.processorBundle
+		? (await arriveFromBundle(arrival.processorBundle)).identity
+		: arrival.processorIdentity;
+	if (processor === undefined) {
+		throw new Error(
+			`this reader cannot name the generation its answers belong to yet: the leader has not published a ` +
+				`state-moved notification, and this host's own spec names its fold neither by a bundle nor by ` +
+				`\`processorIdentity\`. Ask again once the leader has applied a block.`,
+		);
+	}
+	return generationDigestOf({stream: context.stream, processor});
 }
 
 /**

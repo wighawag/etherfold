@@ -86,6 +86,8 @@ The host starts folding as soon as it exists. `startIndexing()` / `stopIndexing(
 
 `createProgressReadable(indexer)` is the small reactive wrapper over the pushed progress, for the app that just wants a progress bar.
 
+**GraphQL over the port is opt-in** (ADR-0099). This package carries a generic `query` case and never imports a query language: pass a `query` handler where the host is built (`hostIndexerInThisWorker({..., query: graphqlQueryHandler()})`, the same on `hostIndexerInThisSharedWorker`, or `createIndexerState(...).mainThreadHost({query})`) and hold `workerExecutor(indexer)` in the tab, both from `@etherfold/graphql/worker`. A host whose entry passed none refuses `indexer.query(...)`, and its worker bundle carries no `graphql`; taking it costs about 48 KiB gzipped in the worker bundle (see `@etherfold/graphql`'s README). A closed port rejects a call with `IndexerPortClosedError`, beside `IndexerHostDiedError` for a host that died.
+
 `onStateMoved` is deliberately a plain callback and nothing more: it is what every client library's invalidation API already is (`invalidateQueries`, `refetchQueries`, `reexecuteOperation`), and the value it hands you is the one `@etherfold/core` published, unchanged — so the same handler works when the notification later arrives from another tab or from a server. A tab that attaches part way through is told nothing until the fold next moves, because a notification is a thing that HAPPENED rather than a value to render: read through the surface you already hold instead.
 
 ### A second window is not a stale window

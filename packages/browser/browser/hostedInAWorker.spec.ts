@@ -69,6 +69,7 @@ test('folds a real workload in a dedicated worker, and the tab asks how far it g
 			'onStateMoved',
 			'progress',
 			'promotion',
+			'query',
 			'reads',
 			'reconfigure',
 			'startIndexing',
