@@ -162,9 +162,11 @@ test('main-thread tabs: one fetches, all read alike, readers render progress, an
 			)
 			.toBe(1);
 		const reports = await Promise.all(survivors.map(report));
-		const taker = reports.find((one) => one.seat?.role === 'writer')!;
-		expect(taker.seat).toMatchObject({tookOver: true});
-		expect(taker.ranges[0]!.from).toBeLessThanOrEqual(HELD_AT + 1);
+		const takerTab = survivors[reports.findIndex((one) => one.seat?.role === 'writer')]!;
+		expect(reports.find((one) => one.seat?.role === 'writer')!.seat).toMatchObject({tookOver: true});
+		// The seat is announced before the new leader's first fetch: wait for that fetch.
+		await expect.poll(async () => (await report(takerTab)).ranges.length, {timeout: 30_000}).toBeGreaterThan(0);
+		expect((await report(takerTab)).ranges[0]!.from).toBeLessThanOrEqual(HELD_AT + 1);
 		for (const tab of survivors) {
 			await expect.poll(async () => (await report(tab)).state, {timeout: 30_000}).toEqual(EXPECTED_A);
 		}
@@ -209,9 +211,12 @@ test('a dedicated-worker host per tab: the lock is held in the worker, and KILLI
 				},
 			)
 			.toBe(1);
-		const taker = (await Promise.all(survivors.map(report))).find((one) => one.seat?.role === 'writer')!;
-		expect(taker.seat).toMatchObject({tookOver: true});
-		expect(taker.ranges[0]!.from).toBeLessThanOrEqual(HELD_AT + 1);
+		const reports = await Promise.all(survivors.map(report));
+		const takerTab = survivors[reports.findIndex((one) => one.seat?.role === 'writer')]!;
+		expect(reports.find((one) => one.seat?.role === 'writer')!.seat).toMatchObject({tookOver: true});
+		// The seat is announced before the new leader's first fetch: wait for that fetch.
+		await expect.poll(async () => (await report(takerTab)).ranges.length, {timeout: 30_000}).toBeGreaterThan(0);
+		expect((await report(takerTab)).ranges[0]!.from).toBeLessThanOrEqual(HELD_AT + 1);
 		for (const tab of survivors) {
 			await expect.poll(async () => (await report(tab)).state, {timeout: 30_000}).toEqual(EXPECTED_A);
 		}
