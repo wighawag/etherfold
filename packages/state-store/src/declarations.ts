@@ -1,5 +1,6 @@
 import type {EntityIdPrefix} from './listing.js';
-import type {EntityDeclaration, FieldDeclaration} from './types.js';
+import type {SemanticValue} from './semantic-types.js';
+import type {EntityDeclaration, FieldDeclaration, SemanticTypeName} from './types.js';
 
 /**
  * The declaration, read as TYPES: one description of the data, for storage AND
@@ -79,16 +80,18 @@ export type EntityNamed<D extends readonly EntityDeclaration[], Name> = Extract<
  * Under an annotated declaration its values are not literal, and it reads as
  * `string`, which is still true.
  *
- * A semantic type (`{storage, type}`, ADR-0098) is still `unknown` here. Every
- * backend now stores one canonically and the seam answers the type's value (a
- * `bigint` for a `u256`), so narrowing it is true at run time; the TYPE and the
- * type-level tests that pin it, in process and across the worker port, are
- * `the-read-surface-decodes-a-u256`.
+ * A semantic type (`{storage, type}`, ADR-0098) is the value its type answers
+ * (`SemanticValue`): a `u256` is a `bigint`. That is true rather than hopeful
+ * because every backend stores one canonically and the seam decodes it
+ * (`decodeFieldValues`), and a port carries a `bigint` by structured clone as
+ * itself, so `createReadSurface` and `createPortReadSurface` both answer one.
+ * The storage class does not show through: a `u256` in a `blob` is never a
+ * `Uint8Array` to a reader (ADR-0025's "for free", cashed).
  */
 export type FieldValue<T extends FieldDeclaration> = T extends {readonly enum: readonly (infer V extends string)[]}
 	? V
-	: T extends {readonly type: string}
-		? unknown
+	: T extends {readonly type: infer N extends SemanticTypeName}
+		? SemanticValue<N>
 		: T extends 'text'
 			? string
 			: T extends 'integer' | 'real'

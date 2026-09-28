@@ -87,9 +87,20 @@ export const u256: SemanticType<bigint, Uint8Array> = Object.freeze({
  * `SemanticTypeName`, so a name added to the type without a definition here (or
  * the reverse) does not compile.
  */
-export const SEMANTIC_TYPES: {readonly [Name in SemanticTypeName]: SemanticType<unknown, unknown>} = Object.freeze({
-	u256,
-});
+const REGISTRY = {u256} satisfies {readonly [Name in SemanticTypeName]: SemanticType<unknown, unknown>};
+
+export const SEMANTIC_TYPES: {readonly [Name in SemanticTypeName]: SemanticType<unknown, unknown>} =
+	Object.freeze(REGISTRY);
+
+/**
+ * The value a semantic type answers at the seam, read off its definition in the
+ * registry (a `u256` is a `bigint`), so the type a read surface derives for a
+ * semantic field (`FieldValue`) is the one the type's `decode` returns, and a
+ * type added to the registry types its fields with no second table to keep in
+ * step (ADR-0025, ADR-0098).
+ */
+export type SemanticValue<Name extends SemanticTypeName> =
+	(typeof REGISTRY)[Name] extends SemanticType<infer Value, infer _Encoded> ? Value : never;
 
 /** The semantic type a declared field names, or `undefined` for a bare storage class or an enum. */
 export function semanticTypeOf(field: FieldDeclaration): SemanticType<unknown, unknown> | undefined {

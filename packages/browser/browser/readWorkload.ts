@@ -51,7 +51,13 @@ import {
 export const readEntities = declareEntities([
 	// `memo` is declared and NEVER written, which is how "an unlisted declared
 	// field reads as `null`" is asked of both surfaces: a version is a WHOLE row.
-	{name: 'token', id: 'id', fields: {owner: 'text', transferCount: 'integer', memo: 'text'}},
+	// `tokenId` is the token's id as the uint256 the event carried, declared as a
+	// `u256` (ADR-0098), so both surfaces are asked to answer it as a `bigint`.
+	{
+		name: 'token',
+		id: 'id',
+		fields: {owner: 'text', transferCount: 'integer', memo: 'text', tokenId: {storage: 'blob', type: 'u256'}},
+	},
 	// a block that carried a transfer, so `transfer` has a declared PARENT (ADR-0098):
 	// its leading id column IS the block's whole id, and the collection of one
 	// block's transfers is `surface.block.transfers`.
@@ -79,7 +85,11 @@ export const readProcessor: EntityProcessor<TestABI> = {
 	async onTransfer(state, event) {
 		const id = event.args.id.toString();
 		const held = await state.get<{transferCount: number}>('token', {id});
-		state.set('token', {id}, {owner: event.args.to, transferCount: (held?.transferCount ?? 0) + 1});
+		state.set(
+			'token',
+			{id},
+			{owner: event.args.to, transferCount: (held?.transferCount ?? 0) + 1, tokenId: event.args.id},
+		);
 		state.set('block', {blockNumber: event.blockNumber}, {hash: event.blockHash});
 		state.set('transfer', {blockNumber: event.blockNumber, logIndex: event.logIndex}, {token: id, to: event.args.to});
 	},
@@ -212,7 +222,8 @@ function equals(a: unknown, b: unknown): boolean {
 }
 
 function show(value: unknown): string {
-	return JSON.stringify(value ?? null);
+	// a `bigint` has no JSON form, so it is shown as its literal (`12n`) rather than throwing
+	return JSON.stringify(value ?? null, (_key, entry: unknown) => (typeof entry === 'bigint' ? `${entry}n` : entry));
 }
 
 function same(what: string, actual: unknown, expected: unknown): void {
@@ -264,6 +275,7 @@ export const readSurfaceCases: readonly ReadSurfaceCase[] = [
 				owner: '0x0000000000000000000000000000000000000022',
 				transferCount: 2,
 				memo: null,
+				tokenId: 1n,
 			});
 		},
 	},
@@ -282,7 +294,7 @@ export const readSurfaceCases: readonly ReadSurfaceCase[] = [
 			// is a row the declaration does not describe, and one a caller can spread
 			// straight back into a write.
 			const row = (await surface.token.getCurrent({id: '1'}))!;
-			same('the columns of token 1', Object.keys(row).sort(), ['id', 'memo', 'owner', 'transferCount']);
+			same('the columns of token 1', Object.keys(row).sort(), ['id', 'memo', 'owner', 'tokenId', 'transferCount']);
 		},
 	},
 	{
@@ -297,6 +309,27 @@ export const readSurfaceCases: readonly ReadSurfaceCase[] = [
 		},
 	},
 	{
+		group: 'a declared u256',
+		name: 'reads as a bigint, by id, as of a block and in a listing, never as bytes or a decimal string',
+		async run(surface) {
+			// ADR-0098: the seam decodes a `u256` to a `bigint`, and a port carries a
+			// `bigint` by structured clone as itself, so both surfaces answer one. The
+			// `typeof` is asserted on its own, because an equality alone would not
+			// say WHICH of the two sides stopped being a bigint.
+			const current = (await surface.token.getCurrent({id: '3'}))?.tokenId;
+			same('the type of token 3 at the tip', typeof current, 'bigint');
+			same('token 3 at the tip', current, 3n);
+			const then = (await surface.token.getAsOf({id: '2'}, 100))?.tokenId;
+			same('the type of token 2 as of 100', typeof then, 'bigint');
+			same('token 2 as of 100', then, 2n);
+			const listed = (await surface.token.listCurrent({id: '1'}, 1)).rows[0]?.tokenId;
+			same('the type of token 1 in a listing', typeof listed, 'bigint');
+			same('token 1 in a listing', listed, 1n);
+			// and it is a value to compute with, which is what the type promises
+			same('token 3 plus one', current! + 1n, 4n);
+		},
+	},
+	{
 		group: 'as-of by id',
 		name: 'reads the same entity as of an earlier block',
 		async run(surface) {
@@ -305,6 +338,7 @@ export const readSurfaceCases: readonly ReadSurfaceCase[] = [
 				owner: '0x0000000000000000000000000000000000000011',
 				transferCount: 1,
 				memo: null,
+				tokenId: 1n,
 			});
 		},
 	},

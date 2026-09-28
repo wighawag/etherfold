@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import {describe, expect, it} from 'vitest';
+import {describe, expect, expectTypeOf, it} from 'vitest';
 import {EntityEventProcessor, type EntityStateView} from '@etherfold/processor-entities';
 import {createReadSurface, declareEntities} from '@etherfold/state-store';
 import {
@@ -228,6 +228,55 @@ describe('what the port hands a tab', () => {
 			host.dispose();
 			port.close();
 			ends.close();
+		}
+	});
+});
+
+/**
+ * A declared `u256` (ADR-0098) across the port: the host's store answers a
+ * `bigint`, the port carries it by structured clone AS ITSELF (no row codec
+ * stringifies it on the way), and the tab's surface is TYPED `bigint`, derived
+ * from the declaration rather than written beside it (ADR-0025). The type is the
+ * claim that would rot, so it is pinned here and `pnpm typecheck` runs it.
+ */
+describe('a declared u256 across the port', () => {
+	it('arrives as a bigint, equal to the one read on this thread', async () => {
+		const held = await foldedHost();
+		try {
+			const here = await sameThreadSurface();
+			const across = (await held.surface.token.getCurrent({id: '3'}))!;
+
+			expect(typeof across.tokenId).toBe('bigint');
+			expect(across.tokenId).toBe(3n);
+			expect(across.tokenId).toBe((await here.token.getCurrent({id: '3'}))!.tokenId);
+			const listed = (await held.surface.token.listAsOf({id: '2'}, 100, 1)).rows[0]!;
+			expect(typeof listed.tokenId).toBe('bigint');
+			expect(listed.tokenId).toBe(2n);
+		} finally {
+			held.close();
+		}
+	});
+
+	it('is typed a bigint on the port surface and on the same-thread one, off the same declaration', async () => {
+		const held = await foldedHost();
+		try {
+			const across = createPortReadSurface(held.port, readEntities);
+			const row = (await across.token.getCurrent({id: '1'}))!;
+
+			expectTypeOf(row.tokenId).toEqualTypeOf<bigint | null>();
+			expectTypeOf<
+				NonNullable<Awaited<ReturnType<ReadFixtureSurface['token']['getCurrent']>>>['tokenId']
+			>().toEqualTypeOf<bigint | null>();
+			expectTypeOf<
+				Awaited<ReturnType<ReadFixtureSurface['token']['listCurrent']>>['rows'][number]['tokenId']
+			>().toEqualTypeOf<bigint | null>();
+			const next: bigint = row.tokenId! + 1n;
+			expect(next).toBe(2n);
+			// @ts-expect-error a u256 is a bigint, never the bytes its storage class holds
+			const bytes: Uint8Array | null = row.tokenId;
+			expect(bytes).toBe(1n);
+		} finally {
+			held.close();
 		}
 	});
 });
