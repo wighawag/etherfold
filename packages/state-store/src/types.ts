@@ -20,6 +20,9 @@
  * therefore decimal `text` today, which is a real limitation recorded in
  * `work/notes/findings/sqlite-in-the-browser.md` (contortion 5) and left to
  * `tagged-bigint-codec-across-storage-adapters` to answer properly.
+ *
+ * A field that means more than its storage class says so BESIDE it, with a
+ * semantic type (`SemanticField`, ADR-0098), rather than as a fifth member here.
  */
 export type FieldType = 'text' | 'integer' | 'real' | 'blob';
 
@@ -40,10 +43,31 @@ export type EnumField = {
 };
 
 /**
- * What one field of a declaration may say: a bare storage class, which means
- * exactly what it always meant, or an enum over text (ADR-0098).
+ * The semantic types a field may name (ADR-0098); each is defined, with its
+ * encoding, equality and ordering, in the registry `SEMANTIC_TYPES`.
  */
-export type FieldDeclaration = FieldType | EnumField;
+export type SemanticTypeName = 'u256';
+
+/**
+ * A field declared with a semantic type BESIDE its storage class (ADR-0098):
+ * `{storage: 'blob', type: 'u256'}`. The key is `type`, not `as`, which already
+ * names a relation's collection.
+ *
+ * The type owns a canonical encoding, an equality and an ordering (see
+ * `SEMANTIC_TYPES`), and a declaration naming an unknown type, or a storage class
+ * the type cannot be encoded in, is refused at declaration time.
+ */
+export type SemanticField = {
+	readonly storage: FieldType;
+	readonly type: SemanticTypeName;
+};
+
+/**
+ * What one field of a declaration may say: a bare storage class, which means
+ * exactly what it always meant, an enum over text, or a semantic type beside
+ * its storage class (ADR-0098).
+ */
+export type FieldDeclaration = FieldType | EnumField | SemanticField;
 
 export type EntityDeclaration = {
 	/** entity name, e.g. `token` */
@@ -53,7 +77,7 @@ export type EntityDeclaration = {
 	 * Not the version key: a single business key has many versions over time.
 	 */
 	id: string | readonly string[];
-	/** data fields, excluding the business key, and their storage class (or enum, ADR-0098) */
+	/** data fields, excluding the business key, and their storage class (or enum, or semantic type, ADR-0098) */
 	fields: Readonly<Record<string, FieldDeclaration>>;
 	/**
 	 * The entity this one is a CHILD of, if any (ADR-0098). Optional: a declaration

@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './entities.js';
+export * from './semantic-types.js';
 export * from './declarations.js';
 export * from './read-surface.js';
 export * from './listing.js';

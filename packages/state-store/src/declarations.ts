@@ -79,16 +79,23 @@ export type EntityNamed<D extends readonly EntityDeclaration[], Name> = Extract<
  * than hopeful because every backend refuses any other value at write time.
  * Under an annotated declaration its values are not literal, and it reads as
  * `string`, which is still true.
+ *
+ * A semantic type (`{storage, type}`, ADR-0098) is `unknown` for now, because no
+ * backend stores one canonically yet, so no narrower type would be true; it
+ * becomes the type's value (a `bigint` for a `u256`) once the seam answers one
+ * (`every-backend-stores-a-u256-canonically`, `the-read-surface-decodes-a-u256`).
  */
 export type FieldValue<T extends FieldDeclaration> = T extends {readonly enum: readonly (infer V extends string)[]}
 	? V
-	: T extends 'text'
-		? string
-		: T extends 'integer' | 'real'
-			? number
-			: T extends 'blob'
-				? Uint8Array
-				: never;
+	: T extends {readonly type: string}
+		? unknown
+		: T extends 'text'
+			? string
+			: T extends 'integer' | 'real'
+				? number
+				: T extends 'blob'
+					? Uint8Array
+					: never;
 
 /**
  * One row of a declared entity: its id columns, then its fields.
