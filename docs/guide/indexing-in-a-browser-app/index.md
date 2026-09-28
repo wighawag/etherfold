@@ -652,6 +652,18 @@ indexer.onStateMoved(() => void render()); // render() runs the document and dra
 void render(); // the signal is silent on attaching, so read once by hand
 ```
 
+**Draw only the latest render's answer.** Each signal starts a render, so on a busy chain several are in flight at once, and the worker answers them concurrently: the query pinned to block 4 can come back after the one pinned to block 5. Written as it lands, the older answer overwrites the newer one, and the page shows a past block until the chain moves again. Number the renders and drop an answer a later render has superseded (not by comparing `extensions.block`, which a reorg legitimately lowers):
+
+```ts
+let latestRender = 0;
+async function render() {
+	const mine = ++latestRender;
+	const {data, errors} = await execute({query: HOLDERS, variables: {min: 1}}); // HOLDERS: the document above
+	if (mine !== latestRender) return; // a later render is drawing a newer answer
+	draw(data, errors);
+}
+```
+
 A client cache wires it the same way as any other read: the coherence-token rule from [Wiring it to a cache you already use](#wiring-it-to-a-cache-you-already-use), with the entity names in `entities` mapped to the queries that read them.
 
 ### The browser refuses past a bound, rather than getting slower

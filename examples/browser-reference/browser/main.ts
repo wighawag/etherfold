@@ -22,8 +22,8 @@ import {abi, tokenProcessor} from '../src/processor.js';
  * a block: it holds a PORT to the worker (ADR-0082), hands it the wallet and the
  * settings, and reads what the worker indexed.
  *
- * Three things in here are load-bearing and easy to get wrong. Each is marked
- * HAZARD where it appears, and two of them are bugs that actually shipped in
+ * Four things in here are load-bearing and easy to get wrong. Each is marked
+ * HAZARD where it appears, and three of them are bugs that actually shipped in
  * this repository and were caught only by driving a real browser.
  */
 
@@ -185,11 +185,31 @@ async function start() {
 	/** Accounts holding at least `min` tokens, most first, each with the tokens it holds. */
 	const holders = (min: number) => execute({query: HOLDERS, variables: {min}});
 
+	/**
+	 * HAZARD 4 -- ANSWERS ARRIVE OUT OF ORDER.
+	 *
+	 * Every state-moved signal starts a render, so on a busy chain several are in
+	 * flight at once, and the worker answers them concurrently: a query pinned to
+	 * block 4 can come back AFTER the one pinned to block 5. Written as it lands,
+	 * the older answer overwrites the newer one, and the page then shows a past
+	 * block until the chain moves again (on a quiet chain, for good). This shipped
+	 * here too, and was caught by `verify/reference.spec.ts` in CI.
+	 *
+	 * So each render takes a number, and an answer from a render that a later one
+	 * has superseded is DROPPED: only the latest render writes. Comparing
+	 * `extensions.block` instead would be wrong, because a reorg legitimately
+	 * moves the answer to a LOWER block.
+	 */
+	let latestRender = 0;
+
 	async function render() {
+		const mine = ++latestRender;
 		const counter = await reads.counter.getCurrent({name: 'transfers'});
+		if (mine !== latestRender) return;
 		el('transfers').textContent = String(counter?.value ?? 0);
 
 		const {data, errors} = await holders(1);
+		if (mine !== latestRender) return;
 		// A coded refusal (a filter past the scan's bound, say) is an ANSWER to show,
 		// not an exception: `errors[0].extensions.code` says which.
 		el('holders').textContent = errors
