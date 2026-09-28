@@ -123,6 +123,7 @@ const PORT_SURFACE = [
 	'onStateMoved',
 	'progress',
 	'promotion',
+	'query',
 	'reads',
 	'reconfigure',
 	'startIndexing',
