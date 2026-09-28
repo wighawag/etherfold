@@ -8,11 +8,12 @@ covers: [16]
 
 ## What to build
 
-The IndexedDB index path (rung 2) orders and ranges `u256` fields by their canonical big-endian fixed-width bytes, which sort bytewise on all three engines (`docs/spikes/a-multientry-index-over-computed-field-keys/`), so an index range and an `orderBy` on a `u256` are numeric and agree with the scan and with SQLite. Asserted in the real-engine run, not only under `fake-indexeddb`, since the ordering claim is the engine's. This is the last task of the spec: REMOVE ADR-0098's `accepted, not yet implemented` status line in the same change and update its Status section to say where it is built.
+The IndexedDB index path (rung 2) orders and ranges `u256` fields by their canonical big-endian fixed-width bytes, which sort bytewise on all three engines (`docs/spikes/a-multientry-index-over-computed-field-keys/`), so an index range and an `orderBy` on a `u256` are numeric and agree with the scan and with SQLite. Which `u256` fields rung 2 covers is the entity's `indexed` list (added by `an-indexeddb-index-serves-the-accessor`, which serves a listed `u256` through rung 1 until this task). Asserted in the real-engine run, not only under `fake-indexeddb`, since the ordering claim is the engine's. This is the last task of the spec: REMOVE ADR-0098's `accepted, not yet implemented` status line in the same change and update its Status section to say where it is built.
 
 ## Acceptance criteria
 
 - [ ] A `u256` `where` range and `orderBy` through the index are numeric (9 before 10, values past 2^64) and match rung 1 and SQLite, on Chromium, Firefox and WebKit.
+- [ ] A database written before this change (current rows stored with no `u256` subkeys) is upgraded: the change backfills the subkeys of existing rows in a package-level `versionchange` sanctioned in `keys.ts`, and a test that opens a database written with the previous layout gets the same answers for a `u256` `where` and `orderBy` through rung 1 and rung 2 (no row silently missing from the index).
 - [ ] ADR-0098 no longer carries `accepted, not yet implemented`; changesets for every published package changed.
 
 ## Blocked by

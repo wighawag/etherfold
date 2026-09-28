@@ -5,6 +5,7 @@ humanOnly: true
 blockedBy:
   - a-build-published-app-starts-from-its-own-publication
   - a-browser-app-queries-its-worker-with-graphql
+  - a-host-started-from-a-snapshot-answers-queries
 covers: []
 ---
 
@@ -40,6 +41,7 @@ Move the two consumers we own off the seven `ethereum-indexer*` names, which wer
 
 - `a-build-published-app-starts-from-its-own-publication`: the last task of the spec `a-build-publishes-what-a-browser-app-starts-from`, which proves `build --publish`, the bundle arrival and the publication-index option end to end in the shape this port needs (history `none`, no seed). Everything else is ready: `publish-etherfold-and-deprecate-old-names` is done and every `@etherfold/*` package is on npm.
 - `a-browser-app-queries-its-worker-with-graphql`: the last of the query work (ADR-0098, ADR-0099) the maintainer wants before the port, because `web/` iterates the whole state (`state.cells`, `state.owners`) and the store seam alone cannot enumerate an entity.
+- `a-host-started-from-a-snapshot-answers-queries` (added 2026-09-28): the port starts from a publication AND queries with GraphQL, and until that task lands a host whose store is snapshot-aware answers every query `internal-error`.
 
 ## Prompt
 

@@ -1,5 +1,0 @@
-# `QueryContext.asOf` defaults to true, so a revert-only host that omits it refuses every query
-
-Observed 2026-09-28 while building `the-same-query-answers-the-same-on-both-backends`: `executeQuery` (`packages/graphql/src/execute.ts`) reads `context.asOf ?? true`, so a host over a `revert-only` store that does not pass `asOf: false` pins the tip and passes it to every read, and the store refuses each one with `BlockNotRetainedError` (even a query with no `block`). `sqliteSubject` in `packages/graphql/test/fixtures.ts` builds exactly such a context for its revert-only test, which passes only because that test asks for `block: 9`. Deriving the default from the store's capabilities (or requiring the field) would remove the footgun before the HTTP and worker hosts build contexts of their own; the conformance suite's factories pass it explicitly.
-
-The same run also found this task's body in `work/tasks/backlog/` while the prompt said `ready/` (as `a-claimed-task-was-still-in-backlog.md` already records).

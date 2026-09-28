@@ -1,3 +1,0 @@
-# The SQLite store's import guard does not see a multi-line import
-
-Observed 2026-09-28 while building `an-accessor-scans-indexeddb-within-a-bound`: `packages/state-store-sqlite/test/no-platform-leakage.test.ts` matches imports with `/^\s*import\s+(?:type\s+)?.*?from\s+'([^']+)'/gm`, and `.` does not cross a newline, so an import whose braces span several lines (the house style for any import of more than a few names) is never checked, and a forbidden package imported that way would pass. The same regex in `state-store-indexeddb`'s `stays-a-primitive.test.ts` was widened to `[^;]*?` by that task; the SQLite copy (and any other package carrying the same guard) was left as it is.
