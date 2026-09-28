@@ -132,3 +132,56 @@ jobs:
       # `mains-ci-has-been-red-since-pr-173-because-the-acceptance-gate-does-not-build-the-docs-site`.
       - name: Build docs site
         run: pnpm docs:build
+
+  # THE REAL-BROWSER SUITES, which nothing ran before this job. They are kept out
+  # of `pnpm test` (and so out of `dorfl.json`'s gate) on purpose, because they
+  # need browser binaries a clean checkout does not have (ADR-0030). That left
+  # them run only when someone remembered: the multi-tab election, the killed-
+  # worker handover and the worker hosts were verified by hand in a throwaway
+  # clone before merge, and every later change to them would have landed
+  # unchecked. One job per engine, because what these suites assert is exactly
+  # what engines disagree about (IndexedDB scheduling, Web Locks release on a
+  # killed worker, what survives a reload), and `fail-fast: false` so one
+  # engine's failure does not hide another's result.
+  browser:
+    name: browser (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The version comes from `packageManager`; see the note in `verify`.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Cross-package imports resolve through each package's `dist/`.
+      - name: Build packages
+        run: pnpm build
+
+      - name: Install the browser
+        run: pnpm --filter @etherfold/browser exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: '@etherfold/browser (test:browser)'
+        run: pnpm --filter @etherfold/browser exec playwright test --project=${{ matrix.browser }}
+
+      - name: '@etherfold/state-store-indexeddb (test:browser)'
+        run: pnpm --filter @etherfold/state-store-indexeddb exec playwright test --project=${{ matrix.browser }}
+
+      # The reference declares one project (chromium): the file the guide tells
+      # readers to copy, run against an injected wallet and chain, offline.
+      - name: browser-reference (verify:browser)
+        if: matrix.browser == 'chromium'
+        run: pnpm --filter browser-reference verify:browser
