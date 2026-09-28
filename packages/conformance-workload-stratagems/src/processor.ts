@@ -24,7 +24,8 @@
  * takes 100 arrivals and keeps 7, so the cascade runs 93 times.
  *
  * Here the window is `state.list('placement', {window: WINDOW}, 8)` and the
- * cascade is `state.list('placementPlayer', {ordinal}, ...)`. Nothing is
+ * cascade is `state.list('placementPlayer', {window: WINDOW, ordinal}, ...)`: the
+ * relation `placementPlayer` declares on `placement` (ADR-0098). Nothing is
  * maintained at write time, the arrival order IS the key, and the entity count
  * went from six to three for the same state. The golden state is what says the
  * meaning survived: this processor lands on the byte-identical output the
@@ -66,10 +67,11 @@ type PlacementPlayerRow = {ordinal: string; position: string; moveOrdinal: strin
  */
 async function dropPlacement(state: MutationContext, ordinal: string): Promise<void> {
 	for (;;) {
-		const page = await state.list<PlacementPlayerRow>('placementPlayer', {ordinal}, CASCADE_PAGE);
+		const page = await state.list<PlacementPlayerRow>('placementPlayer', {window: WINDOW, ordinal}, CASCADE_PAGE);
 		if (page.rows.length === 0) break;
 		for (const player of page.rows) {
 			state.delete('placementPlayer', {
+				window: WINDOW,
 				ordinal,
 				position: player.position,
 				moveOrdinal: player.moveOrdinal,
@@ -118,7 +120,7 @@ export const stratagemsProcessor: EntityProcessor<StratagemsABI> = {
 			// positions among the players, derived when read.
 			state.set(
 				'placementPlayer',
-				{ordinal, position: move.position.toString(), moveOrdinal: moveOrdinal(event, moveIndex)},
+				{window: WINDOW, ordinal, position: move.position.toString(), moveOrdinal: moveOrdinal(event, moveIndex)},
 				{color: move.color, address: account},
 			);
 		}

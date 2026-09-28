@@ -21,6 +21,9 @@ import type {BlockPointer, EntityDeclaration, FieldType, Mutation, NormalizedEnt
  * 2. **One declaration per entity**: `{"declare": name, "id": [...], "fields": [[field, type], ...]}`.
  *    Written ONCE, and it fixes the COLUMN ORDER every row of that entity uses
  *    (the id columns, then the fields in the order listed).
+ *    An entity that declares a relation (ADR-0098) carries it as a trailing
+ *    `"parent": {entity, as}`; it changes no column, and it is part of the
+ *    declaration an install is checked against.
  * 3. **Blocks**, ascending, each opened by `{"block": {number, hash, timestamp}}`.
  *    The FIRST is the FLOOR, and its mutations are the rows LIVE at it; every later
  *    block, up to the CUT (`takenAt`), carries the changes it made. Inside a block,
@@ -267,7 +270,14 @@ async function* encodedLines(
 ): AsyncGenerator<string> {
 	yield JSON.stringify(head);
 	for (const entity of entities.values()) {
-		yield JSON.stringify({declare: entity.name, id: entity.id, fields: Object.entries(entity.fields)});
+		// `parent` is written only when declared, so an entity without a relation
+		// keeps the exact line it always had (ADR-0098: existing declarations keep working).
+		yield JSON.stringify({
+			declare: entity.name,
+			id: entity.id,
+			fields: Object.entries(entity.fields),
+			...(entity.parent ? {parent: {entity: entity.parent.entity, as: entity.parent.as}} : {}),
+		});
 	}
 
 	let previous: number | undefined;
@@ -514,12 +524,18 @@ async function* decodedBlocks(
 function declarationOf(fields: Record<string, unknown>): NormalizedEntity {
 	const id = fields.id;
 	const pairs = fields.fields;
+	const parent = fields.parent as {entity?: unknown; as?: unknown} | undefined;
 	if (
 		typeof fields.declare !== 'string' ||
 		!Array.isArray(id) ||
 		!id.every((column) => typeof column === 'string') ||
 		!Array.isArray(pairs) ||
-		!pairs.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string')
+		!pairs.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string') ||
+		(parent !== undefined &&
+			(parent === null ||
+				typeof parent !== 'object' ||
+				typeof parent.entity !== 'string' ||
+				typeof parent.as !== 'string'))
 	) {
 		throw new Error(`a snapshot entity declaration is malformed`);
 	}
@@ -527,20 +543,23 @@ function declarationOf(fields: Record<string, unknown>): NormalizedEntity {
 		name: fields.declare,
 		id: id as string[],
 		fields: Object.fromEntries(pairs as [string, FieldType][]),
+		...(parent ? {parent: {entity: parent.entity as string, as: parent.as as string}} : {}),
 	};
 }
 
 function sameDeclaration(a: NormalizedEntity, b: NormalizedEntity | undefined): boolean {
 	if (!b) return false;
 	if (a.id.length !== b.id.length || a.id.some((column, index) => b.id[index] !== column)) return false;
+	if (a.parent?.entity !== b.parent?.entity || a.parent?.as !== b.parent?.as) return false;
 	const fields = Object.entries(a.fields);
 	return fields.length === Object.keys(b.fields).length && fields.every(([field, type]) => b.fields[field] === type);
 }
 
 function describe(entity: NormalizedEntity): string {
+	const parent = entity.parent ? ` under ${entity.parent.entity} as ${entity.parent.as}` : '';
 	return `(${entity.id.join(', ')}) {${Object.entries(entity.fields)
 		.map(([field, type]) => `${field}: ${type}`)
-		.join(', ')}}`;
+		.join(', ')}}${parent}`;
 }
 
 function decodeRow(entity: NormalizedEntity, row: unknown[]): Mutation {

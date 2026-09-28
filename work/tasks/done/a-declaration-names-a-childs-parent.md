@@ -34,3 +34,26 @@ The promoted stratagems workload has the one shape the rule refuses: `placement`
 > FIRST, check this task against current reality: it is a launch snapshot written on 2026-09-28. Read ADR-0098 and the spec `a-declaration-a-schema-can-be-built-from` (in `work/specs/tasked/`), and check the tasks it is blocked by landed as it assumes. If a dependency landed differently or an ADR superseded an assumption, do not build on the stale premise: route to needs-attention with the discrepancy (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **A child must add at least one id column of its own, which also refuses an entity naming itself as parent.**
+  - Why: a child keyed exactly by its parent's id has at most one row per parent, so it is not a collection. An entity that is its own parent is that same case.
+  - Alternative: allow it, since ADR-0098's wording ("leading id columns are the parent's whole id") does not strictly forbid equal ids.
+  - Touches: `normalizeEntities`, and so every backend. It is a new refusal; loosening it later would not break anyone.
+- **`as` collisions are compared case-insensitively**, the same way `normalizeEntity` already compares the columns of one row. So `as: 'Epoch'` collides with the field `epoch`, and two relations whose `as` differ only in case collide too.
+  - Why: this matches the existing case rule for identifiers, and loosening it later breaks no one, while tightening it later would.
+  - Alternative: exact string comparison, since `as` is never a SQL name.
+  - Touches: the upcoming tasks `the-read-surface-offers-a-parents-children` and `a-graphql-schema-is-built-from-the-declarations`.
+- **The reserved "read-surface names" are exactly `getCurrent`, `getAsOf`, `listCurrent` and `listAsOf`**, the four reads the read surface gives every entity today.
+  - Why: the parent's collection is expected to sit beside them on the parent's read surface.
+  - Alternative: also reserve names the future GraphQL layer will use, which is not designed yet.
+  - Touches: `the-read-surface-offers-a-parents-children`, which may need to extend this list (`READ_SURFACE_NAMES` in `entities.ts`).
+- **A relation is part of the declaration a snapshot is checked against.** A document whose entity declares a different relation, or none, is refused on install even though the column layout is the same.
+  - Why: this matches the strict equality `sameDeclaration` already uses, and a changed declaration is a different processor bundle anyway.
+  - Alternative: ignore `parent` when comparing, because it changes no column.
+  - Touches: `publish` and a tab's bootstrap, and it sets the precedent the enum task (`a-declaration-names-an-enums-values`) will follow.
+- **The read surface's declaration comparison (`assertDeclaredBy`) now includes the relation, but only when one is declared.**
+  - Why: a surface built from a declaration with a different relation would give consumers a different collection. Existing messages stay unchanged.
+  - Alternative: leave this to `the-read-surface-offers-a-parents-children`.
+  - Touches: that task, and `createPortReadSurface` (it passes the entity across the port as-is).

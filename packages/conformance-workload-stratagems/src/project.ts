@@ -176,7 +176,7 @@ async function projectPlacements(store: StateStore): Promise<Data['placements']>
 	for (const arrival of [...window.rows].reverse()) {
 		const players = await store.listCurrent<{position: string; color: number; address: string}>(
 			'placementPlayer',
-			{ordinal: arrival.ordinal},
+			{window: WINDOW, ordinal: arrival.ordinal},
 			MAX_PLACEMENT_PLAYERS,
 		);
 		if (players.truncated) {

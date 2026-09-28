@@ -84,9 +84,18 @@ describe('the model the port is written in', () => {
 		expect([tenth, nextBlock, ninth].sort()).toEqual([ninth, tenth, nextBlock]);
 		expect(moveOrdinal({blockNumber: 13_364_821, logIndex: 9}, 2)).toBe(`${ninth}:${'2'.padStart(12, '0')}`);
 		expect(stratagemsProcessor.entities.find((entity) => entity.name === 'placementPlayer')?.id).toEqual([
+			'window',
 			'ordinal',
 			'position',
 			'moveOrdinal',
 		]);
+	});
+
+	it("declares a placement's players as its children, which is why their id starts with the placement's whole id", () => {
+		// ADR-0098: the relation is checked against the ids at declaration time, on
+		// every backend, so this declaration being accepted by the stores the golden
+		// comparison runs on is what says the ids match it.
+		const player = stratagemsProcessor.entities.find((entity) => entity.name === 'placementPlayer');
+		expect(player?.parent).toEqual({entity: 'placement', as: 'players'});
 	});
 });
