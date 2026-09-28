@@ -7,3 +7,4 @@ export * from './batching.js';
 export * from './store.js';
 export * from './query-surface.js';
 export * from './snapshot.js';
+export * from './accessor.js';

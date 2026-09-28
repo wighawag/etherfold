@@ -17,6 +17,11 @@ import {codeOnly} from './utils/codeOnly.js';
  * invert ADR-0016's direction and drag the whole indexer (viem included) into a
  * storage primitive.
  *
+ * It later gained `@etherfold/accessor`, the OTHER seam this package implements
+ * (ADR-0099, `store.accessor()`), on the same terms: a backend-neutral contract
+ * whose only dependency is `@etherfold/state-store` (asserted below; vitest is an
+ * optional peer for its conformance subpath, never a dependency).
+ *
  * (This test reads the filesystem; the *published* source it inspects does not.)
  */
 
@@ -37,8 +42,8 @@ describe('the package stays platform agnostic', () => {
 		expect(files.length).toBeGreaterThan(0);
 	});
 
-	it('imports nothing but remote-sql, named-logs and the seam it implements', () => {
-		const allowed = new Set(['remote-sql', 'named-logs', '@etherfold/state-store']);
+	it('imports nothing but remote-sql, named-logs and the seams it implements', () => {
+		const allowed = new Set(['remote-sql', 'named-logs', '@etherfold/state-store', '@etherfold/accessor']);
 		for (const file of files) {
 			const source = readFileSync(file, 'utf-8');
 			for (const match of source.matchAll(/^\s*import\s+(?:type\s+)?.*?from\s+'([^']+)'/gm)) {
@@ -62,9 +67,21 @@ describe('the package stays platform agnostic', () => {
 		}
 	});
 
-	it('declares only remote-sql, named-logs and the seam as runtime dependencies', () => {
+	it('declares only remote-sql, named-logs and the seams as runtime dependencies', () => {
 		const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url).pathname, 'utf-8'));
-		expect(Object.keys(pkg.dependencies).sort()).toEqual(['@etherfold/state-store', 'named-logs', 'remote-sql']);
+		expect(Object.keys(pkg.dependencies).sort()).toEqual([
+			'@etherfold/accessor',
+			'@etherfold/state-store',
+			'named-logs',
+			'remote-sql',
+		]);
+	});
+
+	it('and the accessor seam brings nothing but the store seam with it', () => {
+		const accessor = JSON.parse(
+			readFileSync(new URL('../../accessor/package.json', import.meta.url).pathname, 'utf-8'),
+		);
+		expect(Object.keys(accessor.dependencies ?? {})).toEqual(['@etherfold/state-store']);
 	});
 
 	it('and the seam brings nothing with it, so the primitive stays a primitive', () => {
