@@ -1,6 +1,6 @@
 # Spike: can ONE multiEntry index over computed `[field, value]` subkeys serve `where` and `orderBy`?
 
-Gates **rung 2** of [`work/specs/proposed/the-same-query-runs-against-a-worker-and-a-server.md`](https://github.com/wighawag/etherfold/blob/main/work/specs/proposed/the-same-query-runs-against-a-worker-and-a-server.md), its open question 3. Nothing else in that spec waits on this: rung 1 (scan a key range, filter and sort in memory, bounded) ships regardless, as the fallback for any unindexed field and as the reference the index path is checked against.
+Gates **rung 2** of [`work/specs/tasked/the-same-query-runs-against-a-worker-and-a-server.md`](https://github.com/wighawag/etherfold/blob/main/work/specs/tasked/the-same-query-runs-against-a-worker-and-a-server.md), its open question 3. Nothing else in that spec waits on this: rung 1 (scan a key range, filter and sort in memory, bounded) ships regardless, as the fallback for any unindexed field and as the reference the index path is checked against.
 
 ## The question
 

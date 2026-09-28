@@ -2,7 +2,9 @@
 title: 'Port stratagems and its snapshot job off the deprecated ethereum-indexer packages'
 slug: port-stratagems-to-the-etherfold-packages
 humanOnly: true
-blockedBy: [a-build-published-app-starts-from-its-own-publication]
+blockedBy:
+  - a-build-published-app-starts-from-its-own-publication
+  - a-browser-app-queries-its-worker-with-graphql
 covers: []
 ---
 

@@ -3,7 +3,7 @@
 	"private": true,
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Gates rung 2 of work/specs/proposed/the-same-query-runs-against-a-worker-and-a-server.md: can ONE multiEntry index over computed [field, value] subkeys serve where/orderBy on any declared field, on Chromium, Firefox and WebKit?",
+	"description": "Gates rung 2 of work/specs/tasked/the-same-query-runs-against-a-worker-and-a-server.md: can ONE multiEntry index over computed [field, value] subkeys serve where/orderBy on any declared field, on Chromium, Firefox and WebKit?",
 	"scripts": {
 		"browser": "playwright test"
 	},
