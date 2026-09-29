@@ -1,0 +1,38 @@
+{
+	"mode": "model",
+	"machine": {
+		"cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+		"cores": 32,
+		"node": "v24.19.0",
+		"platform": "linux 6.18.49"
+	},
+	"fittedOn": "400 blocks from docs/spikes/the-full-stratagems-replay-on-fake-indexeddb/results/replay-400.json",
+	"msPerMutation": -0.0466,
+	"msPerCloseTimesStoredVersion": 0.003207,
+	"prefixWriteSecondsMeasured": 60.9,
+	"prefixWriteSecondsModelled": 60,
+	"fullStream": {
+		"blocks": 1042,
+		"mutations": 29492,
+		"closes": 20713,
+		"versionsAtTip": 24759
+	},
+	"predictedReplaySeconds": 886,
+	"predictedWriteSeconds": 882,
+	"predictedReadSeconds": 4,
+	"revertCalibration": {
+		"toBlockIndex": 199,
+		"seconds": 77.3,
+		"versionsDeleted": 4219,
+		"versionsReopened": 899,
+		"versionsBefore": 6975,
+		"msPerUnit": 0.003104
+	},
+	"fullRevert": {
+		"forkIndex": 521,
+		"versionsDeleted": 14178,
+		"versionsReopened": 2159,
+		"versionsBefore": 24759
+	},
+	"predictedRevertSeconds": 896
+}

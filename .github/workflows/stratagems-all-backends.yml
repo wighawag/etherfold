@@ -1,0 +1,62 @@
+# The full stratagems replay on EVERY backend, including IndexedDB on `fake-indexeddb`.
+#
+# `test:all-backends` in `@etherfold/conformance-workload-stratagems` is too slow for
+# every pull request (the IndexedDB replay alone is about 40 minutes on the shim, and
+# the revert case about as long again), and the fast smoke case (`test/workload.test.ts`)
+# already covers IndexedDB on every PR through `ci.yml`. But a target nobody runs rots:
+# this one sat red on IndexedDB, unnoticed, until it was measured. So it runs here, off
+# the PR gate: weekly, on demand, and on a pull request that edits THIS file, so the PR
+# that changes how it runs also shows that it still passes.
+#
+# The measurement behind the timeouts is in
+# `docs/spikes/the-full-stratagems-replay-on-fake-indexeddb/`.
+name: Stratagems replay, all backends
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays, 03:17 UTC: off the hour, when scheduled runs queue the longest.
+    - cron: '17 3 * * 1'
+  pull_request:
+    paths:
+      - '.github/workflows/stratagems-all-backends.yml'
+
+concurrency:
+  group: stratagems-all-backends-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  all-backends:
+    runs-on: ubuntu-latest
+    # Two 90-minute vitest bounds on IndexedDB (the replay in `beforeAll`, then the
+    # revert case), each twice the slowest full replay measured, plus about 20 minutes
+    # for install, build and the three fast backends. Set so a vitest timeout is what
+    # fails first, naming the case, rather than the runner killing an anonymous job.
+    timeout-minutes: 200
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The version comes from `packageManager`; see the note in `ci.yml`.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Cross-package imports resolve through each package's `dist/`.
+      - name: Build packages
+        run: pnpm build
+
+      # Prints `stratagems replay on <backend>: N s` and the revert's time per
+      # backend, which is the full-length figure the spike could only extrapolate.
+      # `--reporter=verbose` because the default reporter drops a passing test's
+      # console output, and those lines are the point of a green run.
+      - name: '@etherfold/conformance-workload-stratagems (test:all-backends)'
+        run: pnpm --filter @etherfold/conformance-workload-stratagems test:all-backends --reporter=verbose
