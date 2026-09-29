@@ -5,6 +5,7 @@ spec: the-same-query-runs-against-a-worker-and-a-server
 blockedBy:
   - a-browser-app-queries-its-worker-with-graphql
   - port-stratagems-to-the-etherfold-packages
+  - the-listings-id-order-is-decided
 covers: [16, 21]
 ---
 

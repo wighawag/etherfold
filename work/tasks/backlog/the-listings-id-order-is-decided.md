@@ -1,7 +1,6 @@
 ---
 title: 'The bounded listing states one id order, and every backend keeps it'
 slug: the-listings-id-order-is-decided
-needsAnswers: true
 blockedBy: [a-conformance-case-shows-the-listings-id-order-per-backend]
 covers: []
 ---
@@ -18,17 +17,26 @@ covers: []
 
 <!-- /open-questions -->
 
+## Answers (maintainer, 2026-09-29)
+
+1. **UTF-8 everywhere.** One order on every backend, matching the accessor; the cost is accepted as paying for the future (ids are ASCII today).
+   - **No migration of existing databases.** There are no users yet: the IndexedDB key-layout change bumps the package-level version, and a database written with the old layout may be DISCARDED and rebuilt at the `versionchange` (its stores recreated, the state refolded) rather than upgraded row by row. It must never be READ with the old layout under the new code: an old database opened by the new code comes back empty in the new layout, never mis-ordered.
+   - **Readable ids stay.** The id columns become byte keys, which devtools shows as opaque. Each record already carries the id columns as plain strings in `values` (`completeRow`), so the readable form is kept there: do not drop it, and say so in the key-layout comment in `keys.ts`.
+   - **This lands before `an-indexeddb-index-serves-the-accessor`,** which is now blocked by this task, so the index is built once, on the new key layout.
+   - With UTF-8 everywhere, the merge in `MutationContext.list` sorts in the same order as every store, so the SQLite in-block SET difference the evidence found goes away: assert that in `state-store-sqlite/test/listing-id-order.test.ts`, which pins the current cut and must change.
+
+
 ## What to build
 
 Built only once the question above is answered; this section is written for either answer, and the builder follows the one given.
 
-- **If UTF-8 everywhere**: `compareIds` orders by code point (UTF-8 byte order); the IndexedDB backend encodes id columns so its key order is UTF-8 byte order, with the `versionchange` and an upgrade of existing databases (`keys.ts` is where key layout is sanctioned); every backend's declared id order in the conformance case from `a-conformance-case-shows-the-listings-id-order-per-backend` becomes the UTF-8 default (the option's per-backend overrides are removed) and the case passes on every backend and on the three real engines; ADR-0021's "Ordering is lexicographic over the stringified id" consequence is amended to say UTF-8 byte order.
+- **If UTF-8 everywhere**: `compareIds` orders by code point (UTF-8 byte order); the IndexedDB backend encodes id columns so its key order is UTF-8 byte order, with the `versionchange` (discard and rebuild, per the answers above) (`keys.ts` is where key layout is sanctioned); every backend's declared id order in the conformance case from `a-conformance-case-shows-the-listings-id-order-per-backend` becomes the UTF-8 default (the option's per-backend overrides are removed) and the case passes on every backend and on the three real engines; ADR-0021's "Ordering is lexicographic over the stringified id" consequence is amended to say UTF-8 byte order.
 - **If ASCII only**: ADR-0021's ordering consequence is amended to say that the order is guaranteed for ASCII ids and backend-defined beyond, naming the divergence and the evidence; the conformance case's per-backend declared orders stay and its comment cites the amendment; the listing's doc comments (`compareIds`, `MutationContext.list`, the store seam's `listCurrent` / `listAsOf`) say the same.
 
 ## Acceptance criteria
 
 - [ ] ADR-0021 states the chosen order, dated, with the evidence cited.
-- [ ] For UTF-8 everywhere: the conformance case passes with no per-backend order override on memory, patch, SQLite and IndexedDB, and in the real-browser suite on Chromium, Firefox and WebKit; an IndexedDB database written before the change is upgraded and lists in the new order (a test opens one written with the old layout).
+- [ ] For UTF-8 everywhere: the conformance case passes with no per-backend order override on memory, patch, SQLite and IndexedDB, and in the real-browser suite on Chromium, Firefox and WebKit; an IndexedDB database written with the old layout, opened by the new code, is recreated empty in the new layout and never read in the old order (a test opens one written with the old layout).
 - [ ] For ASCII only: the doc comments and ADR-0021 agree, and the conformance case still records each backend's order.
 - [ ] Changesets for every published package changed (patch or minor, never major; an IndexedDB key-layout change is at least minor).
 - [ ] CI: dorfl's `verify` gate runs vitest only, so the PR's `browser (chromium)`, `browser (firefox)` and `browser (webkit)` jobs green are part of done.
