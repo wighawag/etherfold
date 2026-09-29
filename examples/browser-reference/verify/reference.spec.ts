@@ -1,6 +1,6 @@
 import {readFileSync, writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {expect, test, type Page} from '@playwright/test';
+import {expect, test, type APIRequestContext, type Page} from '@playwright/test';
 import {installFakeWallet, type FakeChainOptions} from './wallet.js';
 
 /**
@@ -279,11 +279,18 @@ test('says whether the indexed state already accounts for a transaction', async 
  * survives), the tab was told `registered`, the generation that answers becomes
  * the one the verdict named, the count is the edited handler's, and the number on
  * screen never went below the incumbent's while the edit caught up.
+ *
+ * And it leaves the server as it found it: the test does not end until the dev
+ * server serves the unedited processor again (`restoreProcessor`), so a later
+ * page in the same run is not handed the edit.
  */
-test('an edited processor is swapped in by the worker, beside the live state, without a reload', async ({page}) => {
+test('an edited processor is swapped in by the worker, beside the live state, without a reload', async ({
+	page,
+	request,
+}) => {
 	const processorFile = fileURLToPath(new URL('../src/processor.ts', import.meta.url));
 	const original = readFileSync(processorFile, 'utf8');
-	const edited = original.replace('(counter?.value ?? 0) + 1', '(counter?.value ?? 0) + 2');
+	const edited = original.replace(UNEDITED_HANDLER, '(counter?.value ?? 0) + 2');
 	expect(edited).not.toBe(original);
 
 	const {errors} = await open(page);
@@ -302,6 +309,7 @@ test('an edited processor is swapped in by the worker, beside the live state, wi
 		Object.assign(window, {__survivor: 'not-reloaded', __transfersShown: shown});
 	});
 
+	let failure: {error: unknown} | undefined;
 	try {
 		writeFileSync(processorFile, edited);
 
@@ -332,7 +340,47 @@ test('an edited processor is swapped in by the worker, beside the live state, wi
 		// NEVER A BLANK APP: the incumbent answered until the edit had caught up
 		expect(after.shown.map(Number).every((value) => value >= 5)).toBe(true);
 		expect(errors).toEqual([]);
-	} finally {
-		writeFileSync(processorFile, original);
+	} catch (error) {
+		failure = {error};
 	}
+	// The file is put back whatever happened; a failed wait for the server to serve
+	// it again is reported only when it is not hiding the test's own failure.
+	try {
+		await restoreProcessor(request, processorFile, original);
+	} catch (error) {
+		if (!failure) throw error;
+	}
+	if (failure) throw failure.error;
 });
+
+/** The line of the handler the edited-processor test changes, as it is committed. */
+const UNEDITED_HANDLER = '(counter?.value ?? 0) + 1';
+
+/**
+ * Put `src/processor.ts` back, and wait until the dev server SERVES it again.
+ *
+ * Writing the file back is not enough on its own. The edit is taken fast (the
+ * restore was measured landing about 30ms after it), and the dev server's file
+ * watcher drops a second change to the same file that close behind the first
+ * (chokidar throttles change events per path). By then the worker has already
+ * fetched the edited module, so Vite keeps that transform and serves the EDIT to
+ * every later page of the run, whose `#transfers` then reads 10 instead of 5.
+ *
+ * So the served module is read back until it carries the unedited handler, and
+ * while it does not, the (byte-identical) original is written again, which is a
+ * change the watcher does see once the throttle window has passed.
+ */
+async function restoreProcessor(request: APIRequestContext, file: string, original: string) {
+	writeFileSync(file, original);
+	await expect
+		.poll(
+			async () => {
+				const served = await (await request.get(`/@fs${file}`)).text();
+				const restored = served.includes(UNEDITED_HANDLER);
+				if (!restored) writeFileSync(file, original);
+				return restored;
+			},
+			{message: 'the dev server serves the unedited src/processor.ts again', intervals: [100, 250, 500]},
+		)
+		.toBe(true);
+}
