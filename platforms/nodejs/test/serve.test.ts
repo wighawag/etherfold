@@ -1,5 +1,5 @@
 import {describe, it, expect, afterEach, vi} from 'vitest';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {Client} from '@libsql/client';
@@ -178,6 +178,51 @@ describe('a server that fails to bind closes only what it opened', () => {
 		expect(client.closed).toBe(false);
 		// and it still answers, carrying the schema the failed start applied through it
 		expect((await readSchemaState(db)).applied).toBe(true);
+	});
+});
+
+/**
+ * A `file:` database whose automatic schema setup cannot succeed: the file exists
+ * but is not SQLite, so the first write the setup makes throws `SQLITE_NOTADB`.
+ */
+function notADatabase(dir: string): string {
+	const path = join(dir, 'not-a-database.db');
+	writeFileSync(path, 'this is not a SQLite database, and it is long enough to be read as a header '.repeat(8));
+	return `file:${path}`;
+}
+
+describe('a server whose automatic schema setup fails closes only what it opened', () => {
+	it('closes the database it opened from a URL, and still rejects with the setup error', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'etherfold-setup-'));
+		try {
+			const before = openedClients.length;
+			await expect(startServer({db: notADatabase(dir), hostname: '127.0.0.1', port: 0})).rejects.toThrow(
+				/not a database/i,
+			);
+
+			// exactly one client was opened by the failed start, and it is closed
+			const opened = openedClients.slice(before);
+			expect(opened).toHaveLength(1);
+			expect(opened[0].closed).toBe(true);
+		} finally {
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+
+	it('leaves a handle it was GIVEN open', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'etherfold-setup-'));
+		try {
+			const db = createNodeDB(notADatabase(dir));
+			const client = openedClients[openedClients.length - 1];
+			await expect(startServer({db, hostname: '127.0.0.1', port: 0})).rejects.toThrow(/not a database/i);
+
+			// a query cannot answer on a file that is not a database, so what is asserted
+			// is that the failed start did not close the caller's client
+			expect(client.closed).toBe(false);
+			client.close();
+		} finally {
+			rmSync(dir, {recursive: true, force: true});
+		}
 	});
 });
 

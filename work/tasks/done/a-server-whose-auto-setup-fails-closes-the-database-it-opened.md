@@ -28,3 +28,10 @@ Found while building `a-server-that-fails-to-bind-closes-the-database-it-opened`
 > FIRST, check this task against current reality: it is a launch snapshot written on 2026-09-29. Check that an auto-setup failure still rejects without closing a URL-opened database. If it already closes it, route to needs-attention saying so (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files. Tests bind only ephemeral local ports and write only to their own temp directories.
+
+## Decisions
+
+- **One guarded span via a private `setUpAndListen` helper:** I moved setup, app build and bind into one private function so a single `try`/`catch` in `startServer` covers every failure after the open. The alternatives were two close calls (one in the bind handler, one around setup), which the task rules out, or one long inline `try` block. Nothing outside `startServer` is affected, and no exported name changed.
+- **Making the setup fail with a non-SQLite file instead of a mock:** the test writes a plain text file and points the `file:` URL at it, so the real `ensureFixedSchema` throws "not a database". The alternative was mocking `ensureFixedSchema` or `applySchema`, which would need a new seam. This touches only the test file.
+- **Caller-handle test checks "not closed" instead of "still answers":** a query cannot answer on a file that is not a database, so the test checks `client.closed === false` and then closes the client itself. The task allows this when the failure mode makes a query impossible.
+- **Log wording:** a failed close now logs `failed to close <url> after the server failed to start` instead of `... after the bind failed`, because it now covers setup failures too. Nothing else is user-visible.
