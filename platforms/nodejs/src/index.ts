@@ -121,7 +121,19 @@ export type RunningServer = {
 
 /** Build the RemoteSQL a Node host uses. Exposed so tests and the CLI can share it. */
 export function createNodeDB(url: string): RemoteSQL {
-	return new RemoteLibSQL(createClient({url}));
+	return openNodeDB(url).db;
+}
+
+/**
+ * `createNodeDB`, keeping hold of the way to close what it opened.
+ *
+ * `RemoteSQL` (and so `RemoteLibSQL`) carries no `close`: the libSQL client it
+ * wraps is the only thing that can release the connection, so a caller that must
+ * undo its own open keeps that client's `close` beside the handle.
+ */
+function openNodeDB(url: string): {db: RemoteSQL; close: () => void} {
+	const client = createClient({url});
+	return {db: new RemoteLibSQL(client), close: () => client.close()};
 }
 
 /**
@@ -169,11 +181,14 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 	const given = options.db;
 	let db: RemoteSQL;
 	let dbURL: string | undefined;
+	// set ONLY when this call opened the database itself, so a failed bind can undo
+	// that open; a handle the caller gave is never closed here
+	let closeOpened: (() => void) | undefined;
 	if (given !== undefined && typeof given !== 'string') {
 		db = given;
 	} else {
 		dbURL = given ?? env.DB ?? 'file:./etherfold.db';
-		db = createNodeDB(dbURL);
+		({db, close: closeOpened} = openNodeDB(dbURL));
 	}
 
 	if (options.autoSetup !== false) {
@@ -210,6 +225,14 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		if (server.listening) return resolve();
 		const onError = (err: Error) => {
 			server.off('listening', onListening);
+			// the rejection hands the caller no `RunningServer`, so nobody else holds a
+			// database this call opened from a URL: close it here. The bind error stays
+			// the one reported even if closing fails too.
+			try {
+				closeOpened?.();
+			} catch (closeErr) {
+				logger.error(`failed to close ${dbURL} after the bind failed`, closeErr);
+			}
 			reject(err);
 		};
 		const onListening = () => {
