@@ -20,6 +20,10 @@
  *   row for row.
  * - `access-path`: the listing's `IDBKeyRange`, read off the real engine's own
  *   `IDBObjectStore.openCursor` rather than off a shim.
+ * - `id-order`: the order each listing read ascends in on this engine, over ids
+ *   that straddle the one place UTF-8 and UTF-16 order disagree. The spec also
+ *   hands its per-engine declaration to the `conformance` run as `idOrder`, so
+ *   the shared case asserts it too.
  * - `write` / `read` phases: persistence across a REAL page reload, which is the
  *   thing no node test can show.
  * - `multi-tab`: one database, four tabs, each OPENING it and writing its own
@@ -39,13 +43,14 @@
 import type {CodeUnderTest, RunContext, RunResult, Timing} from 'playwright-browser-harness/contract';
 import {captureEnv, timed} from 'playwright-browser-harness/contract';
 import {
+	createMutationContext,
 	MemoryStateStore,
 	StoreWriterChangedError,
 	type EntityDeclaration,
 	type StateStoreBackend,
 } from '@etherfold/state-store';
 import {runAccessorConformance} from '@etherfold/accessor/conformance';
-import {runStateStoreConformance} from '@etherfold/state-store-conformance';
+import {ID_ORDER_SAMPLE, runStateStoreConformance, type DeclaredIdOrder} from '@etherfold/state-store-conformance';
 import {deleteDatabase, IndexedDBStateStore} from '../src/index.js';
 import {processor, runWorkload} from './workload.js';
 
@@ -81,6 +86,9 @@ async function conformance(params: Params, timings: Timing[]): Promise<Record<st
 			runStateStoreConformance(
 				(declarations) => new IndexedDBStateStore(declarations, {databaseName: named(), ...options}),
 				{
+					// the order this engine's listings ascend in, as the spec declares it
+					// for this engine (see `id-order` below for what it measured)
+					idOrder: params.idOrder as DeclaredIdOrder | undefined,
 					// the CONTENTION chapter, which needs two handles on ONE database and
 					// is therefore the one part of the suite a factory cannot express. It
 					// belongs in a real engine more than anywhere else: `readwrite`
@@ -240,6 +248,62 @@ async function accessPath(params: Params): Promise<Record<string, unknown>> {
 	} finally {
 		IDBObjectStore.prototype.openCursor = openCursor;
 		IDBCursor.prototype.continue = advance;
+		await store.close();
+	}
+}
+
+/**
+ * The order each listing read ascends in, on this engine: the labels of
+ * `ID_ORDER_SAMPLE` as `listCurrent`, `listAsOf` and `MutationContext.list` (two
+ * of the ids staged in the block) return them, with a limit that covers all five.
+ *
+ * Reported rather than asserted here, so the spec compares each engine's answer
+ * with the order it declares and a disagreement names the engine and the read.
+ */
+async function idOrder(params: Params): Promise<Record<string, unknown>> {
+	const name = databaseName(params, 'id-order');
+	await deleteDatabase(name).catch(() => undefined);
+	const store = new IndexedDBStateStore(
+		[{name: 'placement', id: ['epoch', 'position', 'playerIndex'], fields: {player: 'text'}}],
+		{databaseName: name},
+	);
+	await store.migrate();
+	const written = (indexes: readonly number[]) =>
+		indexes.map((index) => ({
+			type: 'upsert' as const,
+			entity: 'placement',
+			id: {epoch: 7, position: ID_ORDER_SAMPLE[index].id, playerIndex: 0},
+			values: {player: ID_ORDER_SAMPLE[index].label},
+		}));
+	const labels = (rows: readonly Record<string, unknown>[]) => rows.map((row) => row.player);
+
+	try {
+		await store.applyBlock({number: 100, hash: '0x64', timestamp: 1_700_000_000}, written([0, 1, 2, 3, 4]));
+		await store.applyBlock({number: 101, hash: '0x65', timestamp: 1_700_000_012}, []);
+		const listCurrent = await store.listCurrent<Record<string, unknown>>('placement', {epoch: 7}, 10);
+		const listAsOf = await store.listAsOf<Record<string, unknown>>('placement', {epoch: 7}, 100, 10);
+
+		// a second database for the merge: three stored, two staged
+		await deleteDatabase(`${name}-merge`).catch(() => undefined);
+		const merging = new IndexedDBStateStore(
+			[{name: 'placement', id: ['epoch', 'position', 'playerIndex'], fields: {player: 'text'}}],
+			{databaseName: `${name}-merge`},
+		);
+		await merging.migrate();
+		try {
+			await merging.applyBlock({number: 100, hash: '0x64', timestamp: 1_700_000_000}, written([0, 1, 2]));
+			const {state} = createMutationContext(merging);
+			for (const mutation of written([3, 4])) state.set(mutation.entity, mutation.id, mutation.values);
+			const mutationContextList = await state.list<Record<string, unknown>>('placement', {epoch: 7}, 10);
+			return {
+				listCurrent: labels(listCurrent.rows),
+				listAsOf: labels(listAsOf.rows),
+				mutationContextList: labels(mutationContextList.rows),
+			};
+		} finally {
+			await merging.close();
+		}
+	} finally {
 		await store.close();
 	}
 }
@@ -549,6 +613,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'access-path':
 						results = await accessPath(ctx.params);
+						break;
+					case 'id-order':
+						results = await idOrder(ctx.params);
 						break;
 					case 'multi-tab':
 						results = await multiTab(ctx.params, timings);

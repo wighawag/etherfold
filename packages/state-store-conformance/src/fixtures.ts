@@ -9,7 +9,7 @@ import {
 	type StateStoreBackend,
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
-import type {ConformanceCase, StateStoreFactory} from './types.js';
+import type {ConformanceCase, IdOrder, StateStoreFactory} from './types.js';
 
 /**
  * The declarations every case is written against.
@@ -246,6 +246,32 @@ export function burn(id: string): Mutation {
 export function placed(epoch: number, position: number, playerIndex: number, player: string): Mutation {
 	return {type: 'upsert', entity: 'placement', id: {epoch, position, playerIndex}, values: {player}};
 }
+
+/**
+ * Ids that straddle the one place UTF-8 byte order and UTF-16 code-unit order
+ * disagree, each with the label its row carries as `player` so a failure reads
+ * as code points rather than as unprintable characters.
+ *
+ * `B` and `a` are there to catch a third order: both binary orders put `B`
+ * (U+0042) before `a` (U+0061), and a locale collation would not.
+ */
+export const ID_ORDER_SAMPLE: readonly {readonly id: string; readonly label: string}[] = [
+	{id: 'a', label: 'U+0061'},
+	{id: '\u{1F600}', label: 'U+1F600'},
+	{id: '\uFFFD', label: 'U+FFFD'},
+	{id: 'B', label: 'U+0042'},
+	{id: '\uE000', label: 'U+E000'},
+];
+
+/**
+ * The labels of `ID_ORDER_SAMPLE` in each order, written out rather than
+ * computed, so the expectation does not share a comparator with the code under
+ * test.
+ */
+export const ID_ORDER_SEQUENCES: Readonly<Record<IdOrder, readonly string[]>> = {
+	'utf-8': ['U+0042', 'U+0061', 'U+E000', 'U+FFFD', 'U+1F600'],
+	'utf-16': ['U+0042', 'U+0061', 'U+1F600', 'U+E000', 'U+FFFD'],
+};
 
 /** One row of `RESERVED`, written through columns that are all SQL keywords. */
 export function ordered(group: string, index: number, select: string): Mutation {

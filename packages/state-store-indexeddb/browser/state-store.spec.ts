@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {expect, test, type Page} from '@playwright/test';
 import {mountHarness} from 'playwright-browser-harness';
 import {MemoryStateStore} from '@etherfold/state-store';
+import {ID_ORDER_SEQUENCES, type DeclaredIdOrder, type IdOrder} from '@etherfold/state-store-conformance';
 import {processor, runWorkload} from './workload.js';
 
 /**
@@ -40,6 +41,27 @@ test.afterAll(async ({}, testInfo) => {
 	);
 });
 
+/**
+ * The string order this backend's listings ascend in, per ENGINE and per read,
+ * as measured on each engine (`id-order` below). `listCurrent` and `listAsOf`
+ * walk a key range whose id columns are string keys, which the IndexedDB
+ * specification compares by UTF-16 code unit; `MutationContext.list` re-sorts
+ * with `compareIds`, JavaScript's `<`. Declared, not endorsed: which order the
+ * listing SHOULD use is `the-listings-id-order-is-decided`'s question, and the
+ * evidence is `docs/spikes/the-listings-id-order-per-backend/README.md`.
+ */
+const ID_ORDER_BY_ENGINE: Record<string, Required<DeclaredIdOrder>> = {
+	chromium: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
+	firefox: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
+	webkit: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
+};
+
+function idOrderOf(project: string): Required<DeclaredIdOrder> {
+	const declared = ID_ORDER_BY_ENGINE[project];
+	if (!declared) throw new Error(`no id order declared for the Playwright project ${JSON.stringify(project)}`);
+	return declared;
+}
+
 /** A harness over the bundled code-under-test. IndexedDB needs no isolation. */
 async function harnessFor(page: Page) {
 	return mountHarness(page, {cut: CUT, coi: false});
@@ -50,7 +72,11 @@ test('passes the shared conformance suite, under every claim it makes', async ({
 	try {
 		const run = await harness.run({
 			phase: 'once',
-			params: {case: 'conformance', tag: `conformance-${Date.now()}`},
+			params: {
+				case: 'conformance',
+				tag: `conformance-${Date.now()}`,
+				idOrder: idOrderOf(testInfo.project.name),
+			},
 		});
 		record({
 			project: testInfo.project.name,
@@ -162,6 +188,30 @@ test('answers a listing with an IDBKeyRange cursor on this engine', async ({page
 		// four children of epoch 7 among 200 rows: the store walked four, not 200
 		expect(run.results.rows).toBe(4);
 		expect(run.results.visited).toBe(4);
+	} finally {
+		await harness.dispose();
+	}
+});
+
+test('ascends each listing in the id order declared for this engine', async ({page}, testInfo) => {
+	const harness = await harnessFor(page);
+	try {
+		const run = await harness.run({phase: 'once', params: {case: 'id-order', tag: `id-order-${Date.now()}`}});
+		record({
+			project: testInfo.project.name,
+			case: 'id-order',
+			env: run.env,
+			results: run.results,
+			errors: run.errors,
+		});
+
+		expect(run.errors).toEqual([]);
+		const declared = idOrderOf(testInfo.project.name);
+		const expected = (order: IdOrder) => ID_ORDER_SEQUENCES[order];
+		// each read on its own line, so a change names the read that moved
+		expect(run.results.listCurrent, 'listCurrent').toEqual(expected(declared.listCurrent));
+		expect(run.results.listAsOf, 'listAsOf').toEqual(expected(declared.listAsOf));
+		expect(run.results.mutationContextList, 'MutationContext.list').toEqual(expected(declared.mutationContextList));
 	} finally {
 		await harness.dispose();
 	}
