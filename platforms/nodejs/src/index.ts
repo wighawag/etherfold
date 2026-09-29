@@ -181,7 +181,7 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 	const given = options.db;
 	let db: RemoteSQL;
 	let dbURL: string | undefined;
-	// set ONLY when this call opened the database itself, so a failed bind can undo
+	// set ONLY when this call opened the database itself, so a failed start can undo
 	// that open; a handle the caller gave is never closed here
 	let closeOpened: (() => void) | undefined;
 	if (given !== undefined && typeof given !== 'string') {
@@ -191,6 +191,53 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		({db, close: closeOpened} = openNodeDB(dbURL));
 	}
 
+	// EVERYTHING BETWEEN THE OPEN AND A SUCCESSFUL BIND is one guarded span. A
+	// rejection of this call hands the caller no `RunningServer`, so nobody else holds
+	// a database this call opened from a URL, whichever step failed (the automatic
+	// schema setup, building the app, or the bind): the ONE close in the `catch`
+	// undoes that open. The original error stays the one reported even if closing
+	// fails too.
+	let server: ReturnType<typeof serve>;
+	try {
+		server = await setUpAndListen(db, dbURL, env, port, hostname, options);
+	} catch (err) {
+		try {
+			closeOpened?.();
+		} catch (closeErr) {
+			logger.error(`failed to close ${dbURL} after the server failed to start`, closeErr);
+		}
+		throw err;
+	}
+
+	// port 0 means "any free port", and the caller cannot know which one it got
+	// unless we read it back off the listening socket
+	const address = server.address();
+	const boundPort = typeof address === 'object' && address ? address.port : port;
+
+	return {
+		port: boundPort,
+		url: `http://${hostname ?? 'localhost'}:${boundPort}`,
+		db,
+		close: () => new Promise<void>((resolve, reject) => server.close((err?: Error) => (err ? reject(err) : resolve()))),
+	};
+}
+
+/**
+ * Everything `startServer` does between opening the database and a successful
+ * bind: the automatic schema setup, building the app, and binding it. It resolves
+ * only once the socket listens.
+ *
+ * Split out so that this whole span sits inside the ONE guard in `startServer`
+ * that closes a database it opened itself.
+ */
+async function setUpAndListen(
+	db: RemoteSQL,
+	dbURL: string | undefined,
+	env: NodeEnv,
+	port: number,
+	hostname: string | undefined,
+	options: StartOptions,
+): Promise<ReturnType<typeof serve>> {
 	if (options.autoSetup !== false) {
 		await ensureFixedSchema(db, dbURL ?? 'the database handle this server was given');
 	}
@@ -225,14 +272,6 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		if (server.listening) return resolve();
 		const onError = (err: Error) => {
 			server.off('listening', onListening);
-			// the rejection hands the caller no `RunningServer`, so nobody else holds a
-			// database this call opened from a URL: close it here. The bind error stays
-			// the one reported even if closing fails too.
-			try {
-				closeOpened?.();
-			} catch (closeErr) {
-				logger.error(`failed to close ${dbURL} after the bind failed`, closeErr);
-			}
 			reject(err);
 		};
 		const onListening = () => {
@@ -243,15 +282,5 @@ export async function startServer(options: StartOptions = {}): Promise<RunningSe
 		server.once('listening', onListening);
 	});
 
-	// port 0 means "any free port", and the caller cannot know which one it got
-	// unless we read it back off the listening socket
-	const address = server.address();
-	const boundPort = typeof address === 'object' && address ? address.port : port;
-
-	return {
-		port: boundPort,
-		url: `http://${hostname ?? 'localhost'}:${boundPort}`,
-		db,
-		close: () => new Promise<void>((resolve, reject) => server.close((err?: Error) => (err ? reject(err) : resolve()))),
-	};
+	return server;
 }
