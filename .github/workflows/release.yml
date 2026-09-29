@@ -79,14 +79,41 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # MUST be v2 while @changesets/cli is v3, and the two are coupled in a way
+      # that fails SILENTLY. v1 discovered what had been published by grepping the
+      # publish command's stdout for `New tag: <pkg>@<ver>`; @changesets/cli v3
+      # stopped printing that line, so v1 finds nothing published, skips pushing
+      # tags AND creating GitHub releases, and still exits 0 (rocketh hit exactly
+      # this: packages reached npm while its tags and releases silently stopped).
+      # v2 reads structured JSON events instead.
+      #
+      # So: do not bump @changesets/cli across a major without checking this
+      # action, and do not downgrade this action without downgrading the CLI.
+      # And the CLI must stay >= 3: v2 bumps a 0.x package to 1.0.0 whenever a
+      # package it peer-depends on takes a minor (see
+      # scripts/check-no-major-graduation.mjs).
       - name: Create Version PR or publish
-        uses: changesets/action@v1
+        # Pinned to a full commit SHA, not a tag: this is the step that publishes,
+        # so it can reach the OIDC token, and a tag can be repointed. v2 is a
+        # BRANCH upstream, so it moves with every v2.x release; this is v2.1.2.
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           # `release:ci` re-runs the acceptance gate and then publishes. The
           # action itself makes the git commit and the tags, so nothing here
           # pushes. No NPM_TOKEN: npm detects the OIDC environment and
-          # authenticates as the registered trusted publisher.
-          publish: pnpm release:ci
-          version: pnpm changeset version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # authenticates as the registered trusted publisher. v2 dropped its own
+          # .npmrc handling, which is fine because `setup-node` above sets
+          # `registry-url`.
+          publish-script: pnpm release:ci
+          # `changeset:version` runs `changeset version`, then refuses to let a
+          # pre-1.0 package graduate to 1.x (scripts/check-no-major-graduation.mjs),
+          # so the Version PR is never opened with a version nobody chose. A 0.x
+          # `minor` is fine: it stays 0.x.
+          version-script: pnpm changeset:version
+          # v2 REQUIRES the token as an input: it no longer reads the GITHUB_TOKEN
+          # environment variable, nor the credentials `actions/checkout` configures.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # v2 changed the default to pushing commits/tags through the GitHub API.
+          # Kept on the Git CLI, which is what v1 did here, so the upgrade changes
+          # one thing at a time.
+          push-with-git-cli: true
