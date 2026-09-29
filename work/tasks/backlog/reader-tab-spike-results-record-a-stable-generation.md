@@ -1,23 +1,23 @@
 ---
-title: 'The reader-tab spike records a stable generation, so a local browser run leaves the committed evidence unchanged'
+title: 'The reader-tab spike results are refreshed to the generation the current identity rule computes'
 slug: reader-tab-spike-results-record-a-stable-generation
 blockedBy: []
 covers: []
-needsAnswers: true
 ---
 
 ## What to build
 
-Running `pnpm --filter @etherfold/browser test:browser` locally rewrites the committed `docs/spikes/a-reader-tab-learns-from-the-indexing-tab/results/two-tabs-one-database-{chromium,firefox,webkit}.json` with a different `generation` value (for example `de92321b...` became `0f48ccab...`) and nothing else, so the recorded evidence churns on every run and a contributor either commits noise or reverts it by hand. The recorder in `packages/browser/browser/readerTabLearnsFromTheIndexingTab.spec.ts` already stabilises the coherence token (each distinct token becomes `fold-1`, `fold-2`, ... in order of first appearance) and the run stamp in channel names, following `sharedWorkerServesSeveralTabs.spec.ts`; it does not stabilise `generation`.
+A ONE-TIME DATA REFRESH, re-scoped on 2026-09-29 by the maintainer (answer (a) to the question the first build raised). The committed `docs/spikes/a-reader-tab-learns-from-the-indexing-tab/results/two-tabs-one-database-{chromium,firefox,webkit}.json` are STALE, not churning: the first build measured that a local run changes only `generation` (`de92321be3f5a7985a83d20f8e3a4c0e` becomes `0f48ccab2c62b7bef25e4ba300c55d06`, the same value on all three engines), and that every later run reproduces `0f48ccab...` exactly. The value is `generationDigestOf({stream, processor})`, and the processor half comes from the arrival's handler sources (ADR-0086, `packages/browser/src/moduleIdentity.ts`), whose identity work (#163, #165, #167, #197) landed after these results were recorded (#147). So the digest is deterministic evidence and stays in the files as a real digest: a future change to the identity rule, the fixture's handlers or the transpile should show up as a diff.
 
-Find why the value differs per run (a digest over something run-specific, such as a database or stream name carrying the run's timestamp), then stabilise it in `stabilise` the same way the coherence token is: a stable label per distinct value in order of first appearance, so that the RELATION stays evidence (both tabs name the same generation, a different fold names a different one) while the bytes stop changing. If the value turns out to vary for a reason that IS evidence (the same inputs giving a different digest), stop and route to needs-attention instead, because that would be a real defect, not churn.
+Regenerate the three JSON files once with `pnpm --filter @etherfold/browser exec playwright test readerTabLearnsFromTheIndexingTab` (one project at a time is fine), and commit them. Do NOT relabel `generation` in `stabilise` and do not change the spec file or any source.
 
 ## Acceptance criteria
 
-- [ ] Two consecutive local runs of `pnpm --filter @etherfold/browser exec playwright test readerTabLearnsFromTheIndexingTab` on each of the three projects leave `git status --porcelain docs/spikes/a-reader-tab-learns-from-the-indexing-tab/` empty after the committed files are regenerated once by this change.
-- [ ] The committed results still show that the two tabs agree on the generation (the same label), and the spec's comment block explains the new rule beside the coherence one.
-- [ ] Changesets: `@etherfold/browser` (patch), since its directory changes (patch or minor, never major).
-- [ ] CI: dorfl's `verify` gate runs vitest only, so the PR's `browser (chromium)`, `browser (firefox)` and `browser (webkit)` jobs green are part of done (this spec runs only there).
+- [ ] The three committed results carry the generation the current code computes, and the diff against main changes only `generation` values (state any other field that changed, and why, in `## Decisions`; if another field changes for a reason that is not the identity work, stop and route to needs-attention).
+- [ ] A second local run on each of the three projects leaves `git status --porcelain docs/spikes/a-reader-tab-learns-from-the-indexing-tab/` empty.
+- [ ] The two tabs still agree on the generation in each file.
+- [ ] No source or spec change, and no changeset (only `docs/` changes). Any other committed results a local Playwright run rewrites as a side effect are restored, not committed.
+- [ ] CI: the PR's CI green as a whole (`verify`, `browser (chromium)`, `browser (firefox)`, `browser (webkit)`).
 
 ## Blocked by
 
@@ -25,10 +25,8 @@ Find why the value differs per run (a digest over something run-specific, such a
 
 ## Prompt
 
-> Goal: committed spike evidence that a re-run does not churn. Look at `stabilise` and `record` in `packages/browser/browser/readerTabLearnsFromTheIndexingTab.spec.ts`, the same helpers in `sharedWorkerServesSeveralTabs.spec.ts`, where the reported `generation` comes from in `@etherfold/browser` (`streamDigestOf` and the generation's identity, ADR-0053), and the committed results folder above.
+> Goal: committed spike evidence that matches what the current code computes, with the real digest kept as evidence (ADR-0053, ADR-0086). Look at `record` and `stabilise` in `packages/browser/browser/readerTabLearnsFromTheIndexingTab.spec.ts` (read only) and the results folder above.
 >
-> FIRST, check this task against current reality: it is a launch snapshot written on 2026-09-28. Check that a local run still changes only `generation` in those files. If more fields churn, stabilise only the ones that are not evidence and say which in `## Decisions`; if nothing churns any more, route to needs-attention saying so (WORK-CONTRACT.md, "Drift is a needs-attention signal").
+> FIRST, check this task against current reality: it was re-scoped on 2026-09-29. Run the spec once and check that only `generation` changes and that a second run changes nothing. If a second run DOES change the files, the premise is false again: route to needs-attention with what churns (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
-> RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
->
-> CI: dorfl's gate runs vitest only. The real-browser suites run in CI's `browser (chromium)`, `browser (firefox)` and `browser (webkit)` jobs; the PR is done only when those three are green too.
+> RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
