@@ -30,3 +30,8 @@ Regenerate the three JSON files once with `pnpm --filter @etherfold/browser exec
 > FIRST, check this task against current reality: it was re-scoped on 2026-09-29. Run the spec once and check that only `generation` changes and that a second run changes nothing. If a second run DOES change the files, the premise is false again: route to needs-attention with what churns (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **All three projects in one invocation:** I regenerated with the single command from the task body instead of one project at a time, which the task allows. The config runs one worker in sequence, so each file is written by its own project. Nothing else is affected.
+- **No fields other than `generation` changed**, so there is nothing further to justify.
