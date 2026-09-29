@@ -42,3 +42,30 @@ Do NOT edit the `changeset-release/main` branch or PR #239: once this lands, the
 > Run `changeset version` only in a throwaway copy (for example a `git worktree` or a copy under a temp dir), never in the tree you commit: it deletes the changesets and rewrites every package version.
 >
 > RECORD every non-obvious in-scope choice in a `## Decisions` block at the end of your final report; do not write the done record or commit message yourself. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified `*.bundle.js` files.
+
+## Decisions
+
+- **Measured versions (the throwaway runs).** v3 run: my changes committed in a clone, then `pnpm changeset:version`. v2 run: an unmodified clone at `0d33344e` with `changeset version`. The guard passed on v3 and exited 1 on the v2 output, naming `@etherfold/graphql: 0.0.0 -> 1.0.0`. Each line is package: before, then v3, then v2:
+  - accessor: 0.0.0, 0.1.0, 0.1.0
+  - browser: 0.11.0, 0.12.0, 0.12.0
+  - etherfold: 0.9.0, 0.10.0, 0.10.0
+  - core: 0.10.0, 0.10.0, 0.10.0
+  - fetcher-host: 0.2.2, 0.2.2, 0.2.2
+  - **graphql: 0.0.0, 0.1.0, 1.0.0**
+  - processor-entities: 0.3.0, 0.3.1, 0.3.1
+  - processor-sqlite: 0.2.2, 0.2.3, 0.2.3
+  - server: 0.3.0, 0.4.0, 0.4.0
+  - state-moved-conformance: 0.3.0, 0.3.0, 0.3.0
+  - state-store-conformance: 0.3.0, 0.4.0, 0.4.0
+  - state-store-indexeddb: 0.2.1, 0.3.0, 0.3.0
+  - state-store: 0.3.0, 0.4.0, 0.4.0
+  - state-store-patch: 0.2.1, 0.2.2, 0.2.2
+  - state-store-sqlite: 0.3.0, 0.4.0, 0.4.0
+  - utils: 0.8.2, 0.8.2, 0.8.2
+  - platform-nodejs-fetcher: 0.2.2, 0.2.2, 0.2.2
+  - platform-nodejs: 0.2.2, 0.3.0, 0.3.0
+- **`pnpm pack` manifest line.** Packing `@etherfold/graphql` in this tree gives `"@etherfold/browser": "^0.11.0"` under `peerDependencies`. After the version bump it would be `^0.12.0`. I could not pack in the version-bumped clone, because its packages were not installed there.
+- **How the guard test runs in CI.** I used `node --test` through a new `test:scripts` script at the start of the root `test`, rather than vitest (there is no package around a root script) or a new step in `dorfl.json` (CI would never run it, and the task says `ci.yml` stays unchanged). The downside is that the root `test` now does slightly more for every task's gate, about 0.3s. This touches the root `test` script, which both the gate and CI use.
+- **What the guard scans.** It reads `packages/`, `platforms/` and `examples/`, the same list `check-changesets.mjs` uses, and skips `private: true` packages. Rocketh's version reads only `packages/`, which would miss the published `@etherfold/platform-*` packages. It takes an optional root argument so the fixture test can point it at a temp repo.
+- **Where the policy is written down.** The "patch or minor, never major" rule was not stated anywhere in `CONTEXT.md` (only in task prompts). I added it as a new Conventions bullet next to the changeset rule, with the three safeguards. Nothing else links to it.
+- **`$schema` bump.** I pointed it at `@changesets/config@4.0.1`, the version v3 installs. That schema still lists every key our config uses.
