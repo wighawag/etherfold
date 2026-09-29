@@ -1,0 +1,87 @@
+{
+	"what": "the id-order case of packages/state-store-indexeddb/browser/state-store.spec.ts, extracted from its browser-<project>.json output; labels of ID_ORDER_SAMPLE in the order each read returned them",
+	"playwright": "1.62.1",
+	"engines": {
+		"chromium": {
+			"ranAt": "2026-09-29T00:28:48.780Z",
+			"userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+			"observed": {
+				"listCurrent": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				],
+				"listAsOf": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				],
+				"mutationContextList": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				]
+			}
+		},
+		"firefox": {
+			"ranAt": "2026-09-29T00:28:53.086Z",
+			"userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0",
+			"observed": {
+				"listCurrent": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				],
+				"listAsOf": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				],
+				"mutationContextList": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				]
+			}
+		},
+		"webkit": {
+			"ranAt": "2026-09-29T00:28:55.018Z",
+			"userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+			"observed": {
+				"listCurrent": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				],
+				"listAsOf": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				],
+				"mutationContextList": [
+					"U+0042",
+					"U+0061",
+					"U+1F600",
+					"U+E000",
+					"U+FFFD"
+				]
+			}
+		}
+	}
+}

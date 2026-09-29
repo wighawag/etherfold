@@ -15,7 +15,12 @@ import {
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
-import {runStateStoreConformance, type StateStoreFactory} from '../src/index.js';
+import {
+	runStateStoreConformance,
+	type DeclaredIdOrder,
+	type StateStoreConformanceOptions,
+	type StateStoreFactory,
+} from '../src/index.js';
 
 /**
  * The test that makes the suite worth running: backends that LIE go red.
@@ -72,9 +77,19 @@ import {runStateStoreConformance, type StateStoreFactory} from '../src/index.js'
 
 const honest: StateStoreFactory = (declarations) => new MemoryStateStore(declarations);
 
+/**
+ * The id order the reference store's listings use, declared as every backend
+ * declares its own: `compareIds` is JavaScript's `<`, which is UTF-16 code units.
+ * Every run below hands it over, so the lie under test is the only one.
+ */
+const MEMORY_ID_ORDER: DeclaredIdOrder = {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'};
+
 /** Names of the cases that failed, as `group > name`, for readable assertions. */
-async function failedCases(factory: StateStoreFactory): Promise<string[]> {
-	const result = await runStateStoreConformance(factory);
+async function failedCases(
+	factory: StateStoreFactory,
+	options: StateStoreConformanceOptions = {idOrder: MEMORY_ID_ORDER},
+): Promise<string[]> {
+	const result = await runStateStoreConformance(factory, options);
 	return result.failures.map((failure) => `${failure.group} > ${failure.name}`);
 }
 
@@ -338,6 +353,7 @@ describe('the conformance suite', () => {
 
 	it('fails a backend that holds a u256 as anything but its canonical encoding', async () => {
 		const result = await runStateStoreConformance(honest, {
+			idOrder: MEMORY_ID_ORDER,
 			// the honest store, reporting its stored form as the decimal text a u256
 			// used to be kept in: the shape a backend that skipped the encoding has
 			storedCurrent: async (store, entity, id) =>
@@ -352,9 +368,25 @@ describe('the conformance suite', () => {
 
 	it('passes the honest store handing over its real stored form', async () => {
 		const result = await runStateStoreConformance(honest, {
+			idOrder: MEMORY_ID_ORDER,
 			storedCurrent: (store, entity, id) => (store as MemoryStateStore).storedCurrent(entity, id),
 		});
 		expect(result.failures).toEqual([]);
+	});
+
+	it('fails a backend whose listings ascend in an order other than the one it declared', async () => {
+		// the reference store sorts in UTF-16 code units; declaring nothing is
+		// declaring UTF-8 bytes, the accessor's text order (ADR-0099), so every
+		// id-order case goes red and nothing else does.
+		expect(await failedCases(honest, {})).toEqual([
+			'bounded id-prefix listing > listCurrent ascends in the declared id order across the UTF-8 / UTF-16 boundary',
+			'bounded id-prefix listing > MutationContext.list, with ids staged in the block, ascends in the declared id order',
+			'bounded id-prefix listing > listAsOf ascends in the declared id order across the UTF-8 / UTF-16 boundary',
+		]);
+		// and in the other direction: the right order, declared for one read only
+		expect(await failedCases(honest, {idOrder: {...MEMORY_ID_ORDER, listCurrent: 'utf-8'}})).toEqual([
+			'bounded id-prefix listing > listCurrent ascends in the declared id order across the UTF-8 / UTF-16 boundary',
+		]);
 	});
 
 	it('fails a backend whose cursor can end up ahead of the block it describes', async () => {
@@ -367,6 +399,7 @@ describe('the conformance suite', () => {
 		const result = await runStateStoreConformance(
 			(declarations) => new LyingSingleWriterStore(new MemoryStateStore(declarations)),
 			{
+				idOrder: MEMORY_ID_ORDER,
 				twoWriters: {
 					sharingStorage: (declarations) => {
 						// ONE store behind two handles: the shape two tabs of one app have
@@ -406,6 +439,7 @@ describe('the conformance suite', () => {
 	it('reports WHY a case failed, and not merely that it did', async () => {
 		const result = await runStateStoreConformance(
 			(declarations) => new AmnesiacStore(new MemoryStateStore(declarations)),
+			{idOrder: MEMORY_ID_ORDER},
 		);
 
 		expect(result.passed).toBeGreaterThan(0);

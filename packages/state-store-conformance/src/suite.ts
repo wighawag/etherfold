@@ -103,7 +103,7 @@ function factoryDrivenCases(
 		...retentionEnforcementCases(factory, capabilities, options),
 		...reorgRevertCases(factory, capabilities),
 		...readYourWritesCases(factory, capabilities),
-		...boundedListingCases(factory, capabilities),
+		...boundedListingCases(factory, capabilities, options),
 		...blockAtomicityCases(factory),
 		...syncCursorCases(factory),
 		...seamRecordCases(factory, options),
