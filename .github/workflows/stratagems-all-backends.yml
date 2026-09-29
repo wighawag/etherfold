@@ -1,8 +1,8 @@
 # The full stratagems replay on EVERY backend, including IndexedDB on `fake-indexeddb`.
 #
 # `test:all-backends` in `@etherfold/conformance-workload-stratagems` is too slow for
-# every pull request (the IndexedDB replay alone is about 40 minutes on the shim, and
-# the revert case about as long again), and the fast smoke case (`test/workload.test.ts`)
+# every pull request (the IndexedDB replay alone took 34 to 36 minutes on the shim on
+# a GitHub runner, and the revert case 36 to 38 more: runs 36502194400 and 36523554754), and the fast smoke case (`test/workload.test.ts`)
 # already covers IndexedDB on every PR through `ci.yml`. But a target nobody runs rots:
 # this one sat red on IndexedDB, unnoticed, until it was measured. So it runs here, off
 # the PR gate: weekly, on demand, and on a pull request that edits THIS file, so the PR
@@ -28,11 +28,13 @@ concurrency:
 jobs:
   all-backends:
     runs-on: ubuntu-latest
-    # Two 90-minute vitest bounds on IndexedDB (the replay in `beforeAll`, then the
-    # revert case), each twice the slowest full replay measured, plus about 20 minutes
-    # for install, build and the three fast backends. Set so a vitest timeout is what
-    # fails first, naming the case, rather than the runner killing an anonymous job.
-    timeout-minutes: 200
+    # The two vitest bounds on IndexedDB, each twice the slowest full-length
+    # measurement of its step rounded up to 5 minutes (the replay in `beforeAll`, 90
+    # minutes from 2,599 s; the revert case, 80 minutes from 2,295.1 s), plus 20
+    # minutes for checkout, install, build and the three fast backends (about 83 s on
+    # run 36502194400). Set so a vitest timeout is what fails first, naming the case,
+    # rather than the runner killing an anonymous job.
+    timeout-minutes: 190
     steps:
       - name: Checkout
         uses: actions/checkout@v7

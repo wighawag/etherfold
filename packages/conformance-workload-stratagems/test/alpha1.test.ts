@@ -17,9 +17,10 @@
  *
  * IndexedDB is in the fast case and NOT in this one by default, and the reason
  * is the shim rather than the backend: on `fake-indexeddb` this replay costs
- * 2,599 s on one machine (measured, full length) and degrades quadratically with
- * the stored version count, where the same backend measured 45.6 ms/block on
- * real Chromium (so under a minute for the whole stream) in
+ * 2,599 s on one machine and 2,052.8 s to 2,165.1 s on a GitHub runner (all
+ * measured, full length; see below) and degrades quadratically with the stored version count,
+ * where the same backend measured 45.6 ms/block on real Chromium (so under a
+ * minute for the whole stream) in
  * `work/notes/findings/sqlite-in-the-browser.md`. Forty minutes on every pull
  * request would be disabled by the next person to wait for it, so it is opt-in as
  * `STRATAGEMS_WORKLOAD=all` (`test:all-backends`), and the honest route to
@@ -36,9 +37,18 @@
  * speed up here and the timeouts are raised instead. Measured on a 400-block
  * prefix (Ryzen 9 9955HX) and extrapolated with a cost model fitted on it: the
  * replay about 890 s and the revert below about 900 s there, against the 2,599 s
- * replay measured on a slower machine. Both bounds are {@link INDEXEDDB_BOUND_MS}
- * (90 minutes): twice that slowest measured replay, rounded up, because a CI
- * runner is slower still. The method, the numbers and the script are in
+ * replay measured on a slower machine. The first run of the workflow below
+ * (GitHub Actions run 36502194400, 2026-09-29, `ubuntu-latest`) then measured
+ * both at full length: the replay 2,052.8 s and the revert 2,170.5 s, 51 of 51
+ * cases passing. A second run (36523554754, same day and runner image) measured
+ * the replay 2,165.1 s and the revert 2,295.1 s, about 5% slower on both: that is
+ * the run-to-run spread on a GitHub runner. Each bound is twice the SLOWEST real
+ * full-length measurement of its step, rounded up to the next 5 minutes, so a
+ * machine that has already run it cannot fail it:
+ * {@link INDEXEDDB_REPLAY_BOUND_MS} (90 minutes, from the 2,599 s replay) and
+ * {@link INDEXEDDB_REVERT_BOUND_MS} (80 minutes, from the 2,295.1 s revert of the
+ * second CI run, the slowest full-length revert recorded). The method, the
+ * numbers and the script are in
  * `docs/spikes/the-full-stratagems-replay-on-fake-indexeddb/`.
  *
  * `.github/workflows/stratagems-all-backends.yml` runs `test:all-backends`
@@ -77,10 +87,17 @@ const POINTS_AT_TIP = 12;
 const POINTS_AFTER_REVERT = 6;
 
 /**
- * The bound on the replay and on the revert: twice the slowest full replay
- * measured on `fake-indexeddb` (2,599 s), rounded up. See the header.
+ * The bound on the IndexedDB replay: twice the slowest full replay measured on
+ * `fake-indexeddb` (2 x 2,599 s = 5,198 s), rounded up to 90 minutes. See the
+ * header.
  */
-const INDEXEDDB_BOUND_MS = 5_400_000;
+const INDEXEDDB_REPLAY_BOUND_MS = 5_400_000;
+/**
+ * The bound on the IndexedDB revert: twice the slowest full revert measured on
+ * `fake-indexeddb` (2 x 2,295.1 s = 4,590.2 s, run 36523554754), rounded up to
+ * 80 minutes. See the header.
+ */
+const INDEXEDDB_REVERT_BOUND_MS = 4_800_000;
 /** Every other backend replays in well under a minute; ten is the old bound. */
 const BOUND_MS = 600_000;
 
@@ -89,12 +106,15 @@ describe.runIf(FULL || ALL_BACKENDS).each(SUBJECTS)('the launched stratagems gam
 
 	// One replay per backend, because it is the expensive part and both cases are
 	// about the SAME run: the second one asks what happens when it is undone.
-	beforeAll(async () => {
-		const started = performance.now();
-		run = await runWorkload(backend.make, ALPHA1);
-		// the scheduled all-backends run is where the full-length figure comes from
-		console.info(`stratagems replay on ${backend.name}: ${((performance.now() - started) / 1000).toFixed(1)} s`);
-	}, boundFor(backend.name));
+	beforeAll(
+		async () => {
+			const started = performance.now();
+			run = await runWorkload(backend.make, ALPHA1);
+			// the scheduled all-backends run is where the full-length figure comes from
+			console.info(`stratagems replay on ${backend.name}: ${((performance.now() - started) / 1000).toFixed(1)} s`);
+		},
+		boundFor(backend.name, 'replay'),
+	);
 
 	it('lands on the state the original JSProcessor computed from the same stream', () => {
 		expectFixtureShape(run, ALPHA1);
@@ -120,12 +140,13 @@ describe.runIf(FULL || ALL_BACKENDS).each(SUBJECTS)('the launched stratagems gam
 
 			expect(await pointsOf(run, EVIL_OWNER)).toBe(POINTS_AFTER_REVERT);
 		},
-		boundFor(backend.name),
+		boundFor(backend.name, 'revert'),
 	);
 });
 
-function boundFor(backend: string): number {
-	return backend === 'indexeddb' ? INDEXEDDB_BOUND_MS : BOUND_MS;
+function boundFor(backend: string, step: 'replay' | 'revert'): number {
+	if (backend !== 'indexeddb') return BOUND_MS;
+	return step === 'replay' ? INDEXEDDB_REPLAY_BOUND_MS : INDEXEDDB_REVERT_BOUND_MS;
 }
 
 async function pointsOf(run: WorkloadRun, owner: string): Promise<number | undefined> {
