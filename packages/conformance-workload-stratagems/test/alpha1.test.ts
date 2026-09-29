@@ -17,14 +17,33 @@
  *
  * IndexedDB is in the fast case and NOT in this one by default, and the reason
  * is the shim rather than the backend: on `fake-indexeddb` this replay costs
- * about half an hour and degrades quadratically with the stored version count,
- * where the same backend measured 45.6 ms/block on real Chromium (so under a
- * minute for the whole stream) in `work/notes/findings/sqlite-in-the-browser.md`.
- * Half an hour on every pull request would be disabled by the next person to
- * wait for it, so it is opt-in as `STRATAGEMS_WORKLOAD=all`, the observation is
- * recorded in `fake-indexeddb-write-cost-grows-quadratically`,
- * and the honest route to heavy-workload coverage on that backend is the real
- * engine (`packages/state-store-indexeddb/browser/`) rather than a faster shim.
+ * 2,599 s on one machine (measured, full length) and degrades quadratically with
+ * the stored version count, where the same backend measured 45.6 ms/block on
+ * real Chromium (so under a minute for the whole stream) in
+ * `work/notes/findings/sqlite-in-the-browser.md`. Forty minutes on every pull
+ * request would be disabled by the next person to wait for it, so it is opt-in as
+ * `STRATAGEMS_WORKLOAD=all` (`test:all-backends`), and the honest route to
+ * heavy-workload coverage on that backend is the real engine
+ * (`packages/state-store-indexeddb/browser/`) rather than a faster shim.
+ *
+ * ## The IndexedDB timeouts, and where the run lives
+ *
+ * The cost is ENTIRELY the shim's and it is not the replay's shape: an overwrite
+ * in an indexed object store makes `fake-indexeddb` scan every record of every
+ * index (`RecordStore.deleteByValue`), and closing a version is exactly such an
+ * overwrite, so each block costs its closes times the versions stored. Packing 50
+ * blocks per transaction changed a 400-block prefix by 3%, so there is nothing to
+ * speed up here and the timeouts are raised instead. Measured on a 400-block
+ * prefix (Ryzen 9 9955HX) and extrapolated with a cost model fitted on it: the
+ * replay about 890 s and the revert below about 900 s there, against the 2,599 s
+ * replay measured on a slower machine. Both bounds are {@link INDEXEDDB_BOUND_MS}
+ * (90 minutes): twice that slowest measured replay, rounded up, because a CI
+ * runner is slower still. The method, the numbers and the script are in
+ * `docs/spikes/the-full-stratagems-replay-on-fake-indexeddb/`.
+ *
+ * `.github/workflows/stratagems-all-backends.yml` runs `test:all-backends`
+ * weekly, on demand, and on a pull request that edits that workflow, because a
+ * target nobody runs rots: this one sat red on IndexedDB, unnoticed.
  *
  * A diff on the golden state is not a fixture to update. It means the processor
  * changed meaning, and that is a finding.
@@ -57,36 +76,57 @@ const FORK_BLOCK = 13_364_821;
 const POINTS_AT_TIP = 12;
 const POINTS_AFTER_REVERT = 6;
 
+/**
+ * The bound on the replay and on the revert: twice the slowest full replay
+ * measured on `fake-indexeddb` (2,599 s), rounded up. See the header.
+ */
+const INDEXEDDB_BOUND_MS = 5_400_000;
+/** Every other backend replays in well under a minute; ten is the old bound. */
+const BOUND_MS = 600_000;
+
 describe.runIf(FULL || ALL_BACKENDS).each(SUBJECTS)('the launched stratagems game on Base, on $name', (backend) => {
 	let run: WorkloadRun;
 
 	// One replay per backend, because it is the expensive part and both cases are
 	// about the SAME run: the second one asks what happens when it is undone.
 	beforeAll(async () => {
+		const started = performance.now();
 		run = await runWorkload(backend.make, ALPHA1);
-	}, 600_000);
+		// the scheduled all-backends run is where the full-length figure comes from
+		console.info(`stratagems replay on ${backend.name}: ${((performance.now() - started) / 1000).toFixed(1)} s`);
+	}, boundFor(backend.name));
 
 	it('lands on the state the original JSProcessor computed from the same stream', () => {
 		expectFixtureShape(run, ALPHA1);
 		expectGoldenState(run, ALPHA1);
 	});
 
-	it(`reverting to block ${FORK_BLOCK.toLocaleString('en-US')} makes the evil owner's computedPoints DECREASE from ${POINTS_AT_TIP} to ${POINTS_AFTER_REVERT}`, async () => {
-		// The canonical bug this whole design exists to prevent, on real data: an
-		// ACCUMULATED counter (read, add, write) that a reorged-out block raised has
-		// to come back DOWN when that block is undone, because the next read is what
-		// the next increment is a function of. A store that leaves the raised value
-		// standing is not obviously broken -- it is quietly, permanently wrong.
-		// the fork has to be BELOW the tip, or the revert is a no-op that would pass
-		// this case by accident on a truncated capture.
-		expect(run.report.tip).toBeGreaterThan(FORK_BLOCK);
-		expect(await pointsOf(run, EVIL_OWNER)).toBe(POINTS_AT_TIP);
+	it(
+		`reverting to block ${FORK_BLOCK.toLocaleString('en-US')} makes the evil owner's computedPoints DECREASE from ${POINTS_AT_TIP} to ${POINTS_AFTER_REVERT}`,
+		async () => {
+			// The canonical bug this whole design exists to prevent, on real data: an
+			// ACCUMULATED counter (read, add, write) that a reorged-out block raised has
+			// to come back DOWN when that block is undone, because the next read is what
+			// the next increment is a function of. A store that leaves the raised value
+			// standing is not obviously broken -- it is quietly, permanently wrong.
+			// the fork has to be BELOW the tip, or the revert is a no-op that would pass
+			// this case by accident on a truncated capture.
+			expect(run.report.tip).toBeGreaterThan(FORK_BLOCK);
+			expect(await pointsOf(run, EVIL_OWNER)).toBe(POINTS_AT_TIP);
 
-		await run.store.revertTo(FORK_BLOCK);
+			const started = performance.now();
+			await run.store.revertTo(FORK_BLOCK);
+			console.info(`stratagems revert on ${backend.name}: ${((performance.now() - started) / 1000).toFixed(1)} s`);
 
-		expect(await pointsOf(run, EVIL_OWNER)).toBe(POINTS_AFTER_REVERT);
-	}, 600_000);
+			expect(await pointsOf(run, EVIL_OWNER)).toBe(POINTS_AFTER_REVERT);
+		},
+		boundFor(backend.name),
+	);
 });
+
+function boundFor(backend: string): number {
+	return backend === 'indexeddb' ? INDEXEDDB_BOUND_MS : BOUND_MS;
+}
 
 async function pointsOf(run: WorkloadRun, owner: string): Promise<number | undefined> {
 	const row = await run.store.getCurrent<{points: number}>('computedPoints', {owner});
