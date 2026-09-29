@@ -1,6 +1,0 @@
----
-'@etherfold/state-store': minor
-'@etherfold/state-store-conformance': minor
----
-
-An entity declaration can name its parent (ADR-0098): `parent: {entity, as}` on the child, where `as` names the parent-side collection (new type `EntityRelation`). The child's leading id columns must be the parent's whole id, by name and in order, and the child must add at least one id column of its own; that, a parent that is not declared, and an `as` that collides with a column of the parent, with another relation's `as` on the same parent or with a read-surface name (`getCurrent`, `getAsOf`, `listCurrent`, `listAsOf`) are refused by `normalizeEntities`, so at declaration time and in the same words on every backend. A relation implies nothing about writes. `NormalizedEntity` carries `parent` when one is declared, the snapshot document writes it on the entity's declare line and checks it on install (an entity without one keeps the line it always had), and `assertDeclaredBy` compares it. `@etherfold/state-store-conformance` gains the group `a declared relation is checked against the ids`: a declared relation's children read back through the prefix listing, every refusal is asserted against the seam's own message, and a related entity survives a snapshot install, on every backend.

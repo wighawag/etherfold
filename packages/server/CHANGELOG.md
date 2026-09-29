@@ -1,5 +1,32 @@
 # @etherfold/server
 
+## 0.4.0
+
+### Minor Changes
+
+- ce4c319: GraphQL over HTTP (ADR-0099). `@etherfold/server` answers `GET` and `POST /graphql` with GraphQL Yoga on its Hono app, from the CANONICAL generation of the host's database (resolved per request) through the SQLite accessor: Yoga speaks HTTP only, and every request is answered by `@etherfold/graphql`'s `executeQuery`, so the one-block pin, the reorg guard, the error formatter and the codes are the in-process executor's, byte for byte; a request Yoga refuses on its own is reformatted by the same formatter (`invalid-query`). The new `ServerOptions.graphql` capability (`GraphQLServing`: `declarationsOf` a generation, and the `retention` and `finalityDepth` the folding process enforces) is what a host supplies; absent, the route answers `501 graphql-not-configured`, and it answers `503 no-canonical-generation`, `503 no-declarations` and `501 several-named-indexers` before GraphQL runs. New export `GRAPHQL_PATH`. `@etherfold/platform-nodejs`'s `startServer` passes `graphql` through. `etherfold serve`, `run` and `node` serve `/graphql`, with the schema built from the declarations the canonical generation's stored bundle carries (ADR-0092), and `run` and `node` claim the `--retention` they enforce (`index` exposes the write path only, so its `/graphql` answers `501`); the new exports `graphqlServing` and `declarationsOfStoredBundle` are that, and `publish` reads its declarations through the same helper. `@etherfold/graphql` gains `httpExecutor(url, {fetch?, headers?})`, which normalises a non-2xx (`http-status`), a body that is not a GraphQL result (`invalid-body`) and a network error (`network`) to the one transport-failure shape, and `executorToFetch(executor)`, which turns any executor into a `fetch` for client libraries that take one. BREAKING: `QueryContext.asOf` is now required (it defaulted to `true`, which made a host over a `revert-only` store refuse every query); copy it from the store's `capabilities.asOf`.
+
+### Patch Changes
+
+- Updated dependencies [b2bf1d2]
+- Updated dependencies [f432ff9]
+- Updated dependencies [b49101f]
+- Updated dependencies [4350448]
+- Updated dependencies [71eee1c]
+- Updated dependencies [ce4c319]
+- Updated dependencies [c2a6e02]
+- Updated dependencies [f680567]
+- Updated dependencies [5fad61f]
+- Updated dependencies [75e98a5]
+- Updated dependencies [40d772e]
+- Updated dependencies [57edeaa]
+- Updated dependencies [e20187d]
+- Updated dependencies [fcd96e3]
+- Updated dependencies [dfd1a8e]
+  - @etherfold/state-store-sqlite@0.4.0
+  - @etherfold/processor-entities@0.3.1
+  - @etherfold/graphql@0.1.0
+
 ## 0.3.0
 
 ### Minor Changes

@@ -1,6 +1,0 @@
----
-'@etherfold/state-store-indexeddb': minor
-'@etherfold/accessor': patch
----
-
-The IndexedDB accessor, rung 1 (ADR-0099): `IndexedDBStateStore.accessor({rowsExaminedBound?})` implements `@etherfold/accessor`'s seam by scanning the entity's key range and filtering and sorting in memory in the seam's order (text as UTF-8 bytes, not IndexedDB's UTF-16 key order; a `u256` numerically; nulls first ascending; ties by the id), so it answers what the SQLite accessor answers for every query within the bound. Past the rows-examined bound (default 25,000, the new `DEFAULT_ROWS_EXAMINED_BOUND`, configurable per deployment and reported as `accessor.rowsExaminedBound`) it refuses with `RowsExaminedBoundError`. As of a block it reads the current rows plus the versions closed since (the `upper` index), under the same bound; that delta counts the changes to every entity in the database, so an as-of query on a quiet entity can be refused because others changed, and the refusal says so. A relation page is one bounded key-range scan per parent. New exports: `indexedDBAccessor`, `IndexedDBAccessor`, `IndexedDBAccessorOptions`, `IndexedDBAccessorContext`, `DEFAULT_ROWS_EXAMINED_BOUND`. The accessor suite runs under `fake-indexeddb` and in Chromium, Firefox and WebKit. `@etherfold/accessor`'s README names the IndexedDB implementation.

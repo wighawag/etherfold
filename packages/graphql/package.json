@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/graphql",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "One GraphQL schema built from the entity declarations, answered through the accessor seam, with every operation pinned to one block; and the QueryExecutor contract every transport implements. Runtime-neutral. The worker executor (`workerExecutor`, and the host's `graphqlQueryHandler`) is the `./worker` subpath, the only part that knows `@etherfold/browser`. Its query conformance suite, which every executor must pass byte for byte, is the `./conformance` subpath.",
 	"publishConfig": {
 		"access": "public"
