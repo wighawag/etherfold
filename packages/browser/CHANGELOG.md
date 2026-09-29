@@ -1,5 +1,32 @@
 # ethereum-indexer-browser
 
+## 0.12.0
+
+### Minor Changes
+
+- c2a6e02: GraphQL over a browser host's port (ADR-0099). `@etherfold/graphql` gains the `./worker` subpath, the only part of it that knows `@etherfold/browser` (an optional peer, for its types only): `graphqlQueryHandler({accessor?, documents?})` is the host's query handler, answering every operation through `executeQuery` from the store the canonical generation folds into (the IndexedDB accessor, built once per store, and the schema once per declaration set) and reporting that generation; `workerExecutor(port)` is the `QueryExecutor` a tab holds, normalising a closed port to the transport failure `port-closed`, a dead host to `host-gone`, and a host that refuses (no handler) to `invalid-body`. Parsed and validated documents are cached: `DocumentCache` (100 per schema, least recently used first), passed to `executeQuery` and `localExecutor` through the new `options.documents`; `prepareDocument` is the uncached step. The root entry still imports nothing of `@etherfold/browser` (asserted), and a worker bundle without the handler contains no `graphql` (asserted); with it, a worker bundle grows by 48.3 KiB gzipped (measured, `docs/spikes/a-worker-host-answers-graphql-over-its-port/`). `@etherfold/browser` carries the generic `query` case on the envelope and `IndexerPort.query(request)`; the handler is injected as `query` on the hosted spec (`hostIndexerInThisWorker`, `hostIndexerInThisSharedWorker`, `serveIndexerHost`) or `mainThreadHost({query})`, and a host without one refuses the case. New types `HostQueryHandler`, `HostQueryContext`, `HostQueryOptions`; a READER under the tab election answers from the shared store, naming the generation its leader last named on the state-moved signal or, before that, the one its own spec names. A call on a closed port now rejects with the new `IndexerPortClosedError` (same messages as before). `@etherfold/state-store-indexeddb`'s `IndexedDBStateStore.tip()` is now public, the query layer's tip read. `@etherfold/state-store`'s claimed handle (`openForWriting`) forwards the store's `accessor` and `tip` where the store has them, as it forwards `applyBlocks`.
+- 577c0df: The generated read surface offers a parent's children through a declared relation (ADR-0098). For every child declaring `parent: {entity, as}`, `createReadSurface` puts a collection named `as` on the parent's reads, beside its four reads: `surface.placement.players.listCurrent({window, ordinal}, limit)` and `listAsOf(parentId, at, limit)`. It is the child's bounded id-prefix listing with the parent's whole key as the prefix, so it answers exactly what that listing answers, with the same required limit. Its name and its key are typed off the declaration (new types `ChildrenReads` and `CollectionsOf`, folded into `ReadSurface`), so renaming `as` or a parent's id column stops a consumer compiling. A parent key missing a column is refused naming the parent; extra properties are ignored rather than narrowing the collection. New helpers `relationsAmong` and `parentPrefix` are exported so other surfaces derive the same collections by the same rule. `createPortReadSurface` in `@etherfold/browser` offers the same collections, composed on the tab side from the child's listing, so nothing new crosses the port. The four existing reads are unchanged.
+
+### Patch Changes
+
+- 75e98a5: The tab-bundle canary in `bundlesForABrowser.test.ts` now detects `createQuerySurface`'s SQL query tier by its implementation (no `@etherfold/state-store-sqlite` module contributes bytes to the bundle, and nothing defines or calls `queryCurrent` or `queryAsOf`) rather than by the bare method names, which every tab now legitimately carries in `@etherfold/state-store`'s reserved read-surface names. Test-only change.
+- 6ec0244: The generated read surface types a declared `u256` (`{storage: 'blob', type: 'u256'}`, ADR-0098) as a `bigint`, derived from the declaration (ADR-0025). `FieldValue` of a semantic field is now the value its registered type decodes to, through the new exported type `SemanticValue<Name>` (read off the registry, so a `u256` is `bigint`), where it was `unknown`; a row from `createReadSurface`, from `createQuerySurface` and, in `@etherfold/browser`, from `createPortReadSurface` therefore types such a field `bigint | null`. The run-time value was already a `bigint` on every backend and across the worker port, which carries it by structured clone as itself.
+- ee799d4: Tests only, no change to the published code: the tab-lease suites stop racing the takeover. The FROZEN-leader case (node) now waits for the new leader's container (`canonical`) before advancing it, since ADR-0097 D4 announces the seat before the fresh start opens the container and `indexMore()` answers as a reader until then (diagnosed in `docs/spikes/the-frozen-leader-takeover-flake/`). The real-browser killed-worker and main-thread close cases poll until the tab that took over has reported its first fetched range before reading `ranges[0]`.
+- Updated dependencies [b2bf1d2]
+- Updated dependencies [7d381b1]
+- Updated dependencies [f432ff9]
+- Updated dependencies [4350448]
+- Updated dependencies [71eee1c]
+- Updated dependencies [c2a6e02]
+- Updated dependencies [a3e2b38]
+- Updated dependencies [5fad61f]
+- Updated dependencies [75e98a5]
+- Updated dependencies [57edeaa]
+- Updated dependencies [6ec0244]
+- Updated dependencies [577c0df]
+  - @etherfold/state-store-indexeddb@0.3.0
+  - @etherfold/state-store@0.4.0
+
 ## 0.11.0
 
 ### Minor Changes

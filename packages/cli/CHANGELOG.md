@@ -1,5 +1,39 @@
 # ethereum-indexer-cli
 
+## 0.10.0
+
+### Minor Changes
+
+- ce4c319: GraphQL over HTTP (ADR-0099). `@etherfold/server` answers `GET` and `POST /graphql` with GraphQL Yoga on its Hono app, from the CANONICAL generation of the host's database (resolved per request) through the SQLite accessor: Yoga speaks HTTP only, and every request is answered by `@etherfold/graphql`'s `executeQuery`, so the one-block pin, the reorg guard, the error formatter and the codes are the in-process executor's, byte for byte; a request Yoga refuses on its own is reformatted by the same formatter (`invalid-query`). The new `ServerOptions.graphql` capability (`GraphQLServing`: `declarationsOf` a generation, and the `retention` and `finalityDepth` the folding process enforces) is what a host supplies; absent, the route answers `501 graphql-not-configured`, and it answers `503 no-canonical-generation`, `503 no-declarations` and `501 several-named-indexers` before GraphQL runs. New export `GRAPHQL_PATH`. `@etherfold/platform-nodejs`'s `startServer` passes `graphql` through. `etherfold serve`, `run` and `node` serve `/graphql`, with the schema built from the declarations the canonical generation's stored bundle carries (ADR-0092), and `run` and `node` claim the `--retention` they enforce (`index` exposes the write path only, so its `/graphql` answers `501`); the new exports `graphqlServing` and `declarationsOfStoredBundle` are that, and `publish` reads its declarations through the same helper. `@etherfold/graphql` gains `httpExecutor(url, {fetch?, headers?})`, which normalises a non-2xx (`http-status`), a body that is not a GraphQL result (`invalid-body`) and a network error (`network`) to the one transport-failure shape, and `executorToFetch(executor)`, which turns any executor into a `fetch` for client libraries that take one. BREAKING: `QueryContext.asOf` is now required (it defaulted to `true`, which made a host over a `revert-only` store refuse every query); copy it from the store's `capabilities.asOf`.
+
+### Patch Changes
+
+- 75e98a5: Three small fixes from the query-layer drive. `normalizeEntities` now also refuses a relation whose `as` is `queryCurrent` or `queryAsOf`, the two reads `createQuerySurface` adds beside a parent's collections, which would otherwise have silently overwritten that collection on the SQLite query surface; `@etherfold/state-store-conformance` asserts both refusals in `a declared relation is checked against the ids`. `QuerySurface` (`@etherfold/state-store-sqlite`) now types a parent's relation collections (`CollectionsOf`), so `surface.<parent>.<as>` needs no cast on the server-side tier either. `startServer` (`@etherfold/platform-nodejs`) waits for the socket to listen before reading its address, so with a `hostname` it reports the port it actually bound rather than `0`, and a bind that fails (for example `EADDRINUSE`) rejects the call; `etherfold serve --host 127.0.0.1 --port 0` therefore prints a usable URL. Every import guard that lists a package's imports (in `@etherfold/state-store-sqlite`, `@etherfold/state-store-patch`, `@etherfold/state-store-indexeddb` and `@etherfold/graphql`) now uses one matcher that crosses newlines and also catches `export ... from`, with a fixture case proving it; `etherfold` gains a test for the `serve` line. Both are test-only changes.
+- 40d772e: The SQLite accessor (`VersionedStateStore.accessor()`, ADR-0099) now refuses an as-of `find` or `children` read below `retainedFrom()`, not only below the retention its own handle claims: a block below the floor a prune pass RECORDED in the database throws `BlockNotRetainedError` (`reason: 'outside-window'`, `retained` naming the blocks storage still holds), so `etherfold serve`, which opens the database with no retention of its own, answers a GraphQL `block:` below the writer's prune floor with `block-not-retained` instead of from partly deleted history. A database that was never pruned is answered exactly as before, and a `revert-only` store still refuses every block. `etherfold` gains a test proving it end to end over `serve`'s `/graphql`.
+- Updated dependencies [b2bf1d2]
+- Updated dependencies [7d381b1]
+- Updated dependencies [f432ff9]
+- Updated dependencies [4350448]
+- Updated dependencies [71eee1c]
+- Updated dependencies [ce4c319]
+- Updated dependencies [55d0115]
+- Updated dependencies [35d9a9f]
+- Updated dependencies [c2a6e02]
+- Updated dependencies [f680567]
+- Updated dependencies [5fad61f]
+- Updated dependencies [75e98a5]
+- Updated dependencies [40d772e]
+- Updated dependencies [57edeaa]
+- Updated dependencies [6ec0244]
+- Updated dependencies [577c0df]
+  - @etherfold/state-store-sqlite@0.4.0
+  - @etherfold/state-store@0.4.0
+  - @etherfold/processor-entities@0.3.1
+  - @etherfold/server@0.4.0
+  - @etherfold/platform-nodejs@0.3.0
+  - @etherfold/fetcher-host@0.2.2
+  - @etherfold/platform-nodejs-fetcher@0.2.2
+
 ## 0.9.0
 
 ### Minor Changes
