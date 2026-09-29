@@ -65,11 +65,27 @@ Predictors for the whole stream come from replaying it on the memory store: 29,4
 
 So the revert case alone exceeds its own 600,000 ms bound even on this machine, which the hook failure had been hiding: the replay never got that far. The other machine's measured 2,599 s replay is 2.9 times this extrapolation, which is the spread between a desktop Zen 5 and a laptop; a GitHub-hosted runner is not faster than either.
 
+## Measured on CI
+
+The workflow's first run (GitHub Actions run [36502194400](https://github.com/wighawag/etherfold/actions/runs/36502194400), 2026-09-29, `ubuntu-latest`) replayed the whole stream at full length on every backend, 51 of 51 cases passing:
+
+| on a GitHub runner | measured |
+| --- | ---: |
+| full replay (`beforeAll`) on `indexeddb` | **2,052.8 s** (about 34 minutes) |
+| the revert case on `indexeddb` | **2,170.5 s** (about 36 minutes) |
+| replay on `sqlite` / `patch` / `memory` | 9.2 s / 1.8 s / 1.4 s |
+| the whole `test:all-backends` target | 4,238.6 s |
+| checkout, install and build | about 66 s |
+
+That is 2.3 and 2.4 times this machine's extrapolation, and faster than the other machine's 2,599 s replay. The revert costs about as much as the replay (1.06 times), as the model predicted (900 s against 890 s), which is further evidence that both are the same scan.
+
 ## Decision: raise the timeouts
 
 The cost is the shim's and batching does not change its shape, so the timeouts go up rather than the replay changing. Both IndexedDB bounds in `test/alpha1.test.ts` (the `beforeAll` replay and the revert case) are **5,400,000 ms (90 minutes)**: twice the SLOWEST measured full replay (2 × 2,599 s = 5,198 s), rounded up. Twice this machine's extrapolation (about 1,800 s) would already fail on the machine that measured 2,599 s, so the anchor is the slowest real measurement rather than the fastest machine's model. The other three backends keep 600,000 ms; they replay in seconds.
 
-The scheduled run is `.github/workflows/stratagems-all-backends.yml`, with `timeout-minutes: 200` (the two 90-minute bounds plus about 20 minutes for install, build and the other backends, so a named vitest timeout fails before the runner kills the job). Its run prints `stratagems replay on <backend>: N s` and the revert's time, which is the full-length figure on a CI runner that this spike could only extrapolate; if it comes in far under the bounds, they can be tightened from it.
+The scheduled run is `.github/workflows/stratagems-all-backends.yml`. Its run prints `stratagems replay on <backend>: N s` and the revert's time, which is the full-length figure on a CI runner that this spike could only extrapolate.
+
+**Set again from the CI figures.** Each bound is now twice the slowest REAL full-length measurement of its own step, rounded up to the next 5 minutes. The replay stays at **5,400,000 ms (90 minutes)**: the slowest replay is still the other machine's 2,599 s (2 × 2,599 s = 5,198 s). The revert gets its own bound, **4,500,000 ms (75 minutes)**: the only full-length revert measured is CI's 2,170.5 s (2 × 2,170.5 s = 4,341 s). The workflow's `timeout-minutes` is **185**: the two bounds (165 minutes) plus 20 minutes for checkout, install, build and the other backends, which took about 83 s on that run, so a named vitest timeout still fails before the runner kills the job.
 
 ## Reproduce
 
