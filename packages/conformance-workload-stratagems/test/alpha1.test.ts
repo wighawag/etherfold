@@ -17,8 +17,8 @@
  *
  * IndexedDB is in the fast case and NOT in this one by default, and the reason
  * is the shim rather than the backend: on `fake-indexeddb` this replay costs
- * 2,599 s on one machine and 2,052.8 s on a GitHub runner (both measured, full
- * length; see below) and degrades quadratically with the stored version count,
+ * 2,599 s on one machine and 2,052.8 s to 2,165.1 s on a GitHub runner (all
+ * measured, full length; see below) and degrades quadratically with the stored version count,
  * where the same backend measured 45.6 ms/block on real Chromium (so under a
  * minute for the whole stream) in
  * `work/notes/findings/sqlite-in-the-browser.md`. Forty minutes on every pull
@@ -40,11 +40,14 @@
  * replay measured on a slower machine. The first run of the workflow below
  * (GitHub Actions run 36502194400, 2026-09-29, `ubuntu-latest`) then measured
  * both at full length: the replay 2,052.8 s and the revert 2,170.5 s, 51 of 51
- * cases passing. Each bound is twice the SLOWEST real full-length measurement of
- * its step, rounded up to the next 5 minutes, so a machine that has already run
- * it cannot fail it: {@link INDEXEDDB_REPLAY_BOUND_MS} (90 minutes, from the
- * 2,599 s replay) and {@link INDEXEDDB_REVERT_BOUND_MS} (75 minutes, from the
- * 2,170.5 s revert, the only full-length revert recorded). The method, the
+ * cases passing. A second run (36523554754, same day and runner image) measured
+ * the replay 2,165.1 s and the revert 2,295.1 s, about 5% slower on both: that is
+ * the run-to-run spread on a GitHub runner. Each bound is twice the SLOWEST real
+ * full-length measurement of its step, rounded up to the next 5 minutes, so a
+ * machine that has already run it cannot fail it:
+ * {@link INDEXEDDB_REPLAY_BOUND_MS} (90 minutes, from the 2,599 s replay) and
+ * {@link INDEXEDDB_REVERT_BOUND_MS} (80 minutes, from the 2,295.1 s revert of the
+ * second CI run, the slowest full-length revert recorded). The method, the
  * numbers and the script are in
  * `docs/spikes/the-full-stratagems-replay-on-fake-indexeddb/`.
  *
@@ -91,10 +94,10 @@ const POINTS_AFTER_REVERT = 6;
 const INDEXEDDB_REPLAY_BOUND_MS = 5_400_000;
 /**
  * The bound on the IndexedDB revert: twice the slowest full revert measured on
- * `fake-indexeddb` (2 x 2,170.5 s = 4,341 s, run 36502194400), rounded up to 75
- * minutes. See the header.
+ * `fake-indexeddb` (2 x 2,295.1 s = 4,590.2 s, run 36523554754), rounded up to
+ * 80 minutes. See the header.
  */
-const INDEXEDDB_REVERT_BOUND_MS = 4_500_000;
+const INDEXEDDB_REVERT_BOUND_MS = 4_800_000;
 /** Every other backend replays in well under a minute; ten is the old bound. */
 const BOUND_MS = 600_000;
 
