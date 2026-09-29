@@ -1,4 +1,8 @@
-import {describe, it, expect, afterEach} from 'vitest';
+import {describe, it, expect, afterEach, vi} from 'vitest';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import type {Client} from '@libsql/client';
 import {REORG_COUNTER_KEY, REORG_LAST_KEY} from '@etherfold/core';
 import {readSchemaState} from '@etherfold/server';
 import {createNodeDB, startServer, type RunningServer, type StartOptions} from '../src/index.js';
@@ -23,6 +27,29 @@ async function countAReorgOutsideTheServer(db: RemoteSQL, blockNumber: number): 
 			.bind(REORG_LAST_KEY, JSON.stringify({cause: 'absence', blockNumber, blockHash: '0xdead', at: 'now'})),
 	]);
 }
+
+/**
+ * Every libSQL client this test file's process opens, in order.
+ *
+ * `RemoteLibSQL` exposes no `close` and no `closed` (it only wraps a client), and
+ * a server whose bind failed hands back no handle at all, so the one place a test
+ * can observe whether the database the server OPENED was closed is the client
+ * underneath it. Recording it here, rather than exporting it from the adapter, keeps
+ * that observation out of the published API.
+ */
+const openedClients = vi.hoisted(() => [] as Client[]);
+
+vi.mock('@libsql/client', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@libsql/client')>();
+	return {
+		...actual,
+		createClient: (...args: Parameters<typeof actual.createClient>) => {
+			const client = actual.createClient(...args);
+			openedClients.push(client);
+			return client;
+		},
+	};
+});
 
 let running: RunningServer | undefined;
 
@@ -118,6 +145,39 @@ describe('the node adapter serves the app over real HTTP', () => {
 		await expect(startServer({db: ':memory:', hostname: '127.0.0.1', port: running.port})).rejects.toThrow(
 			/EADDRINUSE/,
 		);
+	});
+});
+
+describe('a server that fails to bind closes only what it opened', () => {
+	it('closes the database it opened from a URL, and still rejects with the bind error', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'etherfold-bind-'));
+		try {
+			running = await startServer({db: ':memory:', hostname: '127.0.0.1', port: 0});
+
+			const before = openedClients.length;
+			await expect(
+				startServer({db: `file:${join(dir, 'second.db')}`, hostname: '127.0.0.1', port: running.port}),
+			).rejects.toThrow(/EADDRINUSE/);
+
+			// exactly one client was opened by the failed start, and it is closed
+			const opened = openedClients.slice(before);
+			expect(opened).toHaveLength(1);
+			expect(opened[0].closed).toBe(true);
+		} finally {
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+
+	it('leaves a handle it was GIVEN open and usable', async () => {
+		running = await startServer({db: ':memory:', hostname: '127.0.0.1', port: 0});
+
+		const db = createNodeDB(':memory:');
+		const client = openedClients[openedClients.length - 1];
+		await expect(startServer({db, hostname: '127.0.0.1', port: running.port})).rejects.toThrow(/EADDRINUSE/);
+
+		expect(client.closed).toBe(false);
+		// and it still answers, carrying the schema the failed start applied through it
+		expect((await readSchemaState(db)).applied).toBe(true);
 	});
 });
 
