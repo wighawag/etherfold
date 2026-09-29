@@ -21,9 +21,12 @@
  * - `access-path`: the listing's `IDBKeyRange`, read off the real engine's own
  *   `IDBObjectStore.openCursor` rather than off a shim.
  * - `id-order`: the order each listing read ascends in on this engine, over ids
- *   that straddle the one place UTF-8 and UTF-16 order disagree. The spec also
- *   hands its per-engine declaration to the `conformance` run as `idOrder`, so
- *   the shared case asserts it too.
+ *   that straddle the one place UTF-8 and UTF-16 order disagree. The shared
+ *   `conformance` run asserts the same UTF-8 order (ADR-0021); this case reports
+ *   each read on its own so a disagreement names the engine and the read.
+ * - `old-layout`: a database written by hand with the previous key layout (id
+ *   columns as STRING keys, version 1), opened by this code: it must come back
+ *   empty in the new layout, which is this engine's version change doing it.
  * - `write` / `read` phases: persistence across a REAL page reload, which is the
  *   thing no node test can show.
  * - `multi-tab`: one database, four tabs, each OPENING it and writing its own
@@ -50,8 +53,21 @@ import {
 	type StateStoreBackend,
 } from '@etherfold/state-store';
 import {runAccessorConformance} from '@etherfold/accessor/conformance';
-import {ID_ORDER_SAMPLE, runStateStoreConformance, type DeclaredIdOrder} from '@etherfold/state-store-conformance';
-import {deleteDatabase, IndexedDBStateStore} from '../src/index.js';
+import {ID_ORDER_SAMPLE, runStateStoreConformance} from '@etherfold/state-store-conformance';
+import {
+	BLOCKS,
+	CURRENT,
+	CURSORS,
+	deleteDatabase,
+	HASH_INDEX,
+	IndexedDBStateStore,
+	LOWER_INDEX,
+	openDatabase,
+	SEAM,
+	UPPER_INDEX,
+	VERSIONS,
+	WRITER_KEY,
+} from '../src/index.js';
 import {processor, runWorkload} from './workload.js';
 
 type Params = Record<string, unknown>;
@@ -86,9 +102,6 @@ async function conformance(params: Params, timings: Timing[]): Promise<Record<st
 			runStateStoreConformance(
 				(declarations) => new IndexedDBStateStore(declarations, {databaseName: named(), ...options}),
 				{
-					// the order this engine's listings ascend in, as the spec declares it
-					// for this engine (see `id-order` below for what it measured)
-					idOrder: params.idOrder as DeclaredIdOrder | undefined,
 					// the CONTENTION chapter, which needs two handles on ONE database and
 					// is therefore the one part of the suite a factory cannot express. It
 					// belongs in a real engine more than anywhere else: `readwrite`
@@ -197,6 +210,19 @@ async function sameProcessor(params: Params, timings: Timing[]): Promise<Record<
  * seam's set read is a bounded key range and not a scan is made against
  * Chromium, Firefox and WebKit rather than against a node shim.
  */
+/**
+ * A key as plain data the harness can carry: a binary part (an id column, keyed
+ * by its UTF-8 bytes, `keys.ts`) becomes `{bytes: <its decoded string>}`, so the
+ * spec can see both WHAT the key said and that it was bytes on this engine.
+ */
+function keyParts(key: unknown): unknown {
+	if (Array.isArray(key)) return key.map(keyParts);
+	if (key instanceof ArrayBuffer || ArrayBuffer.isView(key)) {
+		return {bytes: new TextDecoder().decode(key as ArrayBuffer)};
+	}
+	return key;
+}
+
 async function accessPath(params: Params): Promise<Record<string, unknown>> {
 	const name = databaseName(params, 'access-path');
 	await deleteDatabase(name).catch(() => undefined);
@@ -227,8 +253,8 @@ async function accessPath(params: Params): Promise<Record<string, unknown>> {
 		if (query instanceof IDBKeyRange) {
 			opened.push({
 				on: this.name,
-				lower: query.lower,
-				upper: query.upper,
+				lower: keyParts(query.lower),
+				upper: keyParts(query.upper),
 				lowerOpen: query.lowerOpen,
 				upperOpen: query.upperOpen,
 			});
@@ -257,8 +283,8 @@ async function accessPath(params: Params): Promise<Record<string, unknown>> {
  * `ID_ORDER_SAMPLE` as `listCurrent`, `listAsOf` and `MutationContext.list` (two
  * of the ids staged in the block) return them, with a limit that covers all five.
  *
- * Reported rather than asserted here, so the spec compares each engine's answer
- * with the order it declares and a disagreement names the engine and the read.
+ * Reported rather than asserted here, so the spec compares each read with UTF-8
+ * byte order (ADR-0021) and a disagreement names the engine and the read.
  */
 async function idOrder(params: Params): Promise<Record<string, unknown>> {
 	const name = databaseName(params, 'id-order');
@@ -303,6 +329,78 @@ async function idOrder(params: Params): Promise<Record<string, unknown>> {
 		} finally {
 			await merging.close();
 		}
+	} finally {
+		await store.close();
+	}
+}
+
+/**
+ * A database as the previous key layout wrote it (version 1, id columns as
+ * string keys, rows either side of the UTF-8 / UTF-16 boundary, a block, a
+ * cursor and a writer claim), then opened by this code. Reports what the store
+ * sees before writing, and the order after writing the same ids afresh.
+ */
+async function oldLayout(params: Params): Promise<Record<string, unknown>> {
+	const name = databaseName(params, 'old-layout');
+	await deleteDatabase(name).catch(() => undefined);
+	const old = await openDatabase(name, 1, (db) => {
+		db.createObjectStore(SEAM);
+		db.createObjectStore(CURSORS);
+		db.createObjectStore(CURRENT);
+		const versions = db.createObjectStore(VERSIONS);
+		versions.createIndex(LOWER_INDEX, 'lower');
+		versions.createIndex(UPPER_INDEX, 'upper');
+		const blocks = db.createObjectStore(BLOCKS, {keyPath: 'number'});
+		blocks.createIndex(HASH_INDEX, 'hash', {unique: true});
+	});
+	await new Promise<void>((resolve, reject) => {
+		const tx = old.transaction([SEAM, CURSORS, CURRENT, VERSIONS, BLOCKS], 'readwrite');
+		for (const [position, player] of [
+			['\u{1F600}', 'U+1F600'],
+			['\uE000', 'U+E000'],
+		]) {
+			const values = {epoch: '7', position, playerIndex: '0', player};
+			tx.objectStore(CURRENT).put({lower: 100, values}, ['placement', '7', position, '0']);
+			tx.objectStore(VERSIONS).put({lower: 100, upper: null, values}, ['placement', '7', position, '0', 100]);
+		}
+		tx.objectStore(BLOCKS).put({number: 100, hash: '0x64', timestamp: 1_700_000_000});
+		tx.objectStore(CURSORS).put('100', 'sync');
+		tx.objectStore(SEAM).put('a-writer-from-the-old-build', WRITER_KEY);
+		tx.oncomplete = () => resolve();
+		tx.onerror = () => reject(tx.error);
+		tx.onabort = () => reject(tx.error);
+	});
+	old.close();
+
+	const store = new IndexedDBStateStore(
+		[{name: 'placement', id: ['epoch', 'position', 'playerIndex'], fields: {player: 'text'}}],
+		{databaseName: name},
+	);
+	await store.migrate();
+	try {
+		const listed = await store.listCurrent<Record<string, unknown>>('placement', {epoch: 7}, 10);
+		const before = {
+			rows: listed.rows,
+			truncated: listed.truncated,
+			tip: (await store.tip()) ?? null,
+			cursor: (await store.readCursor('sync')) ?? null,
+		};
+		await store.applyBlock({number: 100, hash: '0x64', timestamp: 1_700_000_000}, [
+			{
+				type: 'upsert',
+				entity: 'placement',
+				id: {epoch: 7, position: '\u{1F600}', playerIndex: 0},
+				values: {player: 'U+1F600'},
+			},
+			{
+				type: 'upsert',
+				entity: 'placement',
+				id: {epoch: 7, position: '\uE000', playerIndex: 0},
+				values: {player: 'U+E000'},
+			},
+		]);
+		const after = await store.listCurrent<Record<string, unknown>>('placement', {epoch: 7}, 10);
+		return {before, after: after.rows.map((row) => row.player)};
 	} finally {
 		await store.close();
 	}
@@ -616,6 +714,9 @@ const cut: CodeUnderTest = {
 						break;
 					case 'id-order':
 						results = await idOrder(ctx.params);
+						break;
+					case 'old-layout':
+						results = await oldLayout(ctx.params);
 						break;
 					case 'multi-tab':
 						results = await multiTab(ctx.params, timings);

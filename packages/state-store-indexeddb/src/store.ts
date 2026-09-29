@@ -45,6 +45,7 @@ import {
 	CURRENT,
 	CURSORS,
 	HASH_INDEX,
+	KEY_LAYOUT_SINCE,
 	listingRange,
 	LOWER_INDEX,
 	rowKey,
@@ -884,18 +885,27 @@ export class IndexedDBStateStore implements StateStoreBackend {
 /**
  * Bring the database to the declared shape, whatever version it was at.
  *
- * It CONVERGES rather than stepping: every creation is `contains`-guarded, so
- * this one function handles any `oldVersion` and no per-step branch is ever
- * written. There is nothing behind it to step over today (`SCHEMA_VERSION` is 1
- * and nothing is published), and that is exactly why it is written this way
- * rather than as a ladder: the first upgrade after publish adds its store here
- * and needs no version arithmetic at all.
+ * A database written with a key layout this code cannot read (below
+ * `KEY_LAYOUT_SINCE`: id columns as string keys, so UTF-16 key order) is
+ * DISCARDED first: every object store is deleted, so the state, its history,
+ * the block records, the cursors and the writer claim all go, and the database
+ * comes back EMPTY in the current layout for the state to be refolded. It is
+ * never re-keyed row by row and never read in the old order. That is a choice
+ * for a package nobody has a database of yet (`keys.ts`, `SCHEMA_VERSION`),
+ * and it is the whole of the upgrade path between the two layouts.
+ *
+ * Then it CONVERGES rather than stepping: every creation is `contains`-guarded,
+ * so this one function handles any `oldVersion` and a new object store needs no
+ * per-step branch and no version arithmetic.
  *
  * The version is this PACKAGE's and never a processor's: the object stores do
  * not depend on the declarations (`keys.ts` says why), so a processor gaining an
  * entity never needs an upgrade transaction that an open tab could block.
  */
-function upgrade(db: IDBDatabase): void {
+function upgrade(db: IDBDatabase, _transaction: IDBTransaction, oldVersion: number): void {
+	if (oldVersion > 0 && oldVersion < KEY_LAYOUT_SINCE) {
+		for (const name of Array.from(db.objectStoreNames)) db.deleteObjectStore(name);
+	}
 	if (!db.objectStoreNames.contains(SEAM)) db.createObjectStore(SEAM);
 	if (!db.objectStoreNames.contains(CURSORS)) db.createObjectStore(CURSORS);
 	if (!db.objectStoreNames.contains(CURRENT)) db.createObjectStore(CURRENT);

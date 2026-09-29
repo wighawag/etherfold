@@ -6,28 +6,27 @@ import {PLACEMENT, block} from './utils/fixtures.js';
 
 /**
  * What `MutationContext.list` answers on THIS backend when the limit CUTS the
- * listing, measured beside the reference store. Evidence for
- * `the-listings-id-order-is-decided`, tabulated in
- * `docs/spikes/the-listings-id-order-per-backend/README.md`.
+ * listing, beside the reference store: the SAME rows, UTF-8's first ones, inside
+ * a block and out of it (ADR-0021).
  *
- * The conformance suite asserts each read's ORDER with a limit that covers every
- * id (`idOrder`, in `@etherfold/state-store-conformance`). What it does not
- * assert is the SET a cut keeps, because on this backend that is not one order's
- * first rows: the read-your-writes merge asks the store for `limit + staged`
- * rows, which SQLite answers in UTF-8 byte order off its BINARY id index, then
- * re-sorts the merge with `compareIds` (UTF-16 code units) and keeps the first
- * `limit`. So which rows survive the cut depends on whether a row is STORED
- * (cut in UTF-8 order) or STAGED (never cut by the store).
+ * The read-your-writes merge asks the store for `limit + staged` rows, adds the
+ * staged ones, re-sorts with `compareIds` and keeps the first `limit`. That is
+ * only one listing when the store and the merge share ONE order. Before the
+ * order was decided they did not here: SQLite cut its stored rows in UTF-8 byte
+ * order off its BINARY id index and the merge re-sorted in UTF-16 code units, so
+ * which rows survived depended on whether a row was STORED or STAGED, and one
+ * scenario below answered a set that was neither order's first rows. The
+ * measurement is in `docs/spikes/the-listings-id-order-per-backend/README.md`;
+ * this pins the answer after the decision, so a store and a merge drifting
+ * apart again is seen.
  *
- * This pins what the code does TODAY so a change to it is seen; it is not a
- * statement of what it should do, which is the decision the evidence is for.
- *
- * The ids: `a` (U+0061), U+E000, U+FFFD, U+1F600 and U+1F601. In UTF-16 the two
- * supplementary-plane characters sort before U+E000 (their high surrogate is
- * U+D83D); in UTF-8 they sort after U+FFFD.
+ * The ids: `a` (U+0061), U+E000, U+FFFD, U+1F600 and U+1F601. In UTF-8 the two
+ * supplementary-plane characters sort after U+FFFD; in UTF-16 (JavaScript's `<`)
+ * they would sort before U+E000, because their high surrogate is U+D83D.
  */
 
 const CHARACTERS: Record<string, string> = {
+	'U+0042': 'B',
 	'U+0061': 'a',
 	'U+E000': '\uE000',
 	'U+FFFD': '\uFFFD',
@@ -68,43 +67,46 @@ async function insideABlock(backend: string, stage: (set: (label: string) => voi
 	return labels(await state.list('placement', {epoch: 7}, 2));
 }
 
+/** UTF-8's first two of what is stored, which every answer below has to be. */
+const UTF8_CUT = {rows: ['U+0061', 'U+E000'], truncated: true};
+
 describe('the bounded listing, cut by its limit inside a block', () => {
-	it('outside a block, each store cuts in its own order: SQLite in UTF-8 bytes, memory in UTF-16 code units', async () => {
-		const sqlite = await BACKENDS.sqlite();
-		const memory = await BACKENDS.memory();
-
-		expect(labels(await sqlite.listCurrent('placement', {epoch: 7}, 2))).toEqual({
-			rows: ['U+0061', 'U+E000'],
-			truncated: true,
-		});
-		expect(labels(await memory.listCurrent('placement', {epoch: 7}, 2))).toEqual({
-			rows: ['U+0061', 'U+1F600'],
-			truncated: true,
-		});
+	it('outside a block, both stores cut in UTF-8 byte order', async () => {
+		for (const backend of Object.keys(BACKENDS)) {
+			const store = await BACKENDS[backend]();
+			expect(labels(await store.listCurrent('placement', {epoch: 7}, 2)), backend).toEqual(UTF8_CUT);
+		}
 	});
 
-	it('with nothing staged under the prefix, SQLite keeps the UTF-8 cut: the same SET as its listing outside the block', async () => {
-		// UTF-16's first two would be U+0061, U+1F600, which memory answers
-		expect(await insideABlock('sqlite', () => {})).toEqual({rows: ['U+0061', 'U+E000'], truncated: true});
-		expect(await insideABlock('memory', () => {})).toEqual({rows: ['U+0061', 'U+1F600'], truncated: true});
+	it('with nothing staged under the prefix, the cut is the same SET as the listing outside the block', async () => {
+		expect(await insideABlock('sqlite', () => {})).toEqual(UTF8_CUT);
+		expect(await insideABlock('memory', () => {})).toEqual(UTF8_CUT);
 	});
 
-	it('with a STORED row overwritten in the block, SQLite still keeps the UTF-8 cut', async () => {
-		// one staged key widens the store's fetch to 3 rows, all of them UTF-8's
-		// first three, and the overwrite replaces one of them
+	it('with a STORED row overwritten in the block, the cut is still UTF-8 order', async () => {
 		const overwrite = (set: (label: string) => void) => set('U+0061');
 
-		expect(await insideABlock('sqlite', overwrite)).toEqual({rows: ['U+0061', 'U+E000'], truncated: true});
-		expect(await insideABlock('memory', overwrite)).toEqual({rows: ['U+0061', 'U+1F600'], truncated: true});
+		expect(await insideABlock('sqlite', overwrite)).toEqual(UTF8_CUT);
+		expect(await insideABlock('memory', overwrite)).toEqual(UTF8_CUT);
 	});
 
-	it("with a NEW row staged in the block, SQLite answers a set that is NEITHER order's first rows", async () => {
-		// the store's fetch (3 rows, UTF-8) leaves out the stored U+1F600, the
-		// staged U+1F601 is never cut by the store, and the UTF-16 re-sort puts it
-		// first. UTF-16's answer is U+0061, U+1F600; UTF-8's is U+0061, U+E000.
+	it('with a NEW row staged in the block, the cut is UTF-8 order over stored and staged rows alike', async () => {
+		// the staged U+1F601 sorts after every stored row, so it is cut like one.
+		// Before the order was decided SQLite answered U+0061, U+1F601 here: the
+		// store had already dropped U+1F600 in UTF-8 order, and the merge's UTF-16
+		// re-sort put the staged row first.
 		const staged = (set: (label: string) => void) => set('U+1F601');
 
-		expect(await insideABlock('sqlite', staged)).toEqual({rows: ['U+0061', 'U+1F601'], truncated: true});
-		expect(await insideABlock('memory', staged)).toEqual({rows: ['U+0061', 'U+1F600'], truncated: true});
+		expect(await insideABlock('sqlite', staged)).toEqual(UTF8_CUT);
+		expect(await insideABlock('memory', staged)).toEqual(UTF8_CUT);
+	});
+
+	it('with a staged row that sorts INTO the cut, it takes its place in UTF-8 order', async () => {
+		// `B` (U+0042) sorts before every stored row, so the cut keeps it and drops
+		// U+E000, whichever side of the merge each row came from.
+		const staged = (set: (label: string) => void) => set('U+0042');
+
+		expect(await insideABlock('sqlite', staged)).toEqual({rows: ['U+0042', 'U+0061'], truncated: true});
+		expect(await insideABlock('memory', staged)).toEqual({rows: ['U+0042', 'U+0061'], truncated: true});
 	});
 });

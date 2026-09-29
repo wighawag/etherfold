@@ -12,7 +12,7 @@ import {
 	placed,
 	playersOf,
 } from '../fixtures.js';
-import type {ConformanceCase, IdOrder, StateStoreConformanceOptions, StateStoreFactory} from '../types.js';
+import type {ConformanceCase, StateStoreFactory} from '../types.js';
 
 const GROUP = 'bounded id-prefix listing';
 
@@ -34,10 +34,7 @@ const GROUP = 'bounded id-prefix listing';
 export function boundedListingCases(
 	factory: StateStoreFactory,
 	capabilities: StateStoreCapabilities,
-	options: StateStoreConformanceOptions = {},
 ): ConformanceCase[] {
-	const idOrder = options.idOrder ?? {};
-
 	/**
 	 * The ids of `ID_ORDER_SAMPLE` as children of epoch 7, one `position` each.
 	 * The position column is where the sample lives, so the order under test is
@@ -53,12 +50,19 @@ export function boundedListingCases(
 	}
 
 	/**
-	 * What every id-order case asserts: the rows came back in EXACTLY the declared
-	 * order. The limit covers every id written, so what is measured is the order
-	 * and never which rows a cut kept.
+	 * What every id-order case asserts: the rows came back in EXACTLY UTF-8 byte
+	 * order, the one order ADR-0021 states. The limit covers every id written, so
+	 * what is measured is the order and never which rows a cut kept. A backend
+	 * that answers in UTF-16 code units (JavaScript's `<`, or IndexedDB over a
+	 * string key) is named as such, so the failure says which mistake it is.
 	 */
-	function expectOrder(read: string, rows: readonly Record<string, unknown>[], order: IdOrder = 'utf-8') {
-		expect(playersOf(rows), `${read}, declared as ${order}`).toEqual(ID_ORDER_SEQUENCES[order]);
+	function expectOrder(read: string, rows: readonly Record<string, unknown>[]) {
+		const answered = playersOf(rows);
+		const drifted =
+			JSON.stringify(answered) === JSON.stringify(ID_ORDER_SEQUENCES['utf-16'])
+				? ' (this is UTF-16 code-unit order)'
+				: '';
+		expect(answered, `${read} must ascend in UTF-8 byte order${drifted}`).toEqual(ID_ORDER_SEQUENCES['utf-8']);
 	}
 
 	/** Three children of epoch 7, applied out of order, plus one of epoch 8. */
@@ -178,22 +182,22 @@ export function boundedListingCases(
 				);
 			},
 
-			// ADR-0021 does not say WHICH string order "lexicographic" is, and the
-			// backends disagree, so each declares its own (`idOrder`) and this asserts
-			// it POSITIVELY: a backend that changes its order, in either direction,
-			// goes red here. Evidence for `the-listings-id-order-is-decided`, in
+			// ADR-0021 states the order as UTF-8 bytes (code point order) on every
+			// backend, and these ids straddle the one place UTF-16 code-unit order,
+			// which JavaScript's `<` and an IndexedDB string key give for free,
+			// disagrees. The evidence the decision was taken on is
 			// `docs/spikes/the-listings-id-order-per-backend/README.md`.
-			'listCurrent ascends in the declared id order across the UTF-8 / UTF-16 boundary': async () => {
+			'listCurrent ascends in UTF-8 byte order across the UTF-8 / UTF-16 boundary': async () => {
 				const store = await opened(factory);
 				await store.applyBlock(block(LADDER_BASE), sampled());
 
 				const listing = await store.listCurrent<Record<string, unknown>>('placement', {epoch: 7}, 10);
 
-				expectOrder('listCurrent', listing.rows, idOrder.listCurrent);
+				expectOrder('listCurrent', listing.rows);
 				expect(listing.truncated).toBe(false);
 			},
 
-			'MutationContext.list, with ids staged in the block, ascends in the declared id order': async () => {
+			'MutationContext.list, with ids staged in the block, ascends in UTF-8 byte order': async () => {
 				// three ids stored, two staged: the merge sees both kinds on each side
 				// of the boundary, and the limit still covers every one of them.
 				const store = await opened(factory);
@@ -203,8 +207,37 @@ export function boundedListingCases(
 
 				const listing = await state.list<Record<string, unknown>>('placement', {epoch: 7}, 10);
 
-				expectOrder('MutationContext.list', listing.rows, idOrder.mutationContextList);
+				expectOrder('MutationContext.list', listing.rows);
 				expect(listing.truncated).toBe(false);
+			},
+
+			'MutationContext.list, CUT by its limit inside a block, keeps the first rows in UTF-8 byte order': async () => {
+				// The merge asks the store for `limit + staged` rows, adds the staged ones
+				// and re-sorts. Unless the store and the merge share ONE order, the rows a
+				// cut keeps depend on whether a row is stored (cut by the store) or staged
+				// (never cut by it): measured on SQLite before the order was decided, this
+				// answered U+0061, U+1F601, the first rows of neither order.
+				const store = await opened(factory);
+				const child = (id: string, label: string) => ({
+					type: 'upsert' as const,
+					entity: 'placement',
+					id: {epoch: 7, position: id, playerIndex: 0},
+					values: {player: label},
+				});
+				await store.applyBlock(block(LADDER_BASE), [
+					child('a', 'U+0061'),
+					child('\uE000', 'U+E000'),
+					child('\uFFFD', 'U+FFFD'),
+					child('\u{1F600}', 'U+1F600'),
+				]);
+				const {state} = createMutationContext(store);
+				const staged = child('\u{1F601}', 'U+1F601');
+				state.set(staged.entity, staged.id, staged.values);
+
+				const listing = await state.list<Record<string, unknown>>('placement', {epoch: 7}, 2);
+
+				expect(playersOf(listing.rows)).toEqual(['U+0061', 'U+E000']);
+				expect(listing.truncated).toBe(true);
 			},
 		}),
 
@@ -232,7 +265,7 @@ export function boundedListingCases(
 						expect(before.rows).toEqual([]);
 					},
 
-					'listAsOf ascends in the declared id order across the UTF-8 / UTF-16 boundary': async () => {
+					'listAsOf ascends in UTF-8 byte order across the UTF-8 / UTF-16 boundary': async () => {
 						const store = await opened(factory);
 						await store.applyBlock(block(LADDER_BASE), sampled());
 						// a later block, so the read is a historical one and not the tip
@@ -240,7 +273,7 @@ export function boundedListingCases(
 
 						const listing = await store.listAsOf<Record<string, unknown>>('placement', {epoch: 7}, LADDER_BASE, 10);
 
-						expectOrder('listAsOf', listing.rows, idOrder.listAsOf);
+						expectOrder('listAsOf', listing.rows);
 						expect(listing.truncated).toBe(false);
 					},
 				})

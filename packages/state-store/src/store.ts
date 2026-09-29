@@ -89,7 +89,8 @@ export interface StateStore {
 
 	/**
 	 * The rows whose declared id starts with `prefix`, at the tip, in ascending
-	 * id order, at most `limit` of them.
+	 * id order, at most `limit` of them. The id order is UTF-8 byte order, each
+	 * column in turn (`compareIds`, ADR-0021), on every backend.
 	 *
 	 * This is the derived collection a one-to-many is read through, and the
 	 * REQUIRED limit is the whole reason it can be asked of any backend: the

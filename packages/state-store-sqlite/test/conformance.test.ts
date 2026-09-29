@@ -52,23 +52,6 @@ import {createTestDB} from './utils/db.js';
 const storedCurrent: StateStoreConformanceOptions['storedCurrent'] = (store, entity, id) =>
 	(store as VersionedStateStore).storedCurrent(entity, id);
 
-/**
- * The string order this store's listings actually ascend in, which is NOT one
- * order. `listCurrent` and `listAsOf` walk the id index, whose TEXT columns use
- * SQLite's default BINARY collation over UTF-8, so they ascend in UTF-8 byte
- * order. `MutationContext.list` asks the store for its rows and then re-sorts
- * the merge with `compareIds` (JavaScript's `<`), so inside a block the same
- * rows come back in UTF-16 code-unit order. Declared, not endorsed: which order
- * the listing SHOULD use is `the-listings-id-order-is-decided`'s question, and
- * what the merge does when a limit CUTS the listing is measured in
- * `listing-id-order.test.ts`.
- */
-const idOrder: StateStoreConformanceOptions['idOrder'] = {
-	listCurrent: 'utf-8',
-	listAsOf: 'utf-8',
-	mutationContextList: 'utf-16',
-};
-
 /** Two handles on one libSQL database: sharing its storage, or addressed apart. */
 const twoWriters: TwoWriters = {
 	sharingStorage(declarations) {
@@ -87,19 +70,19 @@ const twoWriters: TwoWriters = {
 await describeStateStoreConformance(
 	'VersionedStateStore, claiming unbounded history',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
 	'VersionedStateStore, claiming a 60-block window',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: {blocks: 60}, finalityDepth: 60}),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
 	'VersionedStateStore, set to revert-only',
 	(declarations) => new VersionedStateStore(createTestDB(), declarations, {retention: 'revert-only'}),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
@@ -111,7 +94,6 @@ await describeStateStoreConformance(
 	},
 	{
 		storedCurrent,
-		idOrder,
 		// under a namespace too: the token table is inside it, so a namespaced
 		// generation's claim covers its own tables and nothing else.
 		twoWriters: {

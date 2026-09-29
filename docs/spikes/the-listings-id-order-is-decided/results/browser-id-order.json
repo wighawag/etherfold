@@ -1,0 +1,195 @@
+{
+	"what": "the id-order, old-layout and access-path cases of packages/state-store-indexeddb/browser/state-store.spec.ts after the decision (UTF-8 byte order, id columns keyed by their UTF-8 bytes), extracted from its browser-<project>.json output",
+	"playwright": "1.62.1",
+	"engines": {
+		"chromium": {
+			"ranAt": "2026-09-29T09:18:20.756Z",
+			"userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+			"idOrder": {
+				"listCurrent": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				],
+				"listAsOf": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				],
+				"mutationContextList": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				]
+			},
+			"oldLayout": {
+				"before": {
+					"rows": [],
+					"truncated": false,
+					"tip": null,
+					"cursor": null
+				},
+				"after": [
+					"U+E000",
+					"U+1F600"
+				]
+			},
+			"accessPath": {
+				"opened": [
+					{
+						"on": "current",
+						"lower": [
+							"placement",
+							{
+								"bytes": "7"
+							}
+						],
+						"upper": [
+							"placement",
+							{
+								"bytes": "7"
+							},
+							[]
+						],
+						"lowerOpen": false,
+						"upperOpen": false
+					}
+				],
+				"rows": 4,
+				"visited": 4
+			}
+		},
+		"firefox": {
+			"ranAt": "2026-09-29T09:18:29.543Z",
+			"userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0",
+			"idOrder": {
+				"listCurrent": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				],
+				"listAsOf": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				],
+				"mutationContextList": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				]
+			},
+			"oldLayout": {
+				"before": {
+					"rows": [],
+					"truncated": false,
+					"tip": null,
+					"cursor": null
+				},
+				"after": [
+					"U+E000",
+					"U+1F600"
+				]
+			},
+			"accessPath": {
+				"opened": [
+					{
+						"on": "current",
+						"lower": [
+							"placement",
+							{
+								"bytes": "7"
+							}
+						],
+						"upper": [
+							"placement",
+							{
+								"bytes": "7"
+							},
+							[]
+						],
+						"lowerOpen": false,
+						"upperOpen": false
+					}
+				],
+				"rows": 4,
+				"visited": 4
+			}
+		},
+		"webkit": {
+			"ranAt": "2026-09-29T09:18:34.845Z",
+			"userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+			"idOrder": {
+				"listCurrent": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				],
+				"listAsOf": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				],
+				"mutationContextList": [
+					"U+0042",
+					"U+0061",
+					"U+E000",
+					"U+FFFD",
+					"U+1F600"
+				]
+			},
+			"oldLayout": {
+				"before": {
+					"rows": [],
+					"truncated": false,
+					"tip": null,
+					"cursor": null
+				},
+				"after": [
+					"U+E000",
+					"U+1F600"
+				]
+			},
+			"accessPath": {
+				"opened": [
+					{
+						"on": "current",
+						"lower": [
+							"placement",
+							{
+								"bytes": "7"
+							}
+						],
+						"upper": [
+							"placement",
+							{
+								"bytes": "7"
+							},
+							[]
+						],
+						"lowerOpen": false,
+						"upperOpen": false
+					}
+				],
+				"rows": 4,
+				"visited": 4
+			}
+		}
+	}
+}

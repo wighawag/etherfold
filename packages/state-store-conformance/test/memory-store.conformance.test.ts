@@ -22,16 +22,11 @@ import {describeStateStoreConformance, type StateStoreConformanceOptions} from '
  * subject is the store a deployment would actually build.
  *
  * Each run also hands over `storedCurrent`, this store's non-seam read of a row
- * as it holds it, so the suite can check a `u256` is held canonically (ADR-0098),
- * and `idOrder`, the string order its listings actually ascend in: UTF-16 code
- * units on every read, since the scan and the read-your-writes merge both sort
- * with `compareIds`, which is JavaScript's `<`. Declared, not endorsed: which
- * order the listing SHOULD use is `the-listings-id-order-is-decided`'s question.
+ * as it holds it, so the suite can check a `u256` is held canonically (ADR-0098).
  */
 
 const options: StateStoreConformanceOptions = {
 	storedCurrent: (store, entity, id) => (store as MemoryStateStore).storedCurrent(entity, id),
-	idOrder: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
 };
 
 await describeStateStoreConformance(

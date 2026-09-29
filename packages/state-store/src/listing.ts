@@ -93,6 +93,17 @@ export function hasIdPrefix(id: readonly string[], prefix: readonly string[]): b
  * Ascending order of the declared id: column by column, over the STRINGIFIED
  * values, which is the order a key-prefix range scan produces for free.
  *
+ * Each column compares by its UTF-8 BYTES (`compareUtf8`), which is code point
+ * order, and it is the one id order every backend keeps (ADR-0021): SQLite's
+ * BINARY collation over its UTF-8 TEXT columns, IndexedDB's binary key over the
+ * UTF-8 encoding of each id column (`keys.ts` in
+ * `@etherfold/state-store-indexeddb`), and this comparator for the in-memory
+ * stores and for the read-your-writes merge in `MutationContext.list`. It is
+ * NOT JavaScript's `<`, which compares UTF-16 code units and disagrees for an id
+ * above U+FFFF against one from U+E000 to U+FFFF; had the merge used it, a limit
+ * could cut a different SET of rows inside a block than outside one
+ * (`docs/spikes/the-listings-id-order-per-backend/README.md`).
+ *
  * It is therefore LEXICOGRAPHIC, not numeric: `'10'` sorts before `'9'`. An
  * ordered child collection whose key is a number wants a fixed-width or
  * zero-padded key (or, better, a key that is naturally ordered such as
@@ -102,10 +113,37 @@ export function hasIdPrefix(id: readonly string[], prefix: readonly string[]): b
  */
 export function compareIds(a: readonly string[], b: readonly string[]): number {
 	for (let index = 0; index < Math.min(a.length, b.length); index++) {
-		if (a[index] < b[index]) return -1;
-		if (a[index] > b[index]) return 1;
+		const compared = compareUtf8(a[index], b[index]);
+		if (compared !== 0) return compared;
 	}
 	return a.length - b.length;
+}
+
+/**
+ * Two strings in the order of their UTF-8 bytes, which is code point order,
+ * without encoding either.
+ *
+ * UTF-16 code units already order like code points except where a surrogate
+ * (U+D800 to U+DFFF, the halves of a supplementary-plane character) meets a
+ * unit from U+E000 to U+FFFF: as units the surrogate is smaller, as code points
+ * the character it belongs to is larger. So at the first unit that differs,
+ * lift surrogates above U+FFFF's range and compare.
+ *
+ * The one text order the seams promise: the listing's id order (ADR-0021) and
+ * the accessor's text order (ADR-0099) are both this.
+ */
+export function compareUtf8(a: string, b: string): number {
+	const length = Math.min(a.length, b.length);
+	for (let index = 0; index < length; index++) {
+		const x = a.charCodeAt(index);
+		const y = b.charCodeAt(index);
+		if (x !== y) return codePointRank(x) - codePointRank(y);
+	}
+	return a.length - b.length;
+}
+
+function codePointRank(unit: number): number {
+	return unit >= 0xd800 && unit <= 0xdfff ? unit + 0x10000 : unit;
 }
 
 /**

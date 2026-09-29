@@ -24,17 +24,11 @@ import {PatchStateStore} from '../src/index.js';
  * has is `test/sparse-stream.test.ts`.
  *
  * Both runs hand over `storedCurrent`, this store's non-seam read of a row as it
- * holds it, so the suite can check a `u256` is held canonically (ADR-0098), and
- * `idOrder`, the string order its listings actually ascend in: UTF-16 code units,
- * since `listCurrent` and the read-your-writes merge both sort with `compareIds`,
- * which is JavaScript's `<`. No `listAsOf` order is declared because this store
- * answers no historical listing. Declared, not endorsed: which order the listing
- * SHOULD use is `the-listings-id-order-is-decided`'s question.
+ * holds it, so the suite can check a `u256` is held canonically (ADR-0098).
  */
 
 const options: StateStoreConformanceOptions = {
 	storedCurrent: (store, entity, id) => (store as PatchStateStore).storedCurrent(entity, id),
-	idOrder: {listCurrent: 'utf-16', mutationContextList: 'utf-16'},
 };
 
 await describeStateStoreConformance(
