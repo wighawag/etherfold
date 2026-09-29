@@ -50,6 +50,8 @@ export type MutationContext = {
 	/**
 	 * The children of a key: the rows whose declared id STARTS WITH `prefix`, in
 	 * ascending id order, at most `limit` of them, including this block's writes.
+	 * The order is the store's own, UTF-8 byte order (`compareIds`, ADR-0021), so
+	 * a row staged in the block is cut by the limit exactly as a stored one is.
 	 *
 	 * This is how a one-to-many is read: children are their own entity keyed by
 	 * their parent, and the collection is DERIVED HERE rather than stored, so

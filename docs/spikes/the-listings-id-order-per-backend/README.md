@@ -2,6 +2,8 @@
 
 Task: `a-conformance-case-shows-the-listings-id-order-per-backend` (2026-09-29). Read by `the-listings-id-order-is-decided`, which owns the decision between "UTF-8 everywhere" and "only ASCII ids are ordered". Nothing is decided or changed here: every backend keeps the order it had, and the conformance suite now records it.
 
+**Decided 2026-09-29: UTF-8 everywhere** (ADR-0021, amended). This page is the evidence as it stood BEFORE the change; the per-backend declared orders it describes (`idOrder`) are gone, and what every backend answers now is in `docs/spikes/the-listings-id-order-is-decided/README.md`.
+
 ## The question
 
 ADR-0021 says a listing ascends "in that id's own order" and that "ordering is lexicographic over the stringified id", but not WHICH string order. Two are in play:

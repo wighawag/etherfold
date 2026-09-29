@@ -63,16 +63,21 @@ export function walk<T extends IDBCursor>(req: IDBRequest<T | null>, step: Curso
 	});
 }
 
-/** Open (and, the first time, create) a database. */
+/**
+ * Open (and, the first time, create) a database.
+ *
+ * `upgrade` runs inside the version change and is told the version the database
+ * was at before it, `0` for one that did not exist.
+ */
 export function openDatabase(
 	name: string,
 	version: number,
-	upgrade: (db: IDBDatabase, transaction: IDBTransaction) => void,
+	upgrade: (db: IDBDatabase, transaction: IDBTransaction, oldVersion: number) => void,
 	factory: IDBFactory = indexedDB,
 ): Promise<IDBDatabase> {
 	return new Promise((resolve, reject) => {
 		const req = factory.open(name, version);
-		req.onupgradeneeded = () => upgrade(req.result, req.transaction as IDBTransaction);
+		req.onupgradeneeded = (event) => upgrade(req.result, req.transaction as IDBTransaction, event.oldVersion);
 		req.onsuccess = () => resolve(req.result);
 		req.onerror = () => reject(req.error);
 		req.onblocked = () =>

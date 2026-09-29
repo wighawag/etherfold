@@ -10,9 +10,18 @@ import {
 	type PlannedOrder,
 	type PlannedWhere,
 } from '@etherfold/accessor';
-import {boundedListing, type NormalizedEntity} from '@etherfold/state-store';
+import {boundedListing, compareUtf8, type NormalizedEntity} from '@etherfold/state-store';
 import {walk} from './idb.js';
-import {above, CURRENT, startingWith, UPPER_INDEX, VERSIONS, type CurrentRecord, type VersionRecord} from './keys.js';
+import {
+	above,
+	CURRENT,
+	idKey,
+	startingWith,
+	UPPER_INDEX,
+	VERSIONS,
+	type CurrentRecord,
+	type VersionRecord,
+} from './keys.js';
 
 /**
  * ## The accessor seam on IndexedDB, rung 1: a bounded scan (ADR-0099)
@@ -32,9 +41,12 @@ import {above, CURRENT, startingWith, UPPER_INDEX, VERSIONS, type CurrentRecord,
  * order, which disagree on a supplementary-plane character against U+E000 to
  * U+FFFF; bytes compare bytewise, a prefix first (so a `u256` orders
  * numerically); numbers as numbers; nulls first ascending and last descending;
- * ties by the declared id ascending, each column as UTF-8 bytes. The id order is
- * applied by SORTING even when no order is asked for, because the order the
- * cursor walks the keys in is UTF-16 and would cut a different page.
+ * ties by the declared id ascending, each column as UTF-8 bytes (`compareUtf8`,
+ * the seam's, which is also the listing's id order, ADR-0021). The id order is
+ * applied by SORTING even when no order is asked for: the walk over `current`
+ * already arrives in it (each id column is keyed by its UTF-8 bytes, `keys.ts`),
+ * but an as-of answer adds the closed versions off the `upper` index, which
+ * arrive in the order they closed, and a page cut before sorting would differ.
  *
  * ## The bound is ROWS EXAMINED, and it refuses
  *
@@ -203,7 +215,7 @@ async function scanCurrent(
 ): Promise<Row[]> {
 	const matched: Row[] = [];
 	let examined = 0;
-	await walk(tx.objectStore(CURRENT).openCursor(startingWith([entity.name, ...prefix])), (cursor) => {
+	await walk(tx.objectStore(CURRENT).openCursor(startingWith([entity.name, ...idKey(prefix)])), (cursor) => {
 		if (++examined > bound) return 'stop';
 		const record = cursor.value as CurrentRecord;
 		if ((at === undefined || record.lower <= at) && matches(where, record.values)) matched.push(record.values);
@@ -366,30 +378,6 @@ function compareStored(a: unknown, b: unknown): number {
 	const right = bytesOf(b);
 	if (left && right) return compareBytes(left, right);
 	throw new Error(`the IndexedDB accessor cannot compare a stored ${kindOf(a)} with a ${kindOf(b)}`);
-}
-
-/**
- * Two strings in the order of their UTF-8 bytes, which is code point order,
- * without encoding either.
- *
- * UTF-16 code units already order like code points except where a surrogate
- * (U+D800 to U+DFFF, the halves of a supplementary-plane character) meets a
- * unit from U+E000 to U+FFFF: as units the surrogate is smaller, as code points
- * the character it belongs to is larger. So at the first unit that differs,
- * lift surrogates above U+FFFF's range and compare.
- */
-function compareUtf8(a: string, b: string): number {
-	const length = Math.min(a.length, b.length);
-	for (let index = 0; index < length; index++) {
-		const x = a.charCodeAt(index);
-		const y = b.charCodeAt(index);
-		if (x !== y) return codePointRank(x) - codePointRank(y);
-	}
-	return a.length - b.length;
-}
-
-function codePointRank(unit: number): number {
-	return unit >= 0xd800 && unit <= 0xdfff ? unit + 0x10000 : unit;
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {

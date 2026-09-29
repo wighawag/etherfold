@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {expect, test, type Page} from '@playwright/test';
 import {mountHarness} from 'playwright-browser-harness';
 import {MemoryStateStore} from '@etherfold/state-store';
-import {ID_ORDER_SEQUENCES, type DeclaredIdOrder, type IdOrder} from '@etherfold/state-store-conformance';
+import {ID_ORDER_SEQUENCES} from '@etherfold/state-store-conformance';
 import {processor, runWorkload} from './workload.js';
 
 /**
@@ -41,27 +41,6 @@ test.afterAll(async ({}, testInfo) => {
 	);
 });
 
-/**
- * The string order this backend's listings ascend in, per ENGINE and per read,
- * as measured on each engine (`id-order` below). `listCurrent` and `listAsOf`
- * walk a key range whose id columns are string keys, which the IndexedDB
- * specification compares by UTF-16 code unit; `MutationContext.list` re-sorts
- * with `compareIds`, JavaScript's `<`. Declared, not endorsed: which order the
- * listing SHOULD use is `the-listings-id-order-is-decided`'s question, and the
- * evidence is `docs/spikes/the-listings-id-order-per-backend/README.md`.
- */
-const ID_ORDER_BY_ENGINE: Record<string, Required<DeclaredIdOrder>> = {
-	chromium: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
-	firefox: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
-	webkit: {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'},
-};
-
-function idOrderOf(project: string): Required<DeclaredIdOrder> {
-	const declared = ID_ORDER_BY_ENGINE[project];
-	if (!declared) throw new Error(`no id order declared for the Playwright project ${JSON.stringify(project)}`);
-	return declared;
-}
-
 /** A harness over the bundled code-under-test. IndexedDB needs no isolation. */
 async function harnessFor(page: Page) {
 	return mountHarness(page, {cut: CUT, coi: false});
@@ -72,11 +51,7 @@ test('passes the shared conformance suite, under every claim it makes', async ({
 	try {
 		const run = await harness.run({
 			phase: 'once',
-			params: {
-				case: 'conformance',
-				tag: `conformance-${Date.now()}`,
-				idOrder: idOrderOf(testInfo.project.name),
-			},
+			params: {case: 'conformance', tag: `conformance-${Date.now()}`},
 		});
 		record({
 			project: testInfo.project.name,
@@ -181,10 +156,12 @@ test('answers a listing with an IDBKeyRange cursor on this engine', async ({page
 		const opened = run.results.opened as {on: string; lower: unknown; upper: unknown}[];
 		expect(opened).toHaveLength(1);
 		expect(opened[0].on).toBe('current');
-		expect(opened[0].lower).toEqual(['placement', '7']);
-		// `[]` sorts after every string in IndexedDB's key order, so this bound is
-		// "the prefix and its descendants" and nothing else.
-		expect(opened[0].upper).toEqual(['placement', '7', []]);
+		// the id column as its UTF-8 bytes (`keys.ts`), which this engine kept as
+		// a binary key: the key order is UTF-8 byte order (ADR-0021)
+		expect(opened[0].lower).toEqual(['placement', {bytes: '7'}]);
+		// `[]` sorts after every string and binary key in IndexedDB's key order, so
+		// this bound is "the prefix and its descendants" and nothing else.
+		expect(opened[0].upper).toEqual(['placement', {bytes: '7'}, []]);
 		// four children of epoch 7 among 200 rows: the store walked four, not 200
 		expect(run.results.rows).toBe(4);
 		expect(run.results.visited).toBe(4);
@@ -193,7 +170,7 @@ test('answers a listing with an IDBKeyRange cursor on this engine', async ({page
 	}
 });
 
-test('ascends each listing in the id order declared for this engine', async ({page}, testInfo) => {
+test('ascends each listing in UTF-8 byte order on this engine', async ({page}, testInfo) => {
 	const harness = await harnessFor(page);
 	try {
 		const run = await harness.run({phase: 'once', params: {case: 'id-order', tag: `id-order-${Date.now()}`}});
@@ -206,12 +183,35 @@ test('ascends each listing in the id order declared for this engine', async ({pa
 		});
 
 		expect(run.errors).toEqual([]);
-		const declared = idOrderOf(testInfo.project.name);
-		const expected = (order: IdOrder) => ID_ORDER_SEQUENCES[order];
-		// each read on its own line, so a change names the read that moved
-		expect(run.results.listCurrent, 'listCurrent').toEqual(expected(declared.listCurrent));
-		expect(run.results.listAsOf, 'listAsOf').toEqual(expected(declared.listAsOf));
-		expect(run.results.mutationContextList, 'MutationContext.list').toEqual(expected(declared.mutationContextList));
+		// the one order ADR-0021 states, on every engine: the id columns are keyed
+		// by their UTF-8 bytes (`keys.ts`) and this engine compares binary keys
+		// bytewise. Each read on its own line, so a change names the read that moved.
+		const utf8 = ID_ORDER_SEQUENCES['utf-8'];
+		expect(run.results.listCurrent, 'listCurrent').toEqual(utf8);
+		expect(run.results.listAsOf, 'listAsOf').toEqual(utf8);
+		expect(run.results.mutationContextList, 'MutationContext.list').toEqual(utf8);
+	} finally {
+		await harness.dispose();
+	}
+});
+
+test('recreates a database written with the previous key layout EMPTY, on this engine', async ({page}, testInfo) => {
+	const harness = await harnessFor(page);
+	try {
+		const run = await harness.run({phase: 'once', params: {case: 'old-layout', tag: `old-layout-${Date.now()}`}});
+		record({
+			project: testInfo.project.name,
+			case: 'old-layout',
+			env: run.env,
+			results: run.results,
+			errors: run.errors,
+		});
+
+		expect(run.errors).toEqual([]);
+		// nothing the string-keyed layout wrote is read, in any order
+		expect(run.results.before).toEqual({rows: [], truncated: false, tip: null, cursor: null});
+		// and the database works in the new layout, in UTF-8 order
+		expect(run.results.after).toEqual(['U+E000', 'U+1F600']);
 	} finally {
 		await harness.dispose();
 	}

@@ -24,7 +24,7 @@ import {
  * an upgrade transaction that no other tab may hold a connection through, so a
  * store per entity would turn "the processor declares one more entity" into a
  * schema migration that a second open tab BLOCKS. With the entity in the key the
- * schema is fixed at version 1 forever, and every access path a table would have
+ * schema never moves with a processor's declarations, and every access path a table would have
  * given is still a key range, because a key range on `[entity, ...]` is exactly
  * "that entity's rows".
  *
@@ -33,6 +33,22 @@ import {
  * one more entity is still not a migration and still cannot be blocked by a
  * second open tab; what moves the version is this package growing an object
  * store of its own.
+ *
+ * **Each id column is keyed by its UTF-8 BYTES, not by its string** (`idKey`),
+ * and the entity name, which a key range only ever matches exactly, stays a
+ * string. The listing's id order is UTF-8 byte order on every backend
+ * (ADR-0021), and IndexedDB compares a STRING key by UTF-16 code unit, which
+ * disagrees with it for an id above U+FFFF against one from U+E000 to U+FFFF; a
+ * binary key compares bytewise on Chromium, Firefox and WebKit, so the key
+ * order the listing's range scan walks is the listing's order, with nothing
+ * sorted after the scan. The evidence is
+ * `docs/spikes/the-listings-id-order-per-backend/README.md`.
+ *
+ * The price is that devtools shows the id part of a key as opaque bytes. The
+ * READABLE form is kept where it already was: `values` carries every id column
+ * as its plain string (`completeRow` in `store.ts`), so a record still says
+ * which row it is. Do not drop the id columns from `values` on the grounds that
+ * the key has them: the key has them only as bytes.
  *
  * `values` is the COMPLETE row (id columns and every declared field, unlisted
  * ones NULL), so a version means the same thing here as everywhere else. It is
@@ -47,27 +63,34 @@ import {
  * The version this package opens its database at. `open(name, version)` takes
  * one, so there is no not having it; what it MEANS is decided here.
  *
- * **It is 1, and it stays 1 until this repository has published a build.** The
- * object stores in this package have changed three times in git history (the
- * cursor store, the writer token, and the seam's own records taking the writer
- * store over), and this number climbed to 3 narrating them. That was a ladder
- * for databases that do not exist: nothing is published, so no browser anywhere
- * holds a database an earlier build created, and every step of the ladder was an
- * upgrade nothing could ever perform.
+ * **Bump it when THIS PACKAGE changes an object store or the key layout**,
+ * which are the only things that can need one: a processor declaring one more
+ * entity is not a migration here, because the entity name is part of the KEY
+ * rather than the name of a store (above), and that is what keeps an upgrade
+ * transaction, which a second open tab BLOCKS, out of the ordinary path.
  *
- * **Bump it when THIS PACKAGE adds or renames an object store**, which is the
- * only thing that can need one -- a processor declaring one more entity is not a
- * migration here, because the entity name is part of the KEY rather than the
- * name of a store (above), and that is what keeps an upgrade transaction, which
- * a second open tab BLOCKS, out of the ordinary path.
+ * - **1**: the stores above, with id columns as STRING keys (UTF-16 key order).
+ * - **2**: id columns as their UTF-8 BYTES (`idKey`), so the key order is the
+ *   listing's order (ADR-0021).
  *
- * `upgrade` (in `store.ts`) is written to CONVERGE rather than to step: every
- * creation is `contains`-guarded, so one function brings a database at any
- * earlier version to the declared shape and no per-step branch is ever written.
- * That is what makes a future bump cheap, and it is forward-looking rather than
- * a relic -- it is how the FIRST upgrade after publish will be written.
+ * Nothing climbs a ladder between them. `upgrade` (in `store.ts`) DISCARDS a
+ * database written below `KEY_LAYOUT_SINCE` and rebuilds it empty, rather than
+ * re-keying it row by row: nobody holds a database worth keeping (nothing is
+ * published), and a state that is discarded is refolded from the stream, while
+ * one read under the wrong layout would answer in the wrong order silently.
+ * Adding a store stays CONVERGENT (every creation is `contains`-guarded), so a
+ * bump for a new store needs no per-step branch either.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+/**
+ * The first `SCHEMA_VERSION` whose keys this code can read: an existing
+ * database at a lower version was written with id columns as string keys and is
+ * discarded at the version change, never read. Raise it (to the new
+ * `SCHEMA_VERSION`) only when the key layout changes again; a new object store
+ * does not.
+ */
+export const KEY_LAYOUT_SINCE = 2;
 export const CURRENT = 'current';
 export const VERSIONS = 'versions';
 export const BLOCKS = 'blocks';
@@ -146,9 +169,23 @@ export type CurrentRecord = {lower: number; values: Record<string, unknown>};
 /** The block record: what `_blocks` is in the SQL backend. */
 export type BlockRecord = {number: number; hash: string; timestamp: number};
 
-/** The key of one business key's row: the entity name, then the id, as strings. */
+const UTF8 = new TextEncoder();
+
+/**
+ * Id column values as key parts: the UTF-8 bytes of each, so IndexedDB, which
+ * compares a binary key bytewise, orders them in UTF-8 byte order (ADR-0021)
+ * rather than in the UTF-16 code units it compares a string key by.
+ *
+ * Every key built from an id or an id prefix goes through here, so a full id, a
+ * listing prefix and a parent key in the accessor are encoded the same way.
+ */
+export function idKey(values: readonly string[]): Uint8Array<ArrayBuffer>[] {
+	return values.map((value) => UTF8.encode(value));
+}
+
+/** The key of one business key's row: the entity name, then each id column as UTF-8 bytes. */
 export function rowKey(entity: NormalizedEntity, id: EntityId): IDBValidKey[] {
-	return [entity.name, ...idValues(entity, id)];
+	return [entity.name, ...idKey(idValues(entity, id))];
 }
 
 /** The key of one VERSION of that row: the row's key with the block it opened at. */
@@ -184,7 +221,7 @@ export function startingWith(key: readonly IDBValidKey[]): IDBKeyRange {
  * on every other backend rather than quietly scanning something else.
  */
 export function listingRange(entity: NormalizedEntity, prefix: EntityIdPrefix): IDBKeyRange {
-	return startingWith([entity.name, ...prefixValues(entity, prefix)]);
+	return startingWith([entity.name, ...idKey(prefixValues(entity, prefix))]);
 }
 
 /**

@@ -44,21 +44,6 @@ import {freshDatabaseName} from './utils/database.js';
 const storedCurrent: StateStoreConformanceOptions['storedCurrent'] = (store, entity, id) =>
 	(store as IndexedDBStateStore).storedCurrent(entity, id);
 
-/**
- * The string order this store's listings actually ascend in: UTF-16 code units
- * on every read. `listCurrent` and `listAsOf` walk a key range whose id columns
- * are string keys, which the IndexedDB specification compares by code unit, and
- * `MutationContext.list` re-sorts with `compareIds` (JavaScript's `<`). This is
- * `fake-indexeddb`'s reading of the specification; the real engines assert
- * their own in `browser/state-store.spec.ts`. Declared, not endorsed: which
- * order the listing SHOULD use is `the-listings-id-order-is-decided`'s question.
- */
-const idOrder: StateStoreConformanceOptions['idOrder'] = {
-	listCurrent: 'utf-16',
-	listAsOf: 'utf-16',
-	mutationContextList: 'utf-16',
-};
-
 /** Two stores on one database name, or on two: the whole of the scoping question here. */
 const twoWriters: TwoWriters = {
 	sharingStorage(declarations) {
@@ -79,7 +64,7 @@ const twoWriters: TwoWriters = {
 await describeStateStoreConformance(
 	'IndexedDBStateStore, keeping everything',
 	(declarations) => new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName()}),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
@@ -90,7 +75,7 @@ await describeStateStoreConformance(
 			retention: {blocks: 128},
 			finalityDepth: 64,
 		}),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );
 
 await describeStateStoreConformance(
@@ -101,7 +86,7 @@ await describeStateStoreConformance(
 			retention: 'revert-only',
 			finalityDepth: 64,
 		}),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );
 
 /**
@@ -118,5 +103,5 @@ await describeStateStoreConformance(
 	'IndexedDBStateStore, refusing two transactions at once',
 	(declarations) =>
 		new IndexedDBStateStore(declarations, {databaseName: freshDatabaseName(), oneTransactionAtATime: true}),
-	{twoWriters, storedCurrent, idOrder},
+	{twoWriters, storedCurrent},
 );

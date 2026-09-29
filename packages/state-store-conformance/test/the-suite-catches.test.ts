@@ -15,12 +15,7 @@ import {
 	type StateStoreCapabilities,
 } from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
-import {
-	runStateStoreConformance,
-	type DeclaredIdOrder,
-	type StateStoreConformanceOptions,
-	type StateStoreFactory,
-} from '../src/index.js';
+import {runStateStoreConformance, type StateStoreConformanceOptions, type StateStoreFactory} from '../src/index.js';
 
 /**
  * The test that makes the suite worth running: backends that LIE go red.
@@ -63,6 +58,10 @@ import {
  *   something to fit in rather than something to refuse, and it is the shape a
  *   backend reaches for the moment the tip rule is inconvenient: every read
  *   afterwards is served from a state assembled out of two positions.
+ * - `Utf16ListingStore` lists in UTF-16 code units rather than UTF-8 bytes. It
+ *   is the order JavaScript's `<` and an IndexedDB string key give for free, so
+ *   it is the one a backend drifts back into, and it disagrees with a server's
+ *   listing only for ids nobody writes today (ADR-0021).
  *
  * Each lie is written as a DECORATOR over the honest store rather than as a
  * subclass overriding one method, because the honest store's refusal is not a
@@ -77,18 +76,8 @@ import {
 
 const honest: StateStoreFactory = (declarations) => new MemoryStateStore(declarations);
 
-/**
- * The id order the reference store's listings use, declared as every backend
- * declares its own: `compareIds` is JavaScript's `<`, which is UTF-16 code units.
- * Every run below hands it over, so the lie under test is the only one.
- */
-const MEMORY_ID_ORDER: DeclaredIdOrder = {listCurrent: 'utf-16', listAsOf: 'utf-16', mutationContextList: 'utf-16'};
-
 /** Names of the cases that failed, as `group > name`, for readable assertions. */
-async function failedCases(
-	factory: StateStoreFactory,
-	options: StateStoreConformanceOptions = {idOrder: MEMORY_ID_ORDER},
-): Promise<string[]> {
+async function failedCases(factory: StateStoreFactory, options: StateStoreConformanceOptions = {}): Promise<string[]> {
 	const result = await runStateStoreConformance(factory, options);
 	return result.failures.map((failure) => `${failure.group} > ${failure.name}`);
 }
@@ -168,6 +157,47 @@ class Decorated implements StateStoreBackend {
 
 	revertTo(keepUpTo: number): Promise<void> {
 		return this.inner.revertTo(keepUpTo);
+	}
+}
+
+/**
+ * Lists in UTF-16 code-unit order, JavaScript's `<`: the order a backend drifts
+ * into by sorting with `<`, or by keying an id column in IndexedDB by its string.
+ * It re-sorts the WHOLE matching set before cutting, so it is a backend with a
+ * different order and not merely a shuffled page.
+ */
+class Utf16ListingStore extends Decorated {
+	override async listCurrent<T = Record<string, unknown>>(
+		entity: string,
+		prefix: EntityIdPrefix,
+		limit: number,
+	): Promise<Listing<T>> {
+		await this.inner.listCurrent(entity, prefix, limit); // its refusals, unchanged
+		return this.resorted(entity, await this.inner.listCurrent<T>(entity, prefix, 10_000), limit);
+	}
+
+	override async listAsOf<T = Record<string, unknown>>(
+		entity: string,
+		prefix: EntityIdPrefix,
+		at: number,
+		limit: number,
+	): Promise<Listing<T>> {
+		await this.inner.listAsOf(entity, prefix, at, limit); // its refusals, unchanged
+		return this.resorted(entity, await this.inner.listAsOf<T>(entity, prefix, at, 10_000), limit);
+	}
+
+	private resorted<T>(entity: string, all: Listing<T>, limit: number): Listing<T> {
+		const columns = this.inner.declarations.get(entity)!.id;
+		const key = (row: T) => columns.map((column) => String((row as Record<string, unknown>)[column]));
+		const rows = [...all.rows].sort((a, b) => {
+			const [x, y] = [key(a), key(b)];
+			for (let index = 0; index < x.length; index++) {
+				if (x[index] < y[index]) return -1;
+				if (x[index] > y[index]) return 1;
+			}
+			return 0;
+		});
+		return {rows: rows.slice(0, limit), truncated: rows.length > limit};
 	}
 }
 
@@ -353,7 +383,6 @@ describe('the conformance suite', () => {
 
 	it('fails a backend that holds a u256 as anything but its canonical encoding', async () => {
 		const result = await runStateStoreConformance(honest, {
-			idOrder: MEMORY_ID_ORDER,
 			// the honest store, reporting its stored form as the decimal text a u256
 			// used to be kept in: the shape a backend that skipped the encoding has
 			storedCurrent: async (store, entity, id) =>
@@ -368,25 +397,29 @@ describe('the conformance suite', () => {
 
 	it('passes the honest store handing over its real stored form', async () => {
 		const result = await runStateStoreConformance(honest, {
-			idOrder: MEMORY_ID_ORDER,
 			storedCurrent: (store, entity, id) => (store as MemoryStateStore).storedCurrent(entity, id),
 		});
 		expect(result.failures).toEqual([]);
 	});
 
-	it('fails a backend whose listings ascend in an order other than the one it declared', async () => {
-		// the reference store sorts in UTF-16 code units; declaring nothing is
-		// declaring UTF-8 bytes, the accessor's text order (ADR-0099), so every
-		// id-order case goes red and nothing else does.
-		expect(await failedCases(honest, {})).toEqual([
-			'bounded id-prefix listing > listCurrent ascends in the declared id order across the UTF-8 / UTF-16 boundary',
-			'bounded id-prefix listing > MutationContext.list, with ids staged in the block, ascends in the declared id order',
-			'bounded id-prefix listing > listAsOf ascends in the declared id order across the UTF-8 / UTF-16 boundary',
+	it('fails a backend whose listings ascend in UTF-16 code units rather than UTF-8 bytes', async () => {
+		// both store reads go red, and nothing else does: the read-your-writes
+		// merge re-sorts with the seam's `compareIds`, so the merge's order is the
+		// seam's and is tested there (`state-store/test/listing.test.ts`).
+		const failures = await failedCases((declarations) => new Utf16ListingStore(new MemoryStateStore(declarations)));
+
+		expect(failures).toEqual([
+			'bounded id-prefix listing > listCurrent ascends in UTF-8 byte order across the UTF-8 / UTF-16 boundary',
+			'bounded id-prefix listing > listAsOf ascends in UTF-8 byte order across the UTF-8 / UTF-16 boundary',
 		]);
-		// and in the other direction: the right order, declared for one read only
-		expect(await failedCases(honest, {idOrder: {...MEMORY_ID_ORDER, listCurrent: 'utf-8'}})).toEqual([
-			'bounded id-prefix listing > listCurrent ascends in the declared id order across the UTF-8 / UTF-16 boundary',
-		]);
+	});
+
+	it('names the UTF-16 order when a backend answers in it', async () => {
+		const result = await runStateStoreConformance(
+			(declarations) => new Utf16ListingStore(new MemoryStateStore(declarations)),
+		);
+
+		expect(String(result.failures[0]?.error)).toMatch(/UTF-16 code-unit order/);
 	});
 
 	it('fails a backend whose cursor can end up ahead of the block it describes', async () => {
@@ -399,7 +432,6 @@ describe('the conformance suite', () => {
 		const result = await runStateStoreConformance(
 			(declarations) => new LyingSingleWriterStore(new MemoryStateStore(declarations)),
 			{
-				idOrder: MEMORY_ID_ORDER,
 				twoWriters: {
 					sharingStorage: (declarations) => {
 						// ONE store behind two handles: the shape two tabs of one app have
@@ -439,7 +471,7 @@ describe('the conformance suite', () => {
 	it('reports WHY a case failed, and not merely that it did', async () => {
 		const result = await runStateStoreConformance(
 			(declarations) => new AmnesiacStore(new MemoryStateStore(declarations)),
-			{idOrder: MEMORY_ID_ORDER},
+			{},
 		);
 
 		expect(result.passed).toBeGreaterThan(0);

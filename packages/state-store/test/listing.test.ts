@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {MemoryStateStore, createMutationContext} from '../src/index.js';
+import {MemoryStateStore, compareIds, createMutationContext} from '../src/index.js';
 import {PLACEMENT, TOKEN, block} from './utils/fixtures.js';
 
 /**
@@ -270,5 +270,85 @@ describe('a listing as of an old block answers about that block', () => {
 		]);
 
 		await expect(store.listAsOf('placement', {epoch: 7}, 10, 10)).rejects.toThrow();
+	});
+});
+
+describe('the id order is UTF-8 bytes, which is code point order (ADR-0021)', () => {
+	// U+E000 and U+1F600 are the one pair the two binary string orders disagree
+	// on: as UTF-16 code units the emoji's high surrogate (U+D83D) is smaller, as
+	// UTF-8 bytes (and code points) the emoji is larger.
+	it('puts a character from U+E000 to U+FFFF before one above U+FFFF', () => {
+		expect(compareIds(['\uE000'], ['\u{1F600}'])).toBeLessThan(0);
+		expect(compareIds(['\u{1F600}'], ['\uE000'])).toBeGreaterThan(0);
+		expect(compareIds(['\uFFFD'], ['\u{1F600}'])).toBeLessThan(0);
+	});
+
+	it('agrees with the UTF-8 bytes of every id column, compared bytewise', () => {
+		const ids = [
+			'',
+			'B',
+			'a',
+			'ab',
+			'\u00E9',
+			'\uD7FF',
+			'\uE000',
+			'\uFFFD',
+			'\u{10000}',
+			'\u{1F600}',
+			'\u{1F601}',
+			'a\u{1F600}',
+			'a\uFFFD',
+		];
+		const bytes = (value: string) => Array.from(new TextEncoder().encode(value));
+		const byBytes = (a: string, b: string) => {
+			const [x, y] = [bytes(a), bytes(b)];
+			for (let index = 0; index < Math.min(x.length, y.length); index++)
+				if (x[index] !== y[index]) return x[index] - y[index];
+			return x.length - y.length;
+		};
+		for (const a of ids) {
+			for (const b of ids) {
+				expect(Math.sign(compareIds([a], [b])), `${JSON.stringify(a)} vs ${JSON.stringify(b)}`).toBe(
+					Math.sign(byBytes(a, b)),
+				);
+			}
+		}
+	});
+
+	it('compares column by column, a shorter id first when it is a prefix of the longer', () => {
+		expect(compareIds(['7', '\uE000'], ['7', '\u{1F600}'])).toBeLessThan(0);
+		expect(compareIds(['7'], ['7', 'a'])).toBeLessThan(0);
+		expect(compareIds(['8'], ['7', 'a'])).toBeGreaterThan(0);
+	});
+
+	it('sorts a listing staged in the block in the same order as the store', async () => {
+		const store = new MemoryStateStore([PLACEMENT]);
+		await store.migrate();
+		await store.applyBlock(block(10), [
+			{
+				type: 'upsert',
+				entity: 'placement',
+				id: {epoch: 7, position: '\u{1F600}', playerIndex: 0},
+				values: {player: 'U+1F600'},
+			},
+			{
+				type: 'upsert',
+				entity: 'placement',
+				id: {epoch: 7, position: '\uFFFD', playerIndex: 0},
+				values: {player: 'U+FFFD'},
+			},
+		]);
+		const {state} = createMutationContext(store);
+		state.set('placement', {epoch: 7, position: '\uE000', playerIndex: 0}, {player: 'U+E000'});
+		state.set('placement', {epoch: 7, position: '\u{1F601}', playerIndex: 0}, {player: 'U+1F601'});
+
+		const stored = await store.listCurrent<{player: string}>('placement', {epoch: 7}, 10);
+		const merged = await state.list<{player: string}>('placement', {epoch: 7}, 2);
+
+		expect(stored.rows.map((row) => row.player)).toEqual(['U+FFFD', 'U+1F600']);
+		expect({rows: merged.rows.map((row) => row.player), truncated: merged.truncated}).toEqual({
+			rows: ['U+E000', 'U+FFFD'],
+			truncated: true,
+		});
 	});
 });

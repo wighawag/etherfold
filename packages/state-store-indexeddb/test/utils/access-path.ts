@@ -48,7 +48,8 @@ export function recordAccess(): AccessLog {
 			const original = prototype[method];
 			if (typeof original !== 'function') continue;
 			prototype[method] = function patched(this: IDBObjectStore | IDBIndex, ...args: unknown[]) {
-				log.requests.push({method, on: this.name, query: args[0] ?? null});
+				const query = args[0] ?? null;
+				log.requests.push({method, on: this.name, query: query instanceof IDBKeyRange ? query : readable(query)});
 				return original.apply(this, args);
 			};
 			restore.push(() => (prototype[method] = original));
@@ -81,5 +82,24 @@ export function boundsOf(query: unknown): {lower: unknown; upper: unknown; lower
 	if (!(range instanceof IDBKeyRange)) {
 		throw new Error(`expected an IDBKeyRange, got ${JSON.stringify(query)}`);
 	}
-	return {lower: range.lower, upper: range.upper, lowerOpen: range.lowerOpen, upperOpen: range.upperOpen};
+	return {
+		lower: readable(range.lower),
+		upper: readable(range.upper),
+		lowerOpen: range.lowerOpen,
+		upperOpen: range.upperOpen,
+	};
+}
+
+/**
+ * A key with every binary part decoded back to its string.
+ *
+ * Id columns are keyed by their UTF-8 BYTES (`idKey` in `keys.ts`), so a
+ * recorded key is decoded here to read as the ids it asked for. What the bytes
+ * ARE, and the order they give, is `key-layout.test.ts`'s subject, not an
+ * access path's.
+ */
+export function readable(key: unknown): unknown {
+	if (Array.isArray(key)) return key.map(readable);
+	if (key instanceof ArrayBuffer || ArrayBuffer.isView(key)) return new TextDecoder().decode(key as ArrayBuffer);
+	return key;
 }
