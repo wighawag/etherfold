@@ -1,19 +1,9 @@
 {
   "project": "chromium",
-  "ranAt": "2026-09-30T09:16:45.552Z",
+  "ranAt": "2026-09-28T16:08:03.769Z",
   "tabs": [
     {
       "tab": 0,
-      "errors": [],
-      "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
-      "unexpected": [],
-      "readBack": 0,
-      "mismatches": 0
-    },
-    {
-      "tab": 1,
       "errors": [],
       "attempted": 20,
       "wrote": 1,
@@ -23,13 +13,23 @@
       "mismatches": 0
     },
     {
-      "tab": 2,
+      "tab": 1,
       "errors": [],
       "attempted": 20,
       "wrote": 0,
       "refused": 20,
       "unexpected": [],
       "readBack": 0,
+      "mismatches": 0
+    },
+    {
+      "tab": 2,
+      "errors": [],
+      "attempted": 20,
+      "wrote": 1,
+      "refused": 19,
+      "unexpected": [],
+      "readBack": 1,
       "mismatches": 0
     },
     {
@@ -44,8 +44,8 @@
     }
   ],
   "audit": {
-    "expected": 21,
-    "found": 21,
+    "expected": 22,
+    "found": 22,
     "missing": 0,
     "surplus": 0
   }

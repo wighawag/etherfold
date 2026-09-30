@@ -1,6 +1,6 @@
 {
   "project": "webkit",
-  "ranAt": "2026-09-30T09:16:57.542Z",
+  "ranAt": "2026-09-28T16:08:35.364Z",
   "tabs": [
     {
       "tab": 0,
@@ -16,10 +16,10 @@
       "tab": 1,
       "errors": [],
       "attempted": 20,
-      "wrote": 0,
-      "refused": 20,
+      "wrote": 1,
+      "refused": 19,
       "unexpected": [],
-      "readBack": 0,
+      "readBack": 1,
       "mismatches": 0
     },
     {
@@ -44,8 +44,8 @@
     }
   ],
   "audit": {
-    "expected": 22,
-    "found": 22,
+    "expected": 23,
+    "found": 23,
     "missing": 0,
     "surplus": 0
   }

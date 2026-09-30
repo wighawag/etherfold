@@ -2,11 +2,11 @@
   "config": {
     "argv": [
       "/nix/store/i1rgc6zsrxbxgfz97vbczz7cxcg71p5s-nodejs-slim-24.19.0/bin/node",
-      "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/node_modules/@playwright/test/cli.js",
+      "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/node_modules/@playwright/test/cli.js",
       "test"
     ],
-    "configFile": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/playwright.config.ts",
-    "rootDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/browser",
+    "configFile": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/playwright.config.ts",
+    "rootDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
@@ -22,7 +22,7 @@
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -30,7 +30,7 @@
         },
         "id": "chromium",
         "name": "chromium",
-        "testDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -38,7 +38,7 @@
         "timeout": 300000
       },
       {
-        "outputDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -46,7 +46,7 @@
         },
         "id": "firefox",
         "name": "firefox",
-        "testDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -54,7 +54,7 @@
         "timeout": 300000
       },
       {
-        "outputDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/test-results",
+        "outputDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -62,7 +62,7 @@
         },
         "id": "webkit",
         "name": "webkit",
-        "testDir": "/home/wighawag/dev/github/wighawag/etherfold/packages/state-store-indexeddb/browser",
+        "testDir": "/home/wighawag/.dorfl/work/github-com__wighawag__etherfold__an-accessor-scans-indexeddb-within-a-bound/packages/state-store-indexeddb/browser",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -118,7 +118,7 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 332,
+                  "duration": 682,
                   "errors": [],
                   "stdout": [],
                   "stderr": [
@@ -127,7 +127,7 @@
                     }
                   ],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:45.190Z",
+                  "startTime": "2026-09-28T16:08:03.019Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -156,12 +156,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 267,
+                  "duration": 604,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:45.567Z",
+                  "startTime": "2026-09-28T16:08:03.797Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -190,7 +190,7 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1236,
+                  "duration": 1851,
                   "errors": [],
                   "stdout": [],
                   "stderr": [
@@ -199,7 +199,7 @@
                     }
                   ],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:48.163Z",
+                  "startTime": "2026-09-28T16:08:09.784Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -228,12 +228,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 800,
+                  "duration": 1403,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:49.601Z",
+                  "startTime": "2026-09-28T16:08:11.920Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -262,7 +262,7 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 756,
+                  "duration": 2539,
                   "errors": [],
                   "stdout": [],
                   "stderr": [
@@ -271,7 +271,7 @@
                     }
                   ],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:56.742Z",
+                  "startTime": "2026-09-28T16:08:32.756Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -300,12 +300,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 740,
+                  "duration": 3071,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:57.556Z",
+                  "startTime": "2026-09-28T16:08:35.426Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -342,12 +342,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 775,
+                  "duration": 2629,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:45.958Z",
+                  "startTime": "2026-09-28T16:08:04.650Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -357,7 +357,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-c29ff7cb18accf4dacc4",
           "file": "state-store.spec.ts",
-          "line": 49,
+          "line": 48,
           "column": 1
         },
         {
@@ -376,12 +376,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 493,
+                  "duration": 1298,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:46.737Z",
+                  "startTime": "2026-09-28T16:08:07.293Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -391,7 +391,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-6a3077bf732412ff1394",
           "file": "state-store.spec.ts",
-          "line": 75,
+          "line": 74,
           "column": 1
         },
         {
@@ -410,12 +410,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 136,
+                  "duration": 292,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:47.235Z",
+                  "startTime": "2026-09-28T16:08:08.604Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -425,7 +425,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-f6ed72897634be865e6a",
           "file": "state-store.spec.ts",
-          "line": 102,
+          "line": 101,
           "column": 1
         },
         {
@@ -444,12 +444,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 147,
+                  "duration": 275,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:47.375Z",
+                  "startTime": "2026-09-28T16:08:08.907Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -459,75 +459,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-df478fe675622ff32e5b",
           "file": "state-store.spec.ts",
-          "line": 143,
-          "column": 1
-        },
-        {
-          "title": "ascends each listing in UTF-8 byte order on this engine",
-          "ok": true,
-          "tags": [],
-          "tests": [
-            {
-              "timeout": 300000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "chromium",
-              "projectName": "chromium",
-              "results": [
-                {
-                  "workerIndex": 0,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 113,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-30T09:16:47.527Z",
-                  "annotations": [],
-                  "attachments": []
-                }
-              ],
-              "status": "expected"
-            }
-          ],
-          "id": "f02749b9ada99cd0eecc-aa04384ca19997471351",
-          "file": "state-store.spec.ts",
-          "line": 173,
-          "column": 1
-        },
-        {
-          "title": "recreates a database written with the previous key layout EMPTY, on this engine",
-          "ok": true,
-          "tags": [],
-          "tests": [
-            {
-              "timeout": 300000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "chromium",
-              "projectName": "chromium",
-              "results": [
-                {
-                  "workerIndex": 0,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 108,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-30T09:16:47.643Z",
-                  "annotations": [],
-                  "attachments": []
-                }
-              ],
-              "status": "expected"
-            }
-          ],
-          "id": "f02749b9ada99cd0eecc-6c207ee05e0c72562d73",
-          "file": "state-store.spec.ts",
-          "line": 198,
+          "line": 142,
           "column": 1
         },
         {
@@ -546,12 +478,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 160,
+                  "duration": 288,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:47.756Z",
+                  "startTime": "2026-09-28T16:08:09.191Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -561,7 +493,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-3bc6353917a9b92ba71a",
           "file": "state-store.spec.ts",
-          "line": 220,
+          "line": 170,
           "column": 1
         },
         {
@@ -580,12 +512,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 3108,
+                  "duration": 10748,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:50.520Z",
+                  "startTime": "2026-09-28T16:08:13.496Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -595,7 +527,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-0ee6491999eb17ca2ed2",
           "file": "state-store.spec.ts",
-          "line": 49,
+          "line": 48,
           "column": 1
         },
         {
@@ -614,12 +546,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1379,
+                  "duration": 5950,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:53.634Z",
+                  "startTime": "2026-09-28T16:08:24.254Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -629,7 +561,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-eb6b5e021e33bac68af6",
           "file": "state-store.spec.ts",
-          "line": 75,
+          "line": 74,
           "column": 1
         },
         {
@@ -648,12 +580,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 286,
+                  "duration": 432,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:55.017Z",
+                  "startTime": "2026-09-28T16:08:30.217Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -663,7 +595,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-7c6870a531302988cde6",
           "file": "state-store.spec.ts",
-          "line": 102,
+          "line": 101,
           "column": 1
         },
         {
@@ -682,12 +614,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 250,
+                  "duration": 575,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:55.309Z",
+                  "startTime": "2026-09-28T16:08:30.657Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -697,75 +629,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-70818cabacb62be43f4e",
           "file": "state-store.spec.ts",
-          "line": 143,
-          "column": 1
-        },
-        {
-          "title": "ascends each listing in UTF-8 byte order on this engine",
-          "ok": true,
-          "tags": [],
-          "tests": [
-            {
-              "timeout": 300000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "firefox",
-              "projectName": "firefox",
-              "results": [
-                {
-                  "workerIndex": 1,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 231,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-30T09:16:55.564Z",
-                  "annotations": [],
-                  "attachments": []
-                }
-              ],
-              "status": "expected"
-            }
-          ],
-          "id": "f02749b9ada99cd0eecc-ff9b4f7099dfc10cd5c3",
-          "file": "state-store.spec.ts",
-          "line": 173,
-          "column": 1
-        },
-        {
-          "title": "recreates a database written with the previous key layout EMPTY, on this engine",
-          "ok": true,
-          "tags": [],
-          "tests": [
-            {
-              "timeout": 300000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "firefox",
-              "projectName": "firefox",
-              "results": [
-                {
-                  "workerIndex": 1,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 227,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-30T09:16:55.799Z",
-                  "annotations": [],
-                  "attachments": []
-                }
-              ],
-              "status": "expected"
-            }
-          ],
-          "id": "f02749b9ada99cd0eecc-74e67093e3dd32f9d4e3",
-          "file": "state-store.spec.ts",
-          "line": 198,
+          "line": 142,
           "column": 1
         },
         {
@@ -784,12 +648,12 @@
                   "workerIndex": 1,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 295,
+                  "duration": 610,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:56.030Z",
+                  "startTime": "2026-09-28T16:08:31.244Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -799,7 +663,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-35dda99f2d2d340b9330",
           "file": "state-store.spec.ts",
-          "line": 220,
+          "line": 170,
           "column": 1
         },
         {
@@ -818,12 +682,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 955,
+                  "duration": 9486,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:58.410Z",
+                  "startTime": "2026-09-28T16:08:38.938Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -833,7 +697,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-08927a2222cca60e9cd9",
           "file": "state-store.spec.ts",
-          "line": 49,
+          "line": 48,
           "column": 1
         },
         {
@@ -852,12 +716,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 590,
+                  "duration": 5050,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:59.371Z",
+                  "startTime": "2026-09-28T16:08:48.449Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -867,7 +731,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-dc9912044ffeea43d084",
           "file": "state-store.spec.ts",
-          "line": 75,
+          "line": 74,
           "column": 1
         },
         {
@@ -886,12 +750,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 253,
+                  "duration": 1081,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:16:59.965Z",
+                  "startTime": "2026-09-28T16:08:53.515Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -901,7 +765,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-cf8115ef70748bd0fc49",
           "file": "state-store.spec.ts",
-          "line": 102,
+          "line": 101,
           "column": 1
         },
         {
@@ -920,12 +784,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 264,
+                  "duration": 1409,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:17:00.223Z",
+                  "startTime": "2026-09-28T16:08:54.615Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -935,75 +799,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-c1eae7b37d2ec2161458",
           "file": "state-store.spec.ts",
-          "line": 143,
-          "column": 1
-        },
-        {
-          "title": "ascends each listing in UTF-8 byte order on this engine",
-          "ok": true,
-          "tags": [],
-          "tests": [
-            {
-              "timeout": 300000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "webkit",
-              "projectName": "webkit",
-              "results": [
-                {
-                  "workerIndex": 2,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 233,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-30T09:17:00.492Z",
-                  "annotations": [],
-                  "attachments": []
-                }
-              ],
-              "status": "expected"
-            }
-          ],
-          "id": "f02749b9ada99cd0eecc-7a184e0b6d7b295dfe76",
-          "file": "state-store.spec.ts",
-          "line": 173,
-          "column": 1
-        },
-        {
-          "title": "recreates a database written with the previous key layout EMPTY, on this engine",
-          "ok": true,
-          "tags": [],
-          "tests": [
-            {
-              "timeout": 300000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "webkit",
-              "projectName": "webkit",
-              "results": [
-                {
-                  "workerIndex": 2,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 254,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-30T09:17:00.729Z",
-                  "annotations": [],
-                  "attachments": []
-                }
-              ],
-              "status": "expected"
-            }
-          ],
-          "id": "f02749b9ada99cd0eecc-e83c74d524fb75c094a1",
-          "file": "state-store.spec.ts",
-          "line": 198,
+          "line": 142,
           "column": 1
         },
         {
@@ -1022,12 +818,12 @@
                   "workerIndex": 2,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 292,
+                  "duration": 1328,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-30T09:17:00.987Z",
+                  "startTime": "2026-09-28T16:08:56.045Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -1037,7 +833,7 @@
           ],
           "id": "f02749b9ada99cd0eecc-1616f9bdf7ebaedfb4d2",
           "file": "state-store.spec.ts",
-          "line": 220,
+          "line": 170,
           "column": 1
         }
       ]
@@ -1045,9 +841,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-09-30T09:16:44.668Z",
-    "duration": 16646.221,
-    "expected": 27,
+    "startTime": "2026-09-28T16:08:01.773Z",
+    "duration": 55760.208999999995,
+    "expected": 21,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0

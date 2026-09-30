@@ -1,6 +1,6 @@
 {
   "project": "firefox",
-  "ranAt": "2026-09-30T09:16:50.362Z",
+  "ranAt": "2026-09-28T16:08:13.259Z",
   "contended": {
     "from": 2000,
     "heights": 12,
@@ -22,17 +22,6 @@
       "tab": 1,
       "errors": [],
       "attempted": 12,
-      "won": [],
-      "refused": 12,
-      "refusedBy": {
-        "StoreWriterChangedError": 12
-      },
-      "unexpected": []
-    },
-    {
-      "tab": 2,
-      "errors": [],
-      "attempted": 12,
       "won": [
         2000,
         2001,
@@ -52,6 +41,17 @@
       "unexpected": []
     },
     {
+      "tab": 2,
+      "errors": [],
+      "attempted": 12,
+      "won": [],
+      "refused": 12,
+      "refusedBy": {
+        "StoreWriterChangedError": 12
+      },
+      "unexpected": []
+    },
+    {
       "tab": 3,
       "errors": [],
       "attempted": 12,
@@ -68,65 +68,65 @@
       {
         "height": 2000,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2001,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2002,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2003,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2004,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2005,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2006,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2007,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2008,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2009,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2010,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       },
       {
         "height": 2011,
         "recorded": true,
-        "owner": "0x2"
+        "owner": "0x1"
       }
     ],
     "applied": 12,
-    "cursor": "2011:2"
+    "cursor": "2011:1"
   }
 }
