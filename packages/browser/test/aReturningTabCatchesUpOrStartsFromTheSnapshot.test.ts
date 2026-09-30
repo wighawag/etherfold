@@ -15,6 +15,7 @@ import {
 	EntityEventProcessor,
 	openAndBootstrap,
 	openForWriting,
+	stateFactoriesFrom,
 	type BootstrapOutcome,
 	type EntityProcessor,
 	type EntityStateView,
@@ -499,5 +500,118 @@ describe('what does not change', () => {
 		expect(tab.handed.map((handed) => handed?.replaceLocal)).toEqual([false]);
 		expect(status).toMatchObject({status: 'found'});
 		expect(host.asked).toEqual([INDEX]);
+	});
+});
+
+/**
+ * The same tab, with both seats derived from ONE store constructor
+ * (`stateFactoriesFrom`) and standing in a tab election of this name. What it was
+ * handed and what the bootstrap did are recorded as `tabOf` records them.
+ */
+function helperTabOf(options: {
+	databaseName: string;
+	definition: EntityProcessor<TestABI>;
+	publication: BrowserPublicationOptions;
+	election: string;
+}) {
+	const handed: (PublicationSnapshot | undefined)[] = [];
+	const outcomes: BootstrapOutcome[] = [];
+	const {createState, openState} = stateFactoriesFrom({
+		open: (_context, entities) => createBrowserStateStore(entities, {databaseName: options.databaseName}),
+		entities: options.definition.entities,
+		finalityDepth: FINALITY,
+		...(options.publication.fetch ? {fetch: options.publication.fetch} : {}),
+		onBootstrap: (outcome) => outcomes.push(outcome),
+	});
+	const indexer = createIndexerState<TestABI, EntityStateView>(
+		{
+			createState: (context, patience, bundle, published) => {
+				handed.push(published);
+				return createState(context, patience, bundle, published);
+			},
+			openState,
+			createProcessor: (state) => new EntityEventProcessor<TestABI>(state, options.definition),
+			processorIdentity: PROCESSOR,
+		},
+		{publication: options.publication, tabElection: {name: options.election}},
+	);
+	return {indexer, handed, outcomes, config: CONFIG};
+}
+
+/**
+ * The SAME install, with both seats derived from ONE store constructor
+ * (`stateFactoriesFrom`) in a tab election: the leader still starts from the
+ * snapshot and still REPLACES its local state when the host abandons a catch-up
+ * (the helper forwards `replaceLocal`), and a reader downloads and installs none.
+ */
+describe('a publication, through ONE store constructor and the tab election', () => {
+	it('the leader starts from the snapshot; a reader of the same store downloads and installs NONE', async () => {
+		const definition = applyingProcessor();
+		const snapshot = await publishedSnapshot(definition, SNAPSHOT_AT);
+		const databaseName = freshName();
+		const election = freshName();
+		const leaderHost = await publication(snapshot);
+		const readerHost = await publication(snapshot);
+
+		const leader = helperTabOf({
+			databaseName,
+			definition,
+			publication: {locations: [INDEX], fetch: leaderHost.get},
+			election,
+		});
+		await leader.indexer.init({provider: node(BRANCH_A, SNAPSHOT_AT).provider, source: SOURCE, config: CONFIG});
+		const reader = helperTabOf({
+			databaseName,
+			definition,
+			publication: {locations: [INDEX], fetch: readerHost.get},
+			election,
+		});
+		await reader.indexer.init({provider: node(BRANCH_A, SNAPSHOT_AT).provider, source: SOURCE, config: CONFIG});
+
+		try {
+			expect(leader.indexer.syncing.$state.election?.role).toBe('writer');
+			expect(reader.indexer.syncing.$state.election?.role).toBe('reader');
+			expect(leader.outcomes).toEqual([{status: 'bootstrapped', at: SNAPSHOT_AT, from: leaderHost.body}]);
+			expect(leaderHost.asked).toContain(leaderHost.body);
+			// the reader built no writer, so it bootstrapped nothing and fetched no body
+			expect(reader.handed).toEqual([]);
+			expect(reader.outcomes).toEqual([]);
+			expect(readerHost.asked).not.toContain(readerHost.body);
+			// ...and reads the rows the leader installed
+			expect(await appliedIn(reader.indexer.state.$state)).toEqual(await appliedIn(leader.indexer.state.$state));
+			expect((await appliedIn(reader.indexer.state.$state)).length).toBeGreaterThan(0);
+		} finally {
+			leader.indexer.dispose();
+			reader.indexer.dispose();
+		}
+	});
+
+	it('an abandoned catch-up still REPLACES the local state through the helper', async () => {
+		const definition = applyingProcessor();
+		const databaseName = await visitedUpTo(definition, LOCAL_AT);
+		const snapshot = await publishedSnapshot(definition, SNAPSHOT_AT);
+		const host = await publication(snapshot);
+		const chain = node(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP, {servesFrom: SNAPSHOT_AT - 1});
+
+		const tab = helperTabOf({
+			databaseName,
+			definition,
+			publication: {locations: [INDEX], fetch: host.get},
+			election: freshName(),
+		});
+		await tab.indexer.init({provider: chain.provider, source: SOURCE, config: tab.config});
+		const reached = await indexToTip(tab.indexer as never);
+		const applied = await appliedIn(tab.indexer.state.$state);
+		tab.indexer.dispose();
+
+		expect(reached.lastToBlock).toBe(BRANCH_A_EXTENDED_TIP);
+		expect(tab.handed.map((handed) => handed?.replaceLocal)).toEqual([false, true]);
+		expect(tab.outcomes).toEqual([
+			{status: 'kept-local', at: LOCAL_AT},
+			{status: 'bootstrapped', at: SNAPSHOT_AT, from: host.body},
+		]);
+		expect(applied).toHaveLength(BRANCH_A_EXTENDED.length);
+		expect(applied.map((row) => row.times)).toEqual(applied.map(() => 1));
+		expect(applied).toEqual(await freshInstallOf(snapshot, BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP));
 	});
 });

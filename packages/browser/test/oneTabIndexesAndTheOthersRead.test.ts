@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {StateMoved} from '@etherfold/core';
-import {EntityEventProcessor, EntityStateView} from '@etherfold/processor-entities';
+import {EntityEventProcessor, EntityStateView, stateFactoriesFrom} from '@etherfold/processor-entities';
 import {openForReading, openForWriting} from '@etherfold/state-store';
 import {
 	connectToIndexerHost,
@@ -290,6 +290,69 @@ describe('one tab indexes and the others read (worker hosts)', () => {
 		expect(asked('reader').calls).toEqual([]);
 		const reads = createPortReadSurface(reader.port, processor.entities);
 		expect((await reads.counter.getCurrent({name: 'transfers'}))?.value).toBe(EXPECTED_A.transfers);
+
+		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
+		leader.close();
+
+		const took = await until('the takeover at the new tip', async () => {
+			const progress = await reader.port.progress();
+			return progress.lastToBlock === BRANCH_A_EXTENDED_TIP ? progress : undefined;
+		});
+		expect(took.election).toEqual({name, role: 'writer', tookOver: true, takeoverReason: 'leader-gone'});
+		expect((await reads.counter.getCurrent({name: 'transfers'}))?.value).toBe(EXPECTED_A_EXTENDED.transfers);
+		expect(asked('reader').ranges[0]!.from).toBeLessThanOrEqual(BRANCH_A_TIP + 1);
+	});
+});
+
+/**
+ * THE SAME ELECTION, with both seats derived from ONE store constructor
+ * (`stateFactoriesFrom`, `@etherfold/processor-entities`): the recipe an app
+ * writes, so the reader cannot open a database the leader does not write.
+ */
+describe('one tab indexes and the others read, from ONE store constructor', () => {
+	function hostOf(databaseName: string, name: string, provider: never) {
+		const line = wire();
+		const host = serveIndexerHost<TestABI, EntityStateView>(
+			{
+				...stateFactoriesFrom({
+					open: (_context, entities) => createBrowserStateStore(entities, {databaseName}),
+					entities: processor.entities,
+				}),
+				createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
+				tabElection: {name},
+				provider,
+				source: SOURCE,
+				config: CONFIG,
+				tipIntervalInSeconds: 0.05,
+			},
+			line.host,
+		);
+		const port = connectToIndexerHost(line.tab, {watch: false});
+		return {host, port, close: () => (host.dispose(), port.close(), line.close())};
+	}
+
+	it('one host folds, the other reads its store and its progress, and takes over when it goes', async () => {
+		const database = fresh('helper-db');
+		const name = fresh('helper-election');
+		const {chain, asked, providerFor} = sharedChain();
+
+		const leader = hostOf(database, name, providerFor('leader'));
+		disposers.push(leader.close);
+		await until('the leader to lead', async () => (await leader.port.progress()).election?.role === 'writer');
+		const reader = hostOf(database, name, providerFor('reader'));
+		disposers.push(reader.close);
+
+		const atTip = await until('the reader to report the leader at its tip', async () => {
+			const progress = await reader.port.progress();
+			return progress.lastToBlock === BRANCH_A_TIP ? progress : undefined;
+		});
+		expect(atTip.election).toEqual({name, role: 'reader', tookOver: false});
+		expect(asked('reader').calls).toEqual([]);
+		const reads = createPortReadSurface(reader.port, processor.entities);
+		expect((await reads.counter.getCurrent({name: 'transfers'}))?.value).toBe(EXPECTED_A.transfers);
+		for (const [id, owner] of Object.entries(EXPECTED_A.owners)) {
+			expect((await reads.token.getCurrent({id}))?.owner).toBe(owner);
+		}
 
 		chain.serve(BRANCH_A_EXTENDED, BRANCH_A_EXTENDED_TIP);
 		leader.close();

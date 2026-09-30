@@ -33,6 +33,12 @@ declare global {
 		 * the wallet's provider being served to the worker by this tab.
 		 */
 		__walletRequests: Record<string, number>;
+		/**
+		 * MINT one more token in a new block ABOVE the tip, which the leader's next poll
+		 * sees: how a test makes a quiet chain move on. Returns the new tip. Each page
+		 * has its own fake chain, so a test that means ONE chain mints on every page.
+		 */
+		__mint: () => number;
 	}
 }
 
@@ -57,10 +63,10 @@ export function installFakeWallet(options: FakeChainOptions): void {
 	// One log per block, from block 1, minting token `i + 1`. Deterministic, so
 	// the counter and the holdings the page shows are numbers the test can assert.
 	const logs: Record<string, unknown>[] = [];
-	for (let i = 0; i < options.transfers; i++) {
+	const mint = (i: number, block = i + 1) =>
 		logs.push({
-			blockNumber: hex(i + 1),
-			blockHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
+			blockNumber: hex(block),
+			blockHash: `0x${block.toString(16).padStart(64, '0')}`,
 			transactionIndex: '0x0',
 			removed: false,
 			address: CONTRACT,
@@ -69,9 +75,9 @@ export function installFakeWallet(options: FakeChainOptions): void {
 			// A transaction hash the test can ask `checkTxInclusion` about.
 			transactionHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
 			logIndex: '0x0',
-			blockTimestamp: hex(1_700_000_000 + i * 12),
+			blockTimestamp: hex(1_700_000_000 + (block - 1) * 12),
 		});
-	}
+	for (let i = 0; i < options.transfers; i++) mint(i);
 
 	const requests: Record<string, number> = {};
 
@@ -122,4 +128,9 @@ export function installFakeWallet(options: FakeChainOptions): void {
 	(window as unknown as {ethereum: unknown}).ethereum = provider;
 	window.__fake = options;
 	window.__walletRequests = requests;
+	window.__mint = () => {
+		options.tipBlock += 1;
+		mint(logs.length, options.tipBlock);
+		return options.tipBlock;
+	};
 }

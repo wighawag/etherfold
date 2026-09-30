@@ -5,6 +5,7 @@ export * from './cursor.js';
 export * from './snapshot.js';
 export * from './view.js';
 export * from './EntityEventProcessor.js';
+export * from './stateFactories.js';
 
 /**
  * Re-exported so a processor author imports the whole authoring surface from one
