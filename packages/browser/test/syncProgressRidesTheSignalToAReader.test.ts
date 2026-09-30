@@ -248,6 +248,7 @@ describe('sync progress riding the cross-tab signal', () => {
 			indexingTab.publish({
 				kind: 'applied',
 				block: 601,
+				hash: '0xa601',
 				coherence: 'a-token',
 				entities: ['counter'],
 				generation: 'a-generation',

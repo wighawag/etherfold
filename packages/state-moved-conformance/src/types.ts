@@ -70,6 +70,19 @@ export type StateMovedTransport = {
 	 */
 	applyNextEmptyBlock(): Promise<number>;
 	/**
+	 * THE HASH THE STORE BEHIND THE CANONICAL FOLD RECORDED at this height, or
+	 * `undefined` when it records none.
+	 *
+	 * Read out of the STORE, and never out of a notification or out of what the
+	 * adapter served the chain: the claim being checked is that the `hash` an
+	 * `applied` notification carries is the one the store recorded, in the store's
+	 * own spelling, because that is the hash a reader pins a re-read to
+	 * (`block: {hash}`) and the one the query layer names in `extensions.blockHash`.
+	 * A transport that re-spelled it (upper-cased it, say) would hand a reader a pin
+	 * that resolves on one backend and not another (ADR-0083, amended 2026-09-30).
+	 */
+	recordedHashAt(block: number): Promise<string | undefined>;
+	/**
 	 * MAKE THE CHAIN TAKE A BRANCH BACK, and answer the FORK POINT the fold
 	 * reverted to.
 	 *

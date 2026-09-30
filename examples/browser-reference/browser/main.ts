@@ -172,8 +172,8 @@ async function start() {
 	 */
 	const execute = workerExecutor(indexer);
 
-	const HOLDERS = `query Holders($min: SafeInt!) {
-		account(where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) {
+	const HOLDERS = `query Holders($min: SafeInt!, $at: BlockAddress) {
+		account(block: $at, where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) {
 			address
 			holds
 			holdings(orderBy: {field: id, direction: asc}, first: 10) { id }
@@ -182,8 +182,12 @@ async function start() {
 
 	type Holders = {account: {address: string; holds: number; holdings: {id: string}[]}[]};
 
-	/** Accounts holding at least `min` tokens, most first, each with the tokens it holds. */
-	const holders = (min: number) => execute({query: HOLDERS, variables: {min}});
+	/**
+	 * Accounts holding at least `min` tokens, most first, each with the tokens it
+	 * holds: at the tip, or at EXACTLY the block whose hash is `at`.
+	 */
+	const holders = (min: number, at?: string) =>
+		execute({query: HOLDERS, variables: at === undefined ? {min} : {min, at: {hash: at}}});
 
 	/**
 	 * HAZARD 4 -- ANSWERS ARRIVE OUT OF ORDER.
@@ -202,14 +206,25 @@ async function start() {
 	 */
 	let latestRender = 0;
 
-	async function render() {
+	/**
+	 * `at` is the HASH of the block a state-moved signal just named, when it named
+	 * one, and the query is PINNED to it: the answer is read at exactly the block
+	 * this tab was told about, not at whatever the tip is by the time the query
+	 * lands. If that block was replaced in between (a reorg), the pinned query is
+	 * REFUSED (`block-not-recorded`) rather than answered from the replacement, and
+	 * the render reads everything again at the tip; the retraction's rotated token
+	 * is on its way too. A NUMBER could not do this: a reorg puts another block at
+	 * the same height, and a query pinned to the height would read it without a word.
+	 */
+	async function render(at?: string) {
 		const mine = ++latestRender;
 		const counter = await reads.counter.getCurrent({name: 'transfers'});
 		if (mine !== latestRender) return;
 		el('transfers').textContent = String(counter?.value ?? 0);
 
-		const {data, errors} = await holders(1);
+		const {data, errors} = await holders(1, at);
 		if (mine !== latestRender) return;
+		if (at !== undefined && errors?.[0]?.extensions?.code === 'block-not-recorded') return void render();
 		// A coded refusal (a filter past the scan's bound, say) is an ANSWER to show,
 		// not an exception: `errors[0].extensions.code` says which.
 		el('holders').textContent = errors
@@ -442,7 +457,14 @@ async function start() {
 		void refreshPending();
 	});
 
-	indexer.onStateMoved(() => void render());
+	indexer.onStateMoved((moved) => {
+		// An APPLIED block is named by its number AND its hash: the hash is the one the
+		// store recorded, and the one `extensions.blockHash` names for an answer read at
+		// that block, so the re-read is pinned to it. A retraction or a pointer move
+		// names no block, so the render reads at the tip.
+		if (moved.kind === 'applied') el('moved').textContent = `block ${moved.block}, ${moved.hash}`;
+		void render(moved.kind === 'applied' ? moved.hash : undefined);
+	});
 	void render();
 
 	// Exposed so the browser verification can drive the paths a human cannot

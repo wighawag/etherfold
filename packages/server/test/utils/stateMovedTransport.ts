@@ -8,6 +8,7 @@ import {
 } from '@etherfold/core';
 import type {ConnectPosition, StateMovedTransport} from '@etherfold/state-moved-conformance';
 import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/processor-sqlite';
+import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {RemoteSQL} from 'remote-sql';
 import {expect} from 'vitest';
@@ -86,6 +87,20 @@ const NAME = 'alpha';
  * stops exercising the condition at all.
  */
 const FIRST_EVENT_BLOCK = START_BLOCK;
+
+/**
+ * A block's hash AS THIS CHAIN SERVES IT: UPPER-case hex, on purpose.
+ *
+ * Hex case means nothing in a block hash, and the store folds it to lower case
+ * on write (`normalizeBlockHash`). Serving it upper-cased is what makes the
+ * suite's hash case a check that the `applied` notification carries the STORE's
+ * spelling rather than whatever the chain handed over: a relay that passed the
+ * served spelling through would hand a reader a pin that differs from
+ * `extensions.blockHash`.
+ */
+function servedHash(branch: 'a' | 'b', block: number): string {
+	return `0x${branch}${block.toString(16)}`.toUpperCase().replace(/^0X/, '0x');
+}
 
 /** One block of the chain as this world told the server about it. */
 type Told = {block: number; hash: string; id: bigint; to: string};
@@ -229,7 +244,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 
 		async applyNextBlock(): Promise<number> {
 			const block = (told.at(-1)?.block ?? FIRST_EVENT_BLOCK - 1) + 1;
-			told.push({block, hash: `0xa${block.toString(16)}`, id: BigInt(block), to: ALICE});
+			told.push({block, hash: servedHash('a', block), id: BigInt(block), to: ALICE});
 			await push(block);
 			return block;
 		},
@@ -239,7 +254,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 			// `entityProcessor` does not track: the receiving fold applies the block and
 			// mutates nothing, so the changed-set crossing the stream is empty.
 			const block = (told.at(-1)?.block ?? FIRST_EVENT_BLOCK - 1) + 1;
-			told.push({block, hash: `0xa${block.toString(16)}`, id: BigInt(block), to: ZERO});
+			told.push({block, hash: servedHash('a', block), id: BigInt(block), to: ZERO});
 			await push(block);
 			return block;
 		},
@@ -251,7 +266,7 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 			const last = told.at(-1)!;
 			told[told.length - 1] = {
 				block: last.block,
-				hash: `0xb${last.block.toString(16)}`,
+				hash: servedHash('b', last.block),
 				id: BigInt(last.block + 1000),
 				to: BOB,
 			};
@@ -272,6 +287,14 @@ export async function openServerTransport(): Promise<StateMovedTransport> {
 				await indexer.rebuildMore();
 			}
 			throw new Error(`the successor generation never became canonical`);
+		},
+
+		async recordedHashAt(block: number): Promise<string | undefined> {
+			// Out of the CANONICAL generation's own database, through the store's query
+			// reads, and never out of `told`: what is checked is the store's spelling.
+			const canonical = await indexer.canonical();
+			if (!canonical) return undefined;
+			return (await new VersionedStateStore(states.open(canonical), entityProcessor.entities).blockAt(block))?.hash;
 		},
 
 		/**

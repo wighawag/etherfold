@@ -23,7 +23,7 @@ const namedLogger = logs('@etherfold/core');
  * ------------------------------------------------------------------------- */
 
 /**
- * WHAT GOES OUT when a fold APPLIED a block: five facts and nothing else.
+ * WHAT GOES OUT when a fold APPLIED a block: six facts and nothing else.
  *
  * A reader's whole rule is two lines, and this payload exists to make those two
  * lines possible:
@@ -46,6 +46,24 @@ export type StateApplied = {
 	kind: 'applied';
 	/** The block that was just applied. */
 	block: number;
+	/**
+	 * The HASH of that block, exactly as the store recorded it (lower-case hex, the
+	 * store's one spelling), and so exactly the hash the query layer names in
+	 * `extensions.blockHash` for an operation answered while this block is the tip.
+	 *
+	 * It is what lets a reader pin its re-read to EXACTLY the block it was told
+	 * about (`block: {hash}`): if that block is replaced before the re-read, the
+	 * re-read is REFUSED and the reader reads everything again, instead of reading
+	 * the replacement and composing parts from two branches until the rotated token
+	 * arrives. A `block` number cannot do that, because a number is not unique
+	 * across a reorg; and a remote reader can key a cache on it, or match a
+	 * notification to an answer exactly (ADR-0083, amended 2026-09-30).
+	 *
+	 * The fold normalises it where the store's rule lives
+	 * (`@etherfold/processor-entities`), and this package relays it untouched,
+	 * since it cannot import the storage seam (ADR-0016).
+	 */
+	hash: string;
 	/**
 	 * Opaque. COMPARE it, never parse it. Changes when cached data may be stale.
 	 *

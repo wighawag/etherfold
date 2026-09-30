@@ -44,8 +44,8 @@ describe('the fold-report relay through the SQLite wrapper', () => {
 		// the names the mutations carried, deduplicated and sorted -- not the
 		// declarations, and not an empty set
 		expect(applied).toEqual([
-			{kind: 'applied', block: 100, entities: ['counter', 'token']},
-			{kind: 'applied', block: 101, entities: ['counter', 'token']},
+			{kind: 'applied', block: 100, hash: '0xaaa', entities: ['counter', 'token']},
+			{kind: 'applied', block: 101, hash: '0xbbb', entities: ['counter', 'token']},
 		]);
 	});
 
@@ -71,9 +71,9 @@ describe('the fold-report relay through the SQLite wrapper', () => {
 		);
 
 		expect(reports).toEqual([
-			{kind: 'applied', block: 100, entities: ['counter', 'token']},
+			{kind: 'applied', block: 100, hash: '0xaaa', entities: ['counter', 'token']},
 			{kind: 'retracted', forkPoint: 99},
-			{kind: 'applied', block: 100, entities: ['counter', 'token']},
+			{kind: 'applied', block: 100, hash: '0xbbb', entities: ['counter', 'token']},
 		]);
 	});
 

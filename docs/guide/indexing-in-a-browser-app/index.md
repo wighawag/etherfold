@@ -498,10 +498,12 @@ The side that applied the block **tells** the sides that are reading, and what i
 
 ```ts
 type StateMoved =
-	| {kind: 'applied'; block: number; coherence: string; entities: readonly string[]; generation: string}
+	| {kind: 'applied'; block: number; hash: string; coherence: string; entities: readonly string[]; generation: string}
 	| {kind: 'retracted'; forkPoint: number; coherence: string; generation: string}
 	| {kind: 'repointed'; coherence: string; generation: string};
 ```
+
+**An applied block is named by its number AND its hash.** `hash` is the hash the store recorded for that block, lower-case hex, which is exactly the `extensions.blockHash` a GraphQL answer names when it is read while that block is the tip. So you can pin a re-read to exactly the block you were told about (`block: {hash}`, see [Re-query when the state moves](#re-query-when-the-state-moves)), match a notification to an answer, or key a cache on it. A number cannot do any of that: a reorg puts another block at the same height.
 
 **Your whole rule is two lines.** `coherence` is an opaque **coherence token**: compare it, never parse it.
 
@@ -608,7 +610,7 @@ const {data, errors, extensions} = await execute({
 	}`,
 	variables: {min: 1},
 });
-extensions; // {generation, block}: which generation answered, and the one block every field was read as of
+extensions; // {generation, block, blockHash}: which generation answered, and the one block every field was read as of
 ```
 
 Every list field takes `where` (per column `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `isNull`, combined with `_and` and `_or`), `orderBy` and a required `first`; a root field also takes `block`, to answer as of an earlier one. A nested collection is read for the whole page of parents in one batched read, bounded per parent. Every operation pins ONE block, so a parent and its children never come from two blocks, a reorg included. A `u256` arrives as a decimal string (`U256`), because JSON has no `bigint`. The reference runs exactly this query against its worker, asserted in a real browser: [`examples/browser-reference`](https://github.com/wighawag/etherfold/tree/main/examples/browser-reference).
@@ -634,7 +636,7 @@ import {workerExecutor} from '@etherfold/graphql/worker';
 const execute = LOCAL ? workerExecutor(indexer) : httpExecutor('https://indexer.example/graphql');
 ```
 
-Nothing below that line changes, and neither does the answer: both executors serialise identically (`U256` as a decimal string, `Bytes` as hex), share one error formatter and one set of codes, and report `extensions: {generation, block}`. That is checked, not promised: one query conformance suite (`@etherfold/graphql/conformance`) runs the same requests against the in-process, HTTP and worker executors and requires the same JSON text byte for byte.
+Nothing below that line changes, and neither does the answer: both executors serialise identically (`U256` as a decimal string, `Bytes` as hex), share one error formatter and one set of codes, and report `extensions: {generation, block, blockHash}`. That is checked, not promised: one query conformance suite (`@etherfold/graphql/conformance`) runs the same requests against the in-process, HTTP and worker executors and requires the same JSON text byte for byte.
 
 **An executor never rejects.** A refusal is a coded error in `errors[].extensions.code`. A transport that failed (an HTTP 500, a body that is not JSON, a network error, a closed port, a worker host that died) is normalised to ONE shape: no `data`, one error coded `transport-failure` naming its `reason`, which `isTransportFailure(result)` detects. So the error handling you write once holds for the mode that can return a 500 and the mode that cannot.
 
@@ -647,26 +649,38 @@ const client = new Client({url: '/graphql', fetch: executorToFetch(execute), exc
 
 ### Re-query when the state moves
 
-There are no subscriptions. The state-moved signal (above) is what tells you to re-read, and a GraphQL query is re-read by running the document again:
+There are no subscriptions. The state-moved signal (above) is what tells you to re-read, and a GraphQL query is re-read by running the document again, PINNED to the block the signal named:
 
 ```ts
-indexer.onStateMoved(() => void render()); // render() runs the document and draws the answer
-void render(); // the signal is silent on attaching, so read once by hand
+indexer.onStateMoved((moved) => void render(moved.kind === 'applied' ? moved.hash : undefined));
+void render(); // the signal is silent on attaching, so read once by hand, at the tip
 ```
+
+Pin it by the signal's `hash`, which the document takes as an optional `BlockAddress` (omitted, the answer is read at the tip):
+
+```ts
+const HOLDERS = `query Holders($min: SafeInt!, $at: BlockAddress) {
+	account(block: $at, where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) { address holds }
+}`;
+```
+
+The answer is then read at exactly the block you were told about, not at whatever the tip is by the time the query lands. If that block is replaced before the query runs (a reorg), the pinned query is REFUSED with `block-not-recorded` rather than answered from the replacement, so you read everything again (the retraction's rotated token is on its way too). Without the pin, a reader re-reading on a reorg can read the replacement block and briefly compose parts from two branches until the rotated token arrives.
 
 **Draw only the latest render's answer.** Each signal starts a render, so on a busy chain several are in flight at once, and the worker answers them concurrently: the query pinned to block 4 can come back after the one pinned to block 5. Written as it lands, the older answer overwrites the newer one, and the page shows a past block until the chain moves again. Number the renders and drop an answer a later render has superseded (not by comparing `extensions.block`, which a reorg legitimately lowers):
 
 ```ts
 let latestRender = 0;
-async function render() {
+async function render(at?: string) {
 	const mine = ++latestRender;
-	const {data, errors} = await execute({query: HOLDERS, variables: {min: 1}}); // HOLDERS: the document above
+	const variables = at === undefined ? {min: 1} : {min: 1, at: {hash: at}};
+	const {data, errors} = await execute({query: HOLDERS, variables}); // HOLDERS: the document above
 	if (mine !== latestRender) return; // a later render is drawing a newer answer
+	if (at !== undefined && errors?.[0]?.extensions?.code === 'block-not-recorded') return void render(); // replaced: read again
 	draw(data, errors);
 }
 ```
 
-**Compose several queries into one view by HASH, not by number.** Every answer names the block it was read at, by number and by hash (`extensions.block`, `extensions.blockHash`). To read a second part of the view at exactly that block, pin the follow-up to the hash, `pool(block: {hash: $at}, first: 10)` with `$at: Bytes32!` set to the first answer's `blockHash`. A number is a height, and a reorg can put another block at it between the two queries, which would mix two chains in one view without a word; a hash names one block of one chain, so the follow-up reads that block or is refused with `block-not-recorded`. Within ONE operation you need none of this: every field is read at one block, and an operation during which the store reverts is retried and never answered from two branches.
+**Compose several queries into one view by HASH, not by number.** Every answer names the block it was read at, by number and by hash (`extensions.block`, `extensions.blockHash`), and every `applied` notification names its block the same two ways, with the same hash. To read a second part of the view at exactly that block, pin the follow-up to the hash, `pool(block: {hash: $at}, first: 10)` with `$at: Bytes32!` set to the first answer's `blockHash`. A number is a height, and a reorg can put another block at it between the two queries, which would mix two chains in one view without a word; a hash names one block of one chain, so the follow-up reads that block or is refused with `block-not-recorded`. Within ONE operation you need none of this: every field is read at one block, and an operation during which the store reverts is retried and never answered from two branches.
 
 A client cache wires it the same way as any other read: the coherence-token rule from [Wiring it to a cache you already use](#wiring-it-to-a-cache-you-already-use), with the entity names in `entities` mapped to the queries that read them.
 

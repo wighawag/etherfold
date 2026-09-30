@@ -1,7 +1,8 @@
 import type {FoldReport} from '@etherfold/core';
-import {MemoryStateStore, openForWriting, type WritableStateStore} from '@etherfold/state-store';
+import {MemoryStateStore, openForWriting, type QueryReads, type WritableStateStore} from '@etherfold/state-store';
 import {describe, expect, it} from 'vitest';
 import {applyEventStream, EntityEventProcessor, type EntityProcessor} from '../src/index.js';
+import {BACKENDS} from './utils/backends.js';
 import {finality, lastSync, processor, SOURCE, transfer, type TestABI} from './utils/fixtures.js';
 
 /**
@@ -49,8 +50,8 @@ describe('a fold reports the blocks it applied', () => {
 		// two blocks are two reports
 		expect(applied).toEqual([
 			// deduplicated and sorted, so two runs of one block produce one payload
-			{kind: 'applied', block: 100, entities: ['counter', 'token']},
-			{kind: 'applied', block: 101, entities: ['counter', 'token']},
+			{kind: 'applied', block: 100, hash: '0xa', entities: ['counter', 'token']},
+			{kind: 'applied', block: 101, hash: '0xb', entities: ['counter', 'token']},
 		]);
 	});
 
@@ -68,7 +69,7 @@ describe('a fold reports the blocks it applied', () => {
 			(block) => applied.push(block),
 		);
 
-		expect(applied).toEqual([{kind: 'applied', block: 100, entities: []}]);
+		expect(applied).toEqual([{kind: 'applied', block: 100, hash: '0xa', entities: []}]);
 	});
 
 	it('reports a block only AFTER it was applied, and never one that was not', async () => {
@@ -120,7 +121,7 @@ describe('a fold reports the blocks it applied', () => {
 			[transfer(100, '0xA', {from: '0x0', to: '0xalice', id: 1n})],
 			lastSync({latestBlock: 100, lastToBlock: 100}),
 		);
-		expect(applied).toEqual([{kind: 'applied', block: 100, entities: ['counter', 'token']}]);
+		expect(applied).toEqual([{kind: 'applied', block: 100, hash: '0xa', entities: ['counter', 'token']}]);
 
 		p.setFoldReporter(undefined);
 		await p.process(
@@ -161,10 +162,11 @@ describe('a fold reports the branch it took back', () => {
 		);
 
 		expect(reports).toEqual([
-			{kind: 'applied', block: 100, entities: ['counter', 'token']},
+			{kind: 'applied', block: 100, hash: '0xa', entities: ['counter', 'token']},
 			// ONE below the lowest removed block, which is what `revertTo` was handed
 			{kind: 'retracted', forkPoint: 99},
-			{kind: 'applied', block: 100, entities: ['counter', 'token']},
+			// the SAME height under a DIFFERENT hash: the number alone cannot tell them apart
+			{kind: 'applied', block: 100, hash: '0xb', entities: ['counter', 'token']},
 		]);
 		// and the fold really did revert: the reorged-out owner is gone
 		expect((await store.getCurrent<{owner: string}>('token', {id: '1'}))?.owner).toBe('0xcarol');
@@ -236,4 +238,39 @@ describe('a fold reports the branch it took back', () => {
 
 		expect(reports).toEqual([]);
 	});
+});
+
+describe('a fold reports the HASH of the block it applied', () => {
+	/**
+	 * The hash rides the report so that a reader can pin its re-read to EXACTLY the
+	 * block it was told about (`block: {hash}`), which a number cannot do across a
+	 * reorg. So it must be the hash the STORE recorded, in the store's own spelling:
+	 * a hash the store would not resolve is a pin that reads as "reorged out", which
+	 * is the one answer that must never be given wrongly. Asked of the two backends
+	 * that answer queries, since the query layer is where the pin is resolved.
+	 */
+	for (const backend of BACKENDS.filter((one) => one.name === 'sqlite' || one.name === 'indexeddb')) {
+		it(`reports the hash ${backend.name} recorded for the block, normalised to lower case`, async () => {
+			const store = await backend.open(processor.entities);
+			const reports: FoldReport[] = [];
+			await applyEventStream(
+				store,
+				processor,
+				[
+					transfer(100, '0xABCDEF', {from: '0x0', to: '0xalice', id: 1n}),
+					transfer(101, '0xFEDCBA', {from: '0xalice', to: '0xbob', id: 1n}),
+				],
+				undefined,
+				undefined,
+				(report) => reports.push(report),
+			);
+
+			const reads = store as unknown as QueryReads;
+			const applied = reports.map((report) => (report.kind === 'applied' ? report : expect.fail('an append')));
+			expect(applied.map((report) => report.hash)).toEqual(['0xabcdef', '0xfedcba']);
+			for (const report of applied) {
+				expect(report.hash).toBe((await reads.blockAt(report.block))?.hash);
+			}
+		});
+	}
 });

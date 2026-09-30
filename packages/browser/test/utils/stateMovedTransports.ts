@@ -1,7 +1,7 @@
 import type {Abi, IndexingSource} from '@etherfold/core';
 import type {StateMovedTransport} from '@etherfold/state-moved-conformance';
 import {EntityEventProcessor, EntityStateView, type EntityProcessor} from '@etherfold/processor-entities';
-import {openForReading, openForWriting} from '@etherfold/state-store';
+import {openForReading, openForWriting, type QueryReads, type WritableStateStore} from '@etherfold/state-store';
 import {identityOf} from './processorIdentity.js';
 import {
 	connectToIndexerHost,
@@ -271,6 +271,11 @@ async function openWorld() {
 
 	/** The highest block this world has made the fold APPLY. */
 	let applied = START_BLOCK - 1;
+	/**
+	 * The store the CANONICAL fold writes into: the one a reader's pin resolves
+	 * against, which a promotion moves onto the successor's.
+	 */
+	let canonicalStore: WritableStateStore = store;
 
 	/**
 	 * Advance every generation until the fold that ANSWERS READS is level with the
@@ -336,10 +341,17 @@ async function openWorld() {
 			// successor reaches the cursor the canonical generation has -- nothing here
 			// asks for it, which is what makes this the promotion an app actually meets.
 			for (let round = 0; round < 40; round++) {
-				if (indexer.canonical?.record.processor !== before) return;
+				if (indexer.canonical?.record.processor !== before) {
+					canonicalStore = successorStore;
+					return;
+				}
 				await indexer.indexMore();
 			}
 			throw new Error(`the successor generation never became canonical`);
+		},
+		/** The hash the canonical fold's STORE recorded at this height, read back through its query reads. */
+		async recordedHashAt(block: number): Promise<string | undefined> {
+			return (await (canonicalStore as unknown as QueryReads).blockAt(block))?.hash;
 		},
 		close(): void {
 			port.close();
@@ -374,6 +386,7 @@ export async function openPortTransport(): Promise<StateMovedTransport> {
 		applyNextEmptyBlock: () => world.applyNextEmptyBlock(),
 		retract: () => world.retract(),
 		promote: () => world.promote(),
+		recordedHashAt: (block) => world.recordedHashAt(block),
 		async readsUpTo() {
 			return headBlockOf(await world.port.reads.getCurrent('head', {name: 'head'}));
 		},
@@ -408,6 +421,7 @@ export async function openCrossTabTransport(): Promise<StateMovedTransport> {
 		applyNextEmptyBlock: () => world.applyNextEmptyBlock(),
 		retract: () => world.retract(),
 		promote: () => world.promote(),
+		recordedHashAt: (block) => world.recordedHashAt(block),
 		async readsUpTo() {
 			// A READER TAB'S OWN HANDLE: the same database, narrowed to the reads, which
 			// is what a tab that only renders holds (ADR-0077).

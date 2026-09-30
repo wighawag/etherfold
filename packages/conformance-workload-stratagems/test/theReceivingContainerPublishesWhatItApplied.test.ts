@@ -369,11 +369,21 @@ describe('the receiving container publishes what it applied', () => {
 		// This container withholds a state HANDLE by design -- reads on this runtime
 		// resolve the canonical pointer to a table namespace (ADR-0053), so there is no
 		// `stateOf` and nothing is notified with a value. Publishing a NOTIFICATION is a
-		// different thing and does not reopen that: what goes out is its case plus four
+		// different thing and does not reopen that: what goes out is its case plus five
 		// facts, and a reader re-reads through the surface it already has.
 		const {container, moved} = await foldTheWholeCapture();
 		for (const notification of appendsIn(moved)) {
-			expect(Object.keys(notification).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
+			expect(Object.keys(notification).sort()).toEqual([
+				'block',
+				'coherence',
+				'entities',
+				'generation',
+				'hash',
+				'kind',
+			]);
+			// the block's HASH, in the store's one spelling (lower-case hex): what a reader
+			// pins a re-read to, and a fact about the block rather than a delta
+			expect(notification.hash).toMatch(/^0x[0-9a-f]+$/);
 			// NAMES, not ids and not rows: a string per entity and nothing structured
 			expect(notification.entities.every((entity) => typeof entity === 'string')).toBe(true);
 		}

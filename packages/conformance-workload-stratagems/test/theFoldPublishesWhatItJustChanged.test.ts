@@ -191,12 +191,22 @@ describe('a fold over the stratagems capture publishes what it just changed', ()
 
 	it('carries no rows, no mutations and no state handle: it is a SIGNAL', async () => {
 		// A reader handed the delta applies it by hand, and applying a delta by hand
-		// is what goes wrong at the next reorg. So the payload is its case plus four
+		// is what goes wrong at the next reorg. So the payload is its case plus five
 		// facts, and what a reader does with it is re-read through the surface it
 		// already has -- which for an in-process caller is the container's own handle.
 		const {indexer, moved} = await foldThroughAContainer();
 		for (const notification of appendsIn(moved)) {
-			expect(Object.keys(notification).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
+			expect(Object.keys(notification).sort()).toEqual([
+				'block',
+				'coherence',
+				'entities',
+				'generation',
+				'hash',
+				'kind',
+			]);
+			// the block's HASH, in the store's one spelling (lower-case hex): what a reader
+			// pins a re-read to, and a fact about the block rather than a delta
+			expect(notification.hash).toMatch(/^0x[0-9a-f]+$/);
 			// NAMES, not ids and not rows: a string per entity and nothing structured
 			expect(notification.entities.every((entity) => typeof entity === 'string')).toBe(true);
 		}

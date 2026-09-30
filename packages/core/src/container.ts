@@ -2292,6 +2292,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 		}
 		this.stateMoved.publish({
 			block: report.block,
+			hash: report.hash,
 			entities: report.entities,
 			generation,
 		});

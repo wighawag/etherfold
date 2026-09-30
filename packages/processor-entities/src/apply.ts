@@ -1,5 +1,11 @@
 import type {Abi, FoldReporter, LastSync, LogEvent} from '@etherfold/core';
-import {createMutationContext, type Mutation, type StateStore, type WritableStateStore} from '@etherfold/state-store';
+import {
+	createMutationContext,
+	normalizeBlockHash,
+	type Mutation,
+	type StateStore,
+	type WritableStateStore,
+} from '@etherfold/state-store';
 import {logs} from 'named-logs';
 import {serializeLastSync, syncedThrough} from './cursor.js';
 import {blockPointer, forkPoint, groupByBlock} from './stream.js';
@@ -101,6 +107,14 @@ export async function runBlockHandlers<ABI extends Abi, ProcessorConfig>(
  *    point and NOT the rows that moved -- `revertTo` answers `void` at the seam,
  *    on purpose, and the token that rotates with this retraction already says
  *    invalidate everything.
+ *
+ * 7. **An applied block is reported WITH ITS HASH, in the store's spelling.** A
+ *    reader pins its re-read to the block it was told about (`block: {hash}`),
+ *    and a number cannot name that block across a reorg. The hash is normalised
+ *    HERE (`normalizeBlockHash`, the rule every backend applies on write) and not
+ *    in `@etherfold/core`, which relays it, because core cannot import the
+ *    storage seam that owns the rule (ADR-0016). So it equals the hash the query
+ *    layer reads back out of the store (`extensions.blockHash`) byte for byte.
  */
 export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 	store: WritableStateStore,
@@ -131,8 +145,16 @@ export async function applyEventStream<ABI extends Abi, ProcessorConfig>(
 			(index === blocks.length - 1
 				? {key: cursor.key, value: serializeLastSync(cursor.lastSync)}
 				: {key: cursor.key, value: serializeLastSync(syncedThrough(cursor.lastSync, block.number))});
-		await store.applyBlock(blockPointer(block), mutations, write);
-		report?.({kind: 'applied', block: block.number, entities: entitiesTouchedBy(mutations)});
+		const pointer = blockPointer(block);
+		await store.applyBlock(pointer, mutations, write);
+		report?.({
+			kind: 'applied',
+			block: block.number,
+			// the hash as the store RECORDED it (every backend normalises on write), so a
+			// reader that pins a re-read to it is answered by that block: see rule 7
+			hash: normalizeBlockHash(pointer.hash),
+			entities: entitiesTouchedBy(mutations),
+		});
 	}
 
 	// A stream with no blocks in it is still progress: a range that carried none of

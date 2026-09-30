@@ -427,16 +427,19 @@ export const hostingShapeCases: readonly HostingShapeCase[] = [
 			);
 			same('nothing was retracted on this branch', told.received.length, applied.length);
 
-			// THE VALUE IS CORE'S OWN, on every shape: the four fields ADR-0083 names and
-			// nothing beside them, with the entity NAMES each block's mutations touched.
+			// THE VALUE IS CORE'S OWN, on every shape: the fields ADR-0083 names and
+			// nothing beside them, with the block's HASH as the store recorded it and the
+			// entity NAMES each block's mutations touched.
 			for (const moved of applied) {
 				same(`what block ${moved.block} carried`, Object.keys(moved).sort(), [
 					'block',
 					'coherence',
 					'entities',
 					'generation',
+					'hash',
 					'kind',
 				]);
+				same(`the hash block ${moved.block} carried`, moved.hash, `0xa${moved.block}`);
 				same(`the entities block ${moved.block} touched`, [...moved.entities].sort(), ['counter', 'token']);
 			}
 

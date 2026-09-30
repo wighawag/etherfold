@@ -1523,11 +1523,13 @@ const blockNamedBy = (moved: StateMoved): number | undefined =>
 	moved.kind === 'applied' ? moved.block : moved.kind === 'retracted' ? moved.forkPoint : undefined;
 
 /** One thing a tab was told, flattened to what a committed result can carry. */
-type ToldOf = {kind: string; block?: number; coherence: string; entities: string[]; generation: string};
+type ToldOf = {kind: string; block?: number; hash?: string; coherence: string; entities: string[]; generation: string};
 
 const toldOf = (moved: StateMoved): ToldOf => ({
 	kind: moved.kind,
 	block: blockNamedBy(moved),
+	// the applied block's hash as the store recorded it; a retraction and a pointer move name none
+	hash: moved.kind === 'applied' ? moved.hash : undefined,
 	coherence: moved.coherence,
 	entities: moved.kind === 'applied' ? [...moved.entities] : [],
 	generation: moved.generation,

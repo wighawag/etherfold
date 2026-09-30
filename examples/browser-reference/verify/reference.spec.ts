@@ -33,10 +33,13 @@ type Reference = {
 		checkTxInclusion(q: {txHash: string}[]): Promise<Record<string, {status: string; basis: string}>>;
 	};
 	onRedeploy(next: unknown): Promise<{stream: string}>;
-	holders(min: number): Promise<{
+	holders(
+		min: number,
+		at?: string,
+	): Promise<{
 		data?: {account: {address: string; holds: number; holdings: {id: string}[]}[]};
 		errors?: {message: string; extensions?: {code?: string}}[];
-		extensions?: {generation: string; block: number};
+		extensions?: {generation: string; block: number | null; blockHash: string | null};
 	}>;
 };
 
@@ -126,6 +129,41 @@ test('answers a GraphQL query from its worker: filtered, ordered, with a nested 
 	expect(everyone.extensions?.block).toBeGreaterThanOrEqual(5);
 
 	expect(filtered.data).toEqual({account: [{address: ALICE, holds: 3, holdings: [{id: '1'}, {id: '3'}, {id: '5'}]}]});
+	expect(errors).toEqual([]);
+});
+
+/**
+ * THE SIGNAL NAMES THE BLOCK'S HASH, AND THE RE-READ IS PINNED TO IT (ADR-0083,
+ * amended 2026-09-30).
+ *
+ * The fake chain's last event-bearing block is 5, so that is the last block the
+ * state-moved signal named, and the page shows its number AND its hash. The hash
+ * is the one the store recorded, which is the one `extensions.blockHash` names
+ * for an answer read while that block is the tip: the page's own document pinned to it
+ * answers from exactly that block, and pinned to a hash the store never recorded
+ * (a block a reorg replaced) it is REFUSED rather than answered from another.
+ */
+test('names the applied block by its hash, and the GraphQL re-read pinned to it answers from that block', async ({
+	page,
+}) => {
+	const {errors} = await open(page);
+	await expect(page.locator('#transfers')).toHaveText('5');
+
+	const hashOf5 = `0x${'5'.padStart(64, '0')}`;
+	await expect(page.locator('#moved')).toHaveText(`block 5, ${hashOf5}`);
+
+	const {pinned, replaced} = await page.evaluate(async (hash) => {
+		const app = (window as never as {__reference: Reference}).__reference;
+		return {pinned: await app.holders(1, hash), replaced: await app.holders(1, `0x${'b'.repeat(64)}`)};
+	}, hashOf5);
+
+	expect(pinned.errors).toBeUndefined();
+	expect(pinned.extensions).toMatchObject({block: 5, blockHash: hashOf5});
+	expect(pinned.data?.account.map(({address, holds}) => ({address, holds}))).toEqual([
+		{address: ALICE, holds: 3},
+		{address: BOB, holds: 2},
+	]);
+	expect(replaced.errors?.[0]?.extensions?.code).toBe('block-not-recorded');
 	expect(errors).toEqual([]);
 });
 

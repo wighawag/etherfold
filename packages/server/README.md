@@ -228,14 +228,14 @@ The refusals before GraphQL are HTTP statuses, since nothing GraphQL answered: `
 
 ## The state-moved stream
 
-`GET /{indexer}/state-moved` tells a remote client that the state moved, over server-sent events, so an app reading from a hosted indexer runs the SAME notification handler as an app indexing in its own browser (ADR-0083). What crosses is `@etherfold/core`'s `StateMoved` serialised as JSON and otherwise untouched, so a reader's whole rule is the same two lines everywhere: **token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything.**
+`GET /{indexer}/state-moved` tells a remote client that the state moved, over server-sent events, so an app reading from a hosted indexer runs the SAME notification handler as an app indexing in its own browser (ADR-0083). What crosses is `@etherfold/core`'s `StateMoved` serialised as JSON and otherwise untouched, so a reader's whole rule is the same two lines everywhere: **token unchanged, invalidate narrowly using `entities`; token changed, invalidate everything.** An `applied` notification names the block's `hash` beside its number, in the store's spelling, which is the hash `/graphql` names in `extensions.blockHash` for an answer read while that block is the tip, so a client pins its re-read to exactly that block with `block: {hash}`.
 
 ```
 event: progress
 data: {"lastToBlock":105,"latestBlock":205,"blocksBehindTip":100,"coherence":"…","generation":"…"}
 
 event: state-moved
-data: {"kind":"applied","block":106,"coherence":"…","entities":["token"],"generation":"…"}
+data: {"kind":"applied","block":106,"hash":"0x…","coherence":"…","entities":["token"],"generation":"…"}
 ```
 
 **This package APPLIES NO BLOCKS, so this is a TRANSPORT and never a producer.** The signal is published by the generation container that folds (`ReceivingIndexer.onStateMoved`, `@etherfold/core`), and a route holds an ENTRY rather than a container -- so this route subscribes at `IndexerRegistryEntry.onStateMoved` and adds nothing of its own. A second transport (a `graphql-ws` adapter, a hibernating socket) attaches at that same seam with NO change to the code that publishes. No GraphQL runtime, schema or subscription is here: the signal is the primitive and a subscription is a derivable adapter over it.
@@ -255,7 +255,7 @@ data: {"kind":"applied","block":106,"coherence":"…","entities":["token"],"gene
 
 **The condition is a capability the HOST declares and never a runtime this package detects**, because it names no runtime at all (asserted by test) and because the failure being prevented is the invisible one: a subscriber registry COMPILES, passes on Node and silently never fires on a Worker, which a reader cannot tell apart from a quiet chain.
 
-**It is a PUBLIC read, like the feed.** `INGEST_TOKEN` guards the routes that can move the cursor; this one moves nothing and reads no rows, and what crosses is a block number, entity NAMES and two opaque digests. A deployment that needs it private puts it behind its own edge.
+**It is a PUBLIC read, like the feed.** `INGEST_TOKEN` guards the routes that can move the cursor; this one moves nothing and reads no rows, and what crosses is a block number and that block's hash, entity NAMES and two opaque digests. A deployment that needs it private puts it behind its own edge.
 
 Note what this is NOT: the **feed**. A feed consumer owns a cursor and reads the sequenced emission stream on its own cadence; a reader here holds no cursor and is told, best-effort, that the state moved.
 

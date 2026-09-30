@@ -89,7 +89,7 @@ export function reportingFold(name: string, entitiesOf: (block: number, hash: st
 				for (const entity of entities) {
 					rows.push({block: block.number, entity, row: `${entity}@${block.number}:${block.hash}`});
 				}
-				reporter?.({kind: 'applied', block: block.number, entities});
+				reporter?.({kind: 'applied', block: block.number, hash: block.hash, entities});
 			}
 			return rows.map((held) => held.row);
 		},

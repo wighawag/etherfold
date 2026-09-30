@@ -77,7 +77,7 @@ export type StateMovedProgress = {
  *
  * The third transport of ADR-0083 and the first one that is not a browser
  * primitive. A client opens it and is told, best-effort, that the state moved --
- * the same `{kind, block, coherence, entities, generation}` value a tab receives
+ * the same `{kind, block, hash, coherence, entities, generation}` value a tab receives
  * over its port or off the cross-tab channel, serialised as JSON and otherwise
  * untouched -- so pointing an app at a hosted indexer instead of at its own
  * worker changes a DEPLOYMENT CHOICE and not a line of its notification handling.

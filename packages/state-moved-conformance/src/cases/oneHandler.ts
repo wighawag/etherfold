@@ -22,7 +22,7 @@ const GROUP = 'one handler';
  */
 export function oneHandlerCases(factory: StateMovedTransportFactory): ConformanceCase[] {
 	return cases(GROUP, {
-		'carries the FIVE fields core publishes for an applied block, and not one more': () =>
+		'carries the SIX fields core publishes for an applied block, and not one more': () =>
 			over(factory, async (transport) => {
 				const reader = await listening(transport);
 				const block = await transport.applyNextBlock();
@@ -34,6 +34,11 @@ export function oneHandlerCases(factory: StateMovedTransportFactory): Conformanc
 				// one then breaks the moment it is pointed at the others.
 				expect(Object.keys(applied).sort()).toEqual([...APPLIED_FIELDS]);
 				expect(applied.block).toBe(block);
+				// The block's HASH, exactly as the store recorded it: the value a reader pins its
+				// re-read to (`block: {hash}`), so a transport that re-spelled it would hand the
+				// reader a pin the store does not resolve.
+				expect(typeof applied.hash).toBe('string');
+				expect(applied.hash).toBe(await transport.recordedHashAt(block));
 				// The entity NAMES the block's mutations touched: strings, bounded by the
 				// declaration. EMPTY is a legal answer (a fold with no entity declarations
 				// has no names), so what is asserted is the TYPE and never the count.
@@ -68,7 +73,7 @@ export function oneHandlerCases(factory: StateMovedTransportFactory): Conformanc
 				const applied = anAppend(reader.received[1]);
 				expect(applied.block).toBe(empty);
 				expect(applied.entities).toEqual([]);
-				// Still the full five fields: an empty changed-set narrows what is IN the payload
+				// Still the full six fields: an empty changed-set narrows what is IN the payload
 				// and not its shape, so the one handler still reads it without a special case.
 				expect(Object.keys(applied).sort()).toEqual([...APPLIED_FIELDS]);
 
@@ -97,6 +102,32 @@ export function oneHandlerCases(factory: StateMovedTransportFactory): Conformanc
 				// did not move.
 				expect(reader.decisions[1]).toEqual({invalidate: [...anAppend(reader.received[1]).entities]});
 				expect(reader.held()).toBe(first.coherence);
+			}),
+
+		'names the HASH the store recorded, so a block that REPLACED another at the same height is told apart': () =>
+			over(factory, async (transport) => {
+				const reader = await listening(transport);
+				const block = await transport.applyNextBlock();
+				await told(reader, (received) => received.length >= 1, `the block ${block} it applied`);
+				const replaced = anAppend(reader.received[0]);
+				expect(replaced.hash).toBe(await transport.recordedHashAt(block));
+
+				// The chain takes that block back and puts a DIFFERENT one at the same height.
+				// The number cannot tell a reader which of the two it was told about; the hash
+				// can, which is what lets a reader pin a re-read to exactly one of them.
+				const forkPoint = await transport.retract();
+				await told(
+					reader,
+					(received) =>
+						received.some((moved, at) => at > 0 && moved.kind === 'applied' && moved.block === forkPoint + 1),
+					`the block that replaced ${forkPoint + 1}`,
+				);
+				const replacement = anAppend(
+					reader.received.find((moved, at) => at > 0 && moved.kind === 'applied' && moved.block === forkPoint + 1),
+				);
+				expect(replacement.block).toBe(replaced.block);
+				expect(replacement.hash).not.toBe(replaced.hash);
+				expect(replacement.hash).toBe(await transport.recordedHashAt(replacement.block));
 			}),
 
 		'tells a reader ONCE PER APPLIED BLOCK, in the order the fold applied them': () =>
