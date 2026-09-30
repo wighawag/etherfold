@@ -202,7 +202,7 @@ const sqlite: QueryExecutor = localExecutor(buildQuerySchema(QUERY_ENTITIES), {
 });
 
 const poolsAt = (at?: number) =>
-	`{ pool(${at === undefined ? '' : `block: ${at}, `}orderBy: {field: pool}, first: 10) { pool label kind deposits(orderBy: {field: seq}, first: 10) { seq who amount } } }`;
+	`{ pool(${at === undefined ? '' : `block: {number: ${at}}, `}orderBy: {field: pool}, first: 10) { pool label kind deposits(orderBy: {field: seq}, first: 10) { seq who amount } } }`;
 
 /** Exactly one error, coded `block-not-retained`, and no rows. */
 function expectRefusedBelowTheFloor(result: Awaited<ReturnType<QueryExecutor>>, requested: number) {

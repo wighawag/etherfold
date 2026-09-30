@@ -3,6 +3,7 @@ import type {StateStoreCapabilities} from './capabilities.js';
 import type {CursorWrite} from './cursor.js';
 import type {RetentionEnforcement} from './enforcement.js';
 import type {EntityIdPrefix, Listing} from './listing.js';
+import {forwardedQueryReads, type QueryReads} from './query-reads.js';
 import type {SeamRecordKey} from './records.js';
 import type {PruneOptions, PruneReport} from './retention.js';
 import type {BlockPointer, BlockUpdate, EntityId, Mutation, NormalizedEntity} from './types.js';
@@ -576,7 +577,11 @@ class ClaimedStateStore implements WritableStateStore {
 	 * which depends on this package.
 	 */
 	readonly accessor?: (options?: never) => unknown;
-	readonly tip?: () => Promise<number | undefined>;
+	readonly tip?: QueryReads['tip'];
+	/** The query layer's block reads and revert sequence, forwarded as `tip` is (`query-reads.ts`). */
+	readonly blockAt?: QueryReads['blockAt'];
+	readonly blockOf?: QueryReads['blockOf'];
+	readonly revertSequence?: QueryReads['revertSequence'];
 
 	constructor(
 		private readonly inner: StateStoreBackend,
@@ -584,15 +589,12 @@ class ClaimedStateStore implements WritableStateStore {
 	) {
 		const packing = (inner as Partial<WritableStateStore>).applyBlocks;
 		if (typeof packing === 'function') this.applyBlocks = (updates) => packing.call(inner, updates);
-		const queryable = inner as {accessor?: (options?: never) => unknown; tip?: () => Promise<number | undefined>};
+		const queryable = inner as {accessor?: (options?: never) => unknown};
 		if (typeof queryable.accessor === 'function') {
 			const accessor = queryable.accessor;
 			this.accessor = (options) => accessor.call(inner, options);
 		}
-		if (typeof queryable.tip === 'function') {
-			const tip = queryable.tip;
-			this.tip = () => tip.call(inner);
-		}
+		Object.assign(this, forwardedQueryReads(inner));
 	}
 
 	get capabilities(): StateStoreCapabilities {

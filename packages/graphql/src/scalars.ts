@@ -106,3 +106,29 @@ function fromHex(value: unknown): Uint8Array {
 	}
 	return bytes;
 }
+
+/**
+ * `Bytes32`: a block hash, 32 bytes as `0x`-prefixed hex, case-insensitively.
+ * Input only (a root field's `block: {hash}`), and passed on as written: the
+ * store folds a hash to lower case on lookup as it does on write (ADR-0015).
+ */
+export const BYTES32_SCALAR = {
+	description: 'A 32-byte value, such as a block hash, carried as 0x-prefixed hexadecimal (64 digits).',
+	serialize(value: unknown): string {
+		return checkedBytes32(value);
+	},
+	parseValue(value: unknown): string {
+		return checkedBytes32(value);
+	},
+	parseLiteral(node: ValueNode): string {
+		if (node.kind === Kind.STRING) return checkedBytes32(node.value);
+		throw new TypeError('a Bytes32 is a 0x-prefixed hexadecimal string of 64 digits');
+	},
+};
+
+function checkedBytes32(value: unknown): string {
+	if (typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value)) return value;
+	throw new TypeError(
+		`a Bytes32 is 0x-prefixed hexadecimal of exactly 64 digits (32 bytes), got ${JSON.stringify(value) ?? String(value)}`,
+	);
+}

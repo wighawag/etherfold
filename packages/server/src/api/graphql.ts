@@ -185,9 +185,15 @@ export function getGraphQLAPI<CustomEnv extends Env>(options: ServerOptions<Cust
 				context: {
 					accessor,
 					generation: digest,
-					tip: async () => (await store.getBlockAtOrBelow(Number.MAX_SAFE_INTEGER))?.number,
+					tip: () => store.tip(),
 					// the store's own claim: a `revert-only` store answers every read at the tip
 					asOf: store.capabilities.asOf,
+					// the pin's hash, a `block: {hash}`, and the revert sequence the reorg guard reads
+					blocks: {
+						at: (number) => store.blockAt(number),
+						of: (hash) => store.blockOf(hash),
+						revertSequence: () => store.revertSequence(),
+					},
 				},
 			};
 		})();
@@ -250,7 +256,8 @@ function reformatted(
 	});
 	const answer: QueryResult = {
 		errors,
-		...(generation === undefined ? {} : {extensions: {generation, block: null}}),
+		// as every answer from this server's context reports it: no block, so no hash
+		...(generation === undefined ? {} : {extensions: {generation, block: null, blockHash: null}}),
 	};
 	return withStatus(answer, status);
 }

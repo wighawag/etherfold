@@ -743,6 +743,47 @@ export class VersionedStateStore implements StateStoreBackend {
 	}
 
 	/**
+	 * The TIP: the highest recorded block's number, or `undefined` before the
+	 * first. One of the query layer's reads (`QueryReads` in `@etherfold/state-store`).
+	 */
+	async tip(): Promise<number | undefined> {
+		return this.tipBlockNumber();
+	}
+
+	/**
+	 * The block recorded at a height, or `undefined`. One of the query layer's
+	 * reads: what names the hash of the block an operation pinned.
+	 */
+	async blockAt(number: number): Promise<RecordedBlock | undefined> {
+		assertHeightForLookup(number);
+		return this.lookupBlock({axis: 'height', number});
+	}
+
+	/**
+	 * The recorded block a HASH names, or `undefined` when this store recorded
+	 * none (reorged out, a block that carried no log it records, or one below a
+	 * snapshot it started from). Normalised as on write (ADR-0015). One of the
+	 * query layer's reads.
+	 */
+	async blockOf(hash: string): Promise<RecordedBlock | undefined> {
+		return this.lookupBlock(parseBlockAddress({hash}));
+	}
+
+	/**
+	 * How many times this store has reverted: incremented in the same batch as
+	 * every `revertTo` (`revertToStatements`), read from the database every time.
+	 * `0` before the first. One of the query layer's reads.
+	 */
+	async revertSequence(): Promise<number> {
+		const value = await this.readSeamRecord('revertSequence');
+		const parsed = value === undefined ? 0 : Number(value);
+		if (!Number.isSafeInteger(parsed) || parsed < 0) {
+			throw new Error(`the revert sequence this store recorded is not a count: ${JSON.stringify(value)}`);
+		}
+		return parsed;
+	}
+
+	/**
 	 * The highest recorded block, or `undefined` before the first one is applied.
 	 *
 	 * This is the TIP a retention window is measured back from, and it is read

@@ -1,3 +1,4 @@
+import {forwardedQueryReads, type QueryReads} from './query-reads.js';
 import {assertBlockNumber} from './blocks.js';
 import type {Retention, StateStoreCapabilities} from './capabilities.js';
 import {
@@ -237,7 +238,15 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	 * `tip` is the store underneath's, unchanged.
 	 */
 	readonly accessor?: (options?: never) => unknown;
-	readonly tip?: () => Promise<number | undefined>;
+	readonly tip?: QueryReads['tip'];
+	/**
+	 * The query layer's block reads and revert sequence (`query-reads.ts`), the
+	 * store underneath's, unchanged. A hash below the floor needs no refusal here:
+	 * an install records no block below it, so none resolves.
+	 */
+	readonly blockAt?: QueryReads['blockAt'];
+	readonly blockOf?: QueryReads['blockOf'];
+	readonly revertSequence?: QueryReads['revertSequence'];
 
 	/** Use `openSnapshotAware`, which recovers a previously recorded origin. */
 	constructor(
@@ -246,15 +255,12 @@ export class SnapshotAwareStateStore implements StateStoreBackend {
 	) {
 		this.origin = origin;
 		this.knownTip = origin;
-		const queryable = inner as {accessor?: (options?: never) => unknown; tip?: () => Promise<number | undefined>};
+		const queryable = inner as {accessor?: (options?: never) => unknown};
 		if (typeof queryable.accessor === 'function') {
 			const accessor = queryable.accessor;
 			this.accessor = (options) => this.floored(accessor.call(inner, options));
 		}
-		if (typeof queryable.tip === 'function') {
-			const tip = queryable.tip;
-			this.tip = () => tip.call(inner);
-		}
+		Object.assign(this, forwardedQueryReads(inner));
 	}
 
 	/** The block this store's contents came from, or `undefined` if it computed them itself. */

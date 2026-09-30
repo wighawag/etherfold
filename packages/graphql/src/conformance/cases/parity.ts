@@ -1,5 +1,5 @@
 import {QUERY_ERROR_CODES} from '../../errors.js';
-import {answer, deposit, extensions, HISTORY, pool, TWO_255, TWO_64} from '../fixtures.js';
+import {answer, deposit, extensions, hashOf, HISTORY, pool, TWO_255, TWO_64} from '../fixtures.js';
 import type {HistoryStep, QueryParityCase} from '../types.js';
 
 /**
@@ -38,6 +38,21 @@ const REORGED: readonly HistoryStep[] = [
 	{revertTo: 10},
 	{block: 11, mutations: [pool('a', {label: 'ALPHA', kind: 'closed'}), deposit('a', '4', {who: 'eve', amount: 3n})]},
 ];
+
+/** The hash of the block that REPLACES block 11 in a reorg: another block at the same height. */
+const REPLACED_11 = `0x${'b1'.repeat(32)}`;
+
+/** A hash no case ever records: a canonical block, as far as a store knows, that carried no log it records. */
+const NEVER_RECORDED = `0x${'ee'.repeat(32)}`;
+
+/** The refusal of a hash the store has no record of, word for word, as every executor carries it. */
+function notRecorded(hash: string): string {
+	return (
+		`block ${hash} is not recorded by this store, so there is no state to answer as of it. It may have been ` +
+		`reorged out, or it may be a block that carried no log this indexer records (only those are recorded), ` +
+		`or one below the snapshot this store started from. Pin to a hash an answer's extensions named, or to a number.`
+	);
+}
 
 export const QUERY_PARITY_CASES: readonly QueryParityCase[] = [
 	// -- nested relations -----------------------------------------------------
@@ -233,7 +248,7 @@ export const QUERY_PARITY_CASES: readonly QueryParityCase[] = [
 		asOf: true,
 		history: HISTORY,
 		request: {
-			query: `{ pool(block: 10, orderBy: {field: pool}, first: 10) { pool kind deposits(first: 10) { seq who } } }`,
+			query: `{ pool(block: {number: 10}, orderBy: {field: pool}, first: 10) { pool kind deposits(first: 10) { seq who } } }`,
 		},
 		expected: (generation) =>
 			answer(
@@ -262,7 +277,7 @@ export const QUERY_PARITY_CASES: readonly QueryParityCase[] = [
 		asOf: true,
 		history: HISTORY,
 		request: {
-			query: `{ now: pool(where: {kind: {eq: open}}, orderBy: {field: amount, direction: desc}, first: 10) { pool amount } then: pool(block: 10, where: {kind: {eq: open}}, orderBy: {field: amount, direction: desc}, first: 10) { pool label amount } }`,
+			query: `{ now: pool(where: {kind: {eq: open}}, orderBy: {field: amount, direction: desc}, first: 10) { pool amount } then: pool(block: {number: 10}, where: {kind: {eq: open}}, orderBy: {field: amount, direction: desc}, first: 10) { pool label amount } }`,
 		},
 		expected: (generation) =>
 			answer(
@@ -315,7 +330,7 @@ export const QUERY_PARITY_CASES: readonly QueryParityCase[] = [
 		asOf: true,
 		history: REORGED,
 		request: {
-			query: `{ replaced: deposit(block: 11, orderBy: {field: seq}, first: 10) { pool seq } shared: deposit(block: 10, orderBy: {field: seq}, first: 10) { pool seq } }`,
+			query: `{ replaced: deposit(block: {number: 11}, orderBy: {field: seq}, first: 10) { pool seq } shared: deposit(block: {number: 10}, orderBy: {field: seq}, first: 10) { pool seq } }`,
 		},
 		expected: (generation) =>
 			answer(
@@ -439,7 +454,7 @@ export const QUERY_PARITY_CASES: readonly QueryParityCase[] = [
 		group: 'one set of codes, one formatter',
 		name: 'a block above the one the operation pinned is block-not-yet-indexed, never answered from the tip',
 		history: HISTORY,
-		request: {query: `{ pool(first: 1, block: 12) { pool } }`},
+		request: {query: `{ pool(first: 1, block: {number: 12}) { pool } }`},
 		expected: (generation) => ({
 			data: null,
 			errors: [
@@ -452,6 +467,106 @@ export const QUERY_PARITY_CASES: readonly QueryParityCase[] = [
 				},
 			],
 			extensions: extensions(generation, 11),
+		}),
+	},
+
+	// -- a block pinned by HASH ------------------------------------------------------
+	{
+		group: 'a block pinned by hash',
+		name: 'pinned to a recorded hash, a root field answers as of that block, exactly as pinned to its number',
+		asOf: true,
+		history: HISTORY,
+		request: {
+			query: `{ byHash: pool(block: {hash: "${hashOf(10)}"}, orderBy: {field: pool}, first: 10) { pool label kind deposits(orderBy: {field: seq}, first: 10) { seq } } byNumber: pool(block: {number: 10}, orderBy: {field: pool}, first: 10) { pool label kind deposits(orderBy: {field: seq}, first: 10) { seq } } }`,
+		},
+		expected: (generation) => {
+			const at10 = [
+				{pool: 'a', label: 'alpha', kind: 'open', deposits: [{seq: '1'}, {seq: '2'}]},
+				{pool: 'b', label: 'beta', kind: 'closed', deposits: [{seq: '1'}]},
+				{pool: 'c', label: 'gamma', kind: 'open', deposits: []},
+				{pool: 'd', label: 'delta', kind: 'closed', deposits: []},
+			];
+			return answer({byHash: at10, byNumber: at10}, generation, 11);
+		},
+	},
+	{
+		group: 'a block pinned by hash',
+		name: 'the hash is read case-insensitively, as the store folds it on write',
+		asOf: true,
+		history: HISTORY,
+		request: {
+			query: `query ($at: Bytes32!) { pool(block: {hash: $at}, where: {pool: {eq: "c"}}, first: 1) { pool label } }`,
+			variables: {at: hashOf(10).toUpperCase().replace('0X', '0x')},
+		},
+		expected: (generation) => answer({pool: [{pool: 'c', label: 'gamma'}]}, generation, 11),
+	},
+	{
+		group: 'a block pinned by hash',
+		name: 'a hash reverted away is block-not-recorded, never answered from the block that replaced it',
+		history: [...HISTORY, {revertTo: 10}, {block: 11, hash: REPLACED_11, mutations: [pool('a', {label: 'ALPHA'})]}],
+		request: {query: `{ pool(block: {hash: "${hashOf(11)}"}, first: 1) { pool } }`},
+		expected: (generation) => ({
+			data: null,
+			errors: [
+				{
+					message: notRecorded(hashOf(11)),
+					locations: [{line: 1, column: 3}],
+					path: ['pool'],
+					extensions: {code: QUERY_ERROR_CODES.blockNotRecorded, requested: hashOf(11)},
+				},
+			],
+			// and the answer names the block that replaced it, by its own hash
+			extensions: extensions(generation, 11, REPLACED_11),
+		}),
+	},
+	{
+		group: 'a block pinned by hash',
+		name: 'a canonical hash this store never recorded is block-not-recorded too, and the refusal claims no reorg',
+		history: HISTORY,
+		request: {query: `{ pool(block: {hash: "${NEVER_RECORDED}"}, first: 1) { pool } }`},
+		expected: (generation) => ({
+			data: null,
+			errors: [
+				{
+					message: notRecorded(NEVER_RECORDED),
+					locations: [{line: 1, column: 3}],
+					path: ['pool'],
+					extensions: {code: QUERY_ERROR_CODES.blockNotRecorded, requested: NEVER_RECORDED},
+				},
+			],
+			extensions: extensions(generation, 11),
+		}),
+	},
+	{
+		group: 'a block pinned by hash',
+		name: 'a block given by both number and hash is invalid-query, before anything is read (@oneOf)',
+		history: HISTORY,
+		request: {query: `{ pool(block: {number: 10, hash: "${hashOf(10)}"}, first: 1) { pool } }`},
+		expected: (generation) => ({
+			errors: [
+				{
+					message: 'OneOf Input Object "BlockAddress" must specify exactly one key.',
+					locations: [{line: 1, column: 15}],
+					extensions: {code: QUERY_ERROR_CODES.invalidQuery},
+				},
+			],
+			extensions: extensions(generation, null),
+		}),
+	},
+	{
+		group: 'a block pinned by hash',
+		name: 'a block given by neither is invalid-query, before anything is read (@oneOf)',
+		history: HISTORY,
+		request: {query: `{ pool(block: {}, first: 1) { pool } }`},
+		expected: (generation) => ({
+			errors: [
+				{
+					message: 'OneOf Input Object "BlockAddress" must specify exactly one key.',
+					locations: [{line: 1, column: 15}],
+					extensions: {code: QUERY_ERROR_CODES.invalidQuery},
+				},
+			],
+			extensions: extensions(generation, null),
 		}),
 	},
 ];

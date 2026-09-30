@@ -34,7 +34,10 @@ describe('the schema built from the declarations', () => {
 		expect(sdl).toMatch(/kind: PoolKind\n/);
 		expect(sdl).toMatch(/amount: U256\n/);
 		expect(sdl).toMatch(/deposits\(where: DepositWhere, orderBy: DepositOrderBy, first: Int!\): \[Deposit!\]!/);
-		expect(sdl).toMatch(/pool\(where: PoolWhere, orderBy: PoolOrderBy, first: Int!, block: SafeInt\): \[Pool!\]!/);
+		expect(sdl).toMatch(/pool\(where: PoolWhere, orderBy: PoolOrderBy, first: Int!, block: BlockAddress\): \[Pool!\]!/);
+		// a root field is pinned by a height OR a hash, exactly one of them
+		expect(sdl).toMatch(/input BlockAddress @oneOf \{\s+number: SafeInt\s+hash: Bytes32\s+\}/);
+		expect(sdl).toContain('scalar Bytes32');
 	});
 
 	it('refuses a declaration set whose generated names collide, naming both', () => {
@@ -130,7 +133,7 @@ describe('a query answered in process through the accessor', () => {
 		const {context} = await seeded();
 		const executor = localExecutor(buildQuerySchema(DECLARATIONS), context());
 		const result = await executor({
-			query: `{ pool(where: {pool: {eq: "a"}}, first: 1, block: 10) { kind deposits(first: 10) { seq } } }`,
+			query: `{ pool(where: {pool: {eq: "a"}}, first: 1, block: {number: 10}) { kind deposits(first: 10) { seq } } }`,
 		});
 		expect(result).toEqual({
 			data: {pool: [{kind: 'open', deposits: [{seq: '1'}, {seq: '2'}]}]},
@@ -160,7 +163,7 @@ describe('a query answered in process through the accessor', () => {
 	it('refuses a block above the one the operation pinned, and a first below 1, with a code', async () => {
 		const {context} = await seeded();
 		const executor = localExecutor(buildQuerySchema(DECLARATIONS), context());
-		const ahead = await executor({query: `{ pool(first: 1, block: 12) { pool } }`});
+		const ahead = await executor({query: `{ pool(first: 1, block: {number: 12}) { pool } }`});
 		expect(ahead.errors?.[0]?.extensions.code).toBe(QUERY_ERROR_CODES.blockNotYetIndexed);
 		const none = await executor({query: `{ pool(first: 0) { pool } }`});
 		expect(none.errors?.[0]?.extensions.code).toBe(QUERY_ERROR_CODES.invalidQuery);
@@ -186,7 +189,7 @@ describe('a query answered in process through the accessor', () => {
 		const {store, context} = await sqliteSubject({retention: 'revert-only'});
 		await store.applyBlock(block(10), [pool('a', {label: 'alpha'})]);
 		const executor = localExecutor(buildQuerySchema(DECLARATIONS), context());
-		const result = await executor({query: `{ pool(first: 1, block: 9) { pool } }`});
+		const result = await executor({query: `{ pool(first: 1, block: {number: 9}) { pool } }`});
 		expect(result.errors?.[0]?.extensions.code).toBe(QUERY_ERROR_CODES.blockNotRetained);
 		expect(result.errors?.[0]?.path).toEqual(['pool']);
 		expect(result.data).toBeNull();

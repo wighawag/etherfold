@@ -3,6 +3,8 @@ export {
 	executeQuery,
 	localExecutor,
 	type ExecuteQueryOptions,
+	type QueryBlock,
+	type QueryBlocks,
 	type QueryContext,
 	type QueryContextSource,
 } from './execute.js';
@@ -27,4 +29,4 @@ export {
 	UNEXPECTED_ERROR_MESSAGE,
 	type QueryErrorCode,
 } from './errors.js';
-export {BYTES_SCALAR, SAFE_INT_SCALAR, U256_SCALAR} from './scalars.js';
+export {BYTES32_SCALAR, BYTES_SCALAR, SAFE_INT_SCALAR, U256_SCALAR} from './scalars.js';

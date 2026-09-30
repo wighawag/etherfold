@@ -709,7 +709,31 @@ export function revertToStatements(
 		sql: `DELETE FROM ${names.blocks} WHERE number > ?${andGuard(guard)}`,
 		args: [keepUpTo, ...guardArgs(guard)],
 	});
+	// THE REVERT SEQUENCE, in the same batch: a query reads it at its start and its
+	// end, and a revert it cannot see is an answer read from two branches (ADR-0099,
+	// amended 2026-09-30). LAST, so the ordering the two above rest on is untouched.
+	statements.push(bumpRevertSequenceStatement(names, guard));
 	return statements;
+}
+
+/**
+ * Count one more revert in the seam's own table (`revertSequence`, a decimal
+ * string), guarded like the revert it belongs to. An upsert, so the first revert
+ * writes `1` and every later one adds one to what is there.
+ */
+export function bumpRevertSequenceStatement(names: TableNames, guard?: StatementGuard): Statement {
+	const key: SeamRecordKey = 'revertSequence';
+	const increment = `ON CONFLICT(${CURSOR_KEY}) DO UPDATE SET ${CURSOR_VALUE} = CAST(CAST(${CURSOR_VALUE} AS INTEGER) + 1 AS TEXT)`;
+	if (!guard) {
+		return {
+			sql: `INSERT INTO ${names.seamRecords} (${CURSOR_KEY}, ${CURSOR_VALUE}) VALUES (?, '1') ${increment}`,
+			args: [key],
+		};
+	}
+	return {
+		sql: `INSERT INTO ${names.seamRecords} (${CURSOR_KEY}, ${CURSOR_VALUE}) SELECT ?, '1' WHERE ${guard.predicate} ${increment}`,
+		args: [key, ...guardArgs(guard)],
+	};
 }
 
 function asEntityMap(

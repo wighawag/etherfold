@@ -120,11 +120,13 @@ export type QueryParityCase = {
 };
 
 /**
- * One step of a case's history: a block applied (its number, and what it
- * wrote), or a REORG (`store.revertTo`, keeping every block up to `revertTo`).
+ * One step of a case's history: a block applied (its number, what it wrote,
+ * and its hash where it is not the one `block(number)` gives, which is how a
+ * replacement block after a reorg is a DIFFERENT block at the same height), or a
+ * REORG (`store.revertTo`, keeping every block up to `revertTo`).
  */
 export type HistoryStep =
-	| {readonly block: number; readonly mutations: readonly Mutation[]}
+	| {readonly block: number; readonly mutations: readonly Mutation[]; readonly hash?: string}
 	| {readonly revertTo: number};
 
 /** One case: a name, and a function that throws if the executor is wrong. */

@@ -41,8 +41,14 @@ export const QUERY_ENTITIES: readonly EntityDeclaration[] = [POOL, DEPOSIT, CROW
 export const TWO_64 = 2n ** 64n;
 export const TWO_255 = 2n ** 255n;
 
-export function block(number: number): BlockPointer {
-	return {number, hash: `0x${number.toString(16).padStart(64, '0')}`, timestamp: 1_700_000_000 + number * 12};
+/** A block at a height: its hash is the height padded to 32 bytes unless one is given. */
+export function block(number: number, hash = hashOf(number)): BlockPointer {
+	return {number, hash, timestamp: 1_700_000_000 + number * 12};
+}
+
+/** The hash `block(number)` records by default. */
+export function hashOf(number: number): string {
+	return `0x${number.toString(16).padStart(64, '0')}`;
 }
 
 export function pool(id: string, values: Record<string, unknown>): Mutation {
@@ -105,18 +111,27 @@ export async function subjectWith(
 	await subject.store.migrate();
 	for (const step of history) {
 		if ('revertTo' in step) await subject.store.revertTo(step.revertTo);
-		else await subject.store.applyBlock(block(step.block), step.mutations);
+		else await subject.store.applyBlock(block(step.block, step.hash), step.mutations);
 	}
 	return subject;
 }
 
-/** An answer: its data, and the generation and block every answer reports, in the order an executor writes them. */
-export function answer(data: Record<string, unknown> | null, generation: string, pinned: number | null): QueryResult {
-	return {data, extensions: extensions(generation, pinned)};
+/**
+ * An answer: its data, and the generation, block and block hash every answer
+ * reports, in the order an executor writes them.
+ */
+export function answer(
+	data: Record<string, unknown> | null,
+	generation: string,
+	pinned: number | null,
+	hash?: string,
+): QueryResult {
+	return {data, extensions: extensions(generation, pinned, hash)};
 }
 
-export function extensions(generation: string, pinned: number | null): QueryExtensions {
-	return {generation, block: pinned};
+/** What every answer reports: the pinned block's hash is the one `block(pinned)` records, unless given. */
+export function extensions(generation: string, pinned: number | null, hash?: string): QueryExtensions {
+	return {generation, block: pinned, blockHash: pinned === null ? null : (hash ?? hashOf(pinned))};
 }
 
 /** Turns `{name: run}` into cases, so a case reads like the `it` it becomes. */

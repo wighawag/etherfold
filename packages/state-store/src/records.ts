@@ -1,13 +1,15 @@
 /**
  * ## The seam's OWN records: a private keyspace beside the caller's
  *
- * Three small facts have to survive a reload, and none of them belongs to the
+ * Four small facts have to survive a reload, and none of them belongs to the
  * caller: **where a bootstrapped store's rows came from** (`snapshotOrigin`, so
  * it cannot claim history it never received), **the floor the last prune pass
  * ran at** (`retentionEnforcement`, so a store pruned before the process died
- * does not come back saying never) and **the claim itself**
+ * does not come back saying never), **the claim itself**
  * (`writerClaim`, the guaranteed no-op mutation `openForWriting` takes the
- * store with).
+ * store with) and **how many times the store has reverted**
+ * (`revertSequence`, which a query reads at its start and its end so that it is
+ * never answered from two branches; ADR-0099, amended 2026-09-30).
  *
  * They used to live at the CURSOR PORT, under reserved key names, and that was
  * a collision waiting to happen rather than a design: the cursor port is a
@@ -28,7 +30,7 @@
  *
  * A second open keyspace would only move the question: whoever owns it would
  * have to publish which names it had taken. The keys here are a fixed union of
- * three, so the namespace cannot grow by accident, a typo is a compile error,
+ * four, so the namespace cannot grow by accident, a typo is a compile error,
  * and a caller cannot address it at all -- there is no string it could pass.
  *
  * ## Why it is on `StateStoreBackend` and never on `StateStore`
@@ -52,7 +54,7 @@
  * namespaces is what a guard was reaching for, and it needs no runtime check at
  * all: the seam writes where a caller cannot, so there is nothing to enforce.
  *
- * ## Two of the three travel through the port; one never does
+ * ## Two of the four travel through the port; two never do
  *
  * `snapshotOrigin` and `writerClaim` are SEAM-LEVEL -- the snapshot layer wraps
  * an arbitrary backend and the claim is taken through the seam -- so they are
@@ -62,6 +64,14 @@
  * `readRetentionEnforcement`. It is a member of this keyspace rather than of a
  * fourth private one because it is the same KIND of fact and wants the same
  * durability; it simply never needs to cross the interface.
+ *
+ * `revertSequence` is the same kind again: a backend that answers queries
+ * (SQLite, IndexedDB) increments it INSIDE the transaction of every `revertTo`
+ * and reads it back through its own `revertSequence()`, which the wrappers
+ * forward by feature detection as they forward `tip`. It is persisted rather
+ * than held in memory because a reader tab reads a store another tab's leader
+ * reverts. A backend that answers no query (the reference and patch stores)
+ * keeps none, and the key is simply absent there.
  */
 
 /**
@@ -71,7 +81,7 @@
  * independently of the others AND of a cursor that happens to share its name,
  * on every backend.
  */
-export const SEAM_RECORD_KEYS = ['snapshotOrigin', 'retentionEnforcement', 'writerClaim'] as const;
+export const SEAM_RECORD_KEYS = ['snapshotOrigin', 'retentionEnforcement', 'writerClaim', 'revertSequence'] as const;
 
 /**
  * WHICH of the seam's records. Not a caller-chosen string: see the module note.
@@ -83,5 +93,8 @@ export const SEAM_RECORD_KEYS = ['snapshotOrigin', 'retentionEnforcement', 'writ
  *   through the port.
  * - `writerClaim` -- the key `openForWriting` clears in order to claim
  *   (`store.ts`). Nothing ever writes it.
+ * - `revertSequence` -- how many times the store has reverted, as a decimal
+ *   string; written by a backend inside its own `revertTo`, never through the
+ *   port, and read back as `revertSequence()` (`query-reads.ts`).
  */
 export type SeamRecordKey = (typeof SEAM_RECORD_KEYS)[number];
