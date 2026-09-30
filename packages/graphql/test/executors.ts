@@ -6,7 +6,7 @@ import {VersionedStateStore, type VersionedStateStoreOptions} from '@etherfold/s
 import type {EntityDeclaration, QueryReads, StateStoreBackend} from '@etherfold/state-store';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {QueryExecutorFactory, QuerySubject} from '../src/conformance/index.js';
-import {buildQuerySchema, localExecutor, type QueryContext} from '../src/index.js';
+import {buildQuerySchema, localExecutor, queryBlocksOf, type QueryContext} from '../src/index.js';
 import {GENERATION} from './fixtures.js';
 
 /**
@@ -41,11 +41,7 @@ function subject(
 		tip,
 		asOf: capabilities.asOf && capabilities.retention.kind !== 'revert-only',
 		// the block reads and the revert sequence, off the store itself, as a host copies them
-		blocks: {
-			at: (number) => reads.blockAt(number),
-			of: (hash) => reads.blockOf(hash),
-			revertSequence: () => reads.revertSequence(),
-		},
+		blocks: queryBlocksOf(reads),
 	};
 	return {store, executor: localExecutor(buildQuerySchema(declarations), context), generation: GENERATION};
 }

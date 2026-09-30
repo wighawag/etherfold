@@ -3,6 +3,7 @@ import {printSchema} from 'graphql';
 import {describe, expect, it} from 'vitest';
 import {buildQuerySchema, localExecutor, QUERY_ERROR_CODES} from '../src/index.js';
 import {block, DECLARATIONS, deposit, GENERATION, pool, sqliteSubject} from './fixtures.js';
+import {hashOf} from '../src/conformance/fixtures.js';
 
 const TWO_64 = 2n ** 64n;
 
@@ -101,7 +102,7 @@ describe('a query answered in process through the accessor', () => {
 					},
 				],
 			},
-			extensions: {generation: GENERATION, block: 11},
+			extensions: {generation: GENERATION, block: 11, blockHash: hashOf(11)},
 		});
 		// what crosses a transport is JSON, and it is already that: no bigint, no bytes
 		expect(JSON.parse(JSON.stringify(result))).toEqual(result);
@@ -137,7 +138,7 @@ describe('a query answered in process through the accessor', () => {
 		});
 		expect(result).toEqual({
 			data: {pool: [{kind: 'open', deposits: [{seq: '1'}, {seq: '2'}]}]},
-			extensions: {generation: GENERATION, block: 11},
+			extensions: {generation: GENERATION, block: 11, blockHash: hashOf(11)},
 		});
 	});
 
@@ -174,7 +175,7 @@ describe('a query answered in process through the accessor', () => {
 		const executor = localExecutor(buildQuerySchema(DECLARATIONS), context());
 		const unparsable = await executor({query: `{ pool(`});
 		expect(unparsable.errors?.[0]?.extensions.code).toBe(QUERY_ERROR_CODES.invalidQuery);
-		expect(unparsable.extensions).toEqual({generation: GENERATION, block: null});
+		expect(unparsable.extensions).toEqual({generation: GENERATION, block: null, blockHash: null});
 		const invalid = await executor({query: `{ nope }`});
 		expect(invalid.errors?.[0]?.extensions.code).toBe(QUERY_ERROR_CODES.invalidQuery);
 		const negative = await executor({

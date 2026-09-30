@@ -13,6 +13,7 @@ import {
 	type QueryResult,
 } from '../src/index.js';
 import {block, DECLARATIONS, GENERATION, pool, sqliteSubject} from './fixtures.js';
+import {hashOf} from '../src/conformance/fixtures.js';
 
 /**
  * THE HTTP EXECUTOR AND THE FETCH SHIM (ADR-0099), over a REAL socket where a
@@ -197,7 +198,7 @@ describe('executorToFetch', () => {
 					{pool: 'a', amount: '9'},
 				],
 			},
-			extensions: {generation: GENERATION, block: 10},
+			extensions: {generation: GENERATION, block: 10, blockHash: hashOf(10)},
 		});
 		expect(JSON.stringify(result)).toBe(JSON.stringify(await executor({query, variables: {min: '9'}})));
 	});
@@ -210,7 +211,10 @@ describe('executorToFetch', () => {
 			operationName: 'Q',
 		});
 		const got = await (await fetch(`/graphql?${params}`)).json();
-		expect(got).toEqual({data: {pool: [{label: 'beta'}]}, extensions: {generation: GENERATION, block: 10}});
+		expect(got).toEqual({
+			data: {pool: [{label: 'beta'}]},
+			extensions: {generation: GENERATION, block: 10, blockHash: hashOf(10)},
+		});
 
 		const posted = await fetch(
 			new Request('http://anywhere/graphql', {
@@ -218,7 +222,10 @@ describe('executorToFetch', () => {
 				body: JSON.stringify({query: `{ pool(first: 1) { pool } }`}),
 			}),
 		);
-		expect(await posted.json()).toEqual({data: {pool: [{pool: 'a'}]}, extensions: {generation: GENERATION, block: 10}});
+		expect(await posted.json()).toEqual({
+			data: {pool: [{pool: 'a'}]},
+			extensions: {generation: GENERATION, block: 10, blockHash: hashOf(10)},
+		});
 	});
 
 	it('answers a transport failure as a 200 carrying the one shape, so a client reads it as errors', async () => {

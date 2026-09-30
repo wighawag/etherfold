@@ -455,7 +455,17 @@ export function isReadableSnapshotHead(value: unknown): value is SnapshotHead {
  * cannot read, and none of them is a transport failure.
  */
 export async function readSnapshot(document: SnapshotDocument): Promise<SnapshotReader> {
-	const {gzipped, stream} = await sniffGzip(toStream(document));
+	// A source that fails before its first two bytes is refused exactly as one that
+	// fails later in the head: every failure while the head is read is a
+	// `SnapshotFormatError`, as it was before the sniff existed, so where in the
+	// head a download broke does not change what a caller is told.
+	let sniffed: Awaited<ReturnType<typeof sniffGzip>>;
+	try {
+		sniffed = await sniffGzip(toStream(document));
+	} catch {
+		throw new SnapshotFormatError(undefined);
+	}
+	const {gzipped, stream} = sniffed;
 	const lines = linesOf(gzipped ? stream.pipeThrough(codec(new DecompressionStream('gzip'))) : stream);
 	let head: unknown;
 	try {
@@ -718,7 +728,8 @@ async function sniffGzip(
 			length += value.length;
 		}
 	} catch (error) {
-		reader.releaseLock();
+		// release the download too: nothing will read the rest of it
+		await reader.cancel(error).catch(() => undefined);
 		throw error;
 	}
 	const lead = peeked.flatMap((chunk) => [...chunk.subarray(0, 2)]).slice(0, 2);

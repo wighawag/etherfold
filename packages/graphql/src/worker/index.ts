@@ -33,7 +33,7 @@ import type {QueryReads, StateStore} from '@etherfold/state-store';
 import type {GraphQLSchema} from 'graphql';
 import {DocumentCache} from '../documents.js';
 import {QUERY_ERROR_CODES, UNEXPECTED_ERROR_MESSAGE} from '../errors.js';
-import {executeQuery} from '../execute.js';
+import {executeQuery, queryBlocksOf} from '../execute.js';
 import type {QueryRequest, QueryResult} from '../executor.js';
 import {buildQuerySchema} from '../schema.js';
 
@@ -124,11 +124,7 @@ export function graphqlQueryHandler(options: GraphqlQueryHandlerOptions = {}): H
 				accessor,
 				generation: resolved.generation,
 				tip: () => store.tip(),
-				blocks: {
-					at: (number) => store.blockAt(number),
-					of: (hash) => store.blockOf(hash),
-					revertSequence: () => store.revertSequence(),
-				},
+				blocks: queryBlocksOf(store),
 				// the store's own claim: a `revert-only` store answers every read at the tip
 				asOf: store.capabilities.asOf,
 			},

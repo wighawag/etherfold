@@ -38,7 +38,7 @@ export class OperationReads {
 		/** Whether reads are pinned by passing the block (a store that answers as-of reads). */
 		readonly asOf: boolean,
 		/** The store's block reads, which resolve a `block: {hash}` (`QueryContext.blocks`). */
-		readonly blocks?: QueryBlocks,
+		readonly blocks: QueryBlocks,
 	) {}
 
 	/**
@@ -64,15 +64,13 @@ export class OperationReads {
 	 * nothing below its floor, so an unrecorded hash may still be canonical.
 	 */
 	private async resolveHash(hash: string): Promise<number> {
-		const recorded = this.blocks ? await this.blocks.of(hash) : undefined;
+		const recorded = await this.blocks.of(hash);
 		if (recorded) return recorded.number;
 		throw new QueryRefusal(
 			QUERY_ERROR_CODES.blockNotRecorded,
-			this.blocks
-				? `block ${hash} is not recorded by this store, so there is no state to answer as of it. It may have been ` +
-						`reorged out, or it may be a block that carried no log this indexer records (only those are recorded), ` +
-						`or one below the snapshot this store started from. Pin to a hash an answer's extensions named, or to a number.`
-				: `block ${hash} cannot be resolved here: this host reads no block by hash. Pin to a number instead.`,
+			`block ${hash} is not recorded by this store, so there is no state to answer as of it. It may have been ` +
+				`reorged out, or it may be a block that carried no log this indexer records (only those are recorded), ` +
+				`or one below the snapshot this store started from. Pin to a hash an answer's extensions named, or to a number.`,
 			{requested: hash},
 		);
 	}
