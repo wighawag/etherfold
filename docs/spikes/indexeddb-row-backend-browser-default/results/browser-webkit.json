@@ -1,6 +1,6 @@
 {
   "project": "webkit",
-  "ranAt": "2026-09-28T16:08:57.404Z",
+  "ranAt": "2026-09-30T09:17:01.284Z",
   "runs": [
     {
       "project": "webkit",
@@ -14,36 +14,36 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 2718
+          "ms": 263
         },
         {
           "label": "conformance:window-128",
-          "ms": 2775
+          "ms": 242
         },
         {
           "label": "conformance:revert-only",
-          "ms": 3078
+          "ms": 219
         }
       ],
       "results": {
-        "passed": 504,
+        "passed": 521,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 170,
+            "passed": 176,
             "failed": 0,
-            "databases": 185
+            "databases": 191
           },
           "window-128": {
-            "passed": 178,
+            "passed": 184,
             "failed": 0,
-            "databases": 193
+            "databases": 199
           },
           "revert-only": {
-            "passed": 156,
+            "passed": 161,
             "failed": 0,
-            "databases": 171
+            "databases": 176
           }
         }
       },
@@ -61,15 +61,15 @@
       "timings": [
         {
           "label": "accessor-conformance:unbounded",
-          "ms": 1454
+          "ms": 132
         },
         {
           "label": "accessor-conformance:window-128",
-          "ms": 1369
+          "ms": 121
         },
         {
           "label": "accessor-conformance:revert-only",
-          "ms": 1185
+          "ms": 109
         }
       ],
       "results": {
@@ -108,11 +108,11 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 65
+          "ms": 7
         },
         {
           "label": "reference",
-          "ms": 2
+          "ms": 0
         }
       ],
       "results": {
@@ -310,11 +310,15 @@
             "on": "current",
             "lower": [
               "placement",
-              "7"
+              {
+                "bytes": "7"
+              }
             ],
             "upper": [
               "placement",
-              "7",
+              {
+                "bytes": "7"
+              },
               []
             ],
             "lowerOpen": false,
@@ -324,6 +328,63 @@
         "visited": 4,
         "rows": 4,
         "truncated": false
+      },
+      "errors": []
+    },
+    {
+      "project": "webkit",
+      "case": "id-order",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": false,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15"
+      },
+      "results": {
+        "listCurrent": [
+          "U+0042",
+          "U+0061",
+          "U+E000",
+          "U+FFFD",
+          "U+1F600"
+        ],
+        "listAsOf": [
+          "U+0042",
+          "U+0061",
+          "U+E000",
+          "U+FFFD",
+          "U+1F600"
+        ],
+        "mutationContextList": [
+          "U+0042",
+          "U+0061",
+          "U+E000",
+          "U+FFFD",
+          "U+1F600"
+        ]
+      },
+      "errors": []
+    },
+    {
+      "project": "webkit",
+      "case": "old-layout",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": false,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15"
+      },
+      "results": {
+        "before": {
+          "rows": [],
+          "truncated": false,
+          "tip": null,
+          "cursor": null
+        },
+        "after": [
+          "U+E000",
+          "U+1F600"
+        ]
       },
       "errors": []
     },
@@ -339,15 +400,15 @@
       "timings": [
         {
           "label": "write",
-          "ms": 141
+          "ms": 14
         },
         {
           "label": "cold-start",
-          "ms": 9
+          "ms": 0
         },
         {
           "label": "read",
-          "ms": 3
+          "ms": 0
         }
       ],
       "results": {

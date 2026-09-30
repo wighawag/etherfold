@@ -1,6 +1,6 @@
 {
   "project": "chromium",
-  "ranAt": "2026-09-28T16:08:09.488Z",
+  "ranAt": "2026-09-30T09:16:47.921Z",
   "runs": [
     {
       "project": "chromium",
@@ -14,36 +14,36 @@
       "timings": [
         {
           "label": "conformance:unbounded",
-          "ms": 799.8000000119209
+          "ms": 194.29999995231628
         },
         {
           "label": "conformance:window-128",
-          "ms": 735.2999999523163
+          "ms": 229.30000001192093
         },
         {
           "label": "conformance:revert-only",
-          "ms": 820.5
+          "ms": 223.69999998807907
         }
       ],
       "results": {
-        "passed": 504,
+        "passed": 521,
         "failed": 0,
         "failures": [],
         "byClaim": {
           "unbounded": {
-            "passed": 170,
+            "passed": 176,
             "failed": 0,
-            "databases": 185
+            "databases": 191
           },
           "window-128": {
-            "passed": 178,
+            "passed": 184,
             "failed": 0,
-            "databases": 193
+            "databases": 199
           },
           "revert-only": {
-            "passed": 156,
+            "passed": 161,
             "failed": 0,
-            "databases": 171
+            "databases": 176
           }
         }
       },
@@ -61,15 +61,15 @@
       "timings": [
         {
           "label": "accessor-conformance:unbounded",
-          "ms": 268.9000000357628
+          "ms": 119.70000004768372
         },
         {
           "label": "accessor-conformance:window-128",
-          "ms": 348.9000000357628
+          "ms": 112.89999997615814
         },
         {
           "label": "accessor-conformance:revert-only",
-          "ms": 405.60000002384186
+          "ms": 142.19999998807907
         }
       ],
       "results": {
@@ -108,11 +108,11 @@
       "timings": [
         {
           "label": "processor",
-          "ms": 20.5
+          "ms": 9.799999952316284
         },
         {
           "label": "reference",
-          "ms": 1.300000011920929
+          "ms": 0.3999999761581421
         }
       ],
       "results": {
@@ -310,11 +310,15 @@
             "on": "current",
             "lower": [
               "placement",
-              "7"
+              {
+                "bytes": "7"
+              }
             ],
             "upper": [
               "placement",
-              "7",
+              {
+                "bytes": "7"
+              },
               []
             ],
             "lowerOpen": false,
@@ -324,6 +328,63 @@
         "visited": 4,
         "rows": 4,
         "truncated": false
+      },
+      "errors": []
+    },
+    {
+      "project": "chromium",
+      "case": "id-order",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36"
+      },
+      "results": {
+        "listCurrent": [
+          "U+0042",
+          "U+0061",
+          "U+E000",
+          "U+FFFD",
+          "U+1F600"
+        ],
+        "listAsOf": [
+          "U+0042",
+          "U+0061",
+          "U+E000",
+          "U+FFFD",
+          "U+1F600"
+        ],
+        "mutationContextList": [
+          "U+0042",
+          "U+0061",
+          "U+E000",
+          "U+FFFD",
+          "U+1F600"
+        ]
+      },
+      "errors": []
+    },
+    {
+      "project": "chromium",
+      "case": "old-layout",
+      "env": {
+        "crossOriginIsolated": false,
+        "hasSharedArrayBuffer": false,
+        "hasOPFS": true,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36"
+      },
+      "results": {
+        "before": {
+          "rows": [],
+          "truncated": false,
+          "tip": null,
+          "cursor": null
+        },
+        "after": [
+          "U+E000",
+          "U+1F600"
+        ]
       },
       "errors": []
     },
@@ -339,15 +400,15 @@
       "timings": [
         {
           "label": "write",
-          "ms": 29.80000001192093
+          "ms": 13.300000011920929
         },
         {
           "label": "cold-start",
-          "ms": 0.5
+          "ms": 0.3999999761581421
         },
         {
           "label": "read",
-          "ms": 0.19999998807907104
+          "ms": 0.20000004768371582
         }
       ],
       "results": {
