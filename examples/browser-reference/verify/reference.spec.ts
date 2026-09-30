@@ -26,6 +26,7 @@ type Reference = {
 			host: string;
 			scope: string;
 			phase: string;
+			election?: {name: string; role: string; tookOver: boolean; takeoverReason?: string};
 			hotUpdate?: {count: number; report: {outcome: string; generation?: {processor: string}}};
 		}>;
 		generations(): Promise<{record: {stream: string; processor: string}; canonical: boolean}[]>;
@@ -126,6 +127,70 @@ test('answers a GraphQL query from its worker: filtered, ordered, with a nested 
 
 	expect(filtered.data).toEqual({account: [{address: ALICE, holds: 3, holdings: [{id: '1'}, {id: '3'}, {id: '5'}]}]});
 	expect(errors).toEqual([]);
+});
+
+/**
+ * ONE TAB INDEXES AND THE OTHERS READ (ADR-0097), with both seats derived from
+ * ONE store constructor (`stateFactoriesFrom` in `browser/indexer.worker.ts`).
+ *
+ * The second tab's worker finds the election's lock held and is built as a
+ * READER of the database the first tab's worker writes: it asks its wallet for
+ * no logs, and yet its read surface and its GraphQL answer the leader's rows,
+ * which they can only do if the two seats opened one database. When the leading
+ * tab CLOSES, the browser releases the lock and the reader takes over.
+ */
+test("a second tab reads the leader's rows through its read surface and GraphQL, and takes over when the leader closes", async ({
+	context,
+}) => {
+	const first = await context.newPage();
+	const second = await context.newPage();
+	const leader = await open(first);
+	await expect(first.locator('#transfers')).toHaveText('5');
+	const reader = await open(second);
+
+	const seatOf = (page: Page) =>
+		page.evaluate(
+			async () => (await (window as never as {__reference: Reference}).__reference.indexer.progress()).election,
+		);
+	await expect.poll(() => seatOf(first)).toMatchObject({role: 'writer'});
+	await expect.poll(() => seatOf(second)).toMatchObject({role: 'reader', tookOver: false});
+
+	// the read surface, rendered by the reader tab...
+	await expect(second.locator('#transfers')).toHaveText('5');
+
+	// THE LEADER APPLIES A BLOCK the reader hears about. It has to: this app runs its
+	// processor as a MODULE, whose generation is named only once the fold is built,
+	// which a reader never does, so a reader that joined a QUIET chain cannot name the
+	// generation its answers belong to until the leader's state-moved signal names it
+	// (`readerGenerationOf`, `@etherfold/browser`), and refuses a query until then.
+	// Both pages' wallets are the one chain, so the block is minted on each.
+	await second.evaluate(() => window.__mint());
+	await first.evaluate(() => window.__mint());
+	await expect(second.locator('#transfers')).toHaveText('6');
+
+	// ...and GraphQL, answered by the reader's worker from the store the leader wrote
+	const answered = await second.evaluate(async () => {
+		const app = (window as never as {__reference: Reference}).__reference;
+		return {holders: await app.holders(3), requests: window.__walletRequests};
+	});
+	expect(answered.holders.errors).toBeUndefined();
+	const byAddress = [...(answered.holders.data?.account ?? [])].sort((a, b) => a.address.localeCompare(b.address));
+	expect(byAddress).toEqual([
+		{address: ALICE, holds: 3, holdings: [{id: '1'}, {id: '3'}, {id: '5'}]},
+		{address: BOB, holds: 3, holdings: [{id: '2'}, {id: '4'}, {id: '6'}]},
+	]);
+	// a reader fetches nothing: every log it reads, the leader fetched
+	expect(answered.requests['eth_getLogs'] ?? 0).toBe(0);
+
+	await first.close();
+	await expect
+		.poll(() => seatOf(second))
+		.toMatchObject({role: 'writer', tookOver: true, takeoverReason: 'leader-gone'});
+	const after = await second.evaluate(async () => (window as never as {__reference: Reference}).__reference.holders(3));
+	expect(after.errors).toBeUndefined();
+	expect(after.data?.account).toHaveLength(2);
+	expect(leader.errors).toEqual([]);
+	expect(reader.errors).toEqual([]);
 });
 
 /**

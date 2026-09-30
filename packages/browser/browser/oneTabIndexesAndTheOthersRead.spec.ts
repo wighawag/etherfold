@@ -225,6 +225,40 @@ test('a dedicated-worker host per tab: the lock is held in the worker, and KILLI
 	}
 });
 
+test('ONE store constructor (`stateFactoriesFrom`) in a worker entry: the first tab writes, the second reads its rows, and takes over when the leader CLOSES', async ({
+	browser,
+}) => {
+	const context = await browser.newContext();
+	const tabs = await openTabs(context, 2);
+	const [leader, second] = tabs as [Tab, Tab];
+	const run = tag();
+	try {
+		await leader.run({case: 'election-worker-open', tag: run, holdAbove: HELD_AT, helper: true});
+		await expect.poll(async () => (await report(leader)).seat?.role, {timeout: 30_000}).toBe('writer');
+		await second.run({case: 'election-worker-open', tag: run, helper: true});
+
+		await expect.poll(async () => (await report(leader)).progress.lastToBlock, {timeout: 30_000}).toBe(HELD_AT);
+		const led = await report(leader);
+		await expect.poll(async () => (await report(second)).progress.lastToBlock, {timeout: 30_000}).toBe(HELD_AT);
+		const read = await report(second);
+		expect(read.seat).toMatchObject({role: 'reader'});
+		expect(read.calls).toBe(0);
+		// the reader's read surface answers the rows the LEADER wrote, so both opened one database
+		expect(read.state).toEqual(led.state);
+		expect(read.state.transfers).toBeGreaterThan(0);
+
+		// A CLEAN CLOSE of the leader's tab, which takes its worker and its lock with it.
+		await leader.page.close();
+		await expect.poll(async () => (await report(second)).seat?.role, {timeout: 30_000}).toBe('writer');
+		expect((await report(second)).seat).toMatchObject({tookOver: true, takeoverReason: 'leader-gone'});
+		await expect.poll(async () => (await report(second)).ranges.length, {timeout: 30_000}).toBeGreaterThan(0);
+		expect((await report(second)).ranges[0]!.from).toBeLessThanOrEqual(HELD_AT + 1);
+		await expect.poll(async () => (await report(second)).state, {timeout: 30_000}).toEqual(EXPECTED_A);
+	} finally {
+		await disposeAll(tabs, context);
+	}
+});
+
 test('two tabs that both believe they lead leave the store correct, the loser demoting as today', async ({browser}) => {
 	const context = await browser.newContext();
 	const tabs = await openTabs(context, 2);

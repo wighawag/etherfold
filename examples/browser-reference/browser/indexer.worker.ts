@@ -1,6 +1,6 @@
 import {createBrowserStateStore, hostIndexerInThisWorker, keepStreamOnIndexedDB} from '@etherfold/browser';
 import {graphqlQueryHandler} from '@etherfold/graphql/worker';
-import {EntityStateView, fromEntityProcessor, openForReading, openForWriting} from '@etherfold/processor-entities';
+import {fromEntityProcessor, openForWriting, stateFactoriesFrom} from '@etherfold/processor-entities';
 import {tokenProcessor} from '../src/processor.js';
 
 /**
@@ -23,15 +23,15 @@ import {tokenProcessor} from '../src/processor.js';
  */
 const host = hostIndexerInThisWorker({
 	// =====================================================================
-	// THE STORE: one line, and the only place a backend is named
+	// THE STORE: one constructor, and the only place a backend is named
 	// =====================================================================
 	// IndexedDB is the browser default (ADR-0024): versioned rows, and the sync
 	// cursor written in the same transaction as the block it describes, so a worker
 	// that is ended mid-index reopens consistent.
 	//
-	// It is a FACTORY and not a value, because an indexer holds any number of
+	// It is a CONSTRUCTOR and not a value, because an indexer holds any number of
 	// GENERATIONS (a stream plus a fold over it), one of which is canonical and
-	// answers every read, and each folds into its own state. The host calls this
+	// answers every read, and each folds into its own state. The host calls it
 	// once per generation.
 	//
 	// KEYED ON THE CONTEXT, which is what keeps each generation's state its own.
@@ -41,15 +41,17 @@ const host = hostIndexerInThisWorker({
 	// cursor as well as on the rows. It is also what lets a redeploy's new source
 	// fold BESIDE the live one (`onRedeploy` in `main.ts`) into a store of its own.
 	//
-	// CLAIMED, because this worker INDEXES: building a store and becoming its
-	// writer are two acts, and `openForWriting` is the second one (ADR-0077). The
-	// signal bounds the claim, so a store another context holds is reported as a
-	// refusal the tab reads on `progress.failure` rather than a wait for ever.
-	createState: async (context, {signal}) =>
-		openForWriting(
-			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `reference-${context.stream}`}),
-			{signal},
-		),
+	// `stateFactoriesFrom` derives BOTH factories the host takes from it:
+	// `createState`, which CLAIMS the store because this worker indexes (building a
+	// store and becoming its writer are two acts, and `openForWriting` is the
+	// second one, ADR-0077; the signal bounds the claim, so a store another context
+	// holds is a refusal the tab reads on `progress.failure` rather than a wait for
+	// ever), and `openState`, the reader below. One constructor is what guarantees
+	// that a reader opens the database the leader writes.
+	...stateFactoriesFrom({
+		open: (context, entities) => createBrowserStateStore(entities, {databaseName: `reference-${context.stream}`}),
+		entities: tokenProcessor.entities,
+	}),
 	createProcessor: (state) => fromEntityProcessor(tokenProcessor)(state),
 	// =====================================================================
 	// ONE TAB INDEXES, THE OTHERS READ (ADR-0097)
@@ -60,18 +62,13 @@ const host = hostIndexerInThisWorker({
 	// worker: the worker that holds it indexes, and the browser releases it when
 	// that worker (or its tab) goes away, crash included.
 	//
-	// A worker that finds the lock held is built from `openState` instead: the SAME
-	// database as `createState`, opened for READING, with no claim and no fetch. It
-	// answers its tab's reads from the store the leader writes, reports the leader's
-	// progress (`progress.election.role === 'reader'`), and takes over when the lock
-	// is released, through `createState` and from the stored cursor.
+	// A worker that finds the lock held is built from `openState` instead (from
+	// `stateFactoriesFrom` above): the SAME database, opened for READING, with no
+	// claim and no fetch. It answers its tab's reads from the store the leader
+	// writes, reports the leader's progress (`progress.election.role === 'reader'`),
+	// and takes over when the lock is released, through `createState` and from the
+	// stored cursor.
 	tabElection: {name: 'etherfold-browser-reference'},
-	openState: async (context) => {
-		const store = openForReading(
-			await createBrowserStateStore(tokenProcessor.entities, {databaseName: `reference-${context.stream}`}),
-		);
-		return {store, state: new EntityStateView(store)};
-	},
 	// =====================================================================
 	// THE STREAM KEEPER: the logs, kept, so a new fold need not fetch them again
 	// =====================================================================
@@ -89,7 +86,10 @@ const host = hostIndexerInThisWorker({
 	// too, and the tab only sends documents over its port (`workerExecutor` in
 	// `main.ts`). Each operation is answered from the store the canonical
 	// generation folds into, pinned to one block, and a READER worker answers it
-	// from the store its leader writes, the same way.
+	// from the store its leader writes, the same way, once it has heard the leader
+	// name its generation: this processor is a MODULE, named only when a fold is
+	// built, so a reader that joins a quiet chain refuses a query until the leader
+	// applies a block (`readerGenerationOf`, `@etherfold/browser`).
 	//
 	// OPT-IN, and this line is what it costs: about 48 KiB gzipped on this
 	// worker's bundle, off the first-paint path. An app that reads a few entities

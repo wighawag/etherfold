@@ -20,7 +20,7 @@
  * `new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})`
  * and its bundler builds the same thing from the same source.
  */
-import {EntityEventProcessor, EntityStateView} from '@etherfold/processor-entities';
+import {EntityEventProcessor, EntityStateView, stateFactoriesFrom} from '@etherfold/processor-entities';
 import {openForReading, openForWriting, type WritableStateStore} from '@etherfold/state-store';
 import {createBrowserStateStore, hostIndexerInThisWorker} from '../src/index.js';
 import {FINALITY, fakeChain, processor, SOURCE, type TestABI} from './workload.js';
@@ -127,6 +127,13 @@ const claimWithinSeconds = Number(new URL(self.location.href).searchParams.get('
 const election = new URL(self.location.href).searchParams.get('election');
 /** The foreground takeover's settle time, in milliseconds, where a spec shortens it. */
 const settle = new URL(self.location.href).searchParams.get('settle');
+/**
+ * WHETHER BOTH SEATS COME FROM ONE STORE CONSTRUCTOR (`stateFactoriesFrom`), the
+ * recipe an application writes, instead of the two hand-written factories below
+ * (which carry this fixture's probes). Unset by default, so every other case runs
+ * exactly as it always did.
+ */
+const oneConstructor = new URL(self.location.href).searchParams.has('helper');
 
 const reports = new URL(self.location.href).searchParams.has('report');
 const report = (message: Record<string, unknown>) => {
@@ -198,6 +205,11 @@ const gatedProvider = {
 // The entry point was reached at all, which separates "the worker never started"
 // from "the worker started and its store never opened".
 report({probe: 'host-construct'});
+const fromOneConstructor = stateFactoriesFrom({
+	open: (context, entities) => createBrowserStateStore(entities, {databaseName: databaseFor(context.stream)}),
+	entities: processor.entities,
+});
+
 hostIndexerInThisWorker<TestABI, EntityStateView>({
 	// The store is opened for WRITING here, in the host. That is the writer/reader
 	// split reaching across the boundary: the tab holds a port, and a port names no
@@ -234,7 +246,9 @@ hostIndexerInThisWorker<TestABI, EntityStateView>({
 		return announcingWrites(writable);
 	},
 	createProcessor: (store) => new EntityEventProcessor<TestABI>(store, processor),
-	...(election
+	...(oneConstructor ? fromOneConstructor : {}),
+	...(election && oneConstructor ? {tabElection: {name: election}} : {}),
+	...(election && !oneConstructor
 		? {
 				tabElection: {name: election, ...(settle ? {foregroundTakeover: {settleMs: Number(settle)}} : {})},
 				openState: async (context: {stream: string}) => {

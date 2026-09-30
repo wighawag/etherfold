@@ -459,24 +459,24 @@ indexer.syncing.subscribe(($syncing) => {
 
 ### One tab indexes and the others read: opt into the tab election
 
-Demotion keeps two tabs correct; it does not stop them both FETCHING, and on a rate-limited provider that is the expensive half. So give your host a **tab election** and a **reader factory**, and only one tab indexes ([ADR-0097](../../adr/0097-one-tab-indexes-by-a-web-lock-the-app-names-and-the-others-are-built-as-readers.md)):
+Demotion keeps two tabs correct; it does not stop them both FETCHING, and on a rate-limited provider that is the expensive half. So give your host a **tab election** and a **reader factory**, and only one tab indexes ([ADR-0097](../../adr/0097-one-tab-indexes-by-a-web-lock-the-app-names-and-the-others-are-built-as-readers.md)). Name the store's constructor ONCE and let `stateFactoriesFrom` (`@etherfold/processor-entities`) derive both factories from it:
 
 ```ts
 hostIndexerInThisWorker({
-	createState: async (context, {signal}) =>
-		openForWriting(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}), {signal}),
+	// ONE constructor: `createState` claims it (the writer), `openState` opens it for READING (the reader)
+	...stateFactoriesFrom({
+		open: (context, entities) => createBrowserStateStore(entities, {databaseName: `app-${context.stream}`}),
+		entities: processor.entities,
+	}),
 	createProcessor: (state) => fromEntityProcessor(processor)(state),
 	// ONE Web Lock per APP, named by you: tabs giving the same name elect one indexing tab
 	tabElection: {name: 'my-app'},
-	// the SAME database, opened for READING, and the read handle over it: no claim, no fetch
-	openState: async (context) => {
-		const store = openForReading(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}));
-		return {store, state: new EntityStateView(store)};
-	},
 });
 ```
 
-On the main thread the same two things go to `createIndexerState`: `openState` beside `createState` in the spec, and `{tabElection: {name}}` in its options.
+One constructor is the point, not a shortcut. The election is correct only while the reader opens the SAME database the leader writes, and two hand-written factories drift: a `databaseName` changed in one of them leaves a reader answering from an empty store while looking healthy. What the helper derives is exactly what you would write by hand, so nothing about either factory changes: `createState` opens the store, starts it from the published snapshot when the host hands one (`openAndBootstrap`, forwarding `replaceLocal`, with the `finalityDepth` and `fetch` you give the helper and an optional `onBootstrap` to render what it did), and claims it with `openForWriting`, handing the host's signal to the CLAIM alone; `openState` opens the same store snapshot-aware and then with `openForReading`, and wraps it in an `EntityStateView`. A reader is therefore read-only by type, never downloads or installs a snapshot, and keeps the floor an installed snapshot recorded. With a `processorBundle`, the store is declared from the bundle's own `processor.entities`, so leave `entities` out; it is for a processor imported as a module.
+
+The two factories remain yours to write when you need something the helper does not do (the hot-update recipe below still writes its own `createState`, because each save folds into a database of its own). They are then the same constructor twice, `openForWriting` in one and `openForReading` in the other. On the main thread the same two things go to `createIndexerState`: the helper's factories spread into the spec, and `{tabElection: {name}}` in its options.
 
 **The first tab leads; every other tab is a reader.** A reader claims nothing and fetches nothing: its reads answer the store the leader writes, its `onStateMoved` fires when the leader's fold moves, and its progress is the leader's, so "syncing, 400 blocks behind" renders in every tab. `progress.election` (on a port) and `syncing.election` (on the hook) say which seat a tab holds: `{name, role: 'reader' | 'writer', tookOver}`, plus `takeoverReason`, `displaced` and `visibility` for the takeover below.
 

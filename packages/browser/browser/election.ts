@@ -137,6 +137,7 @@ export async function electionWorkerOpenCase(params: Params): Promise<Record<str
 	const url = new URL(
 		`./worker.js?db=${encodeURIComponent(databaseOf(params))}&fetch=${FETCH}&holdAbove=${Number(params.holdAbove ?? 0)}` +
 			`&election=${encodeURIComponent(electionName(params))}` +
+			(params.helper ? `&helper` : '') +
 			(params.settleMs !== undefined ? `&settle=${Number(params.settleMs)}` : '') +
 			`&report`,
 		import.meta.url,
