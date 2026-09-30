@@ -2,7 +2,7 @@
 title: 'The browser index orders a u256 numerically, by its bytes'
 slug: the-browser-index-orders-a-u256-numerically
 spec: a-declaration-a-schema-can-be-built-from
-blockedBy: [an-indexeddb-index-serves-the-accessor]
+blockedBy: [an-indexeddb-index-serves-the-accessor, an-as-of-read-scans-only-its-entitys-churn]
 covers: [16]
 ---
 
@@ -19,6 +19,7 @@ The IndexedDB index path (rung 2) orders and ranges `u256` fields by their canon
 ## Blocked by
 
 - `an-indexeddb-index-serves-the-accessor`
+- `an-as-of-read-scans-only-its-entitys-churn` (added 2026-09-29): both change the IndexedDB `upgrade` and `SCHEMA_VERSION`, so they are serialised.
 
 ## Prompt
 

@@ -1,0 +1,56 @@
+---
+title: 'A GraphQL query is pinned to a block hash, and every answer names its hash'
+slug: a-query-is-pinned-to-a-block-hash
+blockedBy: []
+covers: []
+---
+
+## Answered (2026-09-29, by the maintainer)
+
+1. **Where hash resolution lives.** `QueryContext` gains a block lookup: the pinned block as `{number, hash}` (for example `tip()` answering both, or a `blockAt(number)`) and `blockOf(hash) => {number, hash} | undefined`. Each store implements it: SQLite already resolves a hash (`BlockAddress`, `resolveBlockNumber`); IndexedDB adds a read of the `hash` index on its blocks store. Every wrapper between a store and the query layer forwards it: the snapshot-aware store (`openSnapshotAware` / `openAndBootstrap`) and the claimed handle (`openForWriting`), both in `@etherfold/state-store`, by feature detection as `tip` is forwarded today. (`openForReading` wraps nothing: it returns the store it is given, so a reader gets the member from whatever that store is, a raw backend in the documented reader recipe.) The lookup normalises its input hash as the stores do on write (`normalizeBlockHash`, ADR-0015's case folding). The accessor seam stays number-only: a hash is resolved to a number before any read.
+2. **The argument's shape.** A `@oneOf` input `BlockAddress {number: SafeInt, hash: Bytes32}` REPLACES `block: SafeInt` on root fields (`graphql` 16.14 supports `@oneOf`; a breaking schema change, 0.x minor), mirroring the SQLite store's `BlockAddress`.
+3. **An unresolvable hash.** Only log-bearing blocks are recorded (ADR-0015), and a snapshot-seeded store records nothing below its floor, so an unrecorded hash may still be canonical. It is refused with a new code, `block-not-recorded`, distinct from `block-not-retained` (a recorded height outside retention), whose message says the hash is not recorded HERE (possibly reorged out, possibly a block that carried no log, or one below a snapshot) and never claims a reorg. ADR-0015's Consequences ("a client error naming the reorg") get a dated amendment.
+4. **Which hash `extensions` names, and how it is kept true.** `extensions` names the OPERATION's pin, `{number, hash}`, as it names the number today (a root field's own `block` is the caller's to know). The pin must describe EVERY field, and today's guard compares tip NUMBERS at the start and the end (`tornBetween` in `execute.ts`), which cannot see the pinned block replaced at the same height between reads (its comment accepts that). Re-resolving the pin's hash at the end is NOT enough either: a reorg away and a second reorg BACK to the same block during one operation (A, then B, then A again) leaves the hash matching while the fields read in between came from B. So the guard is a REVERT COUNTER, as graph-node's (issue #1405 case H2, PR #1801):
+   - each store keeps a monotonic revert sequence in the seam's own keyspace (ADR-0080), incremented in the SAME transaction as every `revertTo`, persisted (a reader tab reads the store another tab's leader writes, so an in-memory counter would not see the leader's reverts);
+   - `QueryContext` exposes it, the wrappers forward it, and EVERY operation (hash-pinned or not) reads it at the start and at the end: changed means torn, retried once, then refused (`tip-moved-during-operation`, or a new code if the message would otherwise mislead);
+   - THE READ ORDER IS PART OF THE GUARD: the start read of the counter comes BEFORE the pin (`{number, hash}`) is read, and the end read comes AFTER the last field read, or the three are read in ONE read transaction (on IndexedDB, one readonly transaction over the blocks store and the seam's keyspace). Read the other way round, a revert and a replacement block landing between the pin and the counter are never seen, and the answer names a hash its fields were not read at;
+   - it ADDS to today's tip-number check and does not replace it: on a revert-only store (`asOf: false`) any forward move of the tip still tears an operation, which a revert counter cannot see, so the existing one-block tests pass untouched;
+   - a revert that did not reach the pin (a reorg of the tip while a root field reads an earlier block) also bumps it, so such an operation retries needlessly: accepted, because it only costs a retry, and it keeps the store state to one integer rather than a revert log;
+   - the ADR-0099 amendment retires the accepted gap in the guard's comment.
+     Between operations the hash is enough on its own: the state as of a block is a function of the chain up to it, so a follow-up pinned to a hash that is recorded again (after an A, B, A flip) reads the same state the first answer did.
+5. **The state-moved signal.** Its `applied` variant carries the block's hash, so a follower pins its re-reads to exactly the block it was told about. A separate task, `the-state-moved-signal-names-its-block-hash`, blocked by this one.
+
+## What to build
+
+Several GraphQL operations an app composes into one view can be made to agree today only by block NUMBER: read `extensions.block` from the first, pass it as `block:` to the next. A number is a height, not an identity: if a reorg replaces that height between two operations, the second silently reads a DIFFERENT chain's state at the same number, and the composed view mixes two chains. A HASH closes that: the second operation reads the same block, or is refused because that hash is no longer recorded.
+
+What exists: SQLite resolves a hash through its block table (`BlockAddress` `{hash}`, `NoSuchBlockError` with `reason: 'unknown-hash'`, task `block-addressing-hash-height-time`), and IndexedDB keeps a `hash` index on its blocks store (used today only to keep hashes unique on write). What is missing is every layer between them and a query, not only the GraphQL surface: a public hash lookup on the IndexedDB store, a revert sequence in both stores, the `QueryContext` members that read them (answer 1, answer 4), the forwarding in both `@etherfold/state-store` wrappers, the worker's and the server's context builders, and the schema's `block` argument and `extensions` (ADR-0099).
+
+So: every response's `extensions` names the pinned block's hash beside its number, a root field accepts a `BlockAddress` to pin to, an unrecorded hash is refused with `block-not-recorded`, identically on every executor (worker, HTTP, in-process), as the query conformance suite requires for every parity rule; and no answer mixes two branches, because every operation checks the store's revert sequence at its start and its end.
+
+Seen in the stratagems port (`port-stratagems-to-the-etherfold-packages`): its web app follows the state by re-reading only the parts a state-moved signal names, pinned to that signal's block, so the parts compose into one block; with a hash they compose into one block of one chain.
+
+## Acceptance criteria
+
+- [ ] `extensions` carries the pinned block's hash beside its number, on every executor, byte for byte the same (the query conformance suite).
+- [ ] A root field pinned to a recorded hash answers as of that block; the same query pinned to its number answers identically, on SQLite and IndexedDB; a `BlockAddress` giving both or neither is refused as `@oneOf` requires.
+- [ ] A hash that was reverted away is refused with `block-not-recorded`, on every executor; and so is a hash of a canonical block the store never recorded, with a message that does not claim a reorg.
+- [ ] The revert sequence is persisted and increases in the same transaction as every revert, on SQLite and IndexedDB, and a READER store (`openForReading`) sees the leader's increments.
+- [ ] An operation during which the store reverts is retried, then refused, rather than answered from a mix: tested for a hash-pinned and a tip-pinned operation, including the A, B, A case (a revert away from the pinned block and a second revert back to it between two field reads), which a hash re-check alone would not see. Tested in process (as `one-block.test.ts` tests today's guard), since the query conformance harness applies history only before a request; extending that harness is not in scope.
+- [ ] The IndexedDB store exposes the hash lookup, normalising its input, and the wrappers forward it and the revert sequence: a store opened snapshot-aware (`openAndBootstrap`) and then claimed (`openForWriting`) answers queries by hash, and so does a raw backend passed to `openForReading` (the documented reader recipe), both asserted end to end.
+- [ ] A revert and a replacement block landing between an operation's pin read and its counter read are caught (a test that interleaves them at that point), which proves the read order in answer 4.
+- [ ] The existing tip-number tests (`one-block.test.ts`, including the revert-only store's forward move) pass untouched.
+- [ ] ADR-0099 gets a dated amendment in the same change (the `extensions` shape, the `BlockAddress` argument, and the revert-sequence guard replacing the accepted gap), ADR-0015 gets one for `block-not-recorded`, and ADR-0080 gets one for the revert sequence joining the seam's CLOSED union of record keys (with the `records.ts` JSDoc and `SEAM_RECORD_KEYS` updated), unless the builder records it as a backend-private record read by a dedicated member, as `retentionEnforcement` is, and says why in the Decisions block.
+- [ ] Changesets for every published package changed (0.x: minor for the schema change and the new store members).
+
+## Blocked by
+
+- None: can start immediately.
+
+## Prompt
+
+> Goal: a GraphQL operation can be pinned to a block HASH, every answer names the block (number and hash) it was wholly read at, and no answer mixes two branches, so an app composing several operations into one view cannot mix two chains across a reorg. The decisions are in "Answered" above. Look at `@etherfold/graphql` (`schema.ts`: the `block` argument on root fields; `execute.ts`: how an operation pins one block, the start-and-end tip guard and its accepted gap, and `extensions`; the revert counter's read order in answer 4 is load-bearing; `worker/index.ts`: the worker's `QueryableStore`), `@etherfold/state-store` (`store.ts`: what the claimed handle forwards; `snapshot.ts`: what the snapshot-aware store forwards), `@etherfold/state-store-indexeddb` (its blocks store and `hash` index, `revertTo`, the seam's keyspace), `@etherfold/state-store-sqlite` (`BlockAddress`, `resolveBlockNumber`, `NoSuchBlockError`, `revertTo`), `@etherfold/server` (`api/graphql.ts`: how the server builds the query context), ADR-0015, ADR-0080 (the seam's own keyspace), ADR-0099, and graph-node's reorg-during-query detection (graphprotocol/graph-node issue 1405, PR 1801) as prior art.
+>
+> FIRST, check this task against current reality (written 2026-09-29 against `@etherfold/graphql@0.1.0`). If the premise has drifted, route to needs-attention with the discrepancy as the reason (WORK-CONTRACT.md, "Drift is a needs-attention signal").
+>
+> RECORD every non-obvious choice in a `## Decisions` block at the end of your final report. Add a changeset for every published package you change (0.x: patch or minor, never major). Never write an em dash character. Bound exploratory shell commands, and never grep `node_modules`, `dist`, `.git` or minified bundles.
