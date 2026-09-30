@@ -1,5 +1,15 @@
 # @etherfold/server
 
+## 0.5.1
+
+### Patch Changes
+
+- Updated dependencies [1d372f5]
+  - @etherfold/core@0.11.1
+  - @etherfold/processor-entities@0.4.1
+  - @etherfold/graphql@0.2.1
+  - @etherfold/state-store-sqlite@0.5.1
+
 ## 0.5.0
 
 ### Minor Changes

@@ -1,5 +1,14 @@
 # @etherfold/graphql
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [1d372f5]
+  - @etherfold/state-store@0.5.1
+  - @etherfold/browser@0.12.2
+  - @etherfold/accessor@0.1.2
+
 ## 0.2.0
 
 ### Minor Changes

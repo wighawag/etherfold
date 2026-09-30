@@ -1,5 +1,12 @@
 # @etherfold/state-store-patch
 
+## 0.2.4
+
+### Patch Changes
+
+- Updated dependencies [1d372f5]
+  - @etherfold/state-store@0.5.1
+
 ## 0.2.3
 
 ### Patch Changes

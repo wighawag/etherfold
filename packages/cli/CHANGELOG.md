@@ -1,5 +1,24 @@
 # ethereum-indexer-cli
 
+## 0.11.0
+
+### Minor Changes
+
+- 1d372f5: `etherfold publish` and `etherfold build --publish` print a `new processor:` line, followed by one `  held: <identity>` line per processor the index already held, when the processor they just published is not among those `publication.json` held a snapshot of on the same stream. That is the bundle's identity moving since the last publication into the directory (its code changed, or a dependency it bundles did, such as an etherfold upgrade), which previously nothing reported. `WrittenPublication` gains `processorsHeldBefore`, and `processorIsNewTo(written)` is exported.
+
+### Patch Changes
+
+- Updated dependencies [1d372f5]
+  - @etherfold/core@0.11.1
+  - @etherfold/processor-entities@0.4.1
+  - @etherfold/state-store@0.5.1
+  - @etherfold/utils@0.8.4
+  - @etherfold/fetcher-host@0.2.4
+  - @etherfold/server@0.5.1
+  - @etherfold/platform-nodejs@0.3.2
+  - @etherfold/platform-nodejs-fetcher@0.2.4
+  - @etherfold/state-store-sqlite@0.5.1
+
 ## 0.10.1
 
 ### Patch Changes
