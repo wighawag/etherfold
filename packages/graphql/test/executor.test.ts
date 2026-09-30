@@ -52,10 +52,10 @@ describe('the transport-failure shape', () => {
 		const answered: QueryResult = {
 			data: null,
 			errors: [{message: 'no', extensions: {code: QUERY_ERROR_CODES.blockNotRetained}}],
-			extensions: {generation: 'g', block: 1},
+			extensions: {generation: 'g', block: 1, blockHash: null},
 		};
 		expect(isTransportFailure(answered)).toBe(false);
-		expect(isTransportFailure({data: {}, extensions: {generation: 'g', block: 1}})).toBe(false);
+		expect(isTransportFailure({data: {}, extensions: {generation: 'g', block: 1, blockHash: null}})).toBe(false);
 	});
 
 	it('refuses a reason outside the contract', () => {

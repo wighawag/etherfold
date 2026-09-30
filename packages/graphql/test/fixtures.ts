@@ -3,7 +3,7 @@ import type {Accessor} from '@etherfold/accessor';
 import type {BlockPointer, EntityDeclaration, Mutation} from '@etherfold/state-store';
 import {VersionedStateStore, type VersionedStateStoreOptions} from '@etherfold/state-store-sqlite';
 import {RemoteLibSQL} from 'remote-sql-libsql';
-import type {QueryContext} from '../src/index.js';
+import {queryBlocksOf, type QueryContext} from '../src/index.js';
 
 /**
  * A declaration set carrying everything ADR-0098 added: a relation (a pool's
@@ -50,12 +50,13 @@ export function deposit(poolId: string, seq: string, values: Record<string, unkn
 export async function sqliteSubject(options: VersionedStateStoreOptions = {}) {
 	const store = new VersionedStateStore(new RemoteLibSQL(createClient({url: ':memory:'})), DECLARATIONS, options);
 	await store.migrate();
-	const tip = async () => (await store.getBlockAtOrBelow(Number.MAX_SAFE_INTEGER))?.number;
+	const tip = () => store.tip();
 	const context = (accessor: Accessor = store.accessor()): QueryContext => ({
 		accessor,
 		generation: GENERATION,
 		tip,
 		asOf: store.capabilities.asOf,
+		blocks: queryBlocksOf(store),
 	});
 	return {store, tip, context};
 }

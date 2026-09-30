@@ -19,7 +19,7 @@ import {
 	type HistoryStep,
 	type QueryExecutorFactory,
 } from '../src/conformance/index.js';
-import {buildQuerySchema, localExecutor, QUERY_ERROR_CODES, type QueryExecutor} from '../src/index.js';
+import {buildQuerySchema, localExecutor, QUERY_ERROR_CODES, queryBlocksOf, type QueryExecutor} from '../src/index.js';
 import {closePort, readerHostExecutor, terminateHost, workerHostExecutor} from './workerHosts.js';
 
 /**
@@ -197,8 +197,9 @@ await apply(floorSource, LATER);
 const sqlite: QueryExecutor = localExecutor(buildQuerySchema(QUERY_ENTITIES), {
 	accessor: floorSource.accessor(),
 	generation: 'sqlite-source',
-	tip: async () => (await floorSource.getBlockAtOrBelow(Number.MAX_SAFE_INTEGER))?.number,
+	tip: () => floorSource.tip(),
 	asOf: true,
+	blocks: queryBlocksOf(floorSource),
 });
 
 const poolsAt = (at?: number) =>

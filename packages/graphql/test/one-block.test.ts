@@ -1,7 +1,8 @@
 import type {Accessor, FindQuery} from '@etherfold/accessor';
 import {describe, expect, it} from 'vitest';
-import {buildQuerySchema, localExecutor, QUERY_ERROR_CODES, type QueryContext} from '../src/index.js';
+import {buildQuerySchema, localExecutor, QUERY_ERROR_CODES, queryBlocksOf, type QueryContext} from '../src/index.js';
 import {block, DECLARATIONS, deposit, GENERATION, pool, sqliteSubject} from './fixtures.js';
+import {hashOf} from '../src/conformance/fixtures.js';
 
 /**
  * EVERY OPERATION PINS ONE BLOCK (ADR-0099), which is what stops a parent and
@@ -45,7 +46,7 @@ async function seeded() {
 
 const AT_10 = {
 	data: {pool: [{pool: 'a', label: 'alpha', deposits: [{seq: '1', who: 'ann'}]}]},
-	extensions: {generation: GENERATION, block: 10},
+	extensions: {generation: GENERATION, block: 10, blockHash: hashOf(10)},
 };
 
 describe('one operation answers from one block', () => {
@@ -58,7 +59,7 @@ describe('one operation answers from one block', () => {
 		expect(result).toEqual(AT_10);
 		// and the next operation sees block 11, so the pin is a pin and not a stale read
 		const next = await localExecutor(buildQuerySchema(DECLARATIONS), context())({query: QUERY});
-		expect(next.extensions).toEqual({generation: GENERATION, block: 11});
+		expect(next.extensions).toEqual({generation: GENERATION, block: 11, blockHash: hashOf(11)});
 		expect(next.data).toEqual({
 			pool: [
 				{
@@ -126,7 +127,7 @@ describe('one operation answers from one block', () => {
 			started: 11,
 			ended: 10,
 		});
-		expect(result.extensions).toEqual({generation: GENERATION, block: null});
+		expect(result.extensions).toEqual({generation: GENERATION, block: null, blockHash: null});
 	});
 
 	it('a tip that moved FORWARD is no reorg: the pinned answer stands, with no retry', async () => {
@@ -148,7 +149,13 @@ describe('one operation answers from one block', () => {
 	it('on a store that answers no as-of read, it reads the tip and treats ANY move of the tip as a tear', async () => {
 		const {store, tip} = await sqliteSubject({retention: 'revert-only'});
 		await store.applyBlock(block(10), [pool('a', {label: 'alpha'}), deposit('a', '1', {who: 'ann'})]);
-		const context = (accessor: Accessor): QueryContext => ({accessor, generation: GENERATION, tip, asOf: false});
+		const context = (accessor: Accessor): QueryContext => ({
+			accessor,
+			generation: GENERATION,
+			tip,
+			asOf: false,
+			blocks: queryBlocksOf(store),
+		});
 
 		const quiet = await localExecutor(buildQuerySchema(DECLARATIONS), context(store.accessor()))({query: QUERY});
 		expect(quiet).toEqual(AT_10);
@@ -172,7 +179,7 @@ describe('one operation answers from one block', () => {
 					},
 				],
 			},
-			extensions: {generation: GENERATION, block: 11},
+			extensions: {generation: GENERATION, block: 11, blockHash: hashOf(11)},
 		});
 	});
 });

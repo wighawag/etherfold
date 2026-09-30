@@ -1,11 +1,18 @@
 import 'fake-indexeddb/auto';
 import type {Accessor, ChildrenQuery, FindQuery} from '@etherfold/accessor';
 import {createSnapshot, openAndBootstrap} from '@etherfold/processor-entities';
-import {openForReading, openForWriting, type QueryReads} from '@etherfold/state-store';
+import {openForReading, openForWriting, type QueryReads, type StateStoreBackend} from '@etherfold/state-store';
 import {IndexedDBStateStore} from '@etherfold/state-store-indexeddb';
 import {describe, expect, it} from 'vitest';
 import {block, hashOf} from '../src/conformance/fixtures.js';
-import {buildQuerySchema, localExecutor, QUERY_ERROR_CODES, type QueryContext, type QueryResult} from '../src/index.js';
+import {
+	buildQuerySchema,
+	localExecutor,
+	QUERY_ERROR_CODES,
+	queryBlocksOf,
+	type QueryContext,
+	type QueryResult,
+} from '../src/index.js';
 import {graphqlQueryHandler} from '../src/worker/index.js';
 import {DECLARATIONS, deposit, GENERATION, pool, sqliteSubject} from './fixtures.js';
 
@@ -42,15 +49,33 @@ const ON_B = {
 	],
 };
 
-/** Block 10, then A's block 11 (which changes nothing the query reads). */
-async function seeded() {
-	const subject = await sqliteSubject();
-	await subject.store.applyBlock(block(10), [pool('a', {label: 'alpha'}), deposit('a', '1', {who: 'ann'})]);
-	await subject.store.applyBlock(block(11), []);
-	return subject;
-}
+/** What these cases need of a store: the seam, its accessor, and the query layer's reads. */
+type Store = StateStoreBackend & QueryReads & {accessor(): Accessor};
 
-type Store = Awaited<ReturnType<typeof seeded>>['store'];
+/**
+ * The two query-capable backends, each incrementing its revert sequence in its
+ * OWN revert transaction: SQLite in `revertToStatements`' guarded batch,
+ * IndexedDB in `revertTo`'s transaction. The guard is only as good as that, so
+ * every case below is asked of both.
+ */
+const BACKENDS: Record<string, () => Promise<Store>> = {
+	sqlite: async () => (await sqliteSubject()).store as unknown as Store,
+	indexeddb: async () => {
+		const store = new IndexedDBStateStore(DECLARATIONS, {
+			databaseName: `pinned-to-a-hash-${Math.random().toString(36).slice(2, 10)}`,
+		});
+		await store.migrate();
+		return store as unknown as Store;
+	},
+};
+
+/** Block 10, then A's block 11 (which changes nothing the query reads). */
+async function seededOn(open: () => Promise<Store>) {
+	const store = await open();
+	await store.applyBlock(block(10), [pool('a', {label: 'alpha'}), deposit('a', '1', {who: 'ann'})]);
+	await store.applyBlock(block(11), []);
+	return {store};
+}
 
 /** Reorg block 11 to branch B: a different block, with different rows, at the same height. */
 async function toB(store: Store) {
@@ -71,11 +96,7 @@ function hashingContext(store: Store, accessor: Accessor = store.accessor()): Qu
 		generation: GENERATION,
 		tip: () => store.tip(),
 		asOf: store.capabilities.asOf,
-		blocks: {
-			at: (number) => store.blockAt(number),
-			of: (hash) => store.blockOf(hash),
-			revertSequence: () => store.revertSequence(),
-		},
+		blocks: queryBlocksOf(store),
 	};
 }
 
@@ -110,154 +131,162 @@ function flipping(store: Store, times: number) {
 	return {wrap, counts};
 }
 
-describe('a reorg away from the pinned block and back to it (A, B, A) inside one operation', () => {
-	it('WITHOUT the revert sequence it is not seen: the pin and its hash match at both ends, and the answer is a mix', async () => {
-		// the control: what the guard is for, and why a hash re-check could not be it
-		const {store, context} = await seeded();
-		const {wrap} = flipping(store, 1);
+for (const [name, open] of Object.entries(BACKENDS)) {
+	describe(`${name}: a reorg away from the pinned block and back to it (A, B, A) inside one operation`, () => {
+		it('WITHOUT the revert sequence it is not seen: the pin and its hash match at both ends, and the answer is a mix', async () => {
+			// the control: what the guard is for, and why a hash re-check could not be it
+			const {store} = await seededOn(open);
+			const {wrap} = flipping(store, 1);
+			// a context whose revert sequence never moves: the tip check and the pin alone
+			const blind = hashingContext(store, wrap(store.accessor()));
+			const withoutTheSequence: QueryContext = {...blind, blocks: {...blind.blocks, revertSequence: async () => 0}};
 
-		const result = await localExecutor(buildQuerySchema(DECLARATIONS), context(wrap(store.accessor())))({query: QUERY});
+			const result = await localExecutor(buildQuerySchema(DECLARATIONS), withoutTheSequence)({query: QUERY});
 
-		// the parent read on A, its children read on B: a state no chain ever had
-		expect(result.data).toEqual({
-			pool: [
-				{
-					pool: 'a',
-					label: 'alpha',
-					deposits: [
-						{seq: '1', who: 'ann'},
-						{seq: '9', who: 'bea'},
-					],
-				},
-			],
+			// the parent read on A, its children read on B: a state no chain ever had
+			expect(result.data).toEqual({
+				pool: [
+					{
+						pool: 'a',
+						label: 'alpha',
+						deposits: [
+							{seq: '1', who: 'ann'},
+							{seq: '9', who: 'bea'},
+						],
+					},
+				],
+			});
+			expect(await store.blockAt(11)).toMatchObject({hash: A11});
 		});
-		expect(await store.blockAt(11)).toMatchObject({hash: A11});
-	});
 
-	it('is retried, and the retry answers from A alone, naming the hash of A (a tip-pinned operation)', async () => {
-		const {store} = await seeded();
-		const {wrap, counts} = flipping(store, 1);
-
-		const result = await localExecutor(
-			buildQuerySchema(DECLARATIONS),
-			hashingContext(store, wrap(store.accessor())),
-		)({query: QUERY});
-
-		expect(counts.finds).toBe(2);
-		expect(result).toEqual({data: ON_A, extensions: {generation: GENERATION, block: 11, blockHash: A11}});
-	});
-
-	it('is retried for a HASH-pinned operation too, which a re-check of that hash would never have caught', async () => {
-		const {store} = await seeded();
-		const {wrap, counts} = flipping(store, 1);
-		const pinned = `{ pool(block: {hash: "${A11}"}, first: 10) { pool label deposits(first: 10) { seq who } } }`;
-
-		const result = await localExecutor(
-			buildQuerySchema(DECLARATIONS),
-			hashingContext(store, wrap(store.accessor())),
-		)({query: pinned});
-
-		expect(counts.finds).toBe(2);
-		expect(result).toEqual({data: ON_A, extensions: {generation: GENERATION, block: 11, blockHash: A11}});
-	});
-
-	for (const [shape, query] of [
-		['tip-pinned', QUERY],
-		['hash-pinned', `{ pool(block: {hash: "${A11}"}, first: 10) { pool label deposits(first: 10) { seq who } } }`],
-	] as const) {
-		it(`and when it happens on the retry as well, the ${shape} operation is REFUSED, answering nothing`, async () => {
-			const {store} = await seeded();
-			const {wrap, counts} = flipping(store, 2);
+		it('is retried, and the retry answers from A alone, naming the hash of A (a tip-pinned operation)', async () => {
+			const {store} = await seededOn(open);
+			const {wrap, counts} = flipping(store, 1);
 
 			const result = await localExecutor(
 				buildQuerySchema(DECLARATIONS),
 				hashingContext(store, wrap(store.accessor())),
-			)({query});
+			)({query: QUERY});
 
 			expect(counts.finds).toBe(2);
-			expect(result.data).toBeUndefined();
-			expect(result.errors).toHaveLength(1);
-			expect(result.errors?.[0]?.message).toMatch(/reverted/);
-			expect(result.errors?.[0]?.extensions).toEqual({
-				code: QUERY_ERROR_CODES.tipMovedDuringOperation,
-				started: 11,
-				ended: 11,
+			expect(result).toEqual({data: ON_A, extensions: {generation: GENERATION, block: 11, blockHash: A11}});
+		});
+
+		it('is retried for a HASH-pinned operation too, which a re-check of that hash would never have caught', async () => {
+			const {store} = await seededOn(open);
+			const {wrap, counts} = flipping(store, 1);
+			const pinned = `{ pool(block: {hash: "${A11}"}, first: 10) { pool label deposits(first: 10) { seq who } } }`;
+
+			const result = await localExecutor(
+				buildQuerySchema(DECLARATIONS),
+				hashingContext(store, wrap(store.accessor())),
+			)({query: pinned});
+
+			expect(counts.finds).toBe(2);
+			expect(result).toEqual({data: ON_A, extensions: {generation: GENERATION, block: 11, blockHash: A11}});
+		});
+
+		for (const [shape, query] of [
+			['tip-pinned', QUERY],
+			['hash-pinned', `{ pool(block: {hash: "${A11}"}, first: 10) { pool label deposits(first: 10) { seq who } } }`],
+		] as const) {
+			it(`and when it happens on the retry as well, the ${shape} operation is REFUSED, answering nothing`, async () => {
+				const {store} = await seededOn(open);
+				const {wrap, counts} = flipping(store, 2);
+
+				const result = await localExecutor(
+					buildQuerySchema(DECLARATIONS),
+					hashingContext(store, wrap(store.accessor())),
+				)({query});
+
+				expect(counts.finds).toBe(2);
+				expect(result.data).toBeUndefined();
+				expect(result.errors).toHaveLength(1);
+				expect(result.errors?.[0]?.message).toMatch(/reverted/);
+				expect(result.errors?.[0]?.extensions).toEqual({
+					code: QUERY_ERROR_CODES.tipMovedDuringOperation,
+					started: 11,
+					ended: 11,
+				});
+				expect(result.extensions).toEqual({generation: GENERATION, block: null, blockHash: null});
 			});
-			expect(result.extensions).toEqual({generation: GENERATION, block: null, blockHash: null});
-		});
-	}
-});
+		}
+	});
 
-describe('THE READ ORDER: the revert sequence before the pin, and after the last field', () => {
-	it('catches a revert and a replacement block landing right AFTER the pin is read', async () => {
-		// read the other way round (the pin, then the sequence), this revert lands
-		// before the sequence's first read, is never seen, and the answer names A's
-		// hash over B's rows. The tip is 11 throughout, so the tip check cannot see it.
-		const {store} = await seeded();
-		const context = hashingContext(store);
-		let interleaved = false;
-		let finds = 0;
-		const counting: Accessor = {
-			find: (query) => {
-				finds++;
-				return store.accessor().find(query);
-			},
-			children: (query) => store.accessor().children(query),
-		};
-		const racing: QueryContext = {
-			...context,
-			accessor: counting,
-			blocks: {
-				...context.blocks!,
-				async at(number) {
-					const pinned = await context.blocks!.at(number);
-					if (!interleaved) {
-						interleaved = true;
-						await toB(store);
-					}
-					return pinned;
+	describe(`${name}: THE READ ORDER: the revert sequence before the pin, and after the last field`, () => {
+		it('catches a revert and a replacement block landing right AFTER the pin is read', async () => {
+			// read the other way round (the pin, then the sequence), this revert lands
+			// before the sequence's first read, is never seen, and the answer names A's
+			// hash over B's rows. The tip is 11 throughout, so the tip check cannot see it.
+			const {store} = await seededOn(open);
+			const context = hashingContext(store);
+			let interleaved = false;
+			let finds = 0;
+			const counting: Accessor = {
+				find: (query) => {
+					finds++;
+					return store.accessor().find(query);
 				},
-			},
-		};
+				children: (query) => store.accessor().children(query),
+			};
+			const racing: QueryContext = {
+				...context,
+				accessor: counting,
+				blocks: {
+					...context.blocks!,
+					async at(number) {
+						const pinned = await context.blocks!.at(number);
+						if (!interleaved) {
+							interleaved = true;
+							await toB(store);
+						}
+						return pinned;
+					},
+				},
+			};
 
-		const result = await localExecutor(buildQuerySchema(DECLARATIONS), racing)({query: QUERY});
+			const result = await localExecutor(buildQuerySchema(DECLARATIONS), racing)({query: QUERY});
 
-		// the first attempt was torn and never answered; the retry pinned B, and says so
-		expect(finds).toBe(2);
-		expect(result).toEqual({data: ON_B, extensions: {generation: GENERATION, block: 11, blockHash: B11}});
-	});
-});
-
-describe('the existing guard is kept beside it', () => {
-	it('a revert that did not reach the pin still costs a retry, and nothing else', async () => {
-		const {store} = await seeded();
-		await store.applyBlock(block(12), []);
-		let left = 1;
-		let finds = 0;
-		const accessor: Accessor = {
-			async find<T>(query: FindQuery) {
-				finds++;
-				const page = await store.accessor().find<T>(query);
-				// a reorg of 12 while a field reads block 10
-				if (left-- > 0) {
-					await store.revertTo(11);
-					await store.applyBlock(block(12, `0x${'c2'.repeat(32)}`), []);
-				}
-				return page;
-			},
-			children: (query) => store.accessor().children(query),
-		};
-		const at10 = `{ pool(block: {number: 10}, first: 10) { pool label deposits(first: 10) { seq who } } }`;
-
-		const result = await localExecutor(buildQuerySchema(DECLARATIONS), hashingContext(store, accessor))({query: at10});
-
-		expect(finds).toBe(2);
-		expect(result).toEqual({
-			data: ON_A,
-			extensions: {generation: GENERATION, block: 12, blockHash: `0x${'c2'.repeat(32)}`},
+			// the first attempt was torn and never answered; the retry pinned B, and says so
+			expect(finds).toBe(2);
+			expect(result).toEqual({data: ON_B, extensions: {generation: GENERATION, block: 11, blockHash: B11}});
 		});
 	});
-});
+
+	describe(`${name}: the existing guard is kept beside it`, () => {
+		it('a revert that did not reach the pin still costs a retry, and nothing else', async () => {
+			const {store} = await seededOn(open);
+			await store.applyBlock(block(12), []);
+			let left = 1;
+			let finds = 0;
+			const accessor: Accessor = {
+				async find<T>(query: FindQuery) {
+					finds++;
+					const page = await store.accessor().find<T>(query);
+					// a reorg of 12 while a field reads block 10
+					if (left-- > 0) {
+						await store.revertTo(11);
+						await store.applyBlock(block(12, `0x${'c2'.repeat(32)}`), []);
+					}
+					return page;
+				},
+				children: (query) => store.accessor().children(query),
+			};
+			const at10 = `{ pool(block: {number: 10}, first: 10) { pool label deposits(first: 10) { seq who } } }`;
+
+			const result = await localExecutor(
+				buildQuerySchema(DECLARATIONS),
+				hashingContext(store, accessor),
+			)({query: at10});
+
+			expect(finds).toBe(2);
+			expect(result).toEqual({
+				data: ON_A,
+				extensions: {generation: GENERATION, block: 12, blockHash: `0x${'c2'.repeat(32)}`},
+			});
+		});
+	});
+}
 
 describe('a store that answers queries by hash, through every wrapper between it and the query layer', () => {
 	const TOKENS = DECLARATIONS;

@@ -3,6 +3,7 @@ import {
 	buildQuerySchema,
 	executeQuery,
 	formatQueryError,
+	queryBlocksOf,
 	QUERY_ERROR_CODES,
 	UNEXPECTED_ERROR_MESSAGE,
 	type QueryContext,
@@ -189,11 +190,7 @@ export function getGraphQLAPI<CustomEnv extends Env>(options: ServerOptions<Cust
 					// the store's own claim: a `revert-only` store answers every read at the tip
 					asOf: store.capabilities.asOf,
 					// the pin's hash, a `block: {hash}`, and the revert sequence the reorg guard reads
-					blocks: {
-						at: (number) => store.blockAt(number),
-						of: (hash) => store.blockOf(hash),
-						revertSequence: () => store.revertSequence(),
-					},
+					blocks: queryBlocksOf(store),
 				},
 			};
 		})();

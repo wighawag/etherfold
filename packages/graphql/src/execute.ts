@@ -1,4 +1,5 @@
 import type {Accessor} from '@etherfold/accessor';
+import type {QueryReads} from '@etherfold/state-store';
 import {execute, GraphQLError, type DocumentNode, type ExecutionResult, type GraphQLSchema} from 'graphql';
 import {prepareDocument, type DocumentCache} from './documents.js';
 import {formatQueryError, QUERY_ERROR_CODES, QueryRefusal, refusalJSON, UNEXPECTED_ERROR_MESSAGE} from './errors.js';
@@ -43,17 +44,16 @@ export type QueryContext = {
 	/**
 	 * THE STORE'S BLOCK READS AND ITS REVERT SEQUENCE (`QueryReads` in
 	 * `@etherfold/state-store`), which a host copies off the store it reads, as it
-	 * copies `tip`. With them, every answer names its block's HASH beside its
-	 * number, a root field may be pinned to a hash (`block: {hash}`), and every
-	 * operation reads the revert sequence at its start and its end, so it is never
-	 * answered from two branches, not even across a reorg away and back.
+	 * copies `tip` (`queryBlocksOf(store)` does it in one line). With them, every
+	 * answer names its block's HASH beside its number, a root field may be pinned
+	 * to a hash (`block: {hash}`), and every operation reads the revert sequence at
+	 * its start and its end, so it is never answered from two branches, not even
+	 * across a reorg away and back.
 	 *
-	 * Optional ONLY so that a context built by hand for a test keeps its old
-	 * answers: every host builds it (the worker's handler refuses a store without
-	 * them, and the server's context supplies them). Without it an answer names no
-	 * hash, a `block: {hash}` is refused, and the guard is the tip check alone.
+	 * REQUIRED, for the reason `asOf` is: an optional member made a context that
+	 * left it out answer in another SHAPE (no `blockHash`) and guard less, silently.
 	 */
-	readonly blocks?: QueryBlocks;
+	readonly blocks: QueryBlocks;
 };
 
 /** A recorded block, as the query layer names it. */
@@ -68,6 +68,19 @@ export type QueryBlocks = {
 	/** The store's revert sequence: persisted, incremented with every revert. */
 	revertSequence(): Promise<number>;
 };
+
+/**
+ * The block reads and the revert sequence of a store that has them (the SQLite
+ * and IndexedDB stores, and every handle wrapping one), as a context carries
+ * them: `{..., blocks: queryBlocksOf(store)}`.
+ */
+export function queryBlocksOf(store: QueryReads): QueryBlocks {
+	return {
+		at: (number) => store.blockAt(number),
+		of: (hash) => store.blockOf(hash),
+		revertSequence: () => store.revertSequence(),
+	};
+}
 
 /**
  * A context, or a function answering one per OPERATION: a host whose canonical
@@ -149,7 +162,7 @@ export async function executeQuery(
 		return {errors: [{message: UNEXPECTED_ERROR_MESSAGE, extensions: {code: QUERY_ERROR_CODES.internalError}}]};
 	}
 	const {generation, blocks} = context;
-	const unpinnedExtensions = (): QueryExtensions => extensionsOf(generation, undefined, blocks !== undefined);
+	const unpinnedExtensions = (): QueryExtensions => extensionsOf(generation, undefined);
 	const unpinned = (errors: readonly GraphQLError[]): QueryResult => ({
 		errors: errors.map(formatQueryError),
 		extensions: unpinnedExtensions(),
@@ -169,10 +182,10 @@ export async function executeQuery(
 		let reverted = false;
 		for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
 			// the revert sequence FIRST, then the pin: see the read order above
-			const sequenceAtStart = blocks ? await blocks.revertSequence() : undefined;
+			const sequenceAtStart = await blocks.revertSequence();
 			started = await context.tip();
-			const pin = blocks && started !== undefined ? await blocks.at(started) : undefined;
-			if (blocks && started !== undefined && pin === undefined) {
+			const pin = started !== undefined ? await blocks.at(started) : undefined;
+			if (started !== undefined && pin === undefined) {
 				// the tip's block went between the two reads: a revert, which the
 				// sequence will say too; the attempt is torn before it reads anything
 				ended = await context.tip();
@@ -188,10 +201,10 @@ export async function executeQuery(
 			});
 			// and the sequence LAST, after the last field read
 			ended = await context.tip();
-			const sequenceAtEnd = blocks ? await blocks.revertSequence() : undefined;
+			const sequenceAtEnd = await blocks.revertSequence();
 			reverted = sequenceAtEnd !== sequenceAtStart;
 			if (!reverted && !tornBetween(started, ended, asOf)) {
-				return answered(executed, extensionsOf(generation, pin ?? started, blocks !== undefined));
+				return answered(executed, extensionsOf(generation, pin));
 			}
 		}
 		const refusal = new QueryRefusal(
@@ -212,14 +225,9 @@ export async function executeQuery(
 	}
 }
 
-/**
- * What an answer reports: the generation, the pinned block's number, and, when
- * the context reads blocks, its hash (`null` beside a `null` block).
- */
-function extensionsOf(generation: string, pin: QueryBlock | number | undefined, namesHash: boolean): QueryExtensions {
-	const number = typeof pin === 'object' ? pin.number : pin;
-	if (!namesHash) return {generation, block: number ?? null};
-	return {generation, block: number ?? null, blockHash: typeof pin === 'object' ? pin.hash : null};
+/** What an answer reports: the generation, and the pinned block's number and hash (both `null` when nothing was pinned). */
+function extensionsOf(generation: string, pin: QueryBlock | undefined): QueryExtensions {
+	return {generation, block: pin?.number ?? null, blockHash: pin?.hash ?? null};
 }
 
 /**

@@ -2,6 +2,7 @@ export {buildQuerySchema} from './schema.js';
 export {
 	executeQuery,
 	localExecutor,
+	queryBlocksOf,
 	type ExecuteQueryOptions,
 	type QueryBlock,
 	type QueryBlocks,

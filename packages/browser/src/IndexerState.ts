@@ -424,14 +424,19 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 	 *
 	 * It hands back the SAME storage `createState` would open, opened for READING
 	 * (`openForReading`), plus the read handle over it -- no claim, no processor, no
-	 * fetch:
+	 * fetch. Derive it and `createState` from ONE store constructor, so the two can
+	 * never name different databases (`stateFactoriesFrom`, `@etherfold/processor-entities`):
 	 *
 	 * ```ts
-	 * openState: async (context) => {
-	 *   const store = openForReading(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}));
-	 *   return {store, state: new EntityStateView(store)};
-	 * },
+	 * ...stateFactoriesFrom({
+	 *   open: (context, entities) => createBrowserStateStore(entities, {databaseName: `app-${context.stream}`}),
+	 *   entities: processor.entities,
+	 * }),
 	 * ```
+	 *
+	 * Written by hand it is the same constructor with `openForReading`:
+	 * `openForReading(await createBrowserStateStore(processor.entities, {databaseName: `app-${context.stream}`}))`
+	 * and `{store, state: new EntityStateView(store)}`.
 	 *
 	 * A tab that does not hold the election's lock is built from this at once: its
 	 * reads answer the shared store the leader writes, it follows the leader's

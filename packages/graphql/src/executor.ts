@@ -67,14 +67,12 @@ export type QueryResult = {
  * it, while a hash names one block of one chain, so an app composing several
  * operations into one view pins each follow-up to `block: {hash: blockHash}`,
  * and is refused (`block-not-recorded`) rather than served another chain's
- * state. Every executor over a store reports it; it is absent only from a
- * context built without the block reads (`QueryContext.blocks`), which is a
- * test's hand-built context and never a host's.
+ * state. Every answer reports it.
  */
 export type QueryExtensions = {
 	readonly generation: string;
 	readonly block: number | null;
-	readonly blockHash?: string | null;
+	readonly blockHash: string | null;
 };
 
 /** One error as every executor serialises it. */

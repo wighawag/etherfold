@@ -198,6 +198,26 @@ describe('stateFactoriesFrom', () => {
 		expect(await replaced.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
 	});
 
+	it('claims the store even when `onBootstrap` throws: it observes the install, it does not gate the claim', async () => {
+		const snapshot = await published();
+		const factories = stateFactoriesFrom({
+			open: constructor().open,
+			entities: processor.entities,
+			fetch: serving(snapshot).fetch,
+			onBootstrap: () => {
+				throw new Error("the app's renderer has a bug");
+			},
+		});
+
+		const writer = await factories.createState(CONTEXT, patience(), undefined, {
+			locations: [BODY],
+			processor: 'proc-v1',
+		});
+
+		expect(await writer.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
+		expect(await writer.readCursor(SYNC_CURSOR_KEY)).toBeDefined();
+	});
+
 	it('hands the claim signal to `openForWriting` and to NOTHING else, so it never bounds the download', async () => {
 		const snapshot = await published();
 		const controller = new AbortController();

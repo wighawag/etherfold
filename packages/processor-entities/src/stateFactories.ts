@@ -8,8 +8,11 @@ import {
 	type StateStoreBackend,
 	type WritableStateStore,
 } from '@etherfold/state-store';
+import {logs} from 'named-logs';
 import {openAndBootstrap, type BootstrapOutcome} from './snapshot.js';
 import {EntityStateView} from './view.js';
+
+const logger = logs('@etherfold/processor-entities');
 
 /*
  * THE PARAMETER TYPES THE BROWSER HOST HANDS ITS FACTORIES, declared STRUCTURALLY.
@@ -104,6 +107,10 @@ export type StateFactoriesOptions = {
 	 * Told what the bootstrap did, each time the writer is handed a snapshot: a
 	 * refusal is DATA (`{status: 'not-bootstrapped', reason}`), so an app that
 	 * renders or logs it does so here.
+	 *
+	 * An observer and nothing more: an error it throws is logged and swallowed, so
+	 * a bug in the app's rendering never stops the writer from claiming a store
+	 * that installed correctly.
 	 */
 	readonly onBootstrap?: (outcome: BootstrapOutcome, context: GenerationContext) => void;
 };
@@ -139,7 +146,13 @@ export type StateFactoriesOptions = {
  *
  * The reader is opened SNAPSHOT-AWARE before it is opened for reading, so a
  * reader of a snapshot-seeded store keeps the floor the leader's install
- * recorded and refuses an as-of read below it, as the writer does.
+ * recorded and refuses an as-of read below it, as the writer does. Opening
+ * snapshot-aware MIGRATES the store (`openSnapshotAware` calls `migrate()`), so a
+ * reader runs the backend's idempotent migration too: nothing for the browser
+ * store, whose constructor already migrated, and `CREATE ... IF NOT EXISTS` DDL
+ * on a SQLite one, which a read-only connection would refuse. Give a reader a
+ * connection that may run it, or open it by hand (`openForReading` over the raw
+ * backend), accepting that it then reads without the snapshot floor.
  */
 export function stateFactoriesFrom(options: StateFactoriesOptions): StateFactories {
 	const entitiesOf = (bundle: ArrivedProcessorBundle | undefined): readonly EntityDeclaration[] => {
@@ -173,7 +186,11 @@ export function stateFactoriesFrom(options: StateFactoriesOptions): StateFactori
 					...(options.finalityDepth !== undefined ? {finalityDepth: options.finalityDepth} : {}),
 					...(options.fetch ? {fetch: options.fetch} : {}),
 				});
-				options.onBootstrap?.(opened.outcome, context);
+				try {
+					options.onBootstrap?.(opened.outcome, context);
+				} catch (error) {
+					logger.error(`onBootstrap threw; the store is claimed regardless`, error);
+				}
 				store = opened.store;
 			} else {
 				// snapshot-aware with no snapshot to fetch: it recovers a floor an earlier

@@ -10,7 +10,9 @@ import type {QueryConformanceCase, QueryConformanceOptions, QueryExecutorFactory
  * ```ts
  * await describeQueryConformance('the in-process executor over SQLite', (declarations) => {
  *   const store = new VersionedStateStore(createTestDB(), declarations);
- *   const executor = localExecutor(buildQuerySchema(declarations), {accessor: store.accessor(), generation, tip, asOf: store.capabilities.asOf});
+ *   const executor = localExecutor(buildQuerySchema(declarations), {
+ *     accessor: store.accessor(), generation, tip: () => store.tip(), asOf: store.capabilities.asOf, blocks: queryBlocksOf(store),
+ *   });
  *   return {store, executor, generation};
  * });
  * ```

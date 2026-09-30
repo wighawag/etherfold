@@ -421,6 +421,29 @@ describe('a document served opaque or already inflated (`Content-Encoding: gzip`
 		expect(source.read()).toBeLessThan(8 * 1024);
 	});
 
+	it('refuses a download that fails BEFORE its first two bytes exactly as one that fails later in the head', async () => {
+		const opaque = await snapshotAt(TAKEN_AT);
+		/** A source that delivers `bytes` bytes, one per pull, then errors. */
+		const failingAfter = (bytes: number) => {
+			let sent = 0;
+			return new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						if (sent >= bytes) return controller.error(new Error('connection reset'));
+						controller.enqueue(opaque.slice(sent, sent + 1));
+						sent++;
+					},
+				},
+				{highWaterMark: 0},
+			);
+		};
+
+		// before the sniff has its two bytes, and after it (mid-head): the same refusal
+		for (const bytes of [0, 1, 10]) {
+			await expect(readSnapshot(failingAfter(bytes))).rejects.toBeInstanceOf(SnapshotFormatError);
+		}
+	});
+
 	for (const form of ['opaque', 'already inflated'] as const) {
 		it(`cancels the UNDERLYING download when a reader is cancelled after its head (${form})`, async () => {
 			const opaque = await snapshotAt(TAKEN_AT, {rows: manyRows(20_000, 'f')});
