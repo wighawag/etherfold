@@ -1,5 +1,33 @@
 # @etherfold/server
 
+## 0.5.0
+
+### Minor Changes
+
+- 5f83eb2: A GraphQL query can be pinned to a block HASH, every answer names its block's hash, and no answer mixes two branches (ADR-0099, amended 2026-09-30).
+  
+  - `@etherfold/graphql`: a root field's `block` is now a `@oneOf` input `BlockAddress {number: SafeInt, hash: Bytes32}` (breaking: `block: 10` becomes `block: {number: 10}`). `extensions` gains `blockHash` beside `block`. An unrecorded hash is refused with the new code `block-not-recorded`, which never claims a reorg. `QueryContext` gains `blocks: {at, of, revertSequence}`, and every operation reads the store's revert sequence before its pin and after its last field, so a reorg away from the pinned block and back (A, B, A) during one operation is retried, then refused, rather than answered from two branches. `graphqlQueryHandler` now requires `blockAt`, `blockOf` and `revertSequence` on the store it reads. New `Bytes32` scalar.
+  - `@etherfold/state-store`: the seam's closed record union gains `revertSequence` (ADR-0080, amended). The claimed handle (`openForWriting`) and the snapshot-aware handle forward `tip`, `blockAt`, `blockOf` and `revertSequence` by feature detection. New `QueryReads` type.
+  - `@etherfold/state-store-indexeddb` and `@etherfold/state-store-sqlite`: new `blockAt(number)`, `blockOf(hash)` (normalised as on write) and `revertSequence()`, a persisted count incremented in the same transaction as every `revertTo`. SQLite gains a public `tip()`.
+  - `@etherfold/server`: `/graphql` answers with `blockHash` and resolves `block: {hash}`, and its reorg guard reads the revert sequence.
+
+### Patch Changes
+
+- 6ac0acb: The state-moved signal's `applied` notification names the HASH of the block it applied, on every transport (ADR-0083, amended 2026-09-30).
+  
+  - `@etherfold/core`: `StateApplied` (the `'applied'` case of `StateMoved`) gains `hash: string`, beside `block`: `{kind: 'applied', block, hash, coherence, entities, generation}`. `'retracted'` and `'repointed'` are unchanged. The fold report that feeds it, `AppliedBlock`, gains `hash` too, and both containers relay it untouched from the one assembly they publish from. It is the hash the store recorded, so it equals the `extensions.blockHash` a GraphQL answer names while that block is the tip, and a reader pins its re-read to exactly the block it was told about with `block: {hash}`. A custom `EventProcessor` that implements `setFoldReporter` must now report `hash` on an applied block.
+  - `@etherfold/processor-entities`: the fold reports each applied block's hash, normalised to the store's spelling (lower case, `normalizeBlockHash`) here, since core cannot import the storage seam (ADR-0016).
+  - `@etherfold/state-moved-conformance`: an applied notification's exact key set now includes `hash`, and a transport adapter supplies a new required verb, `recordedHashAt(block)`, the hash the store behind the canonical fold recorded. The suite asserts the notification's hash equals it, and that a block that replaced another at the same height is named by a different hash. That case relies on `retract()` REPLACING the block it takes back (a different block at `forkPoint + 1`, under a different hash), which is now stated on the verb; an adapter whose retraction only withdraws must serve a replacement.
+  - `@etherfold/server`: documentation only; `/{indexer}/state-moved` carries the new field unchanged.
+- Updated dependencies [5f83eb2]
+- Updated dependencies [3647d50]
+- Updated dependencies [5466666]
+- Updated dependencies [6ac0acb]
+  - @etherfold/graphql@0.2.0
+  - @etherfold/state-store-sqlite@0.5.0
+  - @etherfold/processor-entities@0.4.0
+  - @etherfold/core@0.11.0
+
 ## 0.4.0
 
 ### Minor Changes

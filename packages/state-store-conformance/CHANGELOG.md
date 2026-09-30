@@ -1,5 +1,14 @@
 # @etherfold/state-store-conformance
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [5f83eb2]
+- Updated dependencies [d2b6be2]
+- Updated dependencies [5466666]
+  - @etherfold/state-store@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes

@@ -1,5 +1,32 @@
 # @etherfold/processor-entities
 
+## 0.4.0
+
+### Minor Changes
+
+- 3647d50: New `stateFactoriesFrom({open, entities?, finalityDepth?, fetch?, onBootstrap?})`: ONE store constructor, from which both factories of a tab election (ADR-0097) are derived, spread into the spec beside `tabElection: {name}`. `createState` opens the store, starts it from the `published` snapshot the host hands it (`openAndBootstrap`, forwarding `replaceLocal`), and claims it with `openForWriting`, handing the claim signal to the claim alone; `openState` opens the same store snapshot-aware and then with `openForReading`, with its `EntityStateView`, so a reader is read-only by type, never downloads a snapshot, and keeps an installed snapshot's floor. With a published bundle the store is declared from the bundle's own `processor.entities`. The parameter types are structural, so this package still does not depend on `@etherfold/browser`.
+- 6ac0acb: The state-moved signal's `applied` notification names the HASH of the block it applied, on every transport (ADR-0083, amended 2026-09-30).
+  
+  - `@etherfold/core`: `StateApplied` (the `'applied'` case of `StateMoved`) gains `hash: string`, beside `block`: `{kind: 'applied', block, hash, coherence, entities, generation}`. `'retracted'` and `'repointed'` are unchanged. The fold report that feeds it, `AppliedBlock`, gains `hash` too, and both containers relay it untouched from the one assembly they publish from. It is the hash the store recorded, so it equals the `extensions.blockHash` a GraphQL answer names while that block is the tip, and a reader pins its re-read to exactly the block it was told about with `block: {hash}`. A custom `EventProcessor` that implements `setFoldReporter` must now report `hash` on an applied block.
+  - `@etherfold/processor-entities`: the fold reports each applied block's hash, normalised to the store's spelling (lower case, `normalizeBlockHash`) here, since core cannot import the storage seam (ADR-0016).
+  - `@etherfold/state-moved-conformance`: an applied notification's exact key set now includes `hash`, and a transport adapter supplies a new required verb, `recordedHashAt(block)`, the hash the store behind the canonical fold recorded. The suite asserts the notification's hash equals it, and that a block that replaced another at the same height is named by a different hash. That case relies on `retract()` REPLACING the block it takes back (a different block at `forkPoint + 1`, under a different hash), which is now stated on the verb; an adapter whose retraction only withdraws must serve a replacement.
+  - `@etherfold/server`: documentation only; `/{indexer}/state-moved` carries the new field unchanged.
+
+### Patch Changes
+
+- 5466666: Follow-ups from reviewing the snapshot, tab-election and hash-pinning changes.
+  
+  - `@etherfold/graphql`: `QueryContext.blocks` is now REQUIRED (as `asOf` is), so `extensions.blockHash` is always present, `null` exactly when `block` is. New `queryBlocksOf(store)` builds the member from a store with the query reads.
+  - `@etherfold/state-store`: `readSnapshot` refuses a download that fails within its first two bytes with `SnapshotFormatError`, as it refuses one that fails later in the head, and cancels that download.
+  - `@etherfold/processor-entities`: an `onBootstrap` callback that throws no longer stops `stateFactoriesFrom`'s writer from claiming the store; the JSDoc says a reader opened through it runs the backend's migration.
+  - `@etherfold/browser`: the `openState` example points at `stateFactoriesFrom`.
+- Updated dependencies [5f83eb2]
+- Updated dependencies [d2b6be2]
+- Updated dependencies [5466666]
+- Updated dependencies [6ac0acb]
+  - @etherfold/state-store@0.5.0
+  - @etherfold/core@0.11.0
+
 ## 0.3.1
 
 ### Patch Changes
