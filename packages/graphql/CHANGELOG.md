@@ -1,5 +1,31 @@
 # @etherfold/graphql
 
+## 0.2.0
+
+### Minor Changes
+
+- 5f83eb2: A GraphQL query can be pinned to a block HASH, every answer names its block's hash, and no answer mixes two branches (ADR-0099, amended 2026-09-30).
+  
+  - `@etherfold/graphql`: a root field's `block` is now a `@oneOf` input `BlockAddress {number: SafeInt, hash: Bytes32}` (breaking: `block: 10` becomes `block: {number: 10}`). `extensions` gains `blockHash` beside `block`. An unrecorded hash is refused with the new code `block-not-recorded`, which never claims a reorg. `QueryContext` gains `blocks: {at, of, revertSequence}`, and every operation reads the store's revert sequence before its pin and after its last field, so a reorg away from the pinned block and back (A, B, A) during one operation is retried, then refused, rather than answered from two branches. `graphqlQueryHandler` now requires `blockAt`, `blockOf` and `revertSequence` on the store it reads. New `Bytes32` scalar.
+  - `@etherfold/state-store`: the seam's closed record union gains `revertSequence` (ADR-0080, amended). The claimed handle (`openForWriting`) and the snapshot-aware handle forward `tip`, `blockAt`, `blockOf` and `revertSequence` by feature detection. New `QueryReads` type.
+  - `@etherfold/state-store-indexeddb` and `@etherfold/state-store-sqlite`: new `blockAt(number)`, `blockOf(hash)` (normalised as on write) and `revertSequence()`, a persisted count incremented in the same transaction as every `revertTo`. SQLite gains a public `tip()`.
+  - `@etherfold/server`: `/graphql` answers with `blockHash` and resolves `block: {hash}`, and its reorg guard reads the revert sequence.
+- 5466666: Follow-ups from reviewing the snapshot, tab-election and hash-pinning changes.
+  
+  - `@etherfold/graphql`: `QueryContext.blocks` is now REQUIRED (as `asOf` is), so `extensions.blockHash` is always present, `null` exactly when `block` is. New `queryBlocksOf(store)` builds the member from a store with the query reads.
+  - `@etherfold/state-store`: `readSnapshot` refuses a download that fails within its first two bytes with `SnapshotFormatError`, as it refuses one that fails later in the head, and cancels that download.
+  - `@etherfold/processor-entities`: an `onBootstrap` callback that throws no longer stops `stateFactoriesFrom`'s writer from claiming the store; the JSDoc says a reader opened through it runs the backend's migration.
+  - `@etherfold/browser`: the `openState` example points at `stateFactoriesFrom`.
+
+### Patch Changes
+
+- Updated dependencies [5f83eb2]
+- Updated dependencies [d2b6be2]
+- Updated dependencies [5466666]
+  - @etherfold/state-store@0.5.0
+  - @etherfold/browser@0.12.1
+  - @etherfold/accessor@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes

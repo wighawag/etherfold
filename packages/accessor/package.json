@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/accessor",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The accessor seam the query layer reads through, beside the state-store seam and never part of it: the rows of an entity matching a predicate over declared fields, ordered, bounded, at the tip or as of a block, and a page of parents' children batched per relation. Its conformance suite is the `./conformance` subpath.",
 	"publishConfig": {
 		"access": "public"
