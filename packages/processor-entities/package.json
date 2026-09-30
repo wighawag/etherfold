@@ -6,6 +6,7 @@
 		"access": "public"
 	},
 	"type": "module",
+	"sideEffects": false,
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"exports": {
@@ -36,6 +37,7 @@
 		"@libsql/client": "^0.17.3",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
+		"esbuild": "^0.28.0",
 		"fake-indexeddb": "^6.2.2",
 		"remote-sql": "^0.0.7",
 		"remote-sql-libsql": "^0.0.7",

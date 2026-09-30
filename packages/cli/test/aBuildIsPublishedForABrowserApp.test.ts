@@ -23,7 +23,7 @@ import {
 import {PUBLICATION_INDEX_NAME, readStreamCoverage, type PublicationIndex} from '@etherfold/server';
 import {VersionedStateStore} from '@etherfold/state-store-sqlite';
 import {loadProcessorArtifact, resolveSource} from '@etherfold/utils';
-import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs';
+import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {gunzipSync} from 'node:zlib';
 import {join} from 'node:path';
@@ -347,6 +347,51 @@ describe('`etherfold publish` over a build database', () => {
 		expect(readdirSync(out).sort()).toEqual(
 			[...[one, two, three].map((written) => written.bodies[0]!.name), PUBLICATION_INDEX_NAME].sort(),
 		);
+	});
+
+	// A bundle's identity is its BYTES (ADR-0086), dependencies included, so an
+	// etherfold upgrade alone can move it, and every publication then stops being
+	// found by the rebuilt app. The report is where an author sees that it happened.
+	it('says when the processor is not among those the publication held, naming them, and only then', async () => {
+		const db = oneDatabase();
+		const chain = fakeChain().serve(logsAround(false), TIP);
+		const {out} = aWorkspace();
+		const isTheMoveLine = (line: string) => line.startsWith('new processor: ');
+
+		await aBuild(db, chain);
+		const first = await publishedAndPrinted(db, out);
+		const again = await publishedAndPrinted(db, out);
+		await aBuild(db, chain, EDITED_BUNDLE);
+		const moved = await publishedAndPrinted(db, out, {processor: EDITED_BUNDLE});
+
+		// an empty directory is not a move, and neither is republishing the same processor
+		expect(first.some(isTheMoveLine)).toBe(false);
+		expect(again.some(isTheMoveLine)).toBe(false);
+		const previous = (await theApp()).identity;
+		const edited = (await theApp(EDITED_BUNDLE)).identity;
+		const line = moved.find(isTheMoveLine);
+		expect(line).toContain(edited);
+		expect(line).toContain('etherfold upgrade');
+		expect(moved).toContain(`  held: ${previous}`);
+	});
+
+	it("does not call a processor new because the directory holds another stream's snapshots", async () => {
+		const {out} = aWorkspace();
+		const db = oneDatabase();
+		await aBuild(db, fakeChain().serve(logsAround(false), TIP));
+		const first = await publishing(db, out);
+		const [key, entry] = Object.entries(first.produced.entries.snapshots)[0]!;
+		// the SAME processor's snapshot becomes another stream's, published by another indexer
+		const index = theIndexIn(out);
+		const foreign = {
+			...index,
+			snapshots: {[`${key}-elsewhere`]: {...entry, stream: 'another-stream', processor: 'another-processor'}},
+		};
+		rmSync(join(out, PUBLICATION_INDEX_NAME));
+		writeFileSync(join(out, PUBLICATION_INDEX_NAME), JSON.stringify(foreign));
+
+		const lines = await publishedAndPrinted(db, out);
+		expect(lines.some((line) => line.startsWith('new processor: '))).toBe(false);
 	});
 });
 

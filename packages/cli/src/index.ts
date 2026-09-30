@@ -97,6 +97,7 @@ export {
 	describePublication,
 	nodePublicationFiles,
 	publish,
+	processorIsNewTo,
 	publishDatabase,
 	publishMain,
 	writePublication,

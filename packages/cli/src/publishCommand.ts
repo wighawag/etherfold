@@ -94,6 +94,17 @@ export type WrittenPublication = {
 	readonly index: string;
 	/** Each body, and whether THIS publication wrote it (false: the same bytes were already there). */
 	readonly bodies: readonly {readonly name: string; readonly contentHash: string; readonly written: boolean}[];
+	/**
+	 * Every processor identity the index held a snapshot of ON THIS PUBLICATION'S
+	 * STREAM before this publication, sorted. When it is not empty and does not hold this publication's processor, the
+	 * bundle's identity MOVED since the last publication into this directory: a tab
+	 * running the new bundle finds only what was just written, and one running an
+	 * earlier bundle keeps finding its own (ADR-0095). The identity is the bytes of the
+	 * whole bundle (ADR-0086), so a dependency bump alone, an etherfold upgrade
+	 * included, can do this; the report says so rather than leaving an author to
+	 * compare hashes.
+	 */
+	readonly processorsHeldBefore: readonly string[];
 };
 
 /** What a test substitutes for the world; a deployment supplies none of it. */
@@ -247,7 +258,29 @@ export async function writePublication(
 	await files.write(temporary, `${JSON.stringify(merged, null, '\t')}\n`);
 	await files.rename(temporary, indexPath);
 
-	return {out, produced, index: indexPath, bodies};
+	// ON THIS STREAM only: a directory several indexers publish into holds other streams'
+	// processors, and a first publication beside them is not this processor moving
+	const stream = produced.generation.stream;
+	const processorsHeldBefore = [
+		...new Set(
+			Object.values(existing?.snapshots ?? {})
+				.filter((snapshot) => snapshot.stream === stream)
+				.map((snapshot) => snapshot.processor),
+		),
+	].sort();
+	return {out, produced, index: indexPath, bodies, processorsHeldBefore};
+}
+
+/**
+ * Whether the publication's processor is one the directory held NO snapshot of,
+ * though it held snapshots of others: the bundle's identity moved since the last
+ * publication here. A first publication into an empty directory is not a move.
+ */
+export function processorIsNewTo(written: Pick<WrittenPublication, 'produced' | 'processorsHeldBefore'>): boolean {
+	return (
+		written.processorsHeldBefore.length > 0 &&
+		!written.processorsHeldBefore.includes(written.produced.generation.processor)
+	);
 }
 
 /** A name beside `path` that is this write's alone, in the same directory so the rename is atomic. */
@@ -293,6 +326,17 @@ export function describePublication(written: WrittenPublication, command: 'publi
 		`generation: ${produced.digest}`,
 		`  stream: ${produced.generation.stream}`,
 		`  processor: ${produced.generation.processor}`,
+		// THE IDENTITY MOVED: said in words, because nothing else tells an app author that
+		// a rebuild (an etherfold upgrade, any dependency bump) made a new processor
+		...(processorIsNewTo(written)
+			? [
+					`new processor: ${produced.generation.processor} is not among the processors ${written.index} held a snapshot of. ` +
+						`Its bundle's bytes changed since the last publication here (its own code, or a dependency it bundles, ` +
+						`such as an etherfold upgrade), so a tab running this bundle finds only this snapshot, and a tab running ` +
+						`an earlier bundle keeps finding its own.`,
+					...written.processorsHeldBefore.map((identity) => `  held: ${identity}`),
+				]
+			: []),
 		`indexer: ${produced.indexer}`,
 		`cut: ${produced.cut} (folded through ${produced.tip}, finality ${produced.finality})`,
 		`takenAt: ${produced.head.takenAt.number} (${produced.head.takenAt.hash})`,

@@ -521,6 +521,9 @@ importers:
       as-soon:
         specifier: ^0.1.5
         version: 0.1.6
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.1
       fake-indexeddb:
         specifier: ^6.2.2
         version: 6.2.5
