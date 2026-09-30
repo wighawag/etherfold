@@ -666,6 +666,8 @@ async function render() {
 }
 ```
 
+**Compose several queries into one view by HASH, not by number.** Every answer names the block it was read at, by number and by hash (`extensions.block`, `extensions.blockHash`). To read a second part of the view at exactly that block, pin the follow-up to the hash, `pool(block: {hash: $at}, first: 10)` with `$at: Bytes32!` set to the first answer's `blockHash`. A number is a height, and a reorg can put another block at it between the two queries, which would mix two chains in one view without a word; a hash names one block of one chain, so the follow-up reads that block or is refused with `block-not-recorded`. Within ONE operation you need none of this: every field is read at one block, and an operation during which the store reverts is retried and never answered from two branches.
+
 A client cache wires it the same way as any other read: the coherence-token rule from [Wiring it to a cache you already use](#wiring-it-to-a-cache-you-already-use), with the entity names in `entities` mapped to the queries that read them.
 
 ### The browser refuses past a bound, rather than getting slower
@@ -679,7 +681,7 @@ if (errors?.[0]?.extensions?.code === 'rows-examined-bound') {
 hostIndexerInThisWorker({createState, createProcessor, query: graphqlQueryHandler({accessor: {rowsExaminedBound: 100_000}})});
 ```
 
-A nested collection is bounded per parent, so one prolific parent cannot starve the others. A query with `block:` is served as the current rows plus the churn since that block, under the same bound, and that churn is the whole database's rather than the queried entity's: an as-of query on a quiet entity can be refused because other entities changed a lot. A block the store no longer retains is `block-not-retained`, the same code a server answers.
+A nested collection is bounded per parent, so one prolific parent cannot starve the others. A query with `block:` (a number or a hash) is served as the current rows plus the churn since that block, under the same bound, and that churn is the whole database's rather than the queried entity's: an as-of query on a quiet entity can be refused because other entities changed a lot. A block the store no longer retains is `block-not-retained`, the same code a server answers.
 
 **This is a documented difference between deployments, not a parity rule.** A server answers through SQLite, which has a query planner and no such bound, so the same document can be answered by a server and refused by a browser. The conformance suite asserts each executor against the bound its deployment declares, so the difference is tested rather than discovered.
 

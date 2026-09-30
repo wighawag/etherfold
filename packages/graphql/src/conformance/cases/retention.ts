@@ -8,7 +8,7 @@ import type {QueryConformanceCase, QueryExecutorFactory} from '../types.js';
 const GROUP = 'the retention refusal has one code everywhere';
 
 /** The query every case asks, and where its one field sits in it. */
-const AS_OF_10 = `{ pool(block: 10, first: 10) { pool } }`;
+const AS_OF_10 = `{ pool(block: {number: 10}, first: 10) { pool } }`;
 
 /**
  * The seam's `BlockNotRetainedError` as every executor serialises it: the code

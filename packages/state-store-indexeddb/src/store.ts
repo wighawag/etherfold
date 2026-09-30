@@ -662,6 +662,20 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		});
 
 		blocks.delete(above(keepUpTo));
+		// THE REVERT SEQUENCE, in this same transaction: a query reads it at its start
+		// and its end, and a revert it cannot see is an answer read from two branches
+		// (ADR-0099, amended 2026-09-30). Every revert counts, one that removed nothing
+		// included: counting only real ones would cost a read of what was removed,
+		// and a needless retry is all an extra count costs.
+		const seam = tx.objectStore(SEAM);
+		let sequence: number;
+		try {
+			sequence = sequenceOf((await request(seam.get(REVERT_SEQUENCE))) as string | undefined);
+		} catch (error) {
+			// never a revert the sequence did not count: the whole revert is refused
+			throw abort(tx, settled, error as Error);
+		}
+		seam.put(String(sequence + 1), REVERT_SEQUENCE);
 		await settled;
 	}
 
@@ -842,6 +856,47 @@ export class IndexedDBStateStore implements StateStoreBackend {
 		return cursor ? (cursor.key as number) : undefined;
 	}
 
+	/**
+	 * The block recorded at a height, as `{number, hash, timestamp}`, or `undefined`.
+	 * One of the query layer's reads (`QueryReads` in `@etherfold/state-store`): what
+	 * names the hash of the block an operation pinned.
+	 */
+	async blockAt(number: number): Promise<BlockPointer | undefined> {
+		const record = await this.getBlock(number);
+		return record && {number: record.number, hash: record.hash, timestamp: record.timestamp};
+	}
+
+	/**
+	 * The recorded block a HASH names, or `undefined` when this store recorded
+	 * none: reorged out, a block that carried no log this store records, or one
+	 * below a snapshot it started from. The hash is folded to lower case first,
+	 * as it is on write (`normalizeBlockHash`, ADR-0015), and read through the
+	 * `hash` index the blocks store already keeps unique.
+	 */
+	async blockOf(hash: string): Promise<BlockPointer | undefined> {
+		const normalized = normalizeBlockHash(hash);
+		const db = await this.database();
+		const tx = db.transaction(BLOCKS, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const record = (await request(tx.objectStore(BLOCKS).index(HASH_INDEX).get(normalized))) as BlockRecord | undefined;
+		await settled;
+		return record && {number: record.number, hash: record.hash, timestamp: record.timestamp};
+	}
+
+	/**
+	 * How many times this store has reverted: incremented inside every
+	 * `revertTo`'s transaction, and read from the database every time, because a
+	 * reader tab reads a store another tab's leader reverts. `0` before the first.
+	 */
+	async revertSequence(): Promise<number> {
+		const db = await this.database();
+		const tx = db.transaction(SEAM, 'readonly');
+		const settled = this.commitIfSerialising(tx);
+		const value = (await request(tx.objectStore(SEAM).get(REVERT_SEQUENCE))) as string | undefined;
+		await settled;
+		return sequenceOf(value);
+	}
+
 	// -- internals -----------------------------------------------------------
 
 	/** Whether any version is still unreachable at `floor`: one bounded probe. */
@@ -918,6 +973,18 @@ function upgrade(db: IDBDatabase, _transaction: IDBTransaction, oldVersion: numb
 		const blocks = db.createObjectStore(BLOCKS, {keyPath: 'number'});
 		blocks.createIndex(HASH_INDEX, 'hash', {unique: true});
 	}
+}
+
+/** The seam record the revert sequence is kept under (`SeamRecordKey`, `@etherfold/state-store`). */
+const REVERT_SEQUENCE = 'revertSequence' satisfies SeamRecordKey;
+
+/** A stored revert sequence as a number: absent is `0`. */
+function sequenceOf(value: string | undefined): number {
+	const parsed = value === undefined ? 0 : Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed < 0) {
+		throw new Error(`the revert sequence this store recorded is not a count: ${JSON.stringify(value)}`);
+	}
+	return parsed;
 }
 
 /**

@@ -5,6 +5,7 @@ import {generationDigestOf, type GenerationId} from '@etherfold/core';
 import {httpExecutor, isTransportFailure} from '@etherfold/graphql';
 import {
 	describeQueryConformance,
+	hashOf,
 	HISTORY,
 	QUERY_ENTITIES,
 	subjectWith,
@@ -136,7 +137,7 @@ describe('`etherfold serve` and /graphql', () => {
 		const {executor, generation} = await subjectWith(overServe, HISTORY);
 		expect(await executor({query: '{ deposit(orderBy: {field: amount}, first: 1) { pool seq amount } }'})).toEqual({
 			data: {deposit: [{pool: 'b', seq: '1', amount: '1'}]},
-			extensions: {generation, block: 11},
+			extensions: {generation, block: 11, blockHash: hashOf(11)},
 		});
 		expect(QUERY_ENTITIES.map((entity) => entity.name)).toEqual(['pool', 'deposit', 'crowd']);
 	});
@@ -183,7 +184,7 @@ describe('`etherfold run` serves /graphql over the generation it folds', () => {
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
 
-			const asOf = await executor({query: `{ nft(block: ${START_BLOCK + 10}, first: 1) { owner } }`});
+			const asOf = await executor({query: `{ nft(block: {number: ${START_BLOCK + 10}}, first: 1) { owner } }`});
 			expect(asOf.errors?.[0]?.extensions.code).toBe('block-not-retained');
 			expect(asOf.data).toBeNull();
 		} finally {
@@ -212,7 +213,7 @@ const WINDOW = 20;
 const FLOOR = STORE_TIP - WINDOW;
 
 const asOf = (block: number) =>
-	`{ counter(block: ${block}, first: 1) { name value } nft(block: ${block}, first: 10) { tokenID owner } }`;
+	`{ counter(block: {number: ${block}}, first: 1) { name value } nft(block: {number: ${block}}, first: 10) { tokenID owner } }`;
 
 /** Poll until `done`, or fail naming what never happened. */
 async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, what: string): Promise<T> {

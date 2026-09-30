@@ -11,8 +11,8 @@ import SchemaBuilder from '@pothos/core';
 import type {GraphQLSchema} from 'graphql';
 import {QUERY_ERROR_CODES, QueryRefusal} from './errors.js';
 import {schemaNames, type SchemaNames} from './names.js';
-import {OperationReads, type ResolvedRow, type Selection} from './operation.js';
-import {BYTES_SCALAR, SAFE_INT_SCALAR, U256_SCALAR} from './scalars.js';
+import {OperationReads, type BlockAddressArg, type ResolvedRow, type Selection} from './operation.js';
+import {BYTES32_SCALAR, BYTES_SCALAR, SAFE_INT_SCALAR, U256_SCALAR} from './scalars.js';
 
 /**
  * ## One schema, built from the declarations (ADR-0099)
@@ -43,8 +43,10 @@ import {BYTES_SCALAR, SAFE_INT_SCALAR, U256_SCALAR} from './scalars.js';
  * Every list field takes `where` (per column, `{eq, ne, lt, lte, gt, gte, in,
  * isNull}`, combined with `_and` / `_or`), `orderBy` (`{field, direction}`) and
  * a REQUIRED `first` (the accessor's limit: there is no default, because a
- * default bound is a bound nobody chose). A root field also takes `block`, to
- * answer as of an earlier block; its nested collections read as of the same.
+ * default bound is a bound nobody chose). A root field also takes `block`, a
+ * `BlockAddress` (`@oneOf`: `{number}` or `{hash}`), to answer as of an earlier
+ * block; its nested collections read as of the same. A hash the store has no
+ * record of is refused (`block-not-recorded`), never answered from another block.
  *
  * The resolvers call the accessor seam and nothing else, so the schema is the
  * same over SQLite and IndexedDB, and a capability a backend cannot serve is
@@ -58,6 +60,17 @@ export function buildQuerySchema(declarations: readonly EntityDeclaration[]): Gr
 	builder.scalarType('U256', U256_SCALAR);
 	builder.scalarType('SafeInt', SAFE_INT_SCALAR);
 	builder.scalarType('Bytes', BYTES_SCALAR);
+	builder.scalarType('Bytes32', BYTES32_SCALAR);
+	// a root field's `block`: a height OR a hash, exactly one (`@oneOf`), as the
+	// SQLite store's own `BlockAddress` takes them. A hash names one block of one
+	// chain; a height is whatever block holds it now.
+	const blockAddress = builder.inputType('BlockAddress', {
+		isOneOf: true,
+		fields: (t: Loose) => ({
+			number: t.field({type: 'SafeInt', required: false}),
+			hash: t.field({type: 'Bytes32', required: false}),
+		}),
+	} as Loose);
 	const direction = builder.enumType('OrderDirection', {values: ['asc', 'desc'] as const});
 
 	// the filter input of each value type a column may hold, built once and shared
@@ -171,9 +184,9 @@ export function buildQuerySchema(declarations: readonly EntityDeclaration[]): Gr
 				fields[entity.name] = t.field({
 					type: [own.object],
 					nullable: {list: false, items: false},
-					args: {...listArgs(t, own), block: t.arg({type: 'SafeInt', required: false})},
-					resolve: (_root: unknown, args: ListArgs & {block?: number | null}, reads: OperationReads) =>
-						reads.find(entity, selectionOf(entity, args), reads.readAt(args.block)),
+					args: {...listArgs(t, own), block: t.arg({type: blockAddress, required: false})},
+					resolve: async (_root: unknown, args: ListArgs & {block?: BlockAddressArg | null}, reads: OperationReads) =>
+						reads.find(entity, selectionOf(entity, args), await reads.readAt(args.block)),
 				});
 			}
 			return fields;
@@ -300,6 +313,7 @@ type SchemaTypes = {
 		U256: {Input: bigint; Output: bigint};
 		SafeInt: {Input: number; Output: number};
 		Bytes: {Input: Uint8Array; Output: Uint8Array};
+		Bytes32: {Input: string; Output: string};
 	};
 };
 

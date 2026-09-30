@@ -152,7 +152,10 @@ describe('/graphql', () => {
 		const app = appOver(db, serving);
 		const got = await app.request(`/graphql?${new URLSearchParams({query})}`, {headers: {accept: 'application/json'}});
 		expect(got.status).toBe(200);
-		expect(await got.json()).toEqual({data: {pool: []}, extensions: {generation: subject.generation, block: null}});
+		expect(await got.json()).toEqual({
+			data: {pool: []},
+			extensions: {generation: subject.generation, block: null, blockHash: null},
+		});
 
 		const shimmed = await executorToFetch(subject.executor)('/graphql', {
 			method: 'POST',
@@ -176,7 +179,7 @@ describe('/graphql', () => {
 			expect(result.errors!.map((error) => error.extensions.code)).toEqual(
 				result.errors!.map(() => QUERY_ERROR_CODES.invalidQuery),
 			);
-			expect(result.extensions).toEqual({generation: generationDigestOf(GENERATION), block: null});
+			expect(result.extensions).toEqual({generation: generationDigestOf(GENERATION), block: null, blockHash: null});
 		}
 	});
 
@@ -257,12 +260,12 @@ describe('/graphql', () => {
 		const query = {query: '{ pool(first: 1) { label } }'};
 		expect(await executor(query)).toEqual({
 			data: {pool: [{label: 'incumbent'}]},
-			extensions: {generation: generationDigestOf(GENERATION), block: 5},
+			extensions: {generation: generationDigestOf(GENERATION), block: 5, blockHash: `0x${'5'.padStart(64, '0')}`},
 		});
 		await registry.moveCanonicalTo(successor);
 		expect(await executor(query)).toEqual({
 			data: {pool: [{label: 'successor'}]},
-			extensions: {generation: generationDigestOf(successor), block: 5},
+			extensions: {generation: generationDigestOf(successor), block: 5, blockHash: `0x${'5'.padStart(64, '0')}`},
 		});
 	});
 });

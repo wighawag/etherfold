@@ -11,6 +11,7 @@ import {
 import {QUERY_ERROR_CODES, transportFailure, type QueryResult} from '../src/index.js';
 import {indexedDBExecutor, sqliteExecutor, type AccessorWrap} from './executors.js';
 import {block, deposit, pool} from './fixtures.js';
+import {hashOf} from '../src/conformance/fixtures.js';
 
 /**
  * The suite (`conformance.test.ts`) holds each executor to the same expected
@@ -45,7 +46,7 @@ describe('the same query answers the same bytes on SQLite and on IndexedDB', () 
 		for (const backend of Object.values(BACKENDS)) {
 			const subject = await subjectWith(backend(), HISTORY);
 			await subject.store.applyBlock(block(200), []);
-			answers.push(await subject.executor({query: `{ pool(block: 10, first: 1) { pool } }`}));
+			answers.push(await subject.executor({query: `{ pool(block: {number: 10}, first: 1) { pool } }`}));
 		}
 		expect(answers[0]!.errors?.[0]?.extensions.code).toBe(QUERY_ERROR_CODES.blockNotRetained);
 		expect(serialised(answers[1])).toBe(serialised(answers[0]));
@@ -81,7 +82,7 @@ describe('one operation, one block, across a reorg, on both backends', () => {
 			expect(serialised(result)).toBe(
 				JSON.stringify({
 					data: {pool: [{pool: 'a', label: 'alpha', deposits: [{seq: '1', who: 'ann'}]}]},
-					extensions: {generation: subject.generation, block: 10},
+					extensions: {generation: subject.generation, block: 10, blockHash: hashOf(10)},
 				}),
 			);
 		});

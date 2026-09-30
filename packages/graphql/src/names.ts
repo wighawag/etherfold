@@ -57,7 +57,8 @@ export function schemaNames(entities: ReadonlyMap<string, NormalizedEntity>): Sc
 
 	for (const builtIn of ['String', 'Int', 'Float', 'Boolean', 'ID', 'Query'])
 		claim(builtIn, `GraphQL's own ${builtIn}`);
-	for (const fixed of ['U256', 'SafeInt', 'Bytes', 'OrderDirection']) claim(fixed, `the scalar or enum ${fixed}`);
+	for (const fixed of ['U256', 'SafeInt', 'Bytes', 'Bytes32', 'OrderDirection', 'BlockAddress'])
+		claim(fixed, `the scalar, enum or input ${fixed}`);
 	const filters = {
 		String: claim('StringFilter', 'the filter over String'),
 		SafeInt: claim('SafeIntFilter', 'the filter over SafeInt'),

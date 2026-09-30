@@ -87,7 +87,7 @@ export function rowsExaminedCases(
 		{block: 100, mutations: [pool('quiet', {label: 'quiet'}), ...crowd(rows)]},
 		{block: 101, mutations: crowd(rows, 1)},
 	];
-	const deltaQuery = `{ pool(block: 100, first: 10) { pool label } }`;
+	const deltaQuery = `{ pool(block: {number: 100}, first: 10) { pool label } }`;
 
 	const history = answersHistory(capabilities);
 

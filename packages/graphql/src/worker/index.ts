@@ -29,7 +29,7 @@
  */
 import type {Accessor} from '@etherfold/accessor';
 import type {HostQueryContext, HostQueryHandler} from '@etherfold/browser';
-import type {StateStore} from '@etherfold/state-store';
+import type {QueryReads, StateStore} from '@etherfold/state-store';
 import type {GraphQLSchema} from 'graphql';
 import {DocumentCache} from '../documents.js';
 import {QUERY_ERROR_CODES, UNEXPECTED_ERROR_MESSAGE} from '../errors.js';
@@ -52,24 +52,30 @@ export type GraphqlQueryHandlerOptions = {
 };
 
 /**
- * A store the query layer can read: the seam, plus the two reads beyond it the
- * query layer needs, which the IndexedDB store has (and a claimed handle over it
- * forwards): its accessor, and its tip.
+ * A store the query layer can read: the seam, plus the reads beyond it the query
+ * layer needs (`QueryReads` in `@etherfold/state-store`), which the IndexedDB
+ * store has and every handle wrapping it forwards: its accessor, its tip, its
+ * block reads (the pin's hash, and a `block: {hash}` resolved) and its revert
+ * sequence (the reorg guard).
  */
-type QueryableStore = StateStore & {
-	accessor(options?: Readonly<Record<string, unknown>>): Accessor;
-	tip(): Promise<number | undefined>;
-};
+type QueryableStore = StateStore &
+	QueryReads & {
+		accessor(options?: Readonly<Record<string, unknown>>): Accessor;
+	};
+
+const QUERY_MEMBERS = ['accessor', 'tip', 'blockAt', 'blockOf', 'revertSequence'] as const;
 
 function queryable(store: StateStore): QueryableStore {
-	const candidate = store as Partial<QueryableStore>;
-	if (typeof candidate.accessor !== 'function' || typeof candidate.tip !== 'function') {
+	const candidate = store as unknown as Record<string, unknown>;
+	const missing = QUERY_MEMBERS.filter((member) => typeof candidate[member] !== 'function');
+	if (missing.length > 0) {
 		throw new Error(
-			`the store this host reads from offers no accessor and tip (ADR-0099), so it cannot answer a query: ` +
-				`the IndexedDB store does, and a store handed to \`openForWriting\` or \`openForReading\` keeps them.`,
+			`the store this host reads from offers no ${missing.join(', ')} (ADR-0099), so it cannot answer a query: ` +
+				`the IndexedDB store does, and a store handed to \`openForWriting\`, \`openSnapshotAware\` or ` +
+				`\`openForReading\` keeps them.`,
 		);
 	}
-	return candidate as QueryableStore;
+	return store as QueryableStore;
 }
 
 /**
@@ -118,6 +124,11 @@ export function graphqlQueryHandler(options: GraphqlQueryHandlerOptions = {}): H
 				accessor,
 				generation: resolved.generation,
 				tip: () => store.tip(),
+				blocks: {
+					at: (number) => store.blockAt(number),
+					of: (hash) => store.blockOf(hash),
+					revertSequence: () => store.revertSequence(),
+				},
 				// the store's own claim: a `revert-only` store answers every read at the tip
 				asOf: store.capabilities.asOf,
 			},

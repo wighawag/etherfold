@@ -3,7 +3,7 @@ import {createClient} from '@libsql/client';
 import type {Accessor} from '@etherfold/accessor';
 import {BLOCKS, IndexedDBStateStore, type IndexedDBStateStoreOptions} from '@etherfold/state-store-indexeddb';
 import {VersionedStateStore, type VersionedStateStoreOptions} from '@etherfold/state-store-sqlite';
-import type {EntityDeclaration, StateStoreBackend} from '@etherfold/state-store';
+import type {EntityDeclaration, QueryReads, StateStoreBackend} from '@etherfold/state-store';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {QueryExecutorFactory, QuerySubject} from '../src/conformance/index.js';
 import {buildQuerySchema, localExecutor, type QueryContext} from '../src/index.js';
@@ -34,11 +34,18 @@ function subject(
 	wrap: AccessorWrap | undefined,
 ): QuerySubject {
 	const capabilities = store.capabilities;
+	const reads = store as unknown as QueryReads;
 	const context: QueryContext = {
 		accessor: wrap ? wrap(accessor, store) : accessor,
 		generation: GENERATION,
 		tip,
 		asOf: capabilities.asOf && capabilities.retention.kind !== 'revert-only',
+		// the block reads and the revert sequence, off the store itself, as a host copies them
+		blocks: {
+			at: (number) => reads.blockAt(number),
+			of: (hash) => reads.blockOf(hash),
+			revertSequence: () => reads.revertSequence(),
+		},
 	};
 	return {store, executor: localExecutor(buildQuerySchema(declarations), context), generation: GENERATION};
 }

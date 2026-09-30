@@ -30,6 +30,15 @@ export const QUERY_ERROR_CODES = Object.freeze({
 	 */
 	blockNotRetained: 'block-not-retained',
 	/**
+	 * A `block: {hash}` this store has no record of. Only blocks that carried a
+	 * log the indexer records are recorded (ADR-0015), and a snapshot-seeded store
+	 * records nothing below its floor, so the hash may have been reorged out, OR it
+	 * may be a canonical block that simply carried no such log, or one below a
+	 * snapshot: the refusal says it is not recorded HERE and never claims a reorg.
+	 * Never answered from another block. Carries `requested` (the hash as asked).
+	 */
+	blockNotRecorded: 'block-not-recorded',
+	/**
 	 * A `block` above the one the operation pinned: the store has not indexed it
 	 * yet, and answering it from the tip would be a plausible wrong answer for a
 	 * block that may still change state. Carries `requested` and `pinned`.
@@ -38,9 +47,11 @@ export const QUERY_ERROR_CODES = Object.freeze({
 	/** The accessor's refusal past its rows-examined bound, unchanged. Carries `entity` and `bound`. */
 	rowsExaminedBound: ROWS_EXAMINED_BOUND,
 	/**
-	 * The tip moved under the operation in a way its pin cannot absorb (a reorg
-	 * took it BELOW the pinned block), and did again on the one retry. Carries
-	 * `started` and `ended`, the tip at each end of the retry.
+	 * The store moved under the operation in a way its pin cannot absorb, and did
+	 * again on the one retry: a reorg (the store REVERTED, which its revert
+	 * sequence says even when the tip ends where it started), or, on a store that
+	 * answers no as-of read, any move of the tip. Carries `started` and `ended`,
+	 * the tip at each end of the retry.
 	 */
 	tipMovedDuringOperation: 'tip-moved-during-operation',
 	/** Anything unexpected. The message is masked, so nothing internal leaks through a transport. */
