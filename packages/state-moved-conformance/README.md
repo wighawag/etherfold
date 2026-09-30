@@ -18,8 +18,11 @@ await describeStateMovedConformance('the signal across a tab’s port', async ()
 	return {
 		onStateMoved: (handler) => world.port.onStateMoved(handler),
 		applyNextBlock: () => world.applyNextBlock(),
+		applyNextEmptyBlock: () => world.applyNextEmptyBlock(),
 		retract: () => world.retract(),
 		promote: () => world.promote(),
+		// the hash the store behind the canonical fold RECORDED at a height, read out of the store
+		recordedHashAt: (block) => world.recordedHashAt(block),
 		readsUpTo: () => world.readsUpTo(),
 		close: () => world.close(),
 	};
@@ -32,7 +35,7 @@ Every verb moves a **real fold** and lets the **real producer** publish. An adap
 
 | chapter                            | what breaks without it                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `one handler`                      | the value, the sequence, and what a reader ATTACHING is told                                       |
+| `one handler`                      | the value (the block's `hash` included, which must be the one the store recorded), the sequence, and what a reader ATTACHING is told |
 | `the coherence token`              | that it holds still while nothing invalidates, rotates on a retraction, and rotates on a promotion that is ANNOUNCED at once rather than left for the next block |
 | `a dropped notification`           | that nothing is held for a reader that was away, and that it converges anyway                      |
 | `coherent with what a reader reads` | that a read a notification prompted is not answered from underneath it                             |
@@ -43,7 +46,7 @@ The last chapter is selected on what the transport's READER can do. A reader wit
 
 `describeStateMovedConformance` registers each case as its own vitest `it`, so a divergence is reported as the behaviour that broke on the transport that broke it. `runStateMovedConformance` runs the same list without a test runner and reports which cases failed, which is how a deliberately-diverging transport can be asserted to FAIL the suite, and how a transport built outside this repository checks itself.
 
-This package ships no tests of its own, deliberately: a case here is only worth what it does against a REAL transport, so the suite's own self-checks live where one exists. `packages/browser/test/oneHandlerForEveryTransport.test.ts` feeds `runStateMovedConformance` transports that are wrong in the three ways a real adapter goes wrong — replaying to a late joiner, re-stamping the token, dropping the retraction — plus one that answers neither convergence question, and asserts on WHICH cases went red.
+This package ships no tests of its own, deliberately: a case here is only worth what it does against a REAL transport, so the suite's own self-checks live where one exists. `packages/browser/test/oneHandlerForEveryTransport.test.ts` feeds `runStateMovedConformance` transports that are wrong in the ways a real adapter goes wrong (replaying to a late joiner, re-stamping the token, dropping the retraction, swallowing an empty changed-set, re-spelling the block hash), plus one that answers neither convergence question, and asserts on WHICH cases went red.
 
 ## Related
 

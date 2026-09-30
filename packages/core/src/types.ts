@@ -170,6 +170,17 @@ export type AppliedBlock = {
 	/** The block, as the fold applied it. */
 	readonly block: number;
 	/**
+	 * The block's HASH, exactly as the store RECORDED it: normalised to the store's
+	 * one spelling (lower-case hex) by the layer that recorded it, because this
+	 * package cannot import the storage seam that owns that rule (ADR-0016).
+	 *
+	 * It is what lets a reader pin its re-read to EXACTLY the block it was told
+	 * about (`block: {hash}` on the query layer), which a number cannot do: a
+	 * number is not unique across a reorg, and a hash the store did not record in
+	 * this spelling would not resolve (ADR-0083, amended 2026-09-30).
+	 */
+	readonly hash: string;
+	/**
 	 * The entity NAMES that block touched, deduplicated and sorted, derived from
 	 * the mutations ACTUALLY applied -- so an entity that is declared and untouched
 	 * is absent, and a block whose handlers produced nothing reports an empty set

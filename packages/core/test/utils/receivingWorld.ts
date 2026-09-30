@@ -277,7 +277,7 @@ function foldingProcessor(marker: string, store: MemoryStore, weight: number): E
 				}
 			}
 			for (const block of appliedBlocksOf(eventStream)) {
-				reporter?.({kind: 'applied', block: block.number, entities: [REPORTED_ENTITY]});
+				reporter?.({kind: 'applied', block: block.number, hash: block.hash, entities: [REPORTED_ENTITY]});
 			}
 			// the state and the CHECKPOINT, together, which is what makes a kill between
 			// two chunks resume rather than re-apply or skip

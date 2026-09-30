@@ -45,6 +45,24 @@ describe('the fold publishes what it just changed', () => {
 		expect(appends.find((notification) => notification.block === 102)?.entities).toEqual(['cell', 'player']);
 	});
 
+	it('relays the HASH the fold reported for each block UNTOUCHED', async () => {
+		// The fold names the block's hash in the store's own spelling (the layer below
+		// normalises it, since this package cannot import the storage seam, ADR-0016),
+		// and the container relays exactly what it was handed, beside the number.
+		const fold = reportingFold('A');
+		const world = await openWorld([fold]);
+		await world.indexer.load();
+		await driveToTip(world.indexer);
+
+		const appends = appendsIn(world.moved);
+		expect(appends.map(({block, hash}) => ({block, hash}))).toEqual(
+			BRANCH_A.filter((log, index, all) => all.findIndex((one) => one.blockNumber === log.blockNumber) === index).map(
+				(log) => ({block: log.blockNumber, hash: log.blockHash}),
+			),
+		);
+		expect(Object.keys(appends[0]).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'hash', 'kind']);
+	});
+
 	it('carries ONE unchanged token while nothing invalidates', async () => {
 		// N blocks folded canonically, no reorg and no promotion: N notifications and
 		// one token. The token is what makes best-effort delivery safe, so it must
@@ -152,7 +170,7 @@ describe('the fold publishes what it just changed', () => {
 			}),
 		);
 		expect(publisher.subscriberCount).toBe(50);
-		publisher.publish({block: 1, entities: ['cell'], generation: 'g'});
+		publisher.publish({block: 1, hash: '0x1', entities: ['cell'], generation: 'g'});
 		// the SHAPE of the producer is unchanged: 50 handler references and no
 		// per-subscriber record beside them
 		expect(Object.keys(publisher).sort()).toEqual(shape);
@@ -163,9 +181,9 @@ describe('the fold publishes what it just changed', () => {
 		// and detaching really does stop delivery
 		let called = 0;
 		const detach = publisher.subscribe(() => called++);
-		publisher.publish({block: 2, entities: [], generation: 'g'});
+		publisher.publish({block: 2, hash: '0x2', entities: [], generation: 'g'});
 		detach();
-		publisher.publish({block: 3, entities: [], generation: 'g'});
+		publisher.publish({block: 3, hash: '0x3', entities: [], generation: 'g'});
 		expect(called).toBe(1);
 	});
 

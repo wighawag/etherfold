@@ -130,7 +130,7 @@ function record(name: string, project: string, body: unknown): void {
 	);
 }
 
-type Told = {kind: string; block: number; coherence: string; entities: string[]; generation: string};
+type Told = {kind: string; block: number; hash: string; coherence: string; entities: string[]; generation: string};
 
 test('a reader tab with its own host learns from the indexing tab, and the app next door hears nothing', async ({
 	browser,
@@ -278,7 +278,9 @@ test('a reader tab with its own host learns from the indexing tab, and the app n
 		// NO ELECTION HAPPENED HERE, and the evidence is structural: nothing on the
 		// wire names the publisher, so no reader could have asked who is indexing.
 		for (const one of [...told, ...lateTold, ...heardNextDoor]) {
-			expect(Object.keys(one).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
+			expect(Object.keys(one).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'hash', 'kind']);
+			// the block's hash in the store's one spelling, carried across the channel unchanged
+			expect(one.hash).toMatch(/^0x[0-9a-f]+$/);
 		}
 		// This tab wired its own host to the channel exactly as the indexing tab did
 		// -- every tab publishes, every tab listens -- and published nothing, because

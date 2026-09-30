@@ -156,7 +156,7 @@ const namedLogger = logs('@etherfold/core');
  *    that are reading when it moved the state (`onStateMoved`, ADR-0083): every
  *    server and CLI deployment folds through THIS container, so a signal it did
  *    not publish would be a signal no deployment that runs on a server could
- *    have. What goes out is four facts and no data -- no rows, no mutations and,
+ *    have. What goes out is a handful of facts and no data -- no rows, no mutations and,
  *    exactly as before, no state handle -- so a reader re-reads through the
  *    surface it already has, which on this runtime is the table namespace the
  *    canonical pointer names.
@@ -3137,6 +3137,7 @@ export class ReceivingIndexer<
 		}
 		this.stateMoved.publish({
 			block: report.block,
+			hash: report.hash,
 			entities: report.entities,
 			generation,
 		});

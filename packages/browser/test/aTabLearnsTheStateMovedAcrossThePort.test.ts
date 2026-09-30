@@ -146,11 +146,11 @@ describe('a tab told that the state moved', () => {
 			const applied = watched.applied();
 			expect(applied.map((moved) => moved.block)).toEqual(APPLIED_BLOCKS);
 
-			// THE VALUE IS CORE'S OWN, not a browser-flavoured variant of it: the four
-			// fields ADR-0083 names and nothing beside them, with the entity NAMES the
-			// block's mutations touched.
+			// THE VALUE IS CORE'S OWN, not a browser-flavoured variant of it: the fields
+			// ADR-0083 names and nothing beside them, with the entity NAMES the block's
+			// mutations touched.
 			for (const moved of applied) {
-				expect(Object.keys(moved).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
+				expect(Object.keys(moved).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'hash', 'kind']);
 				expect([...moved.entities].sort()).toEqual(TOUCHED);
 			}
 

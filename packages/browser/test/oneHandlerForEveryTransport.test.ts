@@ -126,6 +126,28 @@ describe('the suite catches a transport that drifted', () => {
 		);
 	});
 
+	it('catches one that RE-SPELLS the block hash on its way across', async () => {
+		// The "improvement": the hash is upper-cased (or checksummed) for display, since
+		// hex case means nothing in a hash. It hands a reader a pin that is not the
+		// store's spelling, so the pin and `extensions.blockHash` no longer compare
+		// equal, and a cache keyed on one misses the other.
+		const outcome = await runStateMovedConformance(async () => {
+			const real = await openPortTransport();
+			return {
+				...real,
+				onStateMoved(handler: StateMovedHandler) {
+					return real.onStateMoved((moved) =>
+						handler(moved.kind === 'applied' ? {...moved, hash: moved.hash.toUpperCase()} : moved),
+					);
+				},
+			};
+		});
+
+		expect(outcome.failures.map((failure) => failure.name)).toContain(
+			'names the HASH the store recorded, so a block that REPLACED another at the same height is told apart',
+		);
+	});
+
 	it('REFUSES a transport that answers neither convergence question, rather than skipping the chapter', async () => {
 		// A capability-driven selection that can select NOTHING is how a suite becomes
 		// decoration: this transport's reader could neither re-read nor be told where

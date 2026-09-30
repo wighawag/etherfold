@@ -125,6 +125,6 @@ export function aRepointing(moved: StateMoved | undefined): StateRepointed {
  * richer transport then breaks when it is pointed at the others, and the payload
  * is the thing ADR-0083 says is very hard to widen later.
  */
-export const APPLIED_FIELDS = ['block', 'coherence', 'entities', 'generation', 'kind'] as const;
+export const APPLIED_FIELDS = ['block', 'coherence', 'entities', 'generation', 'hash', 'kind'] as const;
 export const RETRACTED_FIELDS = ['coherence', 'forkPoint', 'generation', 'kind'] as const;
 export const REPOINTED_FIELDS = ['coherence', 'generation', 'kind'] as const;

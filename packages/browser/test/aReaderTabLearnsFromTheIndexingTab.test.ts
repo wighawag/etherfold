@@ -183,7 +183,7 @@ describe('a reader tab told by the indexing tab', () => {
 			// which is the whole claim: an app writes ONE handler (ADR-0083).
 			expect(told.received).toEqual(acrossThePort.slice(0, told.received.length));
 			for (const moved of told.applied()) {
-				expect(Object.keys(moved).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
+				expect(Object.keys(moved).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'hash', 'kind']);
 			}
 
 			// AND THE READER RE-READS TO THE WRITER'S STATE. It holds no port and no
@@ -323,6 +323,7 @@ describe('a reader tab told by the indexing tab', () => {
 			const moved: StateMoved = {
 				kind: 'applied',
 				block: 104,
+				hash: '0xa104',
 				coherence: 'a-token',
 				entities: ['counter', 'token'],
 				generation: 'a-generation',
@@ -360,6 +361,7 @@ describe('a reader tab told by the indexing tab', () => {
 			const first: StateMoved = {
 				kind: 'applied',
 				block: 104,
+				hash: '0xa104',
 				coherence: 'one-fold',
 				entities: ['token'],
 				generation: 'a-generation',
@@ -373,7 +375,7 @@ describe('a reader tab told by the indexing tab', () => {
 			// what it does about one: compare the token and re-read.
 			expect(told.received).toEqual([first, second]);
 			for (const moved of told.received) {
-				expect(Object.keys(moved).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'kind']);
+				expect(Object.keys(moved).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'hash', 'kind']);
 			}
 		} finally {
 			told.stop();

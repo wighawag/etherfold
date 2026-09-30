@@ -70,6 +70,19 @@ export type StateMovedTransport = {
 	 */
 	applyNextEmptyBlock(): Promise<number>;
 	/**
+	 * THE HASH THE STORE BEHIND THE CANONICAL FOLD RECORDED at this height, or
+	 * `undefined` when it records none.
+	 *
+	 * Read out of the STORE, and never out of a notification or out of what the
+	 * adapter served the chain: the claim being checked is that the `hash` an
+	 * `applied` notification carries is the one the store recorded, in the store's
+	 * own spelling, because that is the hash a reader pins a re-read to
+	 * (`block: {hash}`) and the one the query layer names in `extensions.blockHash`.
+	 * A transport that re-spelled it (upper-cased it, say) would hand a reader a pin
+	 * that resolves on one backend and not another (ADR-0083, amended 2026-09-30).
+	 */
+	recordedHashAt(block: number): Promise<string | undefined>;
+	/**
 	 * MAKE THE CHAIN TAKE A BRANCH BACK, and answer the FORK POINT the fold
 	 * reverted to.
 	 *
@@ -79,6 +92,13 @@ export type StateMovedTransport = {
 	 * its own literal. What a transport does here is serve a different branch, or
 	 * push a block back under a different hash, and let the fold conclude what it
 	 * concludes.
+	 *
+	 * The branch it serves must REPLACE the block it took back: the fold then
+	 * applies a DIFFERENT block at `forkPoint + 1`, under a different hash, as part
+	 * of the same move (the retraction first, then that append). A retraction that
+	 * only withdraws, with nothing at that height afterwards, is a real reorg too,
+	 * but it is not the one this verb causes: the suite's hash case waits for the
+	 * replacement, to show that the hash tells two blocks at one height apart.
 	 */
 	retract(): Promise<number>;
 	/**

@@ -125,6 +125,26 @@ describe('the receiving container publishes what it applied', () => {
 		expect(appends[0].entities).toEqual([REPORTED_ENTITY]);
 	});
 
+	it('relays the HASH the fold reported for each block UNTOUCHED, so a replacement at one height is told apart', async () => {
+		// The fold names the block's hash in the store's own spelling (the layer below
+		// normalises it, since this package cannot import the storage seam, ADR-0016),
+		// and the container relays it as it was handed. A reorg is what makes it worth
+		// carrying: the same HEIGHT comes back under a different hash, and the number
+		// alone cannot tell a reader which of the two it was told about.
+		const {moved, push} = await aContainerBeingFed();
+		await push({toBlock: 105, latestBlock: 105, logs: [AT_101, DEAD_104]});
+		await push({toBlock: 106, latestBlock: 106, logs: [REORGED_104, AT_106]});
+
+		const appends = moved.filter((notification): notification is StateApplied => notification.kind === 'applied');
+		expect(appends.map(({block, hash}) => ({block, hash}))).toEqual([
+			{block: 101, hash: '0xa101'},
+			{block: 104, hash: '0xa104'},
+			{block: 104, hash: '0xb104'},
+			{block: 106, hash: '0xa106'},
+		]);
+		expect(Object.keys(appends[0]).sort()).toEqual(['block', 'coherence', 'entities', 'generation', 'hash', 'kind']);
+	});
+
 	it('carries ONE unchanged token while nothing invalidates, and NONE for a range that applied nothing', async () => {
 		const {moved, push} = await aContainerBeingFed();
 		await push({toBlock: 105, latestBlock: 105, logs: [AT_101, DEAD_104]});
