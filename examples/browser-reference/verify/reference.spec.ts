@@ -141,7 +141,8 @@ test('answers a GraphQL query from its worker: filtered, ordered, with a nested 
  * is the one the store recorded, which is the one `extensions.blockHash` names
  * for an answer read while that block is the tip: the page's own document pinned to it
  * answers from exactly that block, and pinned to a hash the store never recorded
- * (a block a reorg replaced) it is REFUSED rather than answered from another.
+ * (as a block a reorg replaced would be) it is REFUSED rather than answered from
+ * another.
  */
 test('names the applied block by its hash, and the GraphQL re-read pinned to it answers from that block', async ({
 	page,

@@ -656,11 +656,11 @@ indexer.onStateMoved((moved) => void render(moved.kind === 'applied' ? moved.has
 void render(); // the signal is silent on attaching, so read once by hand, at the tip
 ```
 
-Pin it by the signal's `hash`, which the document takes as an optional `BlockAddress` (omitted, the answer is read at the tip):
+Pin it by the signal's `hash`, which the document takes as an optional `BlockAddress` variable, `$block` (omitted, the answer is read at the tip; `BlockAddress` is `{hash}` or `{number}`, unlike the bare `Bytes32` hash the compose recipe below takes):
 
 ```ts
-const HOLDERS = `query Holders($min: SafeInt!, $at: BlockAddress) {
-	account(block: $at, where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) { address holds }
+const HOLDERS = `query Holders($min: SafeInt!, $block: BlockAddress) {
+	account(block: $block, where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) { address holds }
 }`;
 ```
 
@@ -672,7 +672,7 @@ The answer is then read at exactly the block you were told about, not at whateve
 let latestRender = 0;
 async function render(at?: string) {
 	const mine = ++latestRender;
-	const variables = at === undefined ? {min: 1} : {min: 1, at: {hash: at}};
+	const variables = at === undefined ? {min: 1} : {min: 1, block: {hash: at}};
 	const {data, errors} = await execute({query: HOLDERS, variables}); // HOLDERS: the document above
 	if (mine !== latestRender) return; // a later render is drawing a newer answer
 	if (at !== undefined && errors?.[0]?.extensions?.code === 'block-not-recorded') return void render(); // replaced: read again

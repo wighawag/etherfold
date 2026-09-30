@@ -139,14 +139,21 @@ async function openWorld() {
 	await indexer.init({provider: chain.provider, source: SOURCE, config: {stream: {finality: FINALITY}}});
 	const executor = workerExecutor(port);
 
-	/** Fold until the fold is level with the chain's tip, then wait for the port to have carried it. */
+	/**
+	 * Fold until the fold is level with the chain's tip, then wait for the port to
+	 * have carried the block at the tip. Only a notification that arrived DURING this
+	 * drive counts: after a reorg the tip's height is unchanged, and the port is a
+	 * real `MessageChannel`, so the notification for the block that was replaced is
+	 * still the last one until the replacement lands.
+	 */
 	const driveToTip = async (): Promise<StateApplied> => {
+		const from = moved.length;
 		for (let round = 0; round < 60; round++) {
 			const lastSync = await indexer.indexMore();
 			if (lastSync && lastSync.lastToBlock >= chain.tip) break;
 		}
 		for (let wait = 0; wait < 500; wait++) {
-			const last = moved.at(-1);
+			const last = moved.slice(from).at(-1);
 			if (last?.kind === 'applied' && last.block === chain.tip) return last;
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		}

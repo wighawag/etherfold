@@ -92,6 +92,13 @@ export type StateMovedTransport = {
 	 * its own literal. What a transport does here is serve a different branch, or
 	 * push a block back under a different hash, and let the fold conclude what it
 	 * concludes.
+	 *
+	 * The branch it serves must REPLACE the block it took back: the fold then
+	 * applies a DIFFERENT block at `forkPoint + 1`, under a different hash, as part
+	 * of the same move (the retraction first, then that append). A retraction that
+	 * only withdraws, with nothing at that height afterwards, is a real reorg too,
+	 * but it is not the one this verb causes: the suite's hash case waits for the
+	 * replacement, to show that the hash tells two blocks at one height apart.
 	 */
 	retract(): Promise<number>;
 	/**

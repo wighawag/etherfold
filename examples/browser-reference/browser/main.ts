@@ -172,8 +172,8 @@ async function start() {
 	 */
 	const execute = workerExecutor(indexer);
 
-	const HOLDERS = `query Holders($min: SafeInt!, $at: BlockAddress) {
-		account(block: $at, where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) {
+	const HOLDERS = `query Holders($min: SafeInt!, $block: BlockAddress) {
+		account(block: $block, where: {holds: {gte: $min}}, orderBy: {field: holds, direction: desc}, first: 10) {
 			address
 			holds
 			holdings(orderBy: {field: id, direction: asc}, first: 10) { id }
@@ -187,7 +187,7 @@ async function start() {
 	 * holds: at the tip, or at EXACTLY the block whose hash is `at`.
 	 */
 	const holders = (min: number, at?: string) =>
-		execute({query: HOLDERS, variables: at === undefined ? {min} : {min, at: {hash: at}}});
+		execute({query: HOLDERS, variables: at === undefined ? {min} : {min, block: {hash: at}}});
 
 	/**
 	 * HAZARD 4 -- ANSWERS ARRIVE OUT OF ORDER.
