@@ -1,5 +1,11 @@
 # @etherfold/platform-nodejs
 
+## 0.3.2
+
+### Patch Changes
+
+- @etherfold/server@0.5.1
+
 ## 0.3.1
 
 ### Patch Changes

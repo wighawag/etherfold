@@ -1,5 +1,12 @@
 # @etherfold/accessor
 
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [1d372f5]
+  - @etherfold/state-store@0.5.1
+
 ## 0.1.1
 
 ### Patch Changes
