@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import {
 	BlockNotRetainedError,
 	encodeSnapshot,
@@ -158,7 +158,8 @@ describe('installing a snapshot', () => {
 			rows: [owns('1', '0xalice', 3)],
 		};
 
-		// as it was served (plain JSON, which does not even inflate) and gzipped (a head of format 1)
+		// as it was served (plain JSON, read as an already-inflated body whose head is format 1) and gzipped
+		// (the same head, after the inflate)
 		await expect((await fresh()).bootstrap(new TextEncoder().encode(JSON.stringify(formatOne)))).rejects.toBeInstanceOf(
 			SnapshotFormatError,
 		);
@@ -312,6 +313,129 @@ describe('the document, streamed', () => {
 			{type: 'upsert', entity: 'sealed', id: {id: 'x'}, values: {payload, note: null}},
 		]);
 	});
+});
+
+/** The document as a runtime hands it over when the host served it with `Content-Encoding: gzip`. */
+function inflated(bytes: Uint8Array): Promise<Uint8Array> {
+	return bytesOf(
+		new Blob([bytes as Uint8Array<ArrayBuffer>])
+			.stream()
+			.pipeThrough(new DecompressionStream('gzip')) as ReadableStream<Uint8Array>,
+	);
+}
+
+/** One more gzip layer over bytes that are already gzipped. */
+function gzippedAgain(bytes: Uint8Array): Promise<Uint8Array> {
+	return bytesOf(
+		new Blob([bytes as Uint8Array<ArrayBuffer>])
+			.stream()
+			.pipeThrough(new CompressionStream('gzip')) as ReadableStream<Uint8Array>,
+	);
+}
+
+/** A source that records whether it was CANCELLED, which is what releasing a download is. */
+function cancellable(bytes: Uint8Array, chunk = 1024) {
+	const source = trickled(bytes, chunk);
+	let cancelled = false;
+	const reader = source.stream.getReader();
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			async pull(controller) {
+				const {done, value} = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			async cancel(reason) {
+				cancelled = true;
+				await reader.cancel(reason);
+			},
+		},
+		{highWaterMark: 0},
+	);
+	return {stream, read: source.read, cancelled: () => cancelled};
+}
+
+describe('a document served opaque or already inflated (`Content-Encoding: gzip`)', () => {
+	const later = [
+		{block: block(TAKEN_AT + 1), mutations: [owns('1', '0xcarol', 4)]},
+		{block: block(TAKEN_AT + 2), mutations: [{type: 'delete', entity: 'token', id: {id: '2'}} as Mutation]},
+	];
+
+	async function installed(document: ReadableStream<Uint8Array> | Uint8Array) {
+		const store = await fresh();
+		await store.bootstrap(document, {processor: 'proc-v1'});
+		return {
+			rows: [
+				await store.getCurrent('token', {id: '1'}),
+				await store.getCurrent('token', {id: '2'}),
+				await store.getAsOf('token', {id: '2'}, TAKEN_AT + 1),
+			],
+			cursor: await store.readCursor('lastSync'),
+			origin: store.snapshotOrigin,
+		};
+	}
+
+	it('lands on identical rows and the same resume position either way', async () => {
+		const opaque = await snapshotAt(TAKEN_AT, {later});
+		const plain = await inflated(opaque);
+		// what arrives already inflated is the ndjson text, whose first byte is `{`
+		expect(plain[0]).toBe('{'.charCodeAt(0));
+
+		const fromOpaque = await installed(opaque);
+		const fromPlain = await installed(plain);
+
+		expect(fromOpaque.rows[0]).toMatchObject({owner: '0xcarol', transferCount: 4});
+		expect(fromOpaque.rows[1]).toBeUndefined();
+		expect(fromOpaque.cursor).toBe(`synced-through-${TAKEN_AT + 2}`);
+		// the history floor is the document's first block
+		expect(fromOpaque.origin).toBe(TAKEN_AT);
+		expect(fromPlain).toEqual(fromOpaque);
+	});
+
+	it('installs either way when the body arrives ONE byte at a time, so the sniff never assumes a chunk holds two', async () => {
+		const opaque = await snapshotAt(TAKEN_AT, {later});
+		const plain = await inflated(opaque);
+
+		const reference = await installed(opaque);
+		expect(await installed(trickled(opaque, 1).stream)).toEqual(reference);
+		expect(await installed(trickled(plain, 1).stream)).toEqual(reference);
+	});
+
+	it('refuses a body gzipped TWICE, because exactly one layer is peeled', async () => {
+		const twice = await gzippedAgain(await snapshotAt(TAKEN_AT));
+
+		await expect((await fresh()).bootstrap(twice)).rejects.toBeInstanceOf(SnapshotFormatError);
+		await expect(readSnapshot(trickled(twice, 1).stream)).rejects.toBeInstanceOf(SnapshotFormatError);
+	});
+
+	it('streams an already-inflated body too, reading only its head when that is all a caller asks for', async () => {
+		const plain = await inflated(await snapshotAt(TAKEN_AT, {rows: manyRows(40_000, 'e')}));
+		const source = trickled(plain, 1024);
+
+		const reader = await readSnapshot(source.stream);
+		await reader.cancel();
+
+		expect(reader.head).toMatchObject({format: 2, processor: 'proc-v1', floor: TAKEN_AT});
+		expect(plain.length).toBeGreaterThan(1_000_000);
+		// nothing reads ahead of the line reader here, so the head is a chunk or two
+		expect(source.read()).toBeLessThan(8 * 1024);
+	});
+
+	for (const form of ['opaque', 'already inflated'] as const) {
+		it(`cancels the UNDERLYING download when a reader is cancelled after its head (${form})`, async () => {
+			const opaque = await snapshotAt(TAKEN_AT, {rows: manyRows(20_000, 'f')});
+			const source = cancellable(form === 'opaque' ? opaque : await inflated(opaque));
+
+			const reader = await readSnapshot(source.stream);
+			expect(source.cancelled()).toBe(false);
+			await reader.cancel();
+
+			// through the inflate stage the cancel reaches the source on the pipe's
+			// next turn rather than before `cancel()` resolves, so this waits for it
+			// (bounded); what it must never be is lost at the peek.
+			await vi.waitFor(() => expect(source.cancelled()).toBe(true), {timeout: 1_000});
+		});
+	}
 });
 
 describe('a snapshot that carries history above its floor', () => {

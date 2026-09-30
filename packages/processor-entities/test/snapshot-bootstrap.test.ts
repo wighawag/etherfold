@@ -487,3 +487,99 @@ describe('the boot path', () => {
 		expect(outcome).toEqual({status: 'kept-local', at: SNAPSHOT_BLOCK});
 	});
 });
+
+/**
+ * A host may serve the `.gz` body OPAQUE, or with `Content-Encoding: gzip`, in
+ * which case the runtime has inflated it before a script sees it: a `fetch` then
+ * answers with the ndjson text. Vite's dev server does the second for
+ * `static/**\/*.gz`, and the same app's production build does the first, so both
+ * have to install, and land on the same state.
+ */
+describe('a snapshot body served opaque or with `Content-Encoding: gzip`', () => {
+	const BODY = 'https://a.example/state-abc.ndjson.gz';
+	const HEAD = 'https://a.example/head.json';
+
+	/** What a runtime hands a script after it undid `Content-Encoding: gzip`. */
+	async function inflatedOf(snapshot: StateSnapshot): Promise<Uint8Array<ArrayBuffer>> {
+		return new Uint8Array(
+			await new Response(
+				new Blob([snapshot.document]).stream().pipeThrough(new DecompressionStream('gzip')),
+			).arrayBuffer(),
+		);
+	}
+
+	/** A network that serves the snapshot's body as given, and its head as JSON. */
+	function serving(body: Uint8Array<ArrayBuffer>, head?: unknown) {
+		const asked: string[] = [];
+		const fetch = (async (input: string | URL | Request) => {
+			const url = String(input);
+			asked.push(url);
+			if (url === BODY) return new Response(body);
+			if (head !== undefined && url === HEAD) return new Response(JSON.stringify(head));
+			throw new Error(`404 ${url}`);
+		}) as unknown as typeof globalThis.fetch;
+		return {fetch, asked};
+	}
+
+	async function stateOf(store: Awaited<ReturnType<typeof openAndBootstrap>>['store']) {
+		return {
+			token: await store.getCurrent('token', {id: '1'}),
+			counter: await store.getCurrent('counter', {name: 'transfers'}),
+			position: await localPosition(store),
+			cursor: await store.readCursor(SYNC_CURSOR_KEY),
+			origin: store.snapshotOrigin,
+		};
+	}
+
+	for (const backend of BACKENDS) {
+		it(`installs both deliveries on ${backend.name}, landing on identical rows and the same resume position`, async () => {
+			const snapshot = await published(SNAPSHOT_BLOCK);
+			const results = [];
+			for (const body of [snapshot.document, await inflatedOf(snapshot)]) {
+				const {fetch} = serving(body);
+				const {store, outcome} = await openAndBootstrap(await backend.open(processor.entities), BODY, {
+					processor: 'proc-v1',
+					fetch,
+				});
+				expect(outcome).toEqual({status: 'bootstrapped', at: SNAPSHOT_BLOCK, from: BODY});
+				results.push(await stateOf(store));
+			}
+
+			expect(results[0].token).toMatchObject({owner: '0xalice', transferCount: 9});
+			expect(results[0].position).toBe(SNAPSHOT_BLOCK);
+			expect(results[1]).toEqual(results[0]);
+		});
+	}
+
+	it('installs an already-inflated body behind a `{url, head}` location too', async () => {
+		const snapshot = await published(SNAPSHOT_BLOCK);
+		const {fetch, asked} = serving(await inflatedOf(snapshot), snapshot.head);
+
+		const {store, outcome} = await openAndBootstrap(
+			await BACKENDS[0].open(processor.entities),
+			[{url: BODY, head: HEAD}],
+			{processor: 'proc-v1', fetch},
+		);
+
+		expect(asked).toEqual([HEAD, BODY]);
+		expect(outcome).toEqual({status: 'bootstrapped', at: SNAPSHOT_BLOCK, from: BODY});
+		expect(await store.getCurrent('token', {id: '1'})).toMatchObject({owner: '0xalice'});
+	});
+
+	it('refuses a body gzipped twice as `unreadable-format`, peeling exactly one layer', async () => {
+		const snapshot = await published(SNAPSHOT_BLOCK);
+		const twice = new Uint8Array(
+			await new Response(
+				new Blob([snapshot.document]).stream().pipeThrough(new CompressionStream('gzip')),
+			).arrayBuffer(),
+		);
+		const {fetch} = serving(twice);
+
+		const {outcome} = await openAndBootstrap(await BACKENDS[0].open(processor.entities), BODY, {
+			processor: 'proc-v1',
+			fetch,
+		});
+
+		expect(outcome).toEqual({status: 'not-bootstrapped', reason: 'unreadable-format'});
+	});
+});
