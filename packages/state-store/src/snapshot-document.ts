@@ -20,6 +20,15 @@ import type {
  * here ever holds the whole downloaded or decoded document, and the install holds
  * at most ONE block's mutations at a time (the block it is about to apply).
  *
+ * A publisher always WRITES the gzipped bytes, but a host may SERVE them either
+ * way: opaque (the `.gz` bytes, no `Content-Encoding`), or with
+ * `Content-Encoding: gzip`, in which case the runtime has already inflated them
+ * and what arrives is the ndjson text. A reader accepts both, deciding from the
+ * body's leading bytes (the gzip magic, `1f 8b`) and never from a header, as a
+ * stream seed does (`streamSeedPayloadFrom`, `@etherfold/core`): it PEEKS those
+ * bytes off the stream rather than buffering the body, so the install stays
+ * chunk by chunk either way.
+ *
  * The lines, in order:
  *
  * 1. **The head** (`SnapshotHead`): `{format, processor, savedAt, takenAt, floor, cursor}`.
@@ -82,8 +91,8 @@ import type {
  *
  * Format 1 was a JSON object of `Mutation` upserts at one block. It was never
  * published, so it was REPLACED rather than kept beside this one (ADR-0095), and a
- * format-1 document is refused like any other unknown format: it is not gzipped,
- * so it does not even inflate.
+ * format-1 document is refused like any other unknown format: it is plain JSON, so
+ * the reader takes it for an already-inflated body, and its head is not format 2.
  *
  * ## It did NOT move when `processor` stopped being a declared version hash
  *
@@ -165,7 +174,12 @@ export type StateSnapshot = {
 
 /**
  * A snapshot document as a host may hold it: bytes in hand, a response body, or
- * any async source of byte chunks. Always the GZIPPED document.
+ * any async source of byte chunks.
+ *
+ * Either the GZIPPED document (what a publisher writes, and what a host serving
+ * the `.gz` opaque delivers) or the document already INFLATED (what a runtime
+ * hands over when the host served it with `Content-Encoding: gzip`). The reader
+ * tells them apart by the leading bytes and peels exactly one gzip layer.
  */
 export type SnapshotDocument = Uint8Array | ArrayBuffer | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>;
 
@@ -422,15 +436,27 @@ export function isReadableSnapshotHead(value: unknown): value is SnapshotHead {
 }
 
 /**
- * Open a document: inflate it incrementally and read its head.
+ * Open a document: inflate it incrementally when it is gzipped, and read its head.
+ *
+ * Whether to inflate is decided from the body's first two bytes, the gzip magic
+ * (`1f 8b`): a host that served the `.gz` opaque delivers them, and one that
+ * served it with `Content-Encoding: gzip` delivers the ndjson text, whose first
+ * line is JSON and so cannot begin with them. The bytes decide and not a header,
+ * for the reason a stream seed gives (`streamSeedPayloadFrom`, `@etherfold/core`):
+ * a browser that decoded transparently hides `Content-Encoding` from a script.
+ * Exactly ONE layer is peeled, so a body gzipped twice is refused. The bytes are
+ * PEEKED off the stream, never the body buffered, and cancelling the reader
+ * still cancels the underlying source.
  *
  * Refuses with `SnapshotFormatError` when the head cannot be read as format 2 --
- * the bytes do not inflate (format 1 was plain JSON), the first line is not JSON,
- * or its `format` is another number -- because every one of those is a document
- * this build cannot read, and none of them is a transport failure.
+ * a gzipped body that does not inflate, a first line that is not JSON (a body
+ * gzipped twice, once inflated), or a `format` that is another number (format 1,
+ * which was plain JSON) -- because every one of those is a document this build
+ * cannot read, and none of them is a transport failure.
  */
 export async function readSnapshot(document: SnapshotDocument): Promise<SnapshotReader> {
-	const lines = linesOf(toStream(document).pipeThrough(codec(new DecompressionStream('gzip'))));
+	const {gzipped, stream} = await sniffGzip(toStream(document));
+	const lines = linesOf(gzipped ? stream.pipeThrough(codec(new DecompressionStream('gzip'))) : stream);
 	let head: unknown;
 	try {
 		const first = await lines.next();
@@ -663,6 +689,59 @@ function toStream(document: SnapshotDocument): ReadableStream<Uint8Array> {
 		},
 		{highWaterMark: 0},
 	);
+}
+
+/**
+ * Whether a byte stream is gzipped, from its first two bytes, and the SAME bytes
+ * as a stream again: the peeked chunks first, then the rest pulled from the
+ * source as the consumer asks. Reads as many chunks as the two bytes take (a
+ * source may deliver one byte at a time) and never more, so the body is never
+ * buffered. Cancelling the returned stream cancels the source, which is what
+ * releases the download of a mirror that lost.
+ */
+async function sniffGzip(
+	source: ReadableStream<Uint8Array>,
+): Promise<{readonly gzipped: boolean; readonly stream: ReadableStream<Uint8Array>}> {
+	const reader = source.getReader();
+	const peeked: Uint8Array[] = [];
+	let length = 0;
+	let ended = false;
+	try {
+		while (length < 2) {
+			const {done, value} = await reader.read();
+			if (done) {
+				ended = true;
+				break;
+			}
+			if (value.length === 0) continue;
+			peeked.push(value);
+			length += value.length;
+		}
+	} catch (error) {
+		reader.releaseLock();
+		throw error;
+	}
+	const lead = peeked.flatMap((chunk) => [...chunk.subarray(0, 2)]).slice(0, 2);
+	const gzipped = lead.length === 2 && lead[0] === 0x1f && lead[1] === 0x8b;
+
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			async pull(controller) {
+				const next = peeked.shift();
+				if (next) return controller.enqueue(next);
+				if (ended) return controller.close();
+				const {done, value} = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			async cancel(reason) {
+				peeked.length = 0;
+				await reader.cancel(reason);
+			},
+		},
+		{highWaterMark: 0},
+	);
+	return {gzipped, stream};
 }
 
 /**
