@@ -22,7 +22,7 @@ import {
 } from '@etherfold/core';
 import type {GenerationRegistry} from '@etherfold/core';
 import {type StateStore, type WritableStateStore} from '@etherfold/state-store';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {providerOverPort, type ProviderOverPort} from '@eip-1193/over-port';
 import {logs} from 'named-logs';
 import {generationSpecOf} from '../generationSpec.js';
@@ -135,7 +135,7 @@ export type HostedIndexerSpec<ABI extends Abi, ProcessResultType, ProcessorConfi
 		 * The chain, built HERE (from an RPC URL, say), or LEFT OUT for the tab that
 		 * connects to hand over as a port. Given in both places, the tab's is refused.
 		 */
-		provider?: EIP1193ProviderWithoutEvents;
+		provider?: EIP1193CoreProvider;
 		/** What to fold. Left out, the host waits for a tab to send it (`HostSettings.source`). */
 		source?: IndexingSource<ABI>;
 		config?: ProvidedIndexerConfig<ABI>;
@@ -329,7 +329,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	 * after `untilSettled`.
 	 */
 	type Settled = HostedIndexerSpec<ABI, ProcessResultType, ProcessorConfig> & {
-		provider: EIP1193ProviderWithoutEvents;
+		provider: EIP1193CoreProvider;
 		source: IndexingSource<ABI>;
 	};
 	let spec: Settled = undefined as unknown as Settled;
@@ -337,7 +337,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 	/** The settings held so far: the entry's, then whatever tabs added before the start. */
 	let settings: HostSettings = hostSettingsOf(entry as HostSettings);
 	/** The provider held so far: the entry's, or the one a tab handed over. */
-	let provider: EIP1193ProviderWithoutEvents | undefined = entry.provider;
+	let provider: EIP1193CoreProvider | undefined = entry.provider;
 	/** The provider a TAB handed over, which this host owns and lets go of on dispose. */
 	let tabProvider: ProviderOverPort | undefined;
 	let announceSettled: (() => void) | undefined;
@@ -408,10 +408,7 @@ export function serveIndexerHost<ABI extends Abi, ProcessResultType, ProcessorCo
 		settings = merged;
 		if (port) {
 			tabProvider = providerOverPort(port);
-			// `@eip-1193/over-port` types its provider against `eip-1193` 0.7 and this
-			// package against 0.6, whose overloaded `request` signatures TypeScript will not
-			// relate; at run time both are one `request({method, params})`.
-			provider = tabProvider as unknown as EIP1193ProviderWithoutEvents;
+			provider = tabProvider;
 		}
 		settleIfReady();
 		return progress();

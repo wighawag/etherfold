@@ -10,7 +10,7 @@ import {
 import type {EntityProcessor, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport} from '@etherfold/server';
 import {loadProcessorArtifact} from '@etherfold/utils';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {foldPartsFor, openIndexingSource} from './folding.js';
@@ -75,7 +75,7 @@ const logger = logs('etherfold');
 /** What a running `node` hands over so that it can receive an upload. */
 export type UploadContext<ABI extends Abi = Abi, ProcessResultType = unknown> = {
 	/** The chain, for the one step that may cost an `eth_chainId` call: resolving the contracts an upload carries. */
-	provider: EIP1193ProviderWithoutEvents;
+	provider: EIP1193CoreProvider;
 	/** The ONE handle this process folds into. An upload lands in it and never opens another. */
 	db: RemoteSQL;
 	/** Where state goes, exactly as this process resolved it at start: the successor lands under the same rules. */

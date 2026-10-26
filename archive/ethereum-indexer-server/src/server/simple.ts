@@ -9,7 +9,7 @@ import json from 'koa-json';
 import bodyParser from 'koa-bodyparser';
 
 import {IndexingSource, EthereumIndexer, EventProcessor, LastSync, Abi, ExistingStream} from '@etherfold/core';
-import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
+import {JSONRPCHTTPProvider} from '@eip-1193/jsonrpc-provider';
 import {ProcessorFilesystemCache} from '@etherfold/fs-cache';
 
 import {logs} from 'named-logs';
@@ -23,7 +23,7 @@ import {
 	setupCache,
 } from 'ethereum-indexer-db-utils';
 import {getAdminPage} from '../pages/index.js';
-import {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {clean, formatLastSync, removeUndefinedValuesFromObject, resolveProcessorAndSource} from '@etherfold/utils';
 
 const namedLogger = logs('ethereum-index-server');
@@ -40,7 +40,7 @@ export type UserConfig<ABI extends Abi> = {
 	// Optional factory used to construct the EIP-1193 provider from the node URL. Defaults to
 	// `new JSONRPCHTTPProvider(nodeURL)`. Useful for injecting a custom provider or a fake/spy in
 	// tests. When omitted the behaviour is unchanged.
-	createProvider?: (nodeURL: string) => EIP1193ProviderWithoutEvents;
+	createProvider?: (nodeURL: string) => EIP1193CoreProvider;
 };
 
 type Config = {
@@ -83,7 +83,7 @@ export class SimpleServer<ABI extends Abi, ProcessResultType> {
 		this.createProvider = config.createProvider;
 	}
 
-	protected createProvider: ((nodeURL: string) => EIP1193ProviderWithoutEvents) | undefined;
+	protected createProvider: ((nodeURL: string) => EIP1193CoreProvider) | undefined;
 
 	async start(config: {autoIndex: boolean}) {
 		// TODO allow to pass processor configuration
@@ -98,14 +98,14 @@ export class SimpleServer<ABI extends Abi, ProcessResultType> {
 	private async setupIndexing() {
 		const eip1193Provider = this.createProvider
 			? this.createProvider(this.config.nodeURL)
-			: (new JSONRPCHTTPProvider(this.config.nodeURL) as unknown as EIP1193ProviderWithoutEvents);
+			: new JSONRPCHTTPProvider(this.config.nodeURL);
 
 		// Processor/source resolution is shared with the CLI via `resolveProcessorAndSource` in
 		// @etherfold/utils. The server intentionally passes its `folder` as the processor factory
 		// argument (the CLI passes nothing) — this difference is now an explicit `processorConfig`.
 		const {processor, source} = await resolveProcessorAndSource<ABI, ProcessResultType>({
 			processorPath: this.config.processorPath,
-			provider: eip1193Provider as unknown as EIP1193ProviderWithoutEvents,
+			provider: eip1193Provider,
 			source: this.source,
 			processorConfig: this.config.folder,
 		});
@@ -127,7 +127,7 @@ export class SimpleServer<ABI extends Abi, ProcessResultType> {
 		}
 
 		this.indexer = new EthereumIndexer(
-			eip1193Provider as unknown as EIP1193ProviderWithoutEvents,
+			eip1193Provider,
 			rootProcessor,
 			this.source,
 			{

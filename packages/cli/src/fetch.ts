@@ -6,7 +6,7 @@ import {
 	type RunningFetcher,
 	type StartFetcherOptions,
 } from '@etherfold/platform-nodejs-fetcher';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {resolveCommandConfig} from './config.js';
 import {openExplicitSource} from './folding.js';
 import type {FetchConfig, Options} from './types.js';
@@ -45,7 +45,7 @@ export type FetchDependencies = {
 	/** The environment flags fall back to. Defaults to `process.env`. */
 	env?: EnvRecord;
 	/** The chain. Defaults to the rate-limited JSON-RPC provider the fetcher host builds. */
-	provider?: EIP1193ProviderWithoutEvents;
+	provider?: EIP1193CoreProvider;
 	/** The wire. Defaults to the runtime's own `fetch`; a test hands over an in-process receiver. */
 	fetch?: FetchLike;
 	/**

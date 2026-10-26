@@ -1,5 +1,5 @@
 import type {Abi} from 'abitype';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {logs} from 'named-logs';
 import {
 	isRetryable,
@@ -323,7 +323,7 @@ export class LogFetcher<ABI extends Abi> {
 	private readonly provider: MethodDeclaringProvider;
 
 	constructor(
-		provider: EIP1193ProviderWithoutEvents,
+		provider: EIP1193CoreProvider,
 		private readonly source: IndexingSource<ABI>,
 		private readonly target: IngestionTarget,
 		private readonly config: ProvidedLogFetcherConfig = {},

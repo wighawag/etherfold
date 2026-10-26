@@ -1,5 +1,5 @@
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
-import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
+import type {EIP1193HttpNodeProvider} from 'eip-1193';
+import {JSONRPCHTTPProvider} from '@eip-1193/jsonrpc-provider';
 
 /**
  * A JSON-RPC provider over HTTP, built from a URL.
@@ -17,12 +17,12 @@ import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
 export function createJSONRPCProvider(
 	url: string,
 	options: {requestsPerSecond?: number} = {},
-): EIP1193ProviderWithoutEvents {
-	const provider = new JSONRPCHTTPProvider(
+): EIP1193HttpNodeProvider {
+	// Typed as what it is, a node over plain HTTP: the client declares
+	// `implements EIP1193HttpNodeProvider`, so no cast is needed, and every
+	// provider slot in etherfold (`EIP1193CoreProvider`) accepts it.
+	return new JSONRPCHTTPProvider(
 		url,
 		options.requestsPerSecond !== undefined ? {requestsPerSecond: options.requestsPerSecond} : undefined,
 	);
-	// the package declares its own structurally-identical copy of the EIP-1193
-	// surface, which is what the CLI does with it too
-	return provider as unknown as EIP1193ProviderWithoutEvents;
 }

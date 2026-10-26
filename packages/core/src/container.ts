@@ -1,5 +1,5 @@
 import type {Abi} from 'abitype';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {logs} from 'named-logs';
 
 import {IndexerGeneration, type LoadingState, type PauseState, type ReconfigureOutcome} from './indexer.js';
@@ -553,7 +553,7 @@ export class UnheldGenerationError extends Error {
 export type IndexerOptions<ABI extends Abi, ProcessResultType = void> = {
 	/** Which generations this indexer holds, which one is canonical, and the caps that refuse. */
 	registry: GenerationRegistry;
-	provider: EIP1193ProviderWithoutEvents;
+	provider: EIP1193CoreProvider;
 	source: IndexingSource<ABI>;
 	config?: ProvidedIndexerConfig<ABI>;
 	/**
@@ -581,7 +581,7 @@ export type IndexerOptions<ABI extends Abi, ProcessResultType = void> = {
 	 * spy without the generation shape leaking into a test's assertions.
 	 */
 	createGeneration?: (
-		provider: EIP1193ProviderWithoutEvents,
+		provider: EIP1193CoreProvider,
 		processor: EventProcessor<ABI, ProcessResultType>,
 		source: IndexingSource<ABI>,
 		config: ProvidedIndexerConfig<ABI>,
@@ -701,7 +701,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	protected readonly stateMoved = new StateMovedPublisher();
 
 	protected readonly registry: GenerationRegistry;
-	protected provider: EIP1193ProviderWithoutEvents;
+	protected provider: EIP1193CoreProvider;
 	protected source: IndexingSource<ABI>;
 	protected config: ProvidedIndexerConfig<ABI>;
 	protected readonly createGeneration: NonNullable<IndexerOptions<ABI, ProcessResultType>['createGeneration']>;
@@ -1366,7 +1366,7 @@ export class Indexer<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	async updateIndexer(update: {
-		provider?: EIP1193ProviderWithoutEvents;
+		provider?: EIP1193CoreProvider;
 		source?: IndexingSource<ABI>;
 		streamConfig?: ProvidedStreamConfig;
 	}): Promise<ReconfigureOutcome> {

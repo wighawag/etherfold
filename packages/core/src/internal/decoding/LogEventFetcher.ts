@@ -1,4 +1,4 @@
-import {EIP1193Account, EIP1193DATA, EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193Account, EIP1193DATA, EIP1193CoreProvider} from 'eip-1193';
 import {RangeLogFetcher, LogFetcherConfig} from '../engine/RangeLogFetcher.js';
 import {resolveFilterRules, type SourceDeclaration} from './filterRules.js';
 import {requestableRangesPerTopic} from '../engine/eventRanges.js';
@@ -252,7 +252,7 @@ export class LogEventFetcher<ABI extends Abi> extends RangeLogFetcher {
 	private readonly mergedListDecodes: boolean;
 
 	constructor(
-		readonly provider: EIP1193ProviderWithoutEvents,
+		readonly provider: EIP1193CoreProvider,
 		readonly contractsData: ContractList<ABI> | OneABI<ABI>,
 		readonly fetcherConfig: LogFetcherConfig = {},
 		private readonly parseConfig?: LogParseConfig,

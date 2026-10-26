@@ -165,8 +165,8 @@ importers:
   packages/browser:
     dependencies:
       '@eip-1193/over-port':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.2.0
+        version: 0.2.0
       '@etherfold/core':
         specifier: workspace:*
         version: link:../core
@@ -177,8 +177,8 @@ importers:
         specifier: workspace:*
         version: link:../state-store-indexeddb
       eip-1193:
-        specifier: ^0.6.5
-        version: 0.6.6
+        specifier: ^0.7.2
+        version: 0.7.3
       idb-keyval:
         specifier: ^6.2.4
         version: 6.2.4
@@ -228,6 +228,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@eip-1193/jsonrpc-provider':
+        specifier: ^0.5.0
+        version: 0.5.0
       '@etherfold/core':
         specifier: workspace:*
         version: link:../core
@@ -259,11 +262,8 @@ importers:
         specifier: ^15.0.0
         version: 15.0.0
       eip-1193:
-        specifier: ^0.6.5
-        version: 0.6.6
-      eip-1193-jsonrpc-provider:
-        specifier: ^0.4.3
-        version: 0.4.3
+        specifier: ^0.7.2
+        version: 0.7.3
       ldenv:
         specifier: ^0.5.0
         version: 0.5.0
@@ -365,8 +365,8 @@ importers:
         specifier: 1.2.4
         version: 1.2.4(typescript@6.0.3)(zod@4.4.3)
       eip-1193:
-        specifier: ^0.6.6
-        version: 0.6.6
+        specifier: ^0.7.2
+        version: 0.7.3
       named-logs:
         specifier: ^0.4.1
         version: 0.4.1
@@ -392,15 +392,15 @@ importers:
 
   packages/fetcher-host:
     dependencies:
+      '@eip-1193/jsonrpc-provider':
+        specifier: ^0.5.0
+        version: 0.5.0
       '@etherfold/core':
         specifier: workspace:*
         version: link:../core
       eip-1193:
-        specifier: ^0.6.5
-        version: 0.6.6
-      eip-1193-jsonrpc-provider:
-        specifier: ^0.4.3
-        version: 0.4.3
+        specifier: ^0.7.2
+        version: 0.7.3
       named-logs:
         specifier: ^0.4.1
         version: 0.4.1
@@ -1230,8 +1230,11 @@ packages:
       search-insights:
         optional: true
 
-  '@eip-1193/over-port@0.1.0':
-    resolution: {integrity: sha512-oU2XYcgGwOYNE57tYswoD2CJc4tPlW9xtcsgEAgipXte2v9q//ss6CzLoNBvah8Uiz0nSJOm8BvpTwWpGqPhGg==}
+  '@eip-1193/jsonrpc-provider@0.5.0':
+    resolution: {integrity: sha512-msmma2jpdvL7P5U0D6NYkKmaWBVxJ9GA1hP0yhx9rkCzp0fhzDLX4S/UosyiyU5nVkWxR1+uZdZuDUPPo/jnUg==}
+
+  '@eip-1193/over-port@0.2.0':
+    resolution: {integrity: sha512-ni89zinQ1Kzal4wQKEdZfPAukYIfEmIs4W18ssOdVbuhZAcr4T5JT0gZ3HvBHg+l7pTVEkab9WjYI+SNA1fMUQ==}
 
   '@emnapi/core@1.10.0':
     resolution: {integrity: sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==}
@@ -3055,14 +3058,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  eip-1193-jsonrpc-provider@0.4.3:
-    resolution: {integrity: sha512-xcrz22ArOqvbXt4LHOeV5JooL8jTt/sv8WIH7MLQTn8z7fQwRDDzUECgIwZaX1Irpn/HIZGiu6YZwIoRVfPEow==}
-
-  eip-1193@0.6.6:
-    resolution: {integrity: sha512-pnEP5TRFfK0v0EbPsrOuJ1RvKDh8Ykh5OyvB+jlIgkJGdUt0nhC3fM/k2TsrOq6Qk+q1E0dpaikfdRzJ6/fi5g==}
-
-  eip-1193@0.7.0:
-    resolution: {integrity: sha512-Xeq6sfTPuedLQ6pmNF42UjvmLjtB4utSBCekkAwe+AwrnbgdB6fhY9BZrQYFvb/DIUzlf1wBOdV0iWIT9A0/3g==}
+  eip-1193@0.7.3:
+    resolution: {integrity: sha512-oznmudxUQ2dG44QF4rF5VP/SkI5g0AqTURtUxuj7T4GQIXuAkIhzPZ64AOt3C58j7sdJG0gNfS8sR0kc3wMZnA==}
 
   emoji-regex-xs@1.0.0:
     resolution: {integrity: sha512-LRlerrMYoIDrT6jgpeZ2YYl/L8EulRTt5hQcYjy5AInh7HWXKimpqx68aknBFpGL2+/IcogTcaydJEgaTmOpDg==}
@@ -5123,9 +5120,15 @@ snapshots:
     transitivePeerDependencies:
       - '@algolia/client-search'
 
-  '@eip-1193/over-port@0.1.0':
+  '@eip-1193/jsonrpc-provider@0.5.0':
     dependencies:
-      eip-1193: 0.7.0
+      eip-1193: 0.7.3
+      named-logs: 0.3.2
+      promise-throttle: 1.1.2
+
+  '@eip-1193/over-port@0.2.0':
+    dependencies:
+      eip-1193: 0.7.3
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -6678,14 +6681,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  eip-1193-jsonrpc-provider@0.4.3:
-    dependencies:
-      named-logs: 0.3.2
-      promise-throttle: 1.1.2
-
-  eip-1193@0.6.6: {}
-
-  eip-1193@0.7.0: {}
+  eip-1193@0.7.3: {}
 
   emoji-regex-xs@1.0.0: {}
 

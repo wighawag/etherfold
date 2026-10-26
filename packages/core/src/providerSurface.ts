@@ -1,4 +1,4 @@
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 
 // ---------------------------------------------------------------------------
 // THE ENGINE'S PROVIDER SURFACE, DECLARED ONCE
@@ -133,7 +133,7 @@ export class UnexpectedProviderMethodError extends Error {
  * requested set is a SUBSET of the declared one, and a set that can be read is
  * what makes the assertion statable rather than inferred from a call count.
  */
-export type MethodDeclaringProvider = EIP1193ProviderWithoutEvents & {
+export type MethodDeclaringProvider = EIP1193CoreProvider & {
 	/** Every method requested through this wrapper, refused ones included. */
 	readonly methodsRequested: ReadonlySet<string>;
 };
@@ -153,7 +153,7 @@ const guarded = new WeakSet<object>();
  * Idempotent: a provider that is already guarded is handed back as it is, so a
  * reconfigure that re-enters `reinit` does not stack wrappers.
  */
-export function declaredMethodsOnly(provider: EIP1193ProviderWithoutEvents): MethodDeclaringProvider {
+export function declaredMethodsOnly(provider: EIP1193CoreProvider): MethodDeclaringProvider {
 	if (guarded.has(provider)) {
 		return provider as MethodDeclaringProvider;
 	}

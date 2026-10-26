@@ -7,7 +7,7 @@ import {
 	type IngestionTarget,
 	type RetryableError,
 } from '@etherfold/core';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {logs} from 'named-logs';
 import {delayForReport, type ResolvedBackoff} from './backoff.js';
 import {describeFetcherHostConfig, FetcherConfigError, type FetcherHostConfig} from './config.js';
@@ -120,7 +120,7 @@ function httpOptions<ABI extends Abi>(
 
 export type FetcherHostDependencies = {
 	/** Supply a provider instead of building one from `nodeUrl`. */
-	provider?: EIP1193ProviderWithoutEvents;
+	provider?: EIP1193CoreProvider;
 	/**
 	 * Supply a transport instead of building the HTTP one from `endpoint` and `token`.
 	 *

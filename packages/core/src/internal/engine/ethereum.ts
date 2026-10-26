@@ -1,16 +1,16 @@
-import {EIP1193Account, EIP1193DATA, EIP1193Log, EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193Account, EIP1193DATA, EIP1193Log, EIP1193CoreProvider} from 'eip-1193';
 
 import {logs} from 'named-logs';
 import type {ArgumentFilter, IncludedEIP1193Log} from '../../types.js';
 import {UnlessCancelledFunction} from '../utils/promises.js';
 const namedLogger = logs('@etherfold/core:ethereum');
 
-export async function getBlockNumber(provider: EIP1193ProviderWithoutEvents): Promise<number> {
+export async function getBlockNumber(provider: EIP1193CoreProvider): Promise<number> {
 	const blockAsHexString = await provider.request({method: 'eth_blockNumber'});
 	return parseInt(blockAsHexString.slice(2), 16);
 }
 
-export async function getChainId(provider: EIP1193ProviderWithoutEvents): Promise<string> {
+export async function getChainId(provider: EIP1193CoreProvider): Promise<string> {
 	const blockAsHexString = await provider.request({method: 'eth_chainId'});
 	return parseInt(blockAsHexString.slice(2), 16).toString();
 }
@@ -212,7 +212,7 @@ export const MAX_CONCURRENT_LOG_REQUESTS = 4;
  *     nothing is orphaned and no rejection is left with nowhere to go.
  */
 async function issueRequestsBounded(
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 	requestList: LogRequest[],
 	options: {fromBlock: number; toBlock: number},
 	unlessCancelled: UnlessCancelledFunction,
@@ -271,7 +271,7 @@ async function issueRequestsBounded(
  * either way.
  */
 export async function getLogsWithVariousFilters(
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 	contractAddresses: EIP1193Account[] | null,
 	eventNameTopics: EIP1193DATA[] | null,
 	filters: ExtraFilters | null,
@@ -332,7 +332,7 @@ export async function getLogsWithVariousFilters(
 }
 
 export async function getLogs(
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 	contractAddresses: EIP1193Account[] | null,
 	/**
 	 * Positional, and `null` in a slot is the WILDCARD the method defines: match

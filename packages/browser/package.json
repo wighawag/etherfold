@@ -38,11 +38,11 @@
 		"vitest": "^4.1.8"
 	},
 	"dependencies": {
-		"@eip-1193/over-port": "^0.1.0",
+		"@eip-1193/over-port": "^0.2.0",
 		"@etherfold/core": "workspace:*",
 		"@etherfold/state-store": "workspace:*",
 		"@etherfold/state-store-indexeddb": "workspace:*",
-		"eip-1193": "^0.6.5",
+		"eip-1193": "^0.7.2",
 		"idb-keyval": "^6.2.4",
 		"named-logs": "^0.4.1",
 		"sveltore": "^0.0.2",

@@ -75,7 +75,7 @@ import {BROWSER_GENERATION_CAPS} from './storage/generation/OnIndexedDB.js';
 import type {ClaimPatience} from './utils/claim.js';
 import {createRootStore, createStore} from './utils/stores.js';
 import {ReactHooks, useStores} from 'use-stores';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {formatLastSync} from './utils/format.js';
 import {logs} from 'named-logs';
 import {wait} from './utils/time.js';
@@ -535,13 +535,13 @@ export type BrowserGenerationSpec<ABI extends Abi, ProcessResultType, ProcessorC
 
 type InitFunction<ABI extends Abi, ProcessorConfig = undefined> = ProcessorConfig extends undefined
 	? (indexerSetup: {
-			provider: EIP1193ProviderWithoutEvents;
+			provider: EIP1193CoreProvider;
 			source: IndexingSource<ABI>;
 			config?: ProvidedIndexerConfig<ABI>;
 		}) => Promise<void>
 	: (
 			indexerSetup: {
-				provider: EIP1193ProviderWithoutEvents;
+				provider: EIP1193CoreProvider;
 				source: IndexingSource<ABI>;
 				config?: ProvidedIndexerConfig<ABI>;
 			},
@@ -763,7 +763,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// registry filed. A four-parameter factory still compiles, which is exactly why
 		// it is said here: nothing but this sentence would warn a caller that dropped it.
 		createIndexer?: (
-			provider: EIP1193ProviderWithoutEvents,
+			provider: EIP1193CoreProvider,
 			processor: EventProcessor<ABI, ProcessResultType>,
 			source: IndexingSource<ABI>,
 			config: ProvidedIndexerConfig<ABI>,
@@ -1167,7 +1167,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 	async function init(
 		indexerSetup: {
-			provider: EIP1193ProviderWithoutEvents;
+			provider: EIP1193CoreProvider;
 			source: IndexingSource<ABI>;
 			config?: ProvidedIndexerConfig<ABI>;
 		},
@@ -1378,7 +1378,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 
 	async function initAsWriter(
 		indexerSetup: {
-			provider: EIP1193ProviderWithoutEvents;
+			provider: EIP1193CoreProvider;
 			source: IndexingSource<ABI>;
 			config?: ProvidedIndexerConfig<ABI>;
 		},
@@ -1394,7 +1394,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 		// The same code every hosting shape runs (`publishedStart.ts`).
 		await publishedStart.prepare({source, config});
 
-		let provider: EIP1193ProviderWithoutEvents = indexerSetup.provider;
+		let provider: EIP1193CoreProvider = indexerSetup.provider;
 
 		if (options?.trackNumRequests && !options.logRequests) {
 			// only trackNumRequest
@@ -1465,7 +1465,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 	 */
 	type Boot = {
 		registry: GenerationRegistry;
-		provider: EIP1193ProviderWithoutEvents;
+		provider: EIP1193CoreProvider;
 		source: IndexingSource<ABI>;
 		config: ProvidedIndexerConfig<ABI>;
 		processorConfig: ProcessorConfig | undefined;
@@ -2781,7 +2781,7 @@ export function createIndexerState<ABI extends Abi, ProcessResultType, Processor
 			});
 		},
 		updateIndexer(update: {
-			provider?: EIP1193ProviderWithoutEvents;
+			provider?: EIP1193CoreProvider;
 			source?: IndexingSource<ABI>;
 			streamConfig?: ProvidedStreamConfig;
 		}) {

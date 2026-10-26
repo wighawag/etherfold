@@ -1,5 +1,5 @@
 import type {Abi} from 'abitype';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {LogEventFetcher} from '../internal/decoding/LogEventFetcher.js';
 import {sourceHashesOf} from '../internal/engine/eventRanges.js';
 import {streamConfigHashOf} from '../internal/engine/utils.js';
@@ -59,7 +59,7 @@ function earliestStartBlock<ABI extends Abi>(source: IndexingSource<ABI>): numbe
  * WHAT WAS ASKED FOR, not merely of how the answer was decoded.
  */
 export async function captureStream<ABI extends Abi>(
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 	source: IndexingSource<ABI>,
 	options: CaptureStreamOptions,
 ): Promise<StreamFixture<ABI>> {

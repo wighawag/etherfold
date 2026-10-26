@@ -1,4 +1,4 @@
-import {EIP1193Account, EIP1193DATA, EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193Account, EIP1193DATA, EIP1193CoreProvider} from 'eip-1193';
 import {logs} from 'named-logs';
 import {ArchiveRefusedError} from '../../errors.js';
 import {IncludedEIP1193Log} from '../../types.js';
@@ -656,7 +656,7 @@ export class RangeLogFetcher {
 	protected safeNumBlock: number | undefined;
 	private lowestReportedResultCap: number | undefined;
 	constructor(
-		protected provider: EIP1193ProviderWithoutEvents,
+		protected provider: EIP1193CoreProvider,
 		protected contractAddresses: EIP1193Account[] | null,
 		protected eventNameTopics: EIP1193DATA[] | null,
 		readonly conf: LogFetcherConfig = {},

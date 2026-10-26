@@ -19,13 +19,13 @@
 		"eis": "dist/index.js"
 	},
 	"dependencies": {
+		"@eip-1193/jsonrpc-provider": "^0.5.0",
 		"@etherfold/core": "workspace:*",
 		"@etherfold/fs-cache": "workspace:*",
 		"@etherfold/utils": "workspace:*",
 		"@ethersproject/bignumber": "^5.8.0",
 		"commander": "^15.0.0",
-		"eip-1193": "^0.6.5",
-		"eip-1193-jsonrpc-provider": "^0.4.3",
+		"eip-1193": "^0.7.2",
 		"ethereum-indexer-db-utils": "workspace:*",
 		"figlet": "^1.11.0",
 		"koa": "^3.2.1",

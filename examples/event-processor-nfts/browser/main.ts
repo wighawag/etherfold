@@ -247,8 +247,8 @@ async function start() {
 	});
 
 	await indexer.init({
-		// cast because `EIP1193ProviderWithoutEvents` enumerates every JSON-RPC method
-		// it knows; the wrapper above forwards the three this app uses.
+		// cast because `EIP1193CoreProvider` types `request` as one overload per
+		// method it serves; the wrapper above forwards the three this app uses.
 		provider: provider as never,
 		// NO contract addresses: an account's tokens can be in any collection, so
 		// this indexes every address and lets the TOPIC filter below do the

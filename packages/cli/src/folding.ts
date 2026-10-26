@@ -15,7 +15,7 @@ import {
 	type ReceivingIndexerOptions,
 	type StreamWriter,
 } from '@etherfold/core';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {streamConfigFromEnv, type EnvRecord} from '@etherfold/fetcher-host';
 import {
 	localPosition,
@@ -159,11 +159,11 @@ export async function openExplicitSource<ABI extends Abi>(origin: ExplicitSource
 export async function openIndexingSource<ABI extends Abi, ProcessResultType>(
 	origin: SourceOrigin<ABI>,
 	processorModule: ProcessorModule<ABI, ProcessResultType>,
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 ): Promise<IndexingSource<ABI>> {
 	const source =
 		origin.from === 'processor-module'
-			? await resolveSource<ABI, ProcessResultType>(processorModule, provider as never)
+			? await resolveSource<ABI, ProcessResultType>(processorModule, provider)
 			: await openExplicitSource<ABI>(origin);
 	if (!source || !source.contracts) {
 		throw new Error(
@@ -624,7 +624,7 @@ export async function openFolding<ABI extends Abi, ProcessResultType>(
 		 * (ADR-0093): a stored generation is then instantiated over the configured source,
 		 * and one registered on another stream stays frozen, as a filter change's always was.
 		 */
-		sourceCarriedByBundle?: {provider: EIP1193ProviderWithoutEvents};
+		sourceCarriedByBundle?: {provider: EIP1193CoreProvider};
 		/**
 		 * WHETHER THIS PROCESS FETCHES ITS OWN STREAMS (`ReceivingIndexerOptions.fetchesItsOwnStreams`):
 		 * `true` from `run` and `build`, which hold one fetcher per stream the container lists,
@@ -769,7 +769,7 @@ export async function openWaitingFolding<ABI extends Abi, ProcessResultType>(
 		finalityDepth: number;
 		indexer: string;
 		promotion?: PromotionConfig;
-		provider: EIP1193ProviderWithoutEvents;
+		provider: EIP1193CoreProvider;
 	},
 ): Promise<WaitingFoldingAssembly<ABI, ProcessResultType>> {
 	const [server, {VersionedStateStore}] = await Promise.all([

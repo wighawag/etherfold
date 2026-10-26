@@ -6,7 +6,7 @@ import {
 	type WritableStateStore,
 } from '@etherfold/state-store';
 import type {EntityProcessor} from '@etherfold/processor-entities';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {createBrowserStateStore, type BrowserStateStoreConfig} from '../src/index.js';
 import {
 	BRANCH_A,
@@ -101,7 +101,7 @@ export async function readWritableStore(config: BrowserStateStoreConfig = {}): P
 }
 
 /** What a fixture node is, as a caller names one. */
-export type FixtureChain = {readonly provider: EIP1193ProviderWithoutEvents};
+export type FixtureChain = {readonly provider: EIP1193CoreProvider};
 
 /**
  * A node that serves `BRANCH_A` and can be HELD at a block.

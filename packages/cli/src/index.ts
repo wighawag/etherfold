@@ -24,8 +24,8 @@ import {
 import type {EntityProcessor, StateStore, WritableStateStore} from '@etherfold/processor-entities';
 import type {ReconfigureReport, WaitingReport} from '@etherfold/server';
 import {openProcessorArrival} from '@etherfold/utils';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
-import {JSONRPCHTTPProvider} from 'eip-1193-jsonrpc-provider';
+import type {EIP1193CoreProvider} from 'eip-1193';
+import {JSONRPCHTTPProvider} from '@eip-1193/jsonrpc-provider';
 import {logs} from 'named-logs';
 import type {RemoteSQL} from 'remote-sql';
 import {refuseUnbundledProcessor, resolveCommandConfig} from './config.js';
@@ -146,7 +146,7 @@ export type IndexingDependencies = {
 	 */
 	processorBundle?: Uint8Array;
 	/** The chain. Defaults to the rate-limited JSON-RPC provider this CLI owns. */
-	provider?: EIP1193ProviderWithoutEvents;
+	provider?: EIP1193CoreProvider;
 	/** Builds the libSQL handle for the store. Defaults to `createNodeDB`. */
 	createDB?: (url: string) => RemoteSQL;
 	/** The wait between cycles. Defaults to a real sleep. */
@@ -349,9 +349,9 @@ export async function prepareIndexing<
 	// logic is shared with the server via the helpers in @etherfold/utils.
 	const provider =
 		deps.provider ??
-		(new JSONRPCHTTPProvider(configured.nodeUrl, {
+		new JSONRPCHTTPProvider(configured.nodeUrl, {
 			requestsPerSecond: configured.rps,
-		}) as unknown as EIP1193ProviderWithoutEvents);
+		});
 
 	// `node` (ADR-0094): configured with NO processor and NO source, which the resolver
 	// guarantees by refusing both flags. It is assembled over the SAME database, registry
@@ -523,7 +523,7 @@ function fetcherHostOver<ABI extends Abi, ProcessResultType>(
 	resolved: RunConfig<ABI> | NodeConfig | BuildConfig<ABI>,
 	env: EnvRecord,
 	providedStreamConfig: ReturnType<typeof streamConfigFor>,
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 	container: ReceivingIndexer<ABI, ProcessResultType, WritableStateStore>,
 ): FetcherHost<ABI> {
 	return createFetcherHost<ABI>(
@@ -624,7 +624,7 @@ async function prepareWaiting<ABI extends Abi, ProcessResultType, C extends Chai
 	deps: IndexingDependencies,
 	env: EnvRecord,
 	resolved: NodeConfig,
-	provider: EIP1193ProviderWithoutEvents,
+	provider: EIP1193CoreProvider,
 ): Promise<PreparedIndexing<ABI, ProcessResultType, C>> {
 	const providedStreamConfig = streamConfigFor(env);
 	const streamConfig = resolveStreamConfig(providedStreamConfig);

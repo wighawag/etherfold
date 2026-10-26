@@ -1,5 +1,5 @@
 import type {Abi} from 'abitype';
-import type {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 import {logs} from 'named-logs';
 
 import {LogEventFetcher} from '../internal/decoding/LogEventFetcher.js';
@@ -429,7 +429,7 @@ const NEVER_FETCHES = {
 				`processor upgrade cost a local scan instead of a re-index.`,
 		);
 	},
-} as unknown as EIP1193ProviderWithoutEvents;
+} as unknown as EIP1193CoreProvider;
 
 /**
  * THE BOUNDED REBUILD OF ONE GENERATION: the chain-free, chunked counterpart of

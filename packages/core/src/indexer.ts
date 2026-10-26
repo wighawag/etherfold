@@ -1,6 +1,6 @@
 import {getBlockNumber, getChainId} from './internal/engine/ethereum.js';
 
-import {EIP1193ProviderWithoutEvents} from 'eip-1193';
+import type {EIP1193CoreProvider} from 'eip-1193';
 
 import {logs} from 'named-logs';
 import type {
@@ -492,7 +492,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	// ------------------------------------------------------------------------------------------------------------------
 
 	constructor(
-		provider: EIP1193ProviderWithoutEvents,
+		provider: EIP1193CoreProvider,
 		protected processor: EventProcessor<ABI, ProcessResultType>,
 		source: IndexingSource<ABI>,
 		config: ProvidedIndexerConfig<ABI>,
@@ -521,7 +521,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		return this.suppliedProcessorIdentity;
 	}
 
-	reinit(provider: EIP1193ProviderWithoutEvents, source: IndexingSource<ABI>, config: ProvidedIndexerConfig<ABI>) {
+	reinit(provider: EIP1193CoreProvider, source: IndexingSource<ABI>, config: ProvidedIndexerConfig<ABI>) {
 		// THE seam. Idempotent, so a reconfigure re-entering here does not stack
 		// wrappers, and everything built from `this.provider` below inherits the guard.
 		this.provider = declaredMethodsOnly(provider);
@@ -910,7 +910,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 	}
 
 	async updateIndexer(update: {
-		provider?: EIP1193ProviderWithoutEvents;
+		provider?: EIP1193CoreProvider;
 		source?: IndexingSource<ABI>;
 		streamConfig?: ProvidedStreamConfig;
 	}): Promise<ReconfigureOutcome> {
@@ -1826,7 +1826,7 @@ export class IndexerGeneration<ABI extends Abi, ProcessResultType = void> {
 		//
 		// This is also the ONLY chain-swap detection that exists. The comment this
 		// replaces promised a `chainChanged` event would warn the indexer sooner; nobody
-		// built it, no listener exists anywhere, and `EIP1193ProviderWithoutEvents` -- the
+		// built it, no listener exists anywhere, and `EIP1193CoreProvider` -- the
 		// provider type every deployment uses, `@etherfold/browser` included -- cannot
 		// structurally carry a subscription. Building one would not retire this check
 		// either: an event is delivered asynchronously and can land mid-cycle, with the

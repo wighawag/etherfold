@@ -119,9 +119,7 @@ async function start() {
 	const indexer = connectToIndexerHost(
 		dedicatedWorkerHost(() => new Worker(new URL('./indexer.worker.ts', import.meta.url), {type: 'module'})),
 		{
-			// `EIP1193ProviderWithoutEvents` enumerates every JSON-RPC method it knows;
-			// the port needs only its `request`.
-			provider: connection.provider as never,
+			provider: connection.provider,
 			settings: {
 				source: {chainId: String(CHAIN.id), contracts: [{abi, address: CONTRACT, startBlock: START_BLOCK}]},
 				config: {stream: {finality: 12}},

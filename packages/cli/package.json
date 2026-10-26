@@ -25,6 +25,7 @@
 		"etherfold": "dist/cli.js"
 	},
 	"dependencies": {
+		"@eip-1193/jsonrpc-provider": "^0.5.0",
 		"@etherfold/core": "workspace:*",
 		"@etherfold/fetcher-host": "workspace:*",
 		"@etherfold/platform-nodejs": "workspace:*",
@@ -35,8 +36,7 @@
 		"@etherfold/state-store-sqlite": "workspace:*",
 		"@etherfold/utils": "workspace:*",
 		"commander": "^15.0.0",
-		"eip-1193": "^0.6.5",
-		"eip-1193-jsonrpc-provider": "^0.4.3",
+		"eip-1193": "^0.7.2",
 		"ldenv": "^0.5.0",
 		"named-logs": "^0.4.1",
 		"named-logs-console": "^0.5.1",
