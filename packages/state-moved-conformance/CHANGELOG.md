@@ -1,5 +1,12 @@
 # @etherfold/state-moved-conformance
 
+## 0.4.2
+
+### Patch Changes
+
+- Updated dependencies [f6e2557]
+  - @etherfold/core@0.12.0
+
 ## 0.4.1
 
 ### Patch Changes

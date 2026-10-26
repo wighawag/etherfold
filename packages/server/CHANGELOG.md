@@ -1,5 +1,14 @@
 # @etherfold/server
 
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [f6e2557]
+  - @etherfold/core@0.12.0
+  - @etherfold/graphql@0.2.2
+  - @etherfold/processor-entities@0.4.2
+
 ## 0.5.1
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @etherfold/processor-sqlite
 
+## 0.2.6
+
+### Patch Changes
+
+- Updated dependencies [f6e2557]
+  - @etherfold/core@0.12.0
+  - @etherfold/processor-entities@0.4.2
+
 ## 0.2.5
 
 ### Patch Changes
