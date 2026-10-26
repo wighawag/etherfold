@@ -1,5 +1,12 @@
 # @etherfold/graphql
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [f6e2557]
+  - @etherfold/browser@0.13.0
+
 ## 0.2.1
 
 ### Patch Changes

@@ -1,5 +1,26 @@
 # ethereum-indexer-cli
 
+## 0.12.0
+
+### Minor Changes
+
+- f6e2557: Require `eip-1193@^0.7.2` (the 0.7 line is a breaking release of the types; 0.7.2 is the first that does not ship a pnpm `engines` constraint to consumers), and move `etherfold` and `@etherfold/fetcher-host` to the renamed JSON-RPC client `@eip-1193/jsonrpc-provider@^0.5.0` (was `eip-1193-jsonrpc-provider`). `@etherfold/browser` moves to `@eip-1193/over-port@^0.2.0`, whose port provider is typed as the core surface rather than the wallet one.
+  
+  Provider types: every slot that takes a provider is now `EIP1193CoreProvider` instead of `EIP1193ProviderWithoutEvents`. That covers `IndexerOptions.provider`, `IndexerGeneration` and its `reinit` and `updateIndexer`, `Indexer.updateIndexer`, `LogFetcher`, `captureStream` and `declaredMethodsOnly` in `@etherfold/core`; `init`, `updateIndexer` and a hosted spec's `provider` in `@etherfold/browser`; `FetcherHostDependencies.provider`; and `IndexingDependencies`, `FetchDependencies` and `UploadContext` in `etherfold`. Since eip-1193 0.7.0 the old type means the browser-wallet surface, so it rejected a provider typed as `EIP1193NodeProvider` or `EIP1193HttpNodeProvider`, which is what a CLI or a server-side host holds, although the engine only asks for `eth_getLogs`, `eth_blockNumber`, `eth_chainId` and `eth_getBlockByNumber`. `EIP1193CoreProvider` is the set every provider serves, so a wallet, a node and an HTTP node are all accepted, without a cast.
+  
+  What can break in your own code: a provider etherfold hands back is now typed as the core surface, so it no longer advertises `wallet_*` methods or `eth_subscribe`. That is `MethodDeclaringProvider`, the `provider` a `createGeneration` callback receives (`@etherfold/core`) and the `provider` a `createIndexer` callback receives (`@etherfold/browser`). `createJSONRPCProvider` (`@etherfold/fetcher-host`) now returns `EIP1193HttpNodeProvider`, which is what it builds, so assigning its result to `EIP1193ProviderWithoutEvents` no longer compiles. eip-1193 0.7.0 also removed the `request()` catch-all overload, so a call to a method that is not in the provider's method table is now a type error.
+
+### Patch Changes
+
+- Updated dependencies [f6e2557]
+  - @etherfold/core@0.12.0
+  - @etherfold/fetcher-host@0.3.0
+  - @etherfold/processor-entities@0.4.2
+  - @etherfold/server@0.5.2
+  - @etherfold/utils@0.8.5
+  - @etherfold/platform-nodejs@0.3.3
+  - @etherfold/platform-nodejs-fetcher@0.2.5
+
 ## 0.11.0
 
 ### Minor Changes
