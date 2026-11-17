@@ -9,7 +9,7 @@ Triggers run outside the indexer by design (etherfold ADR-0005): this service ow
 - **The consumer** reads the canonical view page by page at or below a **gate** (the safe lane: the chain's `finalized` block, or `latest - depth`), matches each log, and commits the page's deliveries together with the cursor in one batch. A crash re-reads the page; the idempotency key absorbs anything matched twice. A rewind (`409 rewind-required`) retracts what was not yet sent from the fork block on, and records it. A change of the fold answering the feed (its `generation`) PAUSES the consumer until an operator resumes it.
 - **Two kinds of trigger** (ADR-0013): a **subscription** is registered by a user for themself, of a kind the operator declared, filtered on decoded arguments, and it expires unless renewed (ADR-0012); a **global rule** is the operator's code over every log of an event, whose recipient is computed and whose predicate decides.
 - **The outbox** holds one row per delivery, frozen at match time, unique by `(action, key)`. Each action type has a **delivery policy** (ADR-0009): a TTL, a retry budget with backoff, then a dead letter. Every row ends **delivered**, **expired**, **dead** or **retracted**, and stays inspectable.
-- **Actions** are adapters over one primitive, an authenticated `POST` carrying an `Idempotency-Key` header: `pushAction` (push-notification-server's `POST /push`, a token scoped to one domain) and `rewardAction` (your reward service; safe lane only, retried for days). The service never submits a transaction: a mint is your reward service's job.
+- **Actions** are adapters over one primitive, an authenticated `POST` carrying an `Idempotency-Key` header: `pushAction` (push-notification-server's `POST /api/push`, a token scoped to one domain; a `409`, the same key still sending, and a `502`, a failed send, are retried) and `rewardAction` (your reward service; safe lane only, retried for days). The service never submits a transaction: a mint is your reward service's job.
 
 ## Packages
 
@@ -83,7 +83,11 @@ export default defineConfig({
 	},
 
 	actions: {
-		push: pushAction({url: 'https://push.example.com', domain: 'greetings.example.com', token: process.env.PUSH_TOKEN}),
+		push: pushAction({
+			url: 'https://push.example.com/api',
+			domain: 'greetings.example.com',
+			token: process.env.PUSH_TOKEN,
+		}),
 		reward: rewardAction({url: 'https://rewards.example.com/award', token: process.env.REWARD_TOKEN}),
 	},
 

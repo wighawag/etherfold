@@ -32,11 +32,11 @@ const delivery: DeliveryRecord = {
 describe('the push adapter (push-notification-server, S1-1 and S1-4)', () => {
 	it('POSTs /push with the domain token and the idempotency key', async () => {
 		const target = recordingTarget(() => ({status: 200, body: {success: true, successfullPush: 2}}));
-		const push = pushAction({url: 'https://push.test/', domain: 'app.test', token: 's3cret', fetch: target.fetch});
+		const push = pushAction({url: 'https://push.test/api/', domain: 'app.test', token: 's3cret', fetch: target.fetch});
 		expect(await push.deliver(delivery)).toEqual({kind: 'delivered'});
 		expect(target.requests).toEqual([
 			{
-				url: 'https://push.test/push',
+				url: 'https://push.test/api/push',
 				method: 'POST',
 				headers: expect.objectContaining({
 					authorization: 'Bearer s3cret',
@@ -53,20 +53,21 @@ describe('the push adapter (push-notification-server, S1-1 and S1-4)', () => {
 		]);
 	});
 
-	it('retries a partial failure, a 5xx, a 429 and a network error; dead-letters a refusal', async () => {
+	it('retries a failed send, the same key still sending, a 429 and a network error; dead-letters a refusal', async () => {
 		const answers = [
-			{status: 200, body: {success: false, successfullPush: 1, failedPush: 1}},
-			{status: 503},
+			{status: 502, body: {success: false, delivered: 1, failed: 1}},
+			{status: 409, body: {success: false, inFlight: 1}},
 			{status: 429, headers: {'retry-after': '120'}},
 			'network-error' as const,
 			{status: 401, body: {success: false}},
+			{status: 403, body: {success: false}},
 			{status: 400},
 		];
 		const target = recordingTarget((_, index) => answers[index]!);
 		const push = pushAction({url: 'https://push.test', domain: 'app.test', token: 't', fetch: target.fetch});
 		const outcomes = [];
 		for (let i = 0; i < answers.length; i++) outcomes.push(await push.deliver(delivery));
-		expect(outcomes.map((o) => o.kind)).toEqual(['retry', 'retry', 'retry', 'retry', 'dead', 'dead']);
+		expect(outcomes.map((o) => o.kind)).toEqual(['retry', 'retry', 'retry', 'retry', 'dead', 'dead', 'dead']);
 		expect(outcomes[2]).toMatchObject({retryAfterMs: 120_000});
 	});
 

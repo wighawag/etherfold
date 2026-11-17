@@ -93,7 +93,7 @@ async function start(db: RemoteSQL = disk.open(), lane: 'safe' | 'fast' = 'safe'
 		gate: async () => 1000,
 		definitions,
 		actions: {
-			push: pushAction({url: 'https://push.test', domain: 'board.test', token: 'push-token', fetch: push.fetch}),
+			push: pushAction({url: 'https://push.test/api', domain: 'board.test', token: 'push-token', fetch: push.fetch}),
 			reward: rewardAction({
 				url: 'https://rewards.test/award',
 				token: 'reward-token',
@@ -158,7 +158,7 @@ describe('a subscription trigger, end to end', () => {
 		expect([...new Set(calls)].sort()).toEqual(expected.sort());
 		expect(calls.filter((key) => key === calls[0])).toHaveLength(2);
 		expect(push.requests[1]).toMatchObject({
-			url: 'https://push.test/push',
+			url: 'https://push.test/api/push',
 			headers: {authorization: 'Bearer push-token'},
 			body: {domain: 'board.test', topic: 'new-post'},
 		});

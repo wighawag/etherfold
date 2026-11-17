@@ -70,9 +70,9 @@ async function post(
 }
 
 /**
- * A Web Push through push-notification-server's `POST /push`, authenticated by a
- * token scoped to one domain (S1-1), deduplicated by the key per subscription
- * (S1-4). The trigger service holds no push endpoint and no key: identity is
+ * A Web Push through push-notification-server's `POST <url>/push` (`url` is its
+ * API base, `https://<host>/api`), authenticated by a token scoped to one domain
+ * (S1-1), deduplicated by the key per subscription (S1-4). The trigger service holds no push endpoint and no key: identity is
  * `(address, domain)` (etherfold ADR-0009).
  */
 export function pushAction(options: {
@@ -96,19 +96,10 @@ export function pushAction(options: {
 				...(payload.urgency === undefined ? {} : {urgency: payload.urgency}),
 			});
 			if (!('response' in answered)) return answered;
-			const {response, text} = answered;
-			const outcome = outcomeOfStatus(response, text);
-			if (outcome.kind !== 'delivered') return outcome;
-			// a 200 can still say some devices were not reached: retrying is safe because the key
-			// is deduplicated per subscription, so only the ones not yet reached are sent again
-			let body: {success?: unknown} | undefined;
-			try {
-				body = JSON.parse(text) as {success?: unknown};
-			} catch {
-				body = undefined;
-			}
-			if (body && body.success === false) return {kind: 'retry', error: `a partial failure: ${text.slice(0, 200)}`};
-			return outcome;
+			// 200 delivered (or nothing to deliver); 502 a send failed and 409 the same key still sending,
+			// both retried under the key, which reaches only the devices not yet delivered; 400, 401 and
+			// 403 (a bad key, a token problem) are permanent
+			return outcomeOfStatus(answered.response, answered.text, [409]);
 		},
 	};
 }
