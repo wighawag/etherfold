@@ -35,3 +35,4 @@ export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction} fr
 export type {PushPayload} from './actions.js';
 export {createTriggerService} from './service.js';
 export type {TickReport, TriggerService, TriggerServiceOptions} from './service.js';
+export {rpcGate} from './gate.js';
