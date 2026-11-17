@@ -13,7 +13,7 @@ import {RegistrationError, type TriggerRegistry} from './triggers.js';
 
 /**
  * What a proof is checked against: the method and route, the body exactly as
- * sent (`rawBody`, what a request signature covers: missiv-identity's
+ * sent (`rawBody`, what a request signature covers: delegated-identity's
  * `verifyRequest` hashes the bytes, so a re-serialised body would not verify),
  * the same body parsed, and the headers (a request signature travels in one).
  */
