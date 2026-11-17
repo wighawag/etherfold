@@ -11,8 +11,19 @@ import {RegistrationError, type TriggerRegistry} from './triggers.js';
 // server's GAP-2, whose fix asks for ONE shared proof: S1-3's, in step S2b).
 // ---------------------------------------------------------------------------
 
-/** What a proof is checked against: the route, the body (proof included) and the headers. */
-export type RegistrationRequest = {path: string; body: Record<string, unknown>; headers: Headers};
+/**
+ * What a proof is checked against: the method and route, the body exactly as
+ * sent (`rawBody`, what a request signature covers: missiv-identity's
+ * `verifyRequest` hashes the bytes, so a re-serialised body would not verify),
+ * the same body parsed, and the headers (a request signature travels in one).
+ */
+export type RegistrationRequest = {
+	method: string;
+	path: string;
+	rawBody: string;
+	body: Record<string, unknown>;
+	headers: Headers;
+};
 
 /** The seam a registration's proof of address ownership is checked through. */
 export type RegistrationVerifier = {
@@ -26,10 +37,11 @@ export function createRegistrationAPI(options: {registry: TriggerRegistry; verif
 	const app = new Hono();
 
 	/** The body and the address it was proven for, or the refusal to answer with. */
-	async function authenticate(c: {req: {path: string; raw: Request; json(): Promise<unknown>}}) {
+	async function authenticate(c: {req: {path: string; method: string; raw: Request; text(): Promise<string>}}) {
+		const rawBody = await c.req.text();
 		let body: unknown;
 		try {
-			body = await c.req.json();
+			body = JSON.parse(rawBody) as unknown;
 		} catch {
 			return {refusal: {status: 400 as const, error: 'invalid-body', message: 'the body is not JSON'}};
 		}
@@ -37,7 +49,13 @@ export function createRegistrationAPI(options: {registry: TriggerRegistry; verif
 			return {refusal: {status: 400 as const, error: 'invalid-body', message: 'the body is not an object'}};
 		}
 		const record = body as Record<string, unknown>;
-		const verdict = await verifier.verify({path: c.req.path, body: record, headers: c.req.raw.headers});
+		const verdict = await verifier.verify({
+			method: c.req.method,
+			path: c.req.path,
+			rawBody,
+			body: record,
+			headers: c.req.raw.headers,
+		});
 		if (!verdict.ok) return {refusal: {status: 401 as const, error: 'invalid-proof', message: verdict.reason}};
 		return {body: record, address: verdict.address};
 	}
