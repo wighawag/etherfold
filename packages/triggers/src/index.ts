@@ -16,3 +16,16 @@ export type {DeliveryRecord, DeliveryStatus, LogPosition, NewDelivery} from './o
 export {readJournal} from './journal.js';
 export type {JournalEntry, JournalKind} from './journal.js';
 export {setupDatabase} from './schema.js';
+export {createTriggerRegistry, defineTriggers, normaliseValue, RegistrationError} from './triggers.js';
+export type {
+	DecodedLog,
+	EventDefinition,
+	GlobalRule,
+	Subscription,
+	SubscriptionKind,
+	SubscriptionStatus,
+	TriggerDefinitions,
+	TriggerRegistry,
+} from './triggers.js';
+export {createRegistrationAPI} from './registration.js';
+export type {RegistrationRequest, RegistrationVerifier} from './registration.js';

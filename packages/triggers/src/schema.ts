@@ -55,6 +55,33 @@ const STATEMENTS = [
 		kind TEXT NOT NULL,
 		detail TEXT NOT NULL
 	)`,
+	// SUBSCRIPTION TRIGGERS: registered by a user for themself, expiring unless
+	// renewed (etherfold ADR-0012). A cancelled or expired one stays, for "why did
+	// I stop getting notifications?".
+	`CREATE TABLE IF NOT EXISTS subscriptions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind TEXT NOT NULL,
+		recipient TEXT NOT NULL,
+		filter TEXT NOT NULL,
+		condition_count INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		renewed_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL,
+		UNIQUE (kind, recipient, filter)
+	)`,
+	`CREATE INDEX IF NOT EXISTS subscriptions_live ON subscriptions (kind, condition_count, status, expires_at)`,
+	`CREATE INDEX IF NOT EXISTS subscriptions_by_recipient ON subscriptions (recipient, status)`,
+	// The inverted index of etherfold ADR-0013: (kind, argument, value) -> subscription,
+	// so matching one log against every subscriber is an indexed lookup.
+	`CREATE TABLE IF NOT EXISTS subscription_conditions (
+		subscription_id INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		arg TEXT NOT NULL,
+		value TEXT NOT NULL,
+		PRIMARY KEY (subscription_id, arg)
+	)`,
+	`CREATE INDEX IF NOT EXISTS subscription_conditions_lookup ON subscription_conditions (kind, arg, value)`,
 ];
 
 /** Create every table and index this service uses. Idempotent. */
