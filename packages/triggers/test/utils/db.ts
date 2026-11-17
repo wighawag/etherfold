@@ -13,22 +13,24 @@ export function memoryDB(): RemoteSQL {
 /**
  * A database on DISK that can be closed and opened again, which is what a
  * restart of the consumer process is: nothing survives but what was committed.
+ * `close` closes every handle opened so far.
  */
 export function diskDB(): {open(): RemoteSQL; close(): void; remove(): void} {
 	const dir = mkdtempSync(join(tmpdir(), 'etherfold-triggers-'));
 	const url = `file:${join(dir, 'triggers.db')}`;
-	let client: Client | undefined;
+	const clients: Client[] = [];
+	const closeAll = () => {
+		for (const client of clients.splice(0)) client.close();
+	};
 	return {
 		open() {
-			client = createClient({url});
+			const client = createClient({url});
+			clients.push(client);
 			return new RemoteLibSQL(client);
 		},
-		close() {
-			client?.close();
-			client = undefined;
-		},
+		close: closeAll,
 		remove() {
-			client?.close();
+			closeAll();
 			rmSync(dir, {recursive: true, force: true});
 		},
 	};

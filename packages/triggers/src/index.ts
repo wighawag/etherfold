@@ -29,3 +29,9 @@ export type {
 } from './triggers.js';
 export {createRegistrationAPI} from './registration.js';
 export type {RegistrationRequest, RegistrationVerifier} from './registration.js';
+export {assertActionsFitLane, createDeliverer} from './delivery.js';
+export type {ActionAdapter, Deliverer, DeliveryOutcome, DeliveryPolicy, DeliveryReport} from './delivery.js';
+export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction} from './actions.js';
+export type {PushPayload} from './actions.js';
+export {createTriggerService} from './service.js';
+export type {TickReport, TriggerService, TriggerServiceOptions} from './service.js';
