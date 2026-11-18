@@ -25,9 +25,16 @@ export type RegistrationRequest = {
 	headers: Headers;
 };
 
+/**
+ * A proof accepted. `once` asks for it to be accepted only once: `key` names
+ * the signed request, `until` (ms since the epoch) is when it stops being
+ * acceptable anyway, so it need not be remembered longer.
+ */
+export type AcceptedProof = {ok: true; address: string; once?: {key: string; until: number}};
+
 /** The seam a registration's proof of address ownership is checked through. */
 export type RegistrationVerifier = {
-	verify(request: RegistrationRequest): Promise<{ok: true; address: string} | {ok: false; reason: string}>;
+	verify(request: RegistrationRequest): Promise<AcceptedProof | {ok: false; reason: string}>;
 };
 
 const STATUS_OF = {'unknown-kind': 400, 'invalid-filter': 400, 'quota-exceeded': 429} as const;
@@ -57,6 +64,10 @@ export function createRegistrationAPI(options: {registry: TriggerRegistry; verif
 			headers: c.req.raw.headers,
 		});
 		if (!verdict.ok) return {refusal: {status: 401 as const, error: 'invalid-proof', message: verdict.reason}};
+		// a signed request is accepted once: a replay of a registration must not undo a later cancel
+		if (verdict.once && !(await registry.acceptOnce(verdict.once.key, verdict.once.until))) {
+			return {refusal: {status: 401 as const, error: 'invalid-proof', message: 'replayed'}};
+		}
 		return {body: record, address: verdict.address};
 	}
 

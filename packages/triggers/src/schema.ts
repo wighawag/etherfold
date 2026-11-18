@@ -82,6 +82,13 @@ const STATEMENTS = [
 		PRIMARY KEY (subscription_id, arg)
 	)`,
 	`CREATE INDEX IF NOT EXISTS subscription_conditions_lookup ON subscription_conditions (kind, arg, value)`,
+	// The registration requests already accepted, each until its signature would expire anyway,
+	// so a replayed request is refused (a captured registration must not undo a later cancel).
+	`CREATE TABLE IF NOT EXISTS accepted_requests (
+		key TEXT PRIMARY KEY,
+		until INTEGER NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS accepted_requests_until ON accepted_requests (until)`,
 ];
 
 /** Create every table and index this service uses. Idempotent. */

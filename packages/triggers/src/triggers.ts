@@ -120,6 +120,11 @@ export type TriggerRegistry = {
 	list(recipient: string): Promise<Subscription[]>;
 	/** Mark what is past its expiry as expired, one journal entry each (never a quiet DELETE). */
 	expire(): Promise<number>;
+	/**
+	 * Record a signed request as accepted, unless it already was: `false` for a
+	 * replay. Remembered until `until`, when its signature expires anyway.
+	 */
+	acceptOnce(key: string, until: number): Promise<boolean>;
 	/** The consumer's matcher over both archetypes. */
 	matcher(options?: {onUndecodable?: (entry: CanonicalEntry, error: unknown) => void}): Matcher;
 };
@@ -275,6 +280,16 @@ export function createTriggerRegistry(options: {
 
 	return {
 		setup: () => setupDatabase(db),
+
+		async acceptOnce(key, until) {
+			const [, inserted] = await db.batch([
+				db.prepare(`DELETE FROM accepted_requests WHERE until < ?`).bind(clock()),
+				db
+					.prepare(`INSERT INTO accepted_requests (key, until) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING key`)
+					.bind(key, until),
+			]);
+			return (inserted?.results?.length ?? 0) > 0;
+		},
 
 		async subscribe(request) {
 			const {kind, recipient, filter, filterKey} = validated(request);

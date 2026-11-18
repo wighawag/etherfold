@@ -135,6 +135,23 @@ describe('delegatedIdentityVerifier', () => {
 		expect(() => delegatedIdentityVerifier({serverOrigin: SERVER_ORIGIN, domain: 'https://'})).toThrow(/domain/);
 	});
 
+	it('accepts a signed request once: a replay is refused, so a captured registration cannot undo a cancel', async () => {
+		const registration = await subscribe(alice);
+		expect((await send('/subscriptions', registration)).status).toBe(200);
+		const cancel = await signedPost(alice, {
+			serverOrigin: SERVER_ORIGIN,
+			path: '/subscriptions/cancel',
+			fields: {kind: 'new-post'},
+		});
+		expect((await send('/subscriptions/cancel', cancel)).status).toBe(200);
+
+		const replayed = await send('/subscriptions', registration);
+		expect(replayed).toMatchObject({status: 401, body: {error: 'invalid-proof', message: 'replayed'}});
+		expect((await registry.list(alice.address)).map((s) => s.status)).toEqual(['cancelled']);
+		// the same intent signed afresh (a later timestamp) is a new request
+		expect((await send('/subscriptions', await subscribe(alice, {timestamp: Date.now() + 5}))).status).toBe(200);
+	});
+
 	it('refuses a server origin with a path: the API is reached at the origin root, the path a client signs', async () => {
 		expect(() => delegatedIdentityVerifier({serverOrigin: `${SERVER_ORIGIN}/triggers`, domain: DOMAIN})).toThrow(
 			/origin root/,

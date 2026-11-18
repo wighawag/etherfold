@@ -18,10 +18,7 @@
  * event is one greeting. An account is keyed lower-case, as the view compares
  * addresses.
  */
-import {
-	declareEntities,
-	type EntityProcessor,
-} from '@etherfold/processor-entities';
+import {declareEntities, type EntityProcessor} from '@etherfold/processor-entities';
 import type {GreetingsRegistryABI} from './greetings-registry.js';
 
 export const greetingsEntities = declareEntities([
@@ -38,12 +35,7 @@ export const greetingsProcessor: EntityProcessor<GreetingsRegistryABI> = {
 
 	async onMessageChanged(state, event) {
 		const account = event.args.user.toLowerCase();
-		const greeter = (await state.get('greeter', {account})) as
-			{greetings: number} | undefined;
-		state.set(
-			'greeter',
-			{account},
-			{greetings: Number(greeter?.greetings ?? 0) + 1},
-		);
+		const greeter = (await state.get('greeter', {account})) as {greetings: number} | undefined;
+		state.set('greeter', {account}, {greetings: Number(greeter?.greetings ?? 0) + 1});
 	},
 };

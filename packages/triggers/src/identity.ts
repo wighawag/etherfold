@@ -1,4 +1,11 @@
-import {REQUEST_SIGNATURE_HEADER, fromDomainToOrigin, verifyRequest} from 'delegated-identity';
+import {
+	DEFAULT_MAX_REQUEST_AGE_MS,
+	REQUEST_SIGNATURE_HEADER,
+	fromDomainToOrigin,
+	requestMessage,
+	verifyRequest,
+} from 'delegated-identity';
+import {keccak256, stringToHex} from 'viem';
 import type {RegistrationVerifier} from './registration.js';
 
 // ---------------------------------------------------------------------------
@@ -48,8 +55,11 @@ export type DelegatedIdentityVerifierOptions = {
  * delegate key's signature over the request, exactly what a client sends to
  * push-notification-server's `/register`.
  *
- * A request replayed within the time window registers or renews the same
- * subscription again, which an upsert absorbs, so no signature is remembered.
+ * Each signed request is accepted ONCE (`once`, which the registration API
+ * remembers until the signature expires anyway): a request replayed within the
+ * time window would otherwise re-register a subscription its owner has since
+ * cancelled. It is named by the message the delegate key signed, so a second
+ * spelling of the same signature names the same request.
  */
 export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOptions): RegistrationVerifier {
 	const serverOrigin = rootOrigin(options.serverOrigin);
@@ -89,7 +99,15 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 				},
 			);
 			if (!verdict.ok) return {ok: false, reason: verdict.reason};
-			return {ok: true, address: verdict.address.toLowerCase()};
+			const signed = requestMessage({serverOrigin, method, path, body: rawBody, timestamp: verdict.timestamp});
+			return {
+				ok: true,
+				address: verdict.address.toLowerCase(),
+				once: {
+					key: keccak256(stringToHex(`${verdict.publicKey}\n${signed}`)),
+					until: verdict.timestamp + (options.maxAgeMs ?? DEFAULT_MAX_REQUEST_AGE_MS),
+				},
+			};
 		},
 	};
 }
