@@ -13,6 +13,13 @@ import type {DecodedLog} from './triggers.js';
 // logs of one block both see what the fold made of the whole block, which a
 // level-triggered rule (a predicate, a semantic key) is indifferent to.
 //
+// The read is pinned to a BLOCK, not to the generation the feed page came
+// from: if the indexer promotes another generation (a new processor over the
+// same stream) between the page and the read, `/graphql` answers from the new
+// one's state. The consumer pauses on the feed's next answer naming the new
+// generation (`generation-changed`), so at most the page in flight is matched
+// against the successor's state.
+//
 // A read that cannot answer THROWS: a predicate then fails, the page is not
 // committed, and the consumer reads it again next round. It is never taken for
 // "the rule does not fire", which would drop the trigger silently.
