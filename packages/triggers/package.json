@@ -15,7 +15,7 @@
 		},
 		"./package.json": "./package.json"
 	},
-	"license": "AGPL-3.0-only",
+	"license": "MIT",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/wighawag/etherfold.git",
@@ -33,12 +33,11 @@
 		"@etherfold/processor-sqlite": "workspace:*",
 		"@etherfold/server": "workspace:*",
 		"@libsql/client": "^0.17.3",
-		"@push-notification/cli": "^0.1.0",
+		"@push-notification/cli": "^0.1.2",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
 		"remote-sql-libsql": "^0.0.7",
 		"typescript": "^6.0.3",
-		"typia": "7.6.4",
 		"vitest": "^4.1.8"
 	},
 	"scripts": {

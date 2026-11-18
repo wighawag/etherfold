@@ -177,4 +177,4 @@ No test opens a port.
 
 ## License
 
-[AGPL-3.0-only](LICENSE).
+MIT, as the rest of etherfold ([LICENSE](../../LICENSE)).
