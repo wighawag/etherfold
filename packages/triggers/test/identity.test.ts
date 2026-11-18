@@ -134,4 +134,11 @@ describe('delegatedIdentityVerifier', () => {
 
 		expect(() => delegatedIdentityVerifier({serverOrigin: SERVER_ORIGIN, domain: 'https://'})).toThrow(/domain/);
 	});
+
+	it('refuses a server origin with a path: the API is reached at the origin root, the path a client signs', async () => {
+		expect(() => delegatedIdentityVerifier({serverOrigin: `${SERVER_ORIGIN}/triggers`, domain: DOMAIN})).toThrow(
+			/origin root/,
+		);
+		expect(() => delegatedIdentityVerifier({serverOrigin: 'not a url', domain: DOMAIN})).toThrow(/serverOrigin/);
+	});
 });

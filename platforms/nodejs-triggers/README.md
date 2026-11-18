@@ -149,6 +149,8 @@ With a verifier configured, the service serves these routes. Each acts for the a
 
 With `delegatedIdentityVerifier`, the proof is [delegated-identity](https://github.com/wighawag/delegated-identity)'s, the same a client sends to push-notification-server's `/register`, so one identity in the app registers its device there and its triggers here. Each body also carries `{address, domain, ownershipSignature}`: the wallet's address, the app's domain (a bare host, `localhost:5173` for `http://`, or an origin), and the wallet's signature authorizing the app's delegate key for that origin. The `SIGNATURE` header is the delegate key's signature over the request (`signRequest({serverOrigin, method: 'POST', path, body}, delegateKey)`, with `serverOrigin` this service's public origin and `body` the exact bytes sent). A request is refused with `401 invalid-proof` and the reason when the header is missing or malformed, its timestamp is more than a minute off, the app is not the configured `domain`, or the proofs do not recover `address` (another account's key, a proof signed for another app, a request signed for another route or server, a changed body).
 
+The routes are checked at the path the service sees, which is the path the client signs, so serve the API at the root of `serverOrigin`: a proxy that strips a prefix or rewrites the path would refuse every request, and a `serverOrigin` with a path is refused when the verifier is built.
+
 ### Operating it
 
 ```sh

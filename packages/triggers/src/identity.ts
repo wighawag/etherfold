@@ -19,7 +19,11 @@ export type DelegatedIdentityVerifierOptions = {
 	 * This service's own public origin, the one a client signs its requests for
 	 * (`https://triggers.example`), as push-notification-server's `PUBLIC_ORIGIN`.
 	 * Configured rather than read from the request, which a proxy in front may
-	 * rewrite.
+	 * rewrite. The routes are checked at the path the service sees
+	 * (`/subscriptions`), which is the path a client signs, so the API must be
+	 * reached at this origin's ROOT with no path rewritten: an origin with a path
+	 * (`https://example.com/triggers`) is refused here rather than refusing every
+	 * request later with nothing saying why.
 	 */
 	serverOrigin: string;
 	/**
@@ -48,7 +52,7 @@ export type DelegatedIdentityVerifierOptions = {
  * subscription again, which an upsert absorbs, so no signature is remembered.
  */
 export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOptions): RegistrationVerifier {
-	const serverOrigin = new URL(options.serverOrigin).origin;
+	const serverOrigin = rootOrigin(options.serverOrigin);
 	const served = originOf(options.domain);
 	if (!served) throw new Error(`delegatedIdentityVerifier: the domain "${options.domain}" names no origin`);
 
@@ -101,4 +105,20 @@ function originOf(domain: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/** `serverOrigin` as an origin, refused when it is not one or names a path the client would not sign. */
+function rootOrigin(serverOrigin: string): string {
+	let url: URL;
+	try {
+		url = new URL(serverOrigin);
+	} catch {
+		throw new Error(`delegatedIdentityVerifier: the serverOrigin "${serverOrigin}" is not a URL`);
+	}
+	if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+		throw new Error(
+			`delegatedIdentityVerifier: the serverOrigin "${serverOrigin}" has a path; the API must be reached at the origin root, without its path rewritten`,
+		);
+	}
+	return url.origin;
 }
