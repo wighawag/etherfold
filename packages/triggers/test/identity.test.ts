@@ -37,7 +37,7 @@ beforeEach(async () => {
 	await registry.setup();
 	app = createRegistrationAPI({
 		registry,
-		verifier: delegatedIdentityVerifier({serverOrigin: SERVER_ORIGIN, domains: [DOMAIN]}),
+		verifier: delegatedIdentityVerifier({serverOrigin: SERVER_ORIGIN, domain: DOMAIN}),
 	});
 	alice = await appIdentity(DOMAIN);
 	bob = await appIdentity(DOMAIN);
@@ -113,7 +113,7 @@ describe('delegatedIdentityVerifier', () => {
 		expect((await send('/subscriptions', await subscribe(spelled))).status).toBe(200);
 		const local = createRegistrationAPI({
 			registry,
-			verifier: delegatedIdentityVerifier({serverOrigin: 'http://localhost:8787', domains: ['localhost:5173']}),
+			verifier: delegatedIdentityVerifier({serverOrigin: 'http://localhost:8787', domain: 'localhost:5173'}),
 		});
 		const dev = await appIdentity('localhost:5173');
 		const init = await signedPost(dev, {
@@ -122,5 +122,16 @@ describe('delegatedIdentityVerifier', () => {
 			fields: {kind: 'new-post'},
 		});
 		expect((await local.request('http://localhost:8787/subscriptions', init)).status).toBe(200);
+	});
+
+	it('serves ONE app, its configured domain normalised to its origin, and refuses a domain that names no origin', async () => {
+		// a trailing slash or capitals in the operator's config must not refuse every proof
+		const lenient = createRegistrationAPI({
+			registry,
+			verifier: delegatedIdentityVerifier({serverOrigin: `${SERVER_ORIGIN}/`, domain: 'HTTPS://Game.Test/'}),
+		});
+		expect((await lenient.request(`${SERVER_ORIGIN}/subscriptions`, await subscribe(alice))).status).toBe(200);
+
+		expect(() => delegatedIdentityVerifier({serverOrigin: SERVER_ORIGIN, domain: 'https://'})).toThrow(/domain/);
 	});
 });

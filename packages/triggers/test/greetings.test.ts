@@ -131,7 +131,7 @@ async function start(db: RemoteSQL = disk.open(), lane: 'safe' | 'fast' = 'safe'
 				policy: {maxAttempts: 3, backoff: {initialMs: 1000, maxMs: 1000}},
 			}),
 		},
-		verifier: delegatedIdentityVerifier({serverOrigin: TRIGGERS_ORIGIN, domains: [DOMAIN]}),
+		verifier: delegatedIdentityVerifier({serverOrigin: TRIGGERS_ORIGIN, domain: DOMAIN}),
 		lane,
 		limit: 1,
 		clock: () => now,

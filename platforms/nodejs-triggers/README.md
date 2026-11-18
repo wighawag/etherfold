@@ -108,10 +108,11 @@ export default defineConfig({
 
 	// how a registration proves its address; without one the registration API is not served.
 	// delegated-identity's proof, the one push-notification-server's `/register` checks:
-	// `serverOrigin` is this service's public origin (what clients sign for), `domains` the apps it serves
+	// `serverOrigin` is this service's public origin (what clients sign for), `domain` the ONE app it serves
+	// (the push action pushes under one domain, so one service serves one app)
 	verifier: delegatedIdentityVerifier({
 		serverOrigin: 'https://triggers.example.com',
-		domains: ['greetings.example.com'],
+		domain: 'greetings.example.com',
 	}),
 	api: {port: 8787},
 });
@@ -146,7 +147,7 @@ With a verifier configured, the service serves these routes. Each acts for the a
 - `POST /subscriptions/cancel` `{kind, filter?}`.
 - `POST /subscriptions/list`.
 
-With `delegatedIdentityVerifier`, the proof is [delegated-identity](https://github.com/wighawag/delegated-identity)'s, the same a client sends to push-notification-server's `/register`, so one identity in the app registers its device there and its triggers here. Each body also carries `{address, domain, ownershipSignature}`: the wallet's address, the app's domain (a bare host, `localhost:5173` for `http://`, or an origin), and the wallet's signature authorizing the app's delegate key for that origin. The `SIGNATURE` header is the delegate key's signature over the request (`signRequest({serverOrigin, method: 'POST', path, body}, delegateKey)`, with `serverOrigin` this service's public origin and `body` the exact bytes sent). A request is refused with `401 invalid-proof` and the reason when the header is missing or malformed, its timestamp is more than a minute off, the app is not one of `domains`, or the proofs do not recover `address` (another account's key, a proof signed for another app, a request signed for another route or server, a changed body).
+With `delegatedIdentityVerifier`, the proof is [delegated-identity](https://github.com/wighawag/delegated-identity)'s, the same a client sends to push-notification-server's `/register`, so one identity in the app registers its device there and its triggers here. Each body also carries `{address, domain, ownershipSignature}`: the wallet's address, the app's domain (a bare host, `localhost:5173` for `http://`, or an origin), and the wallet's signature authorizing the app's delegate key for that origin. The `SIGNATURE` header is the delegate key's signature over the request (`signRequest({serverOrigin, method: 'POST', path, body}, delegateKey)`, with `serverOrigin` this service's public origin and `body` the exact bytes sent). A request is refused with `401 invalid-proof` and the reason when the header is missing or malformed, its timestamp is more than a minute off, the app is not the configured `domain`, or the proofs do not recover `address` (another account's key, a proof signed for another app, a request signed for another route or server, a changed body).
 
 ### Operating it
 

@@ -23,12 +23,15 @@ export type DelegatedIdentityVerifierOptions = {
 	 */
 	serverOrigin: string;
 	/**
-	 * The apps whose users may register, by domain as push-notification-server
+	 * The ONE app whose users may register, by domain as push-notification-server
 	 * takes it: a bare host (`game.example` is `https://game.example`,
 	 * `localhost:5173` is `http://`) or an origin. A proof for any other app is
-	 * refused, so a page elsewhere cannot register on this service's users' behalf.
+	 * refused, so a page elsewhere cannot register on this service's users'
+	 * behalf. One app per service because a subscription records no app: the push
+	 * action names one domain, so a second app's users would be pushed under the
+	 * first's domain (or to no device, reported delivered).
 	 */
-	domains: string[];
+	domain: string;
 	/** The clock a request's timestamp is checked against; `Date.now` when absent. */
 	clock?: () => number;
 	/** How far a timestamp may be from the clock, either way; delegated-identity's 60 s when absent. */
@@ -36,7 +39,7 @@ export type DelegatedIdentityVerifierOptions = {
 };
 
 /**
- * A `RegistrationVerifier` over delegated-identity. A registration's body is
+ * A `RegistrationVerifier` over delegated-identity, for one app. A registration's body is
  * `{address, domain, ownershipSignature, ...}` and its `SIGNATURE` header the
  * delegate key's signature over the request, exactly what a client sends to
  * push-notification-server's `/register`.
@@ -46,8 +49,8 @@ export type DelegatedIdentityVerifierOptions = {
  */
 export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOptions): RegistrationVerifier {
 	const serverOrigin = new URL(options.serverOrigin).origin;
-	const served = new Set(options.domains.map((domain) => fromDomainToOrigin(domain)));
-	if (served.size === 0) throw new Error('delegatedIdentityVerifier: `domains` names no app');
+	const served = originOf(options.domain);
+	if (!served) throw new Error(`delegatedIdentityVerifier: the domain "${options.domain}" names no origin`);
 
 	return {
 		async verify({method, path, rawBody, body, headers}) {
@@ -62,8 +65,8 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 			) {
 				return {ok: false, reason: 'the body needs `address`, `domain` and `ownershipSignature`'};
 			}
-			const appOrigin = fromDomainToOrigin(domain);
-			if (!served.has(appOrigin)) return {ok: false, reason: `${appOrigin} is not an app this service serves`};
+			const appOrigin = originOf(domain);
+			if (appOrigin !== served) return {ok: false, reason: `${appOrigin ?? domain} is not the app this service serves`};
 
 			const verdict = await verifyRequest(
 				{
@@ -72,7 +75,7 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 					path,
 					body: rawBody,
 					signature,
-					appOrigin,
+					appOrigin: served,
 					address,
 					ownershipSignature: ownershipSignature as `0x${string}`,
 				},
@@ -85,4 +88,17 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 			return {ok: true, address: verdict.address.toLowerCase()};
 		},
 	};
+}
+
+/**
+ * A domain's origin in its one canonical spelling (lower-case, no trailing
+ * slash), as the wallet signed it: `undefined` when it names none.
+ */
+function originOf(domain: string): string | undefined {
+	try {
+		const origin = new URL(fromDomainToOrigin(domain.trim().toLowerCase())).origin;
+		return origin === 'null' ? undefined : origin;
+	} catch {
+		return undefined;
+	}
 }
