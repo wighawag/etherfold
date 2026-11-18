@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/platform-nodejs-triggers",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "etherfold's reference trigger service on Node.js and libSQL: the `etherfold-triggers` command, which runs a consumer of an indexer's canonical feed, its deliveries and its registration API from one config file, as its own process beside `etherfold run`.",
 	"publishConfig": {
 		"access": "public"
