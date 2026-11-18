@@ -28,7 +28,13 @@ etherfold-triggers run --config triggers.config.js
 
 ```js
 // triggers.config.js
-import {defineConfig, pushAction, rewardAction} from 'etherfold-triggers-nodejs';
+import {
+	defineConfig,
+	delegatedIdentityVerifier,
+	pushAction,
+	rewardAction,
+	stateReader,
+} from 'etherfold-triggers-nodejs';
 
 const GreetingsRegistry = '0x...';
 const MessageChanged = {
@@ -39,6 +45,12 @@ const MessageChanged = {
 		{indexed: false, name: 'message', type: 'string'},
 	],
 };
+
+// the indexer's state as of a log's block, over the same etherfold server's `/graphql`
+const state = stateReader({url: 'http://localhost:34002'});
+const GREETINGS_OF = `query GreetingsOf($block: BlockAddress!, $account: String!) {
+	greeter(where: {account: {eq: $account}}, first: 1, block: $block) { greetings }
+}`;
 
 export default defineConfig({
 	chainId: '31337',
@@ -68,16 +80,19 @@ export default defineConfig({
 
 		// what fires on its own, for a computed recipient
 		rules: {
-			'first-greeting': {
+			'third-greeting': {
 				event: 'greeting',
 				recipients: (log) => log.args.user,
-				// a predicate is operator code: a point read of the indexer's state as of
-				// `log.entry.blockHash` goes here (etherfold ADR-0011)
-				predicate: async (log, recipient) => true,
+				// a predicate is operator code. `MessageChanged` carries no count, so it reads the
+				// indexer's state as of the log's block, pinned by its hash (etherfold ADR-0011)
+				predicate: async (log, recipient) => {
+					const data = await state.query(GREETINGS_OF, log, {account: recipient});
+					return (data.greeter[0]?.greetings ?? 0) >= 3;
+				},
 				action: 'reward',
 				// the SEMANTIC key: the same account is never rewarded twice for it
-				key: (log, recipient) => `first-greeting:${recipient}`,
-				render: (log, recipient) => ({achievement: 'first-greeting', account: recipient}),
+				key: (log, recipient) => `third-greeting:${recipient}`,
+				render: (log, recipient) => ({achievement: 'third-greeting', account: recipient}),
 			},
 		},
 	},
@@ -92,8 +107,12 @@ export default defineConfig({
 	},
 
 	// how a registration proves its address; without one the registration API is not served.
-	// The shared ownership proof of push-notification-server (its S1-3) is the one to use.
-	// verifier: {...},
+	// delegated-identity's proof, the one push-notification-server's `/register` checks:
+	// `serverOrigin` is this service's public origin (what clients sign for), `domains` the apps it serves
+	verifier: delegatedIdentityVerifier({
+		serverOrigin: 'https://triggers.example.com',
+		domains: ['greetings.example.com'],
+	}),
 	api: {port: 8787},
 });
 ```
@@ -104,24 +123,30 @@ The reward service is yours. It receives, with `Authorization: Bearer <token>` a
 
 ```json
 {
-	"key": "first-greeting:0xabc...",
+	"key": "third-greeting:0xabc...",
 	"recipient": "0xabc...",
-	"reward": {"achievement": "first-greeting", "account": "0xabc..."},
-	"trigger": "rule:first-greeting",
+	"reward": {"achievement": "third-greeting", "account": "0xabc..."},
+	"trigger": "rule:third-greeting",
 	"log": {"consumer": "greetings", "blockNumber": 123, "blockHash": "0x...", "logIndex": 0, "transactionHash": "0x..."}
 }
 ```
 
 It MUST honour the key (the same key twice is one award: answer the second with the first's `2xx`), because delivery is at-least-once. A `2xx` is delivered; `408`, `409` (the key still in flight), `429` and `5xx` are retried with backoff (`Retry-After` honoured); any other status dead-letters at once. Retries run for about five days by default before a dead letter.
 
+### The state a predicate reads
+
+`stateReader({url})` runs a GraphQL document against the etherfold server the consumer follows (its `/graphql`, the schema an app reads), AS OF a log's block: `state.query(document, log, variables)` passes `block: {hash: log.entry.blockHash}` as `$block`, which the document hands to each root field. It is the state at the end of that block, so two logs of one block see the same state; a level-triggered rule (a predicate and a semantic key) is indifferent to it. A read that cannot answer throws a `StateReadError` (a GraphQL code such as `block-not-recorded` or `block-not-retained`, `http-<status>`, or `no-answer`): the page is then not committed and is read again next round, so a trigger is never dropped because the indexer was down. The indexer must keep the history the consumer acts at, which is etherfold's default (`unbounded` retention); a `--retention revert-only` indexer has pruned the blocks the safe lane reads.
+
 ### Registration
 
-With a verifier configured, the service serves (every body carries a `proof`; the recipient is the address the proof recovers, never one the body names):
+With a verifier configured, the service serves these routes. Each acts for the address the proof recovers, never one the body names:
 
-- `POST /subscriptions` `{kind, filter?, proof}`: register, or renew the same `(kind, filter)`.
-- `POST /subscriptions/renew` `{proof}`: renew every subscription of the prover.
-- `POST /subscriptions/cancel` `{kind, filter?, proof}`.
-- `POST /subscriptions/list` `{proof}`.
+- `POST /subscriptions` `{kind, filter?}`: register, or renew the same `(kind, filter)`.
+- `POST /subscriptions/renew`: renew every subscription of the prover.
+- `POST /subscriptions/cancel` `{kind, filter?}`.
+- `POST /subscriptions/list`.
+
+With `delegatedIdentityVerifier`, the proof is [delegated-identity](https://github.com/wighawag/delegated-identity)'s, the same a client sends to push-notification-server's `/register`, so one identity in the app registers its device there and its triggers here. Each body also carries `{address, domain, ownershipSignature}`: the wallet's address, the app's domain (a bare host, `localhost:5173` for `http://`, or an origin), and the wallet's signature authorizing the app's delegate key for that origin. The `SIGNATURE` header is the delegate key's signature over the request (`signRequest({serverOrigin, method: 'POST', path, body}, delegateKey)`, with `serverOrigin` this service's public origin and `body` the exact bytes sent). A request is refused with `401 invalid-proof` and the reason when the header is missing or malformed, its timestamp is more than a minute off, the app is not one of `domains`, or the proofs do not recover `address` (another account's key, a proof signed for another app, a request signed for another route or server, a changed body).
 
 ### Operating it
 
@@ -136,7 +161,7 @@ etherfold-triggers tick                       # one round, then exit
 
 ## Status
 
-Step S2a of the plan `docs/plans/template-tree-features.md` on the `work` branch of [jolly-roger](https://github.com/wighawag/jolly-roger): the core, tested against the repo's own test contract folded by an in-process etherfold server and recording targets. Not built yet: the fast lane (ADR-0007), digests (ADR-0011's coalescing), dormancy from delivery feedback (ADR-0012's fast path), and the production verifier on push-notification-server's shared ownership proof with an end to end on GreetingsRegistry (step S2b).
+Steps S2a and S2b of the plan `docs/plans/template-tree-features.md` on the `work` branch of [jolly-roger](https://github.com/wighawag/jolly-roger). S2a: the core, tested against the repo's own test contract folded by an in-process etherfold server and recording targets. S2b: the registration proof on delegated-identity, the state read for predicates, and the end to end on jolly-roger's greetings (its `with/indexer` processor, `packages/triggers/test/greetings.test.ts`) through push-notification-server's Node.js platform in process. Not built yet: the fast lane (ADR-0007), digests (ADR-0011's coalescing), dormancy from delivery feedback (ADR-0012's fast path); see `work/notes/ideas/what-the-first-build-left-out.md`.
 
 ## Development
 
