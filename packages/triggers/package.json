@@ -32,9 +32,11 @@
 		"@etherfold/processor-sqlite": "^0.2.6",
 		"@etherfold/server": "^0.5.2",
 		"@libsql/client": "^0.17.4",
+		"@push-notification/cli": "^0.1.0",
 		"@types/node": "^24.19.2",
 		"remote-sql-libsql": "^0.0.7",
 		"typescript": "^6.0.3",
+		"typia": "7.6.4",
 		"vitest": "^4.1.12"
 	},
 	"dependencies": {
