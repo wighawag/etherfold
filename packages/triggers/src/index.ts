@@ -29,6 +29,8 @@ export type {
 } from './triggers.js';
 export {createRegistrationAPI} from './registration.js';
 export type {RegistrationRequest, RegistrationVerifier} from './registration.js';
+export {delegatedIdentityVerifier} from './identity.js';
+export type {DelegatedIdentityVerifierOptions} from './identity.js';
 export {assertActionsFitLane, createDeliverer} from './delivery.js';
 export type {ActionAdapter, Deliverer, DeliveryOutcome, DeliveryPolicy, DeliveryReport} from './delivery.js';
 export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction} from './actions.js';

@@ -38,6 +38,7 @@
 		"vitest": "^4.1.12"
 	},
 	"dependencies": {
+		"delegated-identity": "^0.1.1",
 		"hono": "^4.13.18",
 		"remote-sql": "^0.0.7",
 		"viem": "^2.57.20"
