@@ -1,29 +1,16 @@
-# etherfold-triggers
+# @etherfold/platform-nodejs-triggers
 
-A generic trigger service for [etherfold](https://github.com/wighawag/etherfold): it follows an indexer's canonical feed (`etherfold run`'s `/{indexer}/canonical`) and fires authenticated, idempotent actions when a trigger matches, such as a Web Push through [push-notification-server](https://github.com/wighawag/push-notification-server) or a call to an operator's reward service.
+etherfold's reference trigger service on Node.js and libSQL: the `etherfold-triggers` command. It follows an indexer's canonical feed (`etherfold run`'s `/{indexer}/canonical`) and fires authenticated, idempotent actions when a trigger matches, such as a Web Push through [push-notification-server](https://github.com/wighawag/push-notification-server) or a call to an operator's reward service.
 
-Triggers run outside the indexer by design (etherfold ADR-0005): this service owns its database, its cursor, its gate, its outbox and its auth, and the indexer stores nothing about it. The rules it implements are etherfold's ADRs [0005](https://github.com/wighawag/etherfold/blob/main/docs/adr/0005-triggers-run-outside-the-indexer-server.md), [0007](https://github.com/wighawag/etherfold/blob/main/docs/adr/0007-consumers-gate-themselves-safe-and-fast-lanes.md), [0009](https://github.com/wighawag/etherfold/blob/main/docs/adr/0009-actions-are-idempotent-http-calls-with-per-type-delivery-policy.md), [0011](https://github.com/wighawag/etherfold/blob/main/docs/adr/0011-bound-triggers-by-delivery-rate-and-deliver-digests.md), [0012](https://github.com/wighawag/etherfold/blob/main/docs/adr/0012-triggers-expire-unless-renewed.md) and [0013](https://github.com/wighawag/etherfold/blob/main/docs/adr/0013-trigger-conditions-are-data-actions-are-code.md).
-
-## How it works
-
-- **The consumer** reads the canonical view page by page at or below a **gate** (the safe lane: the chain's `finalized` block, or `latest - depth`), matches each log, and commits the page's deliveries together with the cursor in one batch. A crash re-reads the page; the idempotency key absorbs anything matched twice. A rewind (`409 rewind-required`) retracts what was not yet sent from the fork block on, and records it. A change of the fold answering the feed (its `generation`) PAUSES the consumer until an operator resumes it.
-- **Two kinds of trigger** (ADR-0013): a **subscription** is registered by a user for themself, of a kind the operator declared, filtered on decoded arguments, and it expires unless renewed (ADR-0012); a **global rule** is the operator's code over every log of an event, whose recipient is computed and whose predicate decides.
-- **The outbox** holds one row per delivery, frozen at match time, unique by `(action, key)`. Each action type has a **delivery policy** (ADR-0009): a TTL, a retry budget with backoff, then a dead letter. Every row ends **delivered**, **expired**, **dead** or **retracted**, and stays inspectable.
-- **Actions** are adapters over one primitive, an authenticated `POST` carrying an `Idempotency-Key` header: `pushAction` (push-notification-server's `POST /api/push`, a token scoped to one domain; a `409`, the same key still sending, and a `502`, a failed send, are retried) and `rewardAction` (your reward service; safe lane only, retried for days). The service never submits a transaction: a mint is your reward service's job.
-
-## Packages
-
-| Package                                         |                                                                    |
-| ----------------------------------------------- | ------------------------------------------------------------------ |
-| [`etherfold-triggers`](packages/triggers)       | the core, platform-neutral (a `remote-sql` database and a `fetch`) |
-| [`etherfold-triggers-nodejs`](platforms/nodejs) | the `etherfold-triggers` CLI, on libSQL                            |
+It runs as its own process beside the indexer, never inside it ([ADR-0005](https://github.com/wighawag/etherfold/blob/main/docs/adr/0005-triggers-run-outside-the-indexer-server.md), [ADR-0100](https://github.com/wighawag/etherfold/blob/main/docs/adr/0100-the-reference-trigger-service-lives-in-this-repo-as-its-own-packages-and-runs-as-its-own-process.md)): it owns its database, its cursor, its gate, its outbox and its auth, and the indexer stores nothing about it. How it works (the consumer, the two kinds of trigger, the outbox, the actions) is in the core's README, [`@etherfold/triggers`](https://github.com/wighawag/etherfold/tree/main/packages/triggers); this package adds a libSQL database, the safe lane's RPC gate, the registration API's HTTP server and the command, and re-exports the core, so a config file imports everything from here.
 
 ## Running it
 
-Write a config module and run the CLI beside it:
+Install it in the project that holds your config module (the module imports from it), write the config, and run the command beside it:
 
 ```sh
-etherfold-triggers run --config triggers.config.js
+npm i @etherfold/platform-nodejs-triggers
+npx etherfold-triggers run --config triggers.config.js
 ```
 
 ```js
@@ -34,7 +21,7 @@ import {
 	pushAction,
 	rewardAction,
 	stateReader,
-} from 'etherfold-triggers-nodejs';
+} from '@etherfold/platform-nodejs-triggers';
 
 const GreetingsRegistry = '0x...';
 const MessageChanged = {
@@ -164,16 +151,11 @@ etherfold-triggers tick                       # one round, then exit
 
 ## Status
 
-Steps S2a and S2b of the plan `docs/plans/template-tree-features.md` on the `work` branch of [jolly-roger](https://github.com/wighawag/jolly-roger). S2a: the core, tested against the repo's own test contract folded by an in-process etherfold server and recording targets. S2b: the registration proof on delegated-identity, the state read for predicates, and the end to end on jolly-roger's greetings (its `with/indexer` processor, `packages/triggers/test/greetings.test.ts`) through push-notification-server's Node.js platform in process. Not built yet: the fast lane (ADR-0007), digests (ADR-0011's coalescing), dormancy from delivery feedback (ADR-0012's fast path); see `work/notes/ideas/what-the-first-build-left-out.md`.
+Built in steps S2a and S2b of the plan `docs/plans/template-tree-features.md` on the `work` branch of [jolly-roger](https://github.com/wighawag/jolly-roger), in its own repo (`wighawag/etherfold-triggers`), and moved here with its history in step S2c (ADR-0100). Its end to end runs jolly-roger's greetings (the `with/indexer` processor, `packages/triggers/test/greetings.test.ts`) through push-notification-server's Node.js platform in process. Not built yet: the fast lane (ADR-0007), digests (ADR-0011's coalescing), dormancy from delivery feedback (ADR-0012's fast path); see `work/notes/ideas/what-the-first-build-left-out.md`.
 
 ## Development
 
-```sh
-pnpm install
-pnpm format:check && pnpm build && pnpm typecheck && pnpm test   # the gate, `verify` in dorfl.json
-```
-
-No test opens a port.
+From the root of this repo, `pnpm install`, then this package's tests (`pnpm --filter @etherfold/platform-nodejs-triggers test`, after `pnpm build`) or the whole gate (`verify` in `dorfl.json`). No test opens a port.
 
 ## License
 

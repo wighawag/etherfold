@@ -1,5 +1,5 @@
 ---
-status: accepted; the subject is built outside etherfold (ADR-0005)
+status: accepted; built by the trigger service packages, outside the indexer-server (ADR-0100)
 ---
 
 # Trigger cost is bounded by delivery rate, and notifications are digests
