@@ -1,0 +1,49 @@
+{
+	"name": "etherfold-triggers",
+	"version": "0.0.0",
+	"description": "The core of a trigger service for etherfold: follow an indexer's canonical feed, match triggers as data, and deliver idempotent actions through a durable outbox.",
+	"type": "module",
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/wighawag/etherfold-triggers.git",
+		"directory": "packages/triggers"
+	},
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"src"
+	],
+	"scripts": {
+		"build": "rm -rf dist && tsc",
+		"typecheck": "tsc -p tsconfig.typecheck.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@etherfold/core": "^0.12.0",
+		"@etherfold/processor-entities": "^0.4.2",
+		"@etherfold/processor-sqlite": "^0.2.6",
+		"@etherfold/server": "^0.5.2",
+		"@libsql/client": "^0.17.4",
+		"@push-notification/cli": "^0.1.0",
+		"@types/node": "^24.19.2",
+		"remote-sql-libsql": "^0.0.7",
+		"typescript": "^6.0.3",
+		"typia": "7.6.4",
+		"vitest": "^4.1.12"
+	},
+	"dependencies": {
+		"delegated-identity": "^0.1.1",
+		"hono": "^4.13.18",
+		"remote-sql": "^0.0.7",
+		"viem": "^2.57.20"
+	}
+}

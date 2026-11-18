@@ -1,0 +1,46 @@
+{
+	"name": "etherfold-triggers-nodejs",
+	"version": "0.0.0",
+	"description": "The etherfold trigger service on Node.js and libSQL: a CLI that runs a consumer, its deliveries and its registration API from one config file.",
+	"type": "module",
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/wighawag/etherfold-triggers.git",
+		"directory": "platforms/nodejs"
+	},
+	"bin": {
+		"etherfold-triggers": "dist/cli.js"
+	},
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"src"
+	],
+	"scripts": {
+		"build": "rm -rf dist && tsc",
+		"typecheck": "tsc -p tsconfig.typecheck.json",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@hono/node-server": "^2.1.8",
+		"@libsql/client": "^0.17.4",
+		"etherfold-triggers": "workspace:*",
+		"remote-sql": "^0.0.7",
+		"remote-sql-libsql": "^0.0.7"
+	},
+	"devDependencies": {
+		"@types/node": "^24.19.2",
+		"typescript": "^6.0.3",
+		"viem": "^2.57.20",
+		"vitest": "^4.1.12"
+	}
+}
