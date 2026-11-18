@@ -179,7 +179,9 @@ describe('a subscription trigger on the greetings, through the real push server'
 		disk.close();
 
 		service = await start();
-		await service.tick();
+		// the restarted consumer resumes from the committed cursor: it reads only the second page
+		expect((await service.consumer.status()).cursor).toBeDefined();
+		expect((await service.tick()).consumed).toBe(1);
 		now += 10_000; // past the push's backoff
 		await service.tick();
 
@@ -231,7 +233,8 @@ describe("a global rule on the greetings: every account's third greeting", () =>
 		]);
 		await service.tick();
 		// a restart replays nothing: the cursor and the outbox were committed together
-		await (await start()).tick();
+		const restarted = await (await start()).tick();
+		expect(restarted).toMatchObject({consumed: 0, matched: 0});
 
 		expect(reward.requests.map((r) => r.headers['idempotency-key'])).toEqual([`third-greeting:${bob.address}`]);
 		expect(reward.requests[0]).toMatchObject({
