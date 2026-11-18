@@ -295,6 +295,7 @@ describe('a rewind on the greetings', () => {
 			['reward', blockHash(105)],
 		]);
 		// bob has two greetings on the winning branch: no reward was due, and none was sent
+		expect(reward.requests.length).toBeGreaterThan(0);
 		expect(reward.requests.every((r) => (r.body as {log: {blockHash: string}}).log.blockHash === blockHash(105))).toBe(
 			true,
 		);
