@@ -136,7 +136,7 @@ It MUST honour the key (the same key twice is one award: answer the second with 
 
 ### The state a predicate reads
 
-`stateReader({url})` runs a GraphQL document against the etherfold server the consumer follows (its `/graphql`, the schema an app reads), AS OF a log's block: `state.query(document, log, variables)` passes `block: {hash: log.entry.blockHash}` as `$block`, which the document hands to each root field. It is the state at the end of that block, so two logs of one block see the same state; a level-triggered rule (a predicate and a semantic key) is indifferent to it. A read that cannot answer throws a `StateReadError` (a GraphQL code such as `block-not-recorded` or `block-not-retained`, `http-<status>`, or `no-answer`): the page is then not committed and is read again next round, so a trigger is never dropped because the indexer was down. The indexer must keep the history the consumer acts at, which is etherfold's default (`unbounded` retention); a `--retention revert-only` indexer has pruned the blocks the safe lane reads.
+`stateReader({url})` runs a GraphQL document against the etherfold server the consumer follows (its `/graphql`, the schema an app reads), AS OF a log's block: `state.query(document, log, variables)` passes `block: {hash: log.entry.blockHash}` as `$block`, which the document hands to each root field. It is the state at the end of that block, so two logs of one block see the same state; a level-triggered rule (a predicate and a semantic key) is indifferent to it. A read that cannot answer throws a `StateReadError` (a GraphQL code such as `block-not-recorded` or `block-not-retained`, `http-<status>`, or `no-answer`): the page is then not committed and is read again next round, so a trigger is never dropped because the indexer was down. The other side of that: a read that keeps failing (a broken query, a pruned block) HOLDS the consumer at that page until it answers, so nothing after it is acted on. The journal records it as `stalled` (with the error and its code, once per distinct failure) and `recovered` when it moves again; `etherfold-triggers journal` shows both. The indexer must keep the history the consumer acts at, which is etherfold's default (`unbounded` retention); a `--retention revert-only` indexer has pruned the blocks the safe lane reads.
 
 ### Registration
 
@@ -158,7 +158,7 @@ etherfold-triggers status                     # where the consumer is, and why i
 etherfold-triggers resume                     # after a pause: follow the new generation or stream
 etherfold-triggers deliveries --status dead   # the dead letters, as JSON lines
 etherfold-triggers requeue <id>               # send a dead letter again
-etherfold-triggers journal                    # rewinds, pauses, expiries, dead letters
+etherfold-triggers journal                    # rewinds, pauses, stalls, expiries, dead letters
 etherfold-triggers tick                       # one round, then exit
 ```
 

@@ -3,9 +3,11 @@ import {
 	StateReadError,
 	canonicalFeed,
 	createConsumer,
+	createTriggerService,
 	createTriggerRegistry,
 	defineTriggers,
 	listDeliveries,
+	readJournal,
 	stateReader,
 	type DecodedLog,
 	type StateReader,
@@ -130,5 +132,60 @@ describe('a predicate reading the state', () => {
 		await consumer.catchUp();
 		const deliveries = await listDeliveries(db);
 		expect(deliveries.map((d) => [d.key, d.blockNumber])).toEqual([[`third-post:${ALICE.toLowerCase()}`, 104]]);
+	});
+});
+
+describe('a consumer held at a page by a read that keeps failing', () => {
+	it('journals that it is stalled, once per distinct failure, so the halt is visible after the fact', async () => {
+		let answer: 'down' | 'broken' | 'up' = 'down';
+		const reads = stateReader({
+			url: BASE_URL,
+			fetch: async (input, init) =>
+				answer === 'down'
+					? new Response('unavailable', {status: 503})
+					: answer === 'broken'
+						? new Response('{"errors":[{"message":"no","extensions":{"code":"invalid-query"}}]}', {status: 200})
+						: etherfold.fetch(input, init),
+		});
+		const db = memoryDB();
+		const service = createTriggerService({
+			db,
+			name: INDEXER,
+			chainId: CHAIN_ID,
+			feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
+			gate: async () => 1000,
+			definitions: defineTriggers({
+				events: {posted: {address: BOARD, abi: boardAbi[0]}},
+				rules: {
+					'third-post': {
+						event: 'posted',
+						recipients: (log) => log.args['author'] as string,
+						predicate: async (log, recipient) => (await postsOf(reads, log, recipient)) >= 3,
+						action: 'reward',
+						render: () => ({}),
+					},
+				},
+			}),
+			actions: {
+				reward: {
+					lanes: ['safe'],
+					policy: {maxAttempts: 1, backoff: {initialMs: 1, maxMs: 1}},
+					deliver: async () => ({kind: 'delivered'}),
+				},
+			},
+		});
+		await service.setup();
+
+		await expect(service.tick()).rejects.toBeInstanceOf(StateReadError);
+		await expect(service.tick()).rejects.toBeInstanceOf(StateReadError);
+		answer = 'broken';
+		await expect(service.tick()).rejects.toBeInstanceOf(StateReadError);
+		const stalled = await readJournal(db, {kind: 'stalled'});
+		expect(stalled.map((e) => e.detail['code'])).toEqual(['http-503', 'invalid-query']);
+		expect(stalled[0]?.detail).toMatchObject({consumer: INDEXER, error: expect.stringMatching(/503/)});
+
+		answer = 'up';
+		expect((await service.tick()).consumed).toBe(4);
+		expect(await readJournal(db, {kind: 'recovered'})).toHaveLength(1);
 	});
 });

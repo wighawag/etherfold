@@ -8,6 +8,7 @@ import {
 	type DeliveryReport,
 } from './delivery.js';
 import type {CanonicalFeed} from './feed.js';
+import {journalStatement} from './journal.js';
 import {createRegistrationAPI, type RegistrationVerifier} from './registration.js';
 import {createTriggerRegistry, defineTriggers, type TriggerDefinitions, type TriggerRegistry} from './triggers.js';
 
@@ -84,6 +85,32 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	const deliverer = createDeliverer({db: options.db, actions: options.actions, clock});
 	const api = options.verifier ? createRegistrationAPI({registry, verifier: options.verifier}) : undefined;
 
+	// The failure the journal last recorded, so a consumer held at one page journals it once
+	// rather than every round; in memory, so a restart records it once more.
+	let stalledOn: string | undefined;
+
+	/** Journal a failure to follow the feed when it differs from the last one, and the recovery. */
+	async function recordFollowing(failure: unknown): Promise<void> {
+		if (failure === undefined) {
+			if (stalledOn === undefined) return;
+			stalledOn = undefined;
+			await options.db.batch([journalStatement(options.db, clock(), 'recovered', {consumer: options.name})]);
+			return;
+		}
+		const error = failure instanceof Error ? failure.message : String(failure);
+		const code = (failure as {code?: unknown} | undefined)?.code;
+		const signature = `${typeof code === 'string' ? code : ''}:${error}`;
+		if (signature === stalledOn) return;
+		stalledOn = signature;
+		await options.db.batch([
+			journalStatement(options.db, clock(), 'stalled', {
+				consumer: options.name,
+				error,
+				...(typeof code === 'string' ? {code} : {}),
+			}),
+		]);
+	}
+
 	async function tick(): Promise<TickReport> {
 		const expired = await registry.expire();
 		// a feed that is down must not hold back what is already in the outbox: deliver either way,
@@ -96,6 +123,9 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 			failure = error;
 		}
 		const delivery = await deliverer.deliverDue();
+		// a consumer that cannot follow (a feed down, a predicate whose read keeps failing) halts at
+		// its page rather than dropping it; the journal says so, for an operator after the fact
+		await recordFollowing(followed ? undefined : failure);
 		if (!followed) throw failure;
 		return {
 			expired,

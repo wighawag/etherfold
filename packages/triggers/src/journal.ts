@@ -1,6 +1,16 @@
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 
-export type JournalKind = 'rewind' | 'paused' | 'resumed' | 'expired' | 'dead-lettered' | 'requeued';
+export type JournalKind =
+	| 'rewind'
+	| 'paused'
+	| 'resumed'
+	| 'expired'
+	| 'dead-lettered'
+	| 'requeued'
+	/** following the feed failed (the feed, or a predicate's state read): the consumer is held at its page */
+	| 'stalled'
+	/** following the feed succeeded again after a `stalled` */
+	| 'recovered';
 
 export type JournalEntry = {id: number; at: number; kind: JournalKind; detail: Record<string, unknown>};
 
