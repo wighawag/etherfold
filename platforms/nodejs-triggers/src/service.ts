@@ -1,5 +1,5 @@
 import {createClient} from '@libsql/client';
-import {canonicalFeed, createTriggerService, rpcGate, type TriggerService} from 'etherfold-triggers';
+import {canonicalFeed, createTriggerService, rpcGate, type TriggerService} from '@etherfold/triggers';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import type {NodeConfig} from './config.js';

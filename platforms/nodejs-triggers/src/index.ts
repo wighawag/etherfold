@@ -1,4 +1,4 @@
-export * from 'etherfold-triggers';
+export * from '@etherfold/triggers';
 export {defineConfig, loadConfig} from './config.js';
 export type {NodeConfig} from './config.js';
 export {createNodeService, openDatabase} from './service.js';

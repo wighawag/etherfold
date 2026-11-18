@@ -24,3 +24,7 @@ packages/cli/test/fixtures/processor-bundle/throws-on-evaluation.bundle.js
 *.yaml
 *.html
 *.json
+
+# A copy of jolly-roger's greetings processor (its `with/indexer` processor.ts but its ABI's type
+# and a header), kept in its own formatting so it diffs against the original.
+packages/triggers/test/fixtures/greetings-processor.ts

@@ -1,17 +1,11 @@
 {
-	"name": "etherfold-triggers-nodejs",
+	"name": "@etherfold/platform-nodejs-triggers",
 	"version": "0.0.0",
-	"description": "The etherfold trigger service on Node.js and libSQL: a CLI that runs a consumer, its deliveries and its registration API from one config file.",
+	"description": "etherfold's reference trigger service on Node.js and libSQL: the `etherfold-triggers` command, which runs a consumer of an indexer's canonical feed, its deliveries and its registration API from one config file, as its own process beside `etherfold run`.",
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
-	"license": "AGPL-3.0-only",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/wighawag/etherfold-triggers.git",
-		"directory": "platforms/nodejs"
-	},
-	"bin": {
-		"etherfold-triggers": "dist/cli.js"
-	},
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"exports": {
@@ -21,26 +15,35 @@
 		},
 		"./package.json": "./package.json"
 	},
-	"files": [
-		"dist",
-		"src"
-	],
-	"scripts": {
-		"build": "rm -rf dist && tsc",
-		"typecheck": "tsc -p tsconfig.typecheck.json",
-		"test": "vitest run"
+	"bin": {
+		"etherfold-triggers": "dist/cli.js"
+	},
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/wighawag/etherfold.git",
+		"directory": "platforms/nodejs-triggers"
 	},
 	"dependencies": {
-		"@hono/node-server": "^2.1.8",
-		"@libsql/client": "^0.17.4",
-		"etherfold-triggers": "workspace:*",
+		"@etherfold/triggers": "workspace:*",
+		"@hono/node-server": "^2.1.1",
+		"@libsql/client": "^0.17.3",
 		"remote-sql": "^0.0.7",
 		"remote-sql-libsql": "^0.0.7"
 	},
 	"devDependencies": {
-		"@types/node": "^24.19.2",
+		"@types/node": "^25.9.1",
+		"as-soon": "^0.1.5",
 		"typescript": "^6.0.3",
-		"viem": "^2.57.20",
-		"vitest": "^4.1.12"
+		"viem": "^2.52.0",
+		"vitest": "^4.1.8"
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsc",
+		"prepack": "cp ../../LICENSE LICENSE",
+		"typecheck": "tsc -p tsconfig.typecheck.json",
+		"dev": "as-soon -w src pnpm build",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	}
 }

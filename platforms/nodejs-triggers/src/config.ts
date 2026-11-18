@@ -1,6 +1,6 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import type {ActionAdapter, Lane, RegistrationVerifier, TriggerDefinitions} from 'etherfold-triggers';
+import type {ActionAdapter, Lane, RegistrationVerifier, TriggerDefinitions} from '@etherfold/triggers';
 
 // ---------------------------------------------------------------------------
 // ONE CONFIG FILE per service, written by the operator in JavaScript or

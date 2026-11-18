@@ -3,6 +3,8 @@
 	"compilerOptions": {
 		"rootDir": "./src",
 		"outDir": "./dist",
+		// written under it in its own repo, and kept: stricter than tsconfig.base.json, never looser
+		"noUncheckedIndexedAccess": true,
 		"types": ["node"]
 	},
 	"include": ["src/**/*.ts"],

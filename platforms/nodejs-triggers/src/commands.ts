@@ -1,5 +1,5 @@
 import {parseArgs} from 'node:util';
-import {listDeliveries, readJournal, type DeliveryStatus, type JournalKind} from 'etherfold-triggers';
+import {listDeliveries, readJournal, type DeliveryStatus, type JournalKind} from '@etherfold/triggers';
 import {loadConfig, type NodeConfig} from './config.js';
 import {createNodeService} from './service.js';
 
