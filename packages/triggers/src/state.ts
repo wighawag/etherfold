@@ -70,19 +70,20 @@ export function stateReader(options: {url: string; fetch?: typeof fetch}): State
 		async query<T>(document: string, at: DecodedLog | {blockHash: string}, variables: Record<string, unknown> = {}) {
 			const hash = 'entry' in at ? at.entry.blockHash : at.blockHash;
 			let response: Response;
+			let text: string;
 			try {
 				response = await doFetch(endpoint, {
 					method: 'POST',
 					headers: {'Content-Type': 'application/json', Accept: 'application/json'},
 					body: JSON.stringify({query: document, variables: {...variables, block: {hash}}}),
 				});
+				text = await response.text();
 			} catch (error) {
 				throw new StateReadError(
 					`the state was not read: ${error instanceof Error ? error.message : String(error)}`,
 					'no-answer',
 				);
 			}
-			const text = await response.text();
 			if (!response.ok) {
 				throw new StateReadError(
 					`the state was not read (${response.status}): ${text.slice(0, 200)}`,
