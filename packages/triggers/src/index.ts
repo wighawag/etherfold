@@ -30,6 +30,8 @@ export type {
 export {createRegistrationAPI} from './registration.js';
 export type {RegistrationRequest, RegistrationVerifier} from './registration.js';
 export {delegatedIdentityVerifier} from './identity.js';
+export {StateReadError, stateReader} from './state.js';
+export type {StateReader} from './state.js';
 export type {DelegatedIdentityVerifierOptions} from './identity.js';
 export {assertActionsFitLane, createDeliverer} from './delivery.js';
 export type {ActionAdapter, Deliverer, DeliveryOutcome, DeliveryPolicy, DeliveryReport} from './delivery.js';

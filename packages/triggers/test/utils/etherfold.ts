@@ -1,20 +1,39 @@
 import {createHash} from 'node:crypto';
 import {createClient} from '@libsql/client';
-import {StreamBuilder, serializeWireBatch, type Abi, type IndexingSource, type LogEvent} from '@etherfold/core';
+import {
+	StreamBuilder,
+	generationDigestOf,
+	resolveStreamConfig,
+	serializeWireBatch,
+	streamDigestOf,
+	type Abi,
+	type GenerationId,
+	type IndexingSource,
+	type LogEvent,
+} from '@etherfold/core';
 import {VersionedStateEventProcessor, type EntityProcessor} from '@etherfold/processor-sqlite';
-import {createServer, emissionAppenderFor, indexerRegistry, singleContextEntry} from '@etherfold/server';
+import {
+	createServer,
+	emissionAppenderFor,
+	indexerRegistry,
+	openGenerationRegistryOnSQL,
+	singleContextEntry,
+} from '@etherfold/server';
 import type {RemoteSQL} from 'remote-sql';
 import {RemoteLibSQL} from 'remote-sql-libsql';
 import {encodeAbiParameters, encodeEventTopics} from 'viem';
 
 // ---------------------------------------------------------------------------
-// AN ETHERFOLD SERVER IN THIS PROCESS, folding the repo's own test contract.
+// AN ETHERFOLD SERVER IN THIS PROCESS, folding the repo's own test contract
+// (or another fold: the greetings').
 // ---------------------------------------------------------------------------
 // The same shape as `@etherfold/server`'s own feed harness: a StreamBuilder per
 // named indexer whose emissions are appended to the server's database, and
 // batches pushed through the real `/{indexer}/ingest` route, so the canonical
-// view and its rewinds are the server's own and never synthesised. The app is
-// reached through its `fetch`: no port is opened.
+// view and its rewinds are the server's own and never synthesised. The fold
+// writes into the namespace of the database's CANONICAL generation, so the
+// server's `/graphql` answers its state as `etherfold run` does, pinned to a
+// block. The app is reached through its `fetch`: no port is opened.
 // ---------------------------------------------------------------------------
 
 /** The test contract: a board anyone may post on, which counts each author's posts. */
@@ -45,11 +64,6 @@ export const FINALITY = 3;
 const TOKEN = 'the-ingest-token';
 export const BASE_URL = 'http://etherfold.test';
 
-const SOURCE: IndexingSource<BoardABI> = {
-	chainId: CHAIN_ID,
-	contracts: [{abi: boardAbi, address: BOARD, startBlock: START_BLOCK}],
-};
-
 /** The fold: each author's post count, so the processor is a real one. */
 const boardProcessor: EntityProcessor<BoardABI> = {
 	entities: [{name: 'author', id: ['address'], fields: {posts: 'integer'}}],
@@ -60,7 +74,28 @@ const boardProcessor: EntityProcessor<BoardABI> = {
 	},
 };
 
-const PROCESSOR_IDENTITY = `sha256:${createHash('sha256').update('the-board-fold').digest('hex')}`;
+/** What one in-process etherfold folds: a named indexer over one contract. */
+export type Fold<ABI extends Abi> = {
+	indexer: string;
+	abi: ABI;
+	address: `0x${string}`;
+	processor: EntityProcessor<ABI>;
+	/** Names the processor's bytes, as a bundle's identity does. */
+	marker: string;
+};
+
+export const BOARD_FOLD: Fold<BoardABI> = {
+	indexer: INDEXER,
+	abi: boardAbi,
+	address: BOARD,
+	processor: boardProcessor,
+	marker: 'the-board-fold',
+};
+
+/** A block's hash as a node gives it, 32 bytes, on a named branch: `/graphql` takes no shorter one. */
+export function blockHash(block: number, branch = 'a'): `0x${string}` {
+	return `0x${branch}${block.toString(16).padStart(63, '0')}` as `0x${string}`;
+}
 
 let transactionCounter = 0;
 
@@ -88,30 +123,47 @@ export function posted({block, hash, author, count, text = 'hello', logIndex = 0
 	} as unknown as LogEvent<BoardABI>;
 }
 
-export type Etherfold = {
+export type Etherfold<ABI extends Abi = BoardABI> = {
 	/** What a consumer is handed: the app's own fetch, as `fetch` is. */
 	fetch: typeof fetch;
 	/** Push one batch through `/{indexer}/ingest`, refusing to carry on unless it was accepted. */
-	ingest(fromBlock: number, toBlock: number, logs: LogEvent<BoardABI>[]): Promise<void>;
+	ingest(fromBlock: number, toBlock: number, logs: LogEvent<ABI>[]): Promise<void>;
 };
 
-export async function startEtherfold(): Promise<Etherfold> {
+export async function startEtherfold<ABI extends Abi = BoardABI>(
+	fold: Fold<ABI> = BOARD_FOLD as unknown as Fold<ABI>,
+): Promise<Etherfold<ABI>> {
+	const source: IndexingSource<ABI> = {
+		chainId: CHAIN_ID,
+		contracts: [{abi: fold.abi, address: fold.address, startBlock: START_BLOCK}],
+	};
+	const processorIdentity = `sha256:${createHash('sha256').update(fold.marker).digest('hex')}`;
+	const generation: GenerationId = {
+		stream: streamDigestOf(source, resolveStreamConfig({finality: FINALITY})),
+		processor: processorIdentity,
+	};
+
 	const db: RemoteSQL = new RemoteLibSQL(createClient({url: ':memory:'}));
-	const processor = new VersionedStateEventProcessor<BoardABI>(
-		new RemoteLibSQL(createClient({url: ':memory:'})),
-		boardProcessor,
-	);
-	const builder = new StreamBuilder<BoardABI, unknown>(processor, SOURCE, {
+	// the fold writes into the namespace of the generation `/graphql` answers from
+	const processor = new VersionedStateEventProcessor<ABI>(db, fold.processor, {
+		tableNamespace: generationDigestOf(generation),
+	});
+	const builder = new StreamBuilder<ABI, unknown>(processor, source, {
 		stream: {finality: FINALITY},
-		appendEmissions: emissionAppenderFor(db, INDEXER),
-		processorIdentity: PROCESSOR_IDENTITY,
+		appendEmissions: emissionAppenderFor(db, fold.indexer),
+		processorIdentity,
 	});
 	const app = createServer<{INGEST_TOKEN?: string}>({
 		getDB: () => db,
 		getEnv: () => ({INGEST_TOKEN: TOKEN}),
-		getIndexer: indexerRegistry({[INDEXER]: singleContextEntry(db, builder)}),
+		getIndexer: indexerRegistry({[fold.indexer]: singleContextEntry(db, builder)}),
+		graphql: {declarationsOf: async () => fold.processor.entities},
 	});
 	await app.request('/admin/setup', {method: 'POST'});
+	// and that generation is the database's canonical one, as a folding process leaves it
+	const generations = await openGenerationRegistryOnSQL(db, fold.indexer, {caps: {maxGenerations: 4, maxStreams: 4}});
+	await generations.create(generation);
+	await generations.moveCanonicalTo(generation);
 
 	const served = (async (input: RequestInfo | URL, init?: RequestInit) =>
 		app.fetch(new Request(input, init))) as typeof fetch;
@@ -119,7 +171,7 @@ export async function startEtherfold(): Promise<Etherfold> {
 	return {
 		fetch: served,
 		async ingest(fromBlock, toBlock, logs) {
-			const res = await app.request(`/${INDEXER}/ingest`, {
+			const res = await app.request(`/${fold.indexer}/ingest`, {
 				method: 'POST',
 				headers: {'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}`},
 				body: serializeWireBatch({context: builder.context, fromBlock, toBlock, latestBlock: toBlock, logs}),
