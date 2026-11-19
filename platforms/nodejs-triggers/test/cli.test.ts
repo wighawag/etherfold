@@ -3,7 +3,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {encodeAbiParameters, encodeEventTopics} from 'viem';
-import {defineConfig, loadConfig, rewardAction, runCLI, type NodeConfig} from '../src/index.js';
+import {
+	createNodeService,
+	defineConfig,
+	delegatedIdentityVerifier,
+	loadConfig,
+	rewardAction,
+	runCLI,
+	type NodeConfig,
+} from '../src/index.js';
 
 // ---------------------------------------------------------------------------
 // THE CLI, port-free: every command but `run` against a config whose feed is a
@@ -140,6 +148,32 @@ describe('the CLI', () => {
 		expect(await cli('--help')).toBe(0);
 		expect(output.join('\n')).toMatch(/requeue <id>/);
 		expect(await cli('nope')).toBe(1);
+	});
+});
+
+describe('the registration API `run` serves', () => {
+	it("answers CORS for the served app's origin, with nothing more in the config than its verifier", async () => {
+		const {service, close} = await createNodeService({
+			...config,
+			verifier: delegatedIdentityVerifier({serverOrigin: 'https://triggers.test', domain: 'game.test'}),
+		});
+		try {
+			const preflight = (origin: string) =>
+				service.api!.request('https://triggers.test/subscriptions', {
+					method: 'OPTIONS',
+					headers: {
+						Origin: origin,
+						'Access-Control-Request-Method': 'POST',
+						'Access-Control-Request-Headers': 'content-type,signature',
+					},
+				});
+			const allowed = await preflight('https://game.test');
+			expect(allowed.status).toBe(204);
+			expect(allowed.headers.get('Access-Control-Allow-Origin')).toBe('https://game.test');
+			expect((await preflight('https://evil.test')).headers.get('Access-Control-Allow-Origin')).toBeNull();
+		} finally {
+			close();
+		}
 	});
 });
 
