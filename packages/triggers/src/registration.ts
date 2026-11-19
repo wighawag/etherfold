@@ -1,4 +1,6 @@
+import {REQUEST_SIGNATURE_HEADER} from 'delegated-identity';
 import {Hono} from 'hono';
+import {cors} from 'hono/cors';
 import {RegistrationError, type TriggerRegistry} from './triggers.js';
 
 // ---------------------------------------------------------------------------
@@ -34,14 +36,56 @@ export type AcceptedProof = {ok: true; address: string; once?: {key: string; unt
 
 /** The seam a registration's proof of address ownership is checked through. */
 export type RegistrationVerifier = {
+	/**
+	 * The origin of the ONE app whose pages call the API from a browser
+	 * (`https://game.example`), when the verifier serves one app: the
+	 * registration API answers CORS for this origin and no other. Absent, it
+	 * answers no CORS at all, and only a same-origin page or a server can call it.
+	 */
+	appOrigin?: string;
 	verify(request: RegistrationRequest): Promise<AcceptedProof | {ok: false; reason: string}>;
 };
+
+/** How long a browser may cache a preflight: ten minutes, so a changed app origin is picked up soon. */
+const CORS_MAX_AGE_SECONDS = 600;
+
+/** An origin in the one spelling a browser sends in `Origin`; refused when it is not one. */
+function originOf(appOrigin: string): string {
+	let origin: string;
+	try {
+		origin = new URL(appOrigin).origin;
+	} catch {
+		origin = 'null';
+	}
+	if (origin === 'null')
+		throw new Error(`createRegistrationAPI: the verifier's appOrigin "${appOrigin}" is not an origin`);
+	return origin;
+}
 
 const STATUS_OF = {'unknown-kind': 400, 'invalid-filter': 400, 'quota-exceeded': 429} as const;
 
 export function createRegistrationAPI(options: {registry: TriggerRegistry; verifier: RegistrationVerifier}) {
 	const {registry, verifier} = options;
 	const app = new Hono();
+
+	// CORS for the one app the verifier serves, never `*`: a browser app on its
+	// own origin sends a JSON body and the SIGNATURE header, so every call is
+	// preflighted. Every response carries the allow-origin, refusals included, so
+	// the app can read the reason; another origin gets none and its browser
+	// blocks the call. No credentials: the proof is in the request, not a cookie.
+	// The proof checks are untouched, and the path is not rewritten (it is what
+	// the client signed).
+	if (verifier.appOrigin !== undefined) {
+		app.use(
+			'*',
+			cors({
+				origin: originOf(verifier.appOrigin),
+				allowMethods: ['POST', 'OPTIONS'],
+				allowHeaders: ['content-type', REQUEST_SIGNATURE_HEADER.toLowerCase()],
+				maxAge: CORS_MAX_AGE_SECONDS,
+			}),
+		);
+	}
 
 	/** The body and the address it was proven for, or the refusal to answer with. */
 	async function authenticate(c: {req: {path: string; method: string; raw: Request; text(): Promise<string>}}) {

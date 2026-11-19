@@ -40,7 +40,8 @@ export type DelegatedIdentityVerifierOptions = {
 	 * refused, so a page elsewhere cannot register on this service's users'
 	 * behalf. One app per service because a subscription records no app: the push
 	 * action names one domain, so a second app's users would be pushed under the
-	 * first's domain (or to no device, reported delivered).
+	 * first's domain (or to no device, reported delivered). Its origin is also
+	 * the one the registration API answers CORS for (`appOrigin`).
 	 */
 	domain: string;
 	/** The clock a request's timestamp is checked against; `Date.now` when absent. */
@@ -55,6 +56,9 @@ export type DelegatedIdentityVerifierOptions = {
  * delegate key's signature over the request, exactly what a client sends to
  * push-notification-server's `/register`.
  *
+ * Its `appOrigin` is that app's origin (`fromDomainToOrigin(domain)`), so the
+ * registration API answers CORS for the app's pages and no other origin's.
+ *
  * Each signed request is accepted ONCE (`once`, which the registration API
  * remembers until the signature expires anyway): a request replayed within the
  * time window would otherwise re-register a subscription its owner has since
@@ -67,6 +71,7 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 	if (!served) throw new Error(`delegatedIdentityVerifier: the domain "${options.domain}" names no origin`);
 
 	return {
+		appOrigin: served,
 		async verify({method, path, rawBody, body, headers}) {
 			const signature = headers.get(REQUEST_SIGNATURE_HEADER);
 			if (!signature) return {ok: false, reason: `no ${REQUEST_SIGNATURE_HEADER} header`};
