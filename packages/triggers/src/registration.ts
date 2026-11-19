@@ -128,7 +128,11 @@ export function createRegistrationAPI(options: {registry: TriggerRegistry; verif
 		if (error instanceof RegistrationError) {
 			return c.json({success: false, error: error.code, message: error.message}, STATUS_OF[error.code]);
 		}
-		throw error;
+		// answered here rather than rethrown, so the 500 carries the CORS headers
+		// and the app reads a failure instead of a blocked response; the cause is
+		// logged for the operator and not sent to the caller
+		console.error('trigger service: a registration request failed', error);
+		return c.json({success: false, error: 'internal-error', message: 'the request could not be handled'}, 500);
 	});
 
 	app.post('/subscriptions', async (c) => {

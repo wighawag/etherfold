@@ -1,5 +1,5 @@
 import {REQUEST_SIGNATURE_HEADER} from 'delegated-identity';
-import {beforeEach, describe, expect, it} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {
 	createRegistrationAPI,
 	createTriggerRegistry,
@@ -136,7 +136,45 @@ describe('CORS on the registration API', () => {
 		});
 		expect(unknown.status).toBe(400);
 		expect(unknown.headers.get('Access-Control-Allow-Origin')).toBe(APP_ORIGIN);
+		expect(list(unknown.headers.get('Vary'))).toContain('origin');
 		expect(await unknown.json()).toMatchObject({error: 'unknown-kind'});
+	});
+
+	it('answers an unexpected failure as a JSON 500 that carries it too, and logs the error', async () => {
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		try {
+			const failing = createRegistrationAPI({
+				registry: {
+					...registry,
+					subscribe: async () => {
+						throw new Error('the database is down');
+					},
+				},
+				verifier: delegatedIdentityVerifier({serverOrigin: SERVER_ORIGIN, domain: DOMAIN}),
+			});
+			const init = await signedPost(alice, {
+				serverOrigin: SERVER_ORIGIN,
+				path: '/subscriptions',
+				fields: {kind: 'new-post'},
+			});
+			const response = await failing.request(`${SERVER_ORIGIN}/subscriptions`, {
+				...init,
+				headers: {...(init.headers as Record<string, string>), Origin: APP_ORIGIN},
+			});
+			expect(response.status).toBe(500);
+			expect(response.headers.get('Access-Control-Allow-Origin')).toBe(APP_ORIGIN);
+			expect(list(response.headers.get('Vary'))).toContain('origin');
+			const body = (await response.json()) as Record<string, unknown>;
+			expect(body).toMatchObject({success: false, error: 'internal-error'});
+			// the cause is the operator's to read, not the caller's
+			expect(JSON.stringify(body)).not.toContain('database');
+			expect(logged).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({message: 'the database is down'}),
+			);
+		} finally {
+			logged.mockRestore();
+		}
 	});
 
 	it("leaves the server's proof checks to themselves: a request from another origin gets no allow-origin and the same verdict", async () => {
