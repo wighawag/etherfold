@@ -18,7 +18,8 @@ export type JournalEntry = {id: number; app: string; at: number; kind: JournalKi
 
 /**
  * The statement that records one entry for an app, so it can join the batch whose effect it records.
- * Given the ticker's lease `guard`, it records nothing unless the lease is held (etherfold ADR-0101).
+ * Given the ticker's lease `guard`, it records nothing unless the lease is held (etherfold ADR-0101),
+ * and returns the id of the row it wrote, so an empty result means the lease was gone.
  */
 export function journalStatement(
 	db: RemoteSQL,
@@ -33,9 +34,12 @@ export function journalStatement(
 			.prepare(`INSERT INTO journal (app, at, kind, detail) VALUES (?, ?, ?, ?)`)
 			.bind(app, at, kind, JSON.stringify(detail));
 	}
-	return db
-		.prepare(`INSERT INTO journal (app, at, kind, detail) SELECT ?, ?, ?, ? WHERE ${guard.sql}`)
-		.bind(app, at, kind, JSON.stringify(detail), ...guard.args);
+	return (
+		db
+			// RETURNING, so a caller can tell a row written from one the lost lease kept out
+			.prepare(`INSERT INTO journal (app, at, kind, detail) SELECT ?, ?, ?, ? WHERE ${guard.sql} RETURNING id`)
+			.bind(app, at, kind, JSON.stringify(detail), ...guard.args)
+	);
 }
 
 /** Everything recorded for one app, oldest first. */

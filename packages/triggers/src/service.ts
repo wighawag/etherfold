@@ -190,35 +190,41 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	const api = options.verifier ? createRegistrationAPI({registry, verifier: options.verifier}) : undefined;
 
 	// The failure the journal last recorded, so a consumer held at one page journals it once
-	// rather than every round; in memory, so a restart records it once more.
+	// rather than every round; in memory, so a restart records it once more. It changes only once
+	// the journal row is written: a write the lost lease kept out is tried again by the next holder.
 	let stalledOn: string | undefined;
+
+	/** A failure to follow the feed, as a journal entry and a `lost` report carry it. */
+	function followFailureOf(failure: unknown): {error: string; code?: string} {
+		const code = (failure as {code?: unknown} | undefined)?.code;
+		return {
+			error: failure instanceof Error ? failure.message : String(failure),
+			...(typeof code === 'string' ? {code} : {}),
+		};
+	}
+
+	/** Write one guarded journal row, or stop the round when the lease kept it out. */
+	async function journalUnderLease(kind: 'stalled' | 'recovered', detail: Record<string, unknown>, failure: unknown) {
+		const [written] = await options.db.batch([journalStatement(options.db, app, clock(), kind, detail, lease.guard())]);
+		if ((written?.results?.length ?? 0) === 0) {
+			const lost = lease.lost(`the lease of the app "${app}" was lost before its journal entry: nothing was written`);
+			throw failure === undefined ? lost : new LeaseLostError(lost.message, followFailureOf(failure));
+		}
+	}
 
 	/** Journal a failure to follow the feed when it differs from the last one, and the recovery. */
 	async function recordFollowing(failure: unknown): Promise<void> {
 		if (failure === undefined) {
 			if (stalledOn === undefined) return;
+			await journalUnderLease('recovered', {}, undefined);
 			stalledOn = undefined;
-			await options.db.batch([journalStatement(options.db, app, clock(), 'recovered', {}, lease.guard())]);
 			return;
 		}
-		const error = failure instanceof Error ? failure.message : String(failure);
-		const code = (failure as {code?: unknown} | undefined)?.code;
-		const signature = `${typeof code === 'string' ? code : ''}:${error}`;
+		const detail = followFailureOf(failure);
+		const signature = `${detail.code ?? ''}:${detail.error}`;
 		if (signature === stalledOn) return;
+		await journalUnderLease('stalled', detail, failure);
 		stalledOn = signature;
-		await options.db.batch([
-			journalStatement(
-				options.db,
-				app,
-				clock(),
-				'stalled',
-				{
-					error,
-					...(typeof code === 'string' ? {code} : {}),
-				},
-				lease.guard(),
-			),
-		]);
 	}
 
 	async function tick(): Promise<TickReport> {
@@ -253,22 +259,26 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		}
 		// a consumer that cannot follow (a feed down, a predicate whose read keeps failing) halts at
 		// its page rather than dropping it; the journal says so, for an operator after the fact, while
-		// the lease is still held (a delivery that then loses it must not swallow the failure)
-		await recordFollowing(followed ? undefined : failure);
+		// the lease is still held (a delivery that then loses it must not swallow the failure). A
+		// journal write that fails for another reason does not hold back the outbox: deliver, then
+		// report it.
+		let journalFailure: unknown;
+		try {
+			await recordFollowing(followed ? undefined : failure);
+		} catch (error) {
+			if (error instanceof LeaseLostError) throw error;
+			journalFailure = error;
+		}
 		let delivery: DeliveryReport;
 		try {
 			delivery = await deliverer.deliverDue();
 		} catch (error) {
-			if (error instanceof LeaseLostError && !followed) {
-				const code = (failure as {code?: unknown} | undefined)?.code;
-				throw new LeaseLostError(error.message, {
-					error: failure instanceof Error ? failure.message : String(failure),
-					...(typeof code === 'string' ? {code} : {}),
-				});
-			}
+			if (error instanceof LeaseLostError && !followed)
+				throw new LeaseLostError(error.message, followFailureOf(failure));
 			throw error;
 		}
 		if (!followed) throw failure;
+		if (journalFailure !== undefined) throw journalFailure;
 		return {
 			expired,
 			consumed: followed.entries,
