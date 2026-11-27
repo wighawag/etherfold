@@ -94,7 +94,15 @@ export type RoundReport = {
  * a fence (`lost`) because the lease was taken, or too little of it was left to
  * start the next call, what it committed before staying committed.
  */
-export type TickReport = ({lease: 'held'} & RoundReport) | {lease: 'not-leased'} | {lease: 'lost'; reason: string};
+export type TickReport =
+	| ({lease: 'held'} & RoundReport)
+	| {lease: 'not-leased'}
+	| {
+			lease: 'lost';
+			reason: string;
+			/** The feed's failure earlier in the same round, when there was one. */
+			followFailure?: {error: string; code?: string};
+	  };
 
 export type TriggerService = {
 	/** The app it serves: what an operator read of the outbox or the journal is scoped to. */
@@ -219,7 +227,13 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		try {
 			return {lease: 'held', ...(await round())};
 		} catch (error) {
-			if (error instanceof LeaseLostError) return {lease: 'lost', reason: error.message};
+			if (error instanceof LeaseLostError) {
+				return {
+					lease: 'lost',
+					reason: error.message,
+					...(error.followFailure ? {followFailure: error.followFailure} : {}),
+				};
+			}
 			throw error;
 		}
 	}
@@ -237,10 +251,23 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 			if (error instanceof LeaseLostError) throw error;
 			failure = error;
 		}
-		const delivery = await deliverer.deliverDue();
 		// a consumer that cannot follow (a feed down, a predicate whose read keeps failing) halts at
-		// its page rather than dropping it; the journal says so, for an operator after the fact
+		// its page rather than dropping it; the journal says so, for an operator after the fact, while
+		// the lease is still held (a delivery that then loses it must not swallow the failure)
 		await recordFollowing(followed ? undefined : failure);
+		let delivery: DeliveryReport;
+		try {
+			delivery = await deliverer.deliverDue();
+		} catch (error) {
+			if (error instanceof LeaseLostError && !followed) {
+				const code = (failure as {code?: unknown} | undefined)?.code;
+				throw new LeaseLostError(error.message, {
+					error: failure instanceof Error ? failure.message : String(failure),
+					...(typeof code === 'string' ? {code} : {}),
+				});
+			}
+			throw error;
+		}
 		if (!followed) throw failure;
 		return {
 			expired,

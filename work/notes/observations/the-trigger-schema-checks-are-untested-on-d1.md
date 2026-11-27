@@ -1,0 +1,3 @@
+# The trigger service's start-up schema checks are untested on D1
+
+Observed 2026-11-27 in the whole-range review of `one-trigger-service-serves-several-apps`. `setupDatabase` (`packages/triggers/src/schema.ts`) refuses an old-layout database (`OLD_LAYOUT_MESSAGE`) and a pre-lease one (`NO_LEASE_MESSAGE`) by running one batch of `PRAGMA table_info(<table>)` statements. D1 documents `PRAGMA table_info` as supported, and the suite runs it on libSQL, but nothing has run it inside a batch through a D1 adapter. When a Cloudflare (Workers + D1) platform for the trigger service is built, add a test there that both refusals fire and that a new-layout database is set up again without complaint.

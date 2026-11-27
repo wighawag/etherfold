@@ -1,7 +1,7 @@
 import type {RemoteSQL} from 'remote-sql';
 import type {Lane} from './consumer.js';
 import {journalStatement} from './journal.js';
-import {LeaseLostError, type Lease} from './lease.js';
+import type {Lease} from './lease.js';
 import {deliveryFromRow, type DeliveryRecord} from './outbox.js';
 import {callTimeoutOf, withTimeout} from './timeout.js';
 import type {TriggerDefinitions} from './triggers.js';
@@ -123,9 +123,9 @@ export function createDeliverer(options: {
 			db
 				.prepare(
 					`UPDATE deliveries SET status = ?, attempts = ?, settled_at = ?, last_error = COALESCE(?, last_error)
-					WHERE id = ?${guard ? ` AND ${guard.sql}` : ''} RETURNING id`,
+					WHERE app = ? AND id = ?${guard ? ` AND ${guard.sql}` : ''} RETURNING id`,
 				)
-				.bind(status, attempts, now, error ?? null, delivery.id, ...(guard?.args ?? [])),
+				.bind(status, attempts, now, error ?? null, app, delivery.id, ...(guard?.args ?? [])),
 			...(status === 'delivered'
 				? []
 				: [
@@ -152,7 +152,7 @@ export function createDeliverer(options: {
 	/** Under the lease, a settle that wrote nothing was a stale holder's: the round stops. */
 	function assertSettled(written: unknown[] | undefined) {
 		if (lease && (written?.length ?? 0) === 0) {
-			throw new LeaseLostError(`the lease of the app "${app}" was lost before a settle: nothing was written`);
+			throw lease.lost(`the lease of the app "${app}" was lost before a settle: nothing was written`);
 		}
 	}
 
@@ -211,9 +211,9 @@ export function createDeliverer(options: {
 					const {results: retried} = await db
 						.prepare(
 							`UPDATE deliveries SET attempts = ?, next_attempt_at = ?, last_error = ?
-							WHERE id = ?${guard ? ` AND ${guard.sql}` : ''} RETURNING id`,
+							WHERE app = ? AND id = ?${guard ? ` AND ${guard.sql}` : ''} RETURNING id`,
 						)
-						.bind(attempts, now + wait, outcome.error, delivery.id, ...(guard?.args ?? []))
+						.bind(attempts, now + wait, outcome.error, app, delivery.id, ...(guard?.args ?? []))
 						.all();
 					assertSettled(retried);
 					report.retried++;
@@ -232,9 +232,9 @@ export function createDeliverer(options: {
 			await db.batch([
 				db
 					.prepare(
-						`UPDATE deliveries SET status = 'pending', attempts = 0, next_attempt_at = ?, settled_at = NULL WHERE id = ?`,
+						`UPDATE deliveries SET status = 'pending', attempts = 0, next_attempt_at = ?, settled_at = NULL WHERE app = ? AND id = ?`,
 					)
-					.bind(now, id),
+					.bind(now, app, id),
 				journalStatement(db, app, now, 'requeued', {delivery: id, action: delivery.action, key: delivery.key}),
 			]);
 			return true;

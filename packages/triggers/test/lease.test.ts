@@ -382,6 +382,8 @@ describe('the lease', () => {
 		let before = await snapshot();
 		await expect(consumer.step()).rejects.toBeInstanceOf(LeaseLostError);
 		expect(await snapshot()).toEqual(before);
+		// it forgot the expiry it held: its next acquire asks the database, and is refused
+		expect(await stale.acquire()).toBe(false);
 
 		// a rewind of both pending deliveries, taken over the same way
 		await handover();
@@ -409,6 +411,39 @@ describe('the lease', () => {
 		await expect(deliverer.deliverDue()).rejects.toBeInstanceOf(LeaseLostError);
 		expect(await snapshot()).toEqual(before);
 		expect((await listDeliveries(db, 'a', {status: 'pending'})).map((d) => d.attempts)).toEqual([0, 0]);
+	});
+
+	it('a round whose feed failed and whose delivery then lost the lease journals the failure, and reports it', async () => {
+		let feedDown = false;
+		const feed = pagedFeed(1, 3);
+		const read = feed.read.bind(feed);
+		feed.read = async (query) => {
+			if (feedDown) throw Object.assign(new Error('the feed is down'), {code: 'no-answer'});
+			return read(query);
+		};
+		let takeOver = false;
+		const {triggers} = service({
+			feed,
+			deliver: async () => {
+				if (takeOver) {
+					const other = createLease({db, app: 'a', clock: () => now + DEFAULT_LEASE_MS + 1, callTimeoutMs: 10_000});
+					expect(await other.acquire()).toBe(true);
+				}
+				return {kind: 'retry', error: 'later'};
+			},
+		});
+		// a first round leaves its deliveries pending, to be retried
+		expect(await triggers.tick()).toMatchObject({lease: 'held', matched: 3});
+		feedDown = true;
+		takeOver = true;
+		now += 10;
+		expect(await triggers.tick()).toMatchObject({
+			lease: 'lost',
+			followFailure: {error: 'the feed is down', code: 'no-answer'},
+		});
+		expect(await readJournal(db, 'a', {kind: 'stalled'})).toEqual([
+			expect.objectContaining({detail: {error: 'the feed is down', code: 'no-answer'}}),
+		]);
 	});
 
 	it("an operator's `resume` to a new stream's start is not undone by the ticker's next renewal", async () => {

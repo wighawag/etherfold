@@ -80,6 +80,9 @@ export const APP_NAME = /^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** The fields of the one-app shape that now belong to each app, under `apps`. */
 const PER_APP_FIELDS = ['name', 'chainId', 'etherfold', 'gate', 'triggers', 'actions', 'verifier', 'lane'] as const;
 
+/** What the top of a config holds; everything else is refused. */
+const TOP_LEVEL_FIELDS = ['database', 'api', 'intervalMs', 'retired', 'apps'] as const;
+
 const APPS_SHAPE = `export default defineConfig({
 	database: 'file:triggers.db', // shared by every app unless one names its own
 	api: {port: 8787},
@@ -111,6 +114,14 @@ export function validateConfig(config: unknown): NodeConfig {
 	if (stray.length > 0) {
 		throw new Error(
 			`the config has ${stray.map((field) => `\`${field}\``).join(', ')} beside \`apps\`: they belong to each app, under its name:\n\n${APPS_SHAPE}`,
+		);
+	}
+	// anything else at the top is a typo or a per-app setting misplaced: a plain `.mjs` config would
+	// otherwise have it silently ignored
+	const unknown = Object.keys(record).filter((key) => !(TOP_LEVEL_FIELDS as readonly string[]).includes(key));
+	if (unknown.length > 0) {
+		throw new Error(
+			`the config has ${unknown.map((key) => `\`${key}\``).join(', ')} at the top: only ${TOP_LEVEL_FIELDS.map((key) => `\`${key}\``).join(', ')} go there; a setting of an app (\`callTimeoutMs\`, \`leaseMs\`, ...) belongs under its name in \`apps\``,
 		);
 	}
 	const retired = record['retired'];

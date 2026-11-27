@@ -37,7 +37,11 @@ export const LEASE_CLOCK_SKEW_ALLOWANCE_MS = 5_000;
 /** A tick stopped because it no longer holds its app's lease, or has too little of it left for the next call. */
 export class LeaseLostError extends Error {
 	readonly code = 'lease-lost';
-	constructor(message: string) {
+	constructor(
+		message: string,
+		/** The feed's failure earlier in the same round, which the lost lease kept out of the journal. */
+		readonly followFailure?: {error: string; code?: string},
+	) {
 		super(message);
 		this.name = 'LeaseLostError';
 	}
@@ -70,6 +74,11 @@ export type Lease = {
 	observe(row: LeaseColumns | undefined): void;
 	/** The predicate every committed or settled statement carries, as of now. */
 	guard(): LeaseGuard;
+	/**
+	 * A guarded write found the lease gone: forget the expiry held in memory, so
+	 * the next `acquire()` asks the database, and return the error to throw.
+	 */
+	lost(message: string): LeaseLostError;
 	/** Give the lease up (`lease_expires = 0`), so another ticker may take it at once. A no-op when not held. */
 	release(): Promise<void>;
 };
@@ -151,6 +160,10 @@ export function createLease(options: {
 				throw new LeaseLostError(`the lease of the app "${app}" is held by another ticker`);
 			}
 			expires = Number(row.lease_expires);
+		},
+		lost(message) {
+			expires = undefined;
+			return new LeaseLostError(message);
 		},
 		guard() {
 			return {
