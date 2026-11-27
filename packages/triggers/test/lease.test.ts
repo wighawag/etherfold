@@ -446,6 +446,74 @@ describe('the lease', () => {
 		]);
 	});
 
+	it('a stall the lost lease kept out of the journal is journalled once the lease is back', async () => {
+		let takeOver = true;
+		const other = createLease({db, app: 'a', clock: () => now + DEFAULT_LEASE_MS + 1, callTimeoutMs: 10_000});
+		const feed: CanonicalFeed = {
+			async read() {
+				// another ticker takes the lease while this one's feed read fails
+				if (takeOver) expect(await other.acquire()).toBe(true);
+				throw Object.assign(new Error('the feed is down'), {code: 'no-answer'});
+			},
+		};
+		const {triggers} = service({feed});
+		// nothing is due, so the journal write is where the lost lease shows
+		expect(await triggers.tick()).toMatchObject({
+			lease: 'lost',
+			followFailure: {error: 'the feed is down', code: 'no-answer'},
+		});
+		expect(await readJournal(db, 'a', {kind: 'stalled'})).toEqual([]);
+
+		// the other ticker gives the lease back: the same failure is journalled now, once
+		takeOver = false;
+		await other.release();
+		await expect(triggers.tick()).rejects.toThrow('the feed is down');
+		await expect(triggers.tick()).rejects.toThrow('the feed is down');
+		expect(await readJournal(db, 'a', {kind: 'stalled'})).toEqual([
+			expect.objectContaining({detail: {error: 'the feed is down', code: 'no-answer'}}),
+		]);
+	});
+
+	it('a journal write that fails does not hold back the deliveries due', async () => {
+		let feedDown = false;
+		let journalDown = false;
+		const feed = pagedFeed(1, 3);
+		const read = feed.read.bind(feed);
+		feed.read = async (query) => {
+			if (feedDown) throw new Error('the feed is down');
+			return read(query);
+		};
+		type Wrapped = SQLPreparedStatement & {sql: string; inner: SQLPreparedStatement};
+		const wrap = (sql: string, inner: SQLPreparedStatement): Wrapped => ({
+			sql,
+			inner,
+			bind: (...values) => wrap(sql, inner.bind(...values)),
+			all: () => inner.all(),
+		});
+		const flaky: RemoteSQL = {
+			prepare: (sql) => wrap(sql, db.prepare(sql)),
+			batch: (list) => {
+				const statements = list as Wrapped[];
+				if (journalDown && statements.some((statement) => /INSERT INTO journal/.test(statement.sql))) {
+					return Promise.reject(new Error('the journal is down'));
+				}
+				return db.batch(statements.map((statement) => statement.inner));
+			},
+		};
+		let outcome: DeliveryOutcome = {kind: 'retry', error: 'later'};
+		const {triggers} = service({db: flaky, feed, deliver: async () => outcome});
+		expect(await triggers.tick()).toMatchObject({lease: 'held', matched: 3});
+		expect(await listDeliveries(db, 'a', {status: 'pending'})).toHaveLength(3);
+
+		feedDown = true;
+		journalDown = true;
+		outcome = {kind: 'delivered'};
+		now += 10;
+		// the round still fails on its feed, but what was due went out
+		await expect(triggers.tick()).rejects.toThrow('the feed is down');
+		expect(await listDeliveries(db, 'a', {status: 'delivered'})).toHaveLength(3);
+	});
+
 	it("an operator's `resume` to a new stream's start is not undone by the ticker's next renewal", async () => {
 		const cursors: (string | undefined)[] = [];
 		const feed: CanonicalFeed = {
