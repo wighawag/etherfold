@@ -86,12 +86,31 @@ export type Consumer = {
 	setup(): Promise<void>;
 	/** Read, match and commit ONE page (or act on the view's refusal). */
 	step(): Promise<StepResult>;
-	/** Step until the view says there is no more below the gate, or until it rewinds or pauses. */
-	catchUp(): Promise<{steps: number; entries: number; deliveries: number; last: StepResult}>;
+	/**
+	 * Step until the view says there is no more below the gate, or until it
+	 * rewinds or pauses, or (given `maxPages`) until it has read that many pages:
+	 * a bounded catch-up that reaches its bound returns normally with `hasMore`
+	 * set, and the next one goes on from there (etherfold ADR-0101's bounded
+	 * round). Unbounded, a view that never says it is done fails it after 10 000
+	 * pages.
+	 */
+	catchUp(options?: {maxPages?: number}): Promise<CatchUpReport>;
 	status(): Promise<ConsumerStatus>;
 	/** An operator's decision after a pause: follow the new generation, or start the new stream from its start. */
 	resume(): Promise<void>;
 };
+
+export type CatchUpReport = {
+	steps: number;
+	entries: number;
+	deliveries: number;
+	last: StepResult;
+	/** The view has more below the gate than this catch-up read: it stopped at its `maxPages`. */
+	hasMore: boolean;
+};
+
+/** The pages an unbounded catch-up reads before it calls the view broken. */
+const UNBOUNDED_CATCH_UP_GUARD = 10_000;
 
 type StateRow = {
 	cursor: string | null;
@@ -224,20 +243,26 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 	return {
 		setup: () => setupDatabase(db),
 		step,
-		async catchUp() {
+		async catchUp({maxPages} = {}) {
+			if (maxPages !== undefined && !(Number.isInteger(maxPages) && maxPages > 0)) {
+				throw new Error(`catchUp: maxPages must be a positive integer, not ${maxPages}`);
+			}
 			let steps = 0;
 			let entries = 0;
 			let deliveries = 0;
-			// bounded so a feed that never says it is done fails loudly rather than spinning
-			for (let guard = 0; guard < 10_000; guard++) {
+			// unbounded, guarded so a feed that never says it is done fails loudly rather than spinning;
+			// bounded, reaching the bound is the round's normal end and the next round goes on
+			for (let guard = 0; guard < (maxPages ?? UNBOUNDED_CATCH_UP_GUARD); guard++) {
 				const last = await step();
 				steps++;
-				if (last.kind !== 'advanced') return {steps, entries, deliveries, last};
+				if (last.kind !== 'advanced') return {steps, entries, deliveries, last, hasMore: false};
 				entries += last.entries;
 				deliveries += last.deliveries;
-				if (!last.hasMore) return {steps, entries, deliveries, last};
+				if (!last.hasMore || steps === maxPages) {
+					return {steps, entries, deliveries, last, hasMore: last.hasMore};
+				}
 			}
-			throw new Error(`the canonical view never reported itself caught up after 10000 pages`);
+			throw new Error(`the canonical view never reported itself caught up after ${UNBOUNDED_CATCH_UP_GUARD} pages`);
 		},
 		async status() {
 			const state = await readState();

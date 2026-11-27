@@ -1013,6 +1013,9 @@ importers:
       '@libsql/client':
         specifier: ^0.17.3
         version: 0.17.4
+      hono:
+        specifier: ^4.13.3
+        version: 4.13.3
       remote-sql:
         specifier: ^0.0.7
         version: 0.0.7
@@ -1026,6 +1029,9 @@ importers:
       as-soon:
         specifier: ^0.1.5
         version: 0.1.6
+      delegated-identity:
+        specifier: ^0.1.1
+        version: 0.1.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

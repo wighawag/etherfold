@@ -4,22 +4,24 @@ import {runCLI} from './commands.js';
 import type {NodeConfig} from './config.js';
 import {createNodeService} from './service.js';
 
-/** The long-lived half: the loop, and the registration API when the config has a verifier. */
+/** The long-lived half: every app's loop, and the registration APIs of the apps with a verifier. */
 async function serveService(config: NodeConfig, signal: AbortSignal): Promise<void> {
-	const {service, close} = await createNodeService(config);
-	const server = service.api
-		? serve({fetch: service.api.fetch, port: config.api?.port ?? 8787, hostname: config.api?.hostname ?? '127.0.0.1'})
-		: undefined;
-	if (server) {
-		console.log(`registration API on http://${config.api?.hostname ?? '127.0.0.1'}:${config.api?.port ?? 8787}`);
-	} else {
-		console.log('no verifier configured: the registration API is not served, only global rules fire');
+	const node = await createNodeService(config);
+	const port = config.api?.port ?? 8787;
+	const hostname = config.api?.hostname ?? '127.0.0.1';
+	const server = node.api ? serve({fetch: node.api.fetch, port, hostname}) : undefined;
+	for (const app of Object.values(node.apps)) {
+		console.log(
+			app.service.api
+				? `${app.name}: registration API on http://${hostname}:${port}/${app.name}/subscriptions`
+				: `${app.name}: no verifier configured, so no registration API: only global rules fire`,
+		);
 	}
 	try {
-		await service.run({signal, intervalMs: config.intervalMs ?? 5000});
+		await node.run({signal, intervalMs: config.intervalMs ?? 5000});
 	} finally {
 		await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
-		close();
+		node.close();
 	}
 }
 

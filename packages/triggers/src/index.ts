@@ -5,6 +5,7 @@ export type {
 	Consumer,
 	ConsumerOptions,
 	ConsumerStatus,
+	CatchUpReport,
 	Gate,
 	Lane,
 	MatchContext,
@@ -38,7 +39,7 @@ export {assertActionsFitLane, createDeliverer} from './delivery.js';
 export type {ActionAdapter, Deliverer, DeliveryOutcome, DeliveryPolicy, DeliveryReport} from './delivery.js';
 export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction} from './actions.js';
 export type {PushPayload} from './actions.js';
-export {createTriggerService} from './service.js';
+export {createTriggerService, DEFAULT_MAX_DELIVERIES_PER_ROUND, DEFAULT_MAX_PAGES_PER_ROUND} from './service.js';
 export type {TickReport, TriggerService, TriggerServiceOptions} from './service.js';
 export {rpcGate} from './gate.js';
 export {CallTimeoutError, DEFAULT_CALL_TIMEOUT_MS} from './timeout.js';

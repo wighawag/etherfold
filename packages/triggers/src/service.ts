@@ -50,13 +50,31 @@ export type TriggerServiceOptions = {
 	 * timed-out delivery is retried like a `5xx`.
 	 */
 	callTimeoutMs?: number;
+	/**
+	 * The most pages of the feed ONE round reads (etherfold ADR-0101): 100 when
+	 * absent. A round that reaches it returns normally with `hasMore` set and is
+	 * not a stall; the next round goes on from there, and `run` starts it at once.
+	 */
+	maxPagesPerRound?: number;
+	/**
+	 * The most due deliveries ONE round takes, oldest first (the deliverer's
+	 * batch, etherfold ADR-0101): 100 when absent. The rest wait for the next
+	 * round, so one app's backlog bounds its own round and nobody else's.
+	 */
+	maxDeliveriesPerRound?: number;
 };
+
+/** The default bound on a round's feed pages, and on its deliveries. */
+export const DEFAULT_MAX_PAGES_PER_ROUND = 100;
+export const DEFAULT_MAX_DELIVERIES_PER_ROUND = 100;
 
 export type TickReport = {
 	expired: number;
 	consumed: number;
 	matched: number;
 	paused: boolean;
+	/** The round stopped at `maxPagesPerRound` with more of the feed below the gate. */
+	hasMore: boolean;
 	delivery: DeliveryReport;
 };
 
@@ -69,9 +87,17 @@ export type TriggerService = {
 	/** The registration API (a Hono app), when a verifier was given. */
 	api: ReturnType<typeof createRegistrationAPI> | undefined;
 	setup(): Promise<void>;
-	/** One round: expire what is due, follow the feed to the gate, attempt what is due. */
+	/**
+	 * One round: expire what is due, follow the feed to the gate (at most
+	 * `maxPagesPerRound` pages), attempt what is due (at most
+	 * `maxDeliveriesPerRound`).
+	 */
 	tick(): Promise<TickReport>;
-	/** Tick until the signal aborts, waiting `intervalMs` between rounds; a failed round is reported and retried. */
+	/**
+	 * Tick until the signal aborts, waiting `intervalMs` between rounds, except
+	 * after a round that stopped at its page bound (`hasMore`), whose next round
+	 * starts at once; a failed round is reported and retried.
+	 */
 	run(options: {signal?: AbortSignal; intervalMs?: number; onError?: (error: unknown) => void}): Promise<void>;
 };
 
@@ -81,6 +107,12 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	assertActionsFitLane(definitions, options.actions, lane);
 	const clock = options.clock ?? Date.now;
 	const callTimeoutMs = callTimeoutOf(options.callTimeoutMs);
+	const maxPagesPerRound = positiveInteger('maxPagesPerRound', options.maxPagesPerRound, DEFAULT_MAX_PAGES_PER_ROUND);
+	const maxDeliveriesPerRound = positiveInteger(
+		'maxDeliveriesPerRound',
+		options.maxDeliveriesPerRound,
+		DEFAULT_MAX_DELIVERIES_PER_ROUND,
+	);
 
 	const {app} = options;
 	const registry = createTriggerRegistry({
@@ -104,7 +136,14 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		callTimeoutMs,
 		...(options.limit === undefined ? {} : {limit: options.limit}),
 	});
-	const deliverer = createDeliverer({db: options.db, app, actions: options.actions, clock, callTimeoutMs});
+	const deliverer = createDeliverer({
+		db: options.db,
+		app,
+		actions: options.actions,
+		clock,
+		callTimeoutMs,
+		batchSize: maxDeliveriesPerRound,
+	});
 	const api = options.verifier ? createRegistrationAPI({registry, verifier: options.verifier}) : undefined;
 
 	// The failure the journal last recorded, so a consumer held at one page journals it once
@@ -139,7 +178,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		let followed: Awaited<ReturnType<Consumer['catchUp']>> | undefined;
 		let failure: unknown;
 		try {
-			followed = await consumer.catchUp();
+			followed = await consumer.catchUp({maxPages: maxPagesPerRound});
 		} catch (error) {
 			failure = error;
 		}
@@ -153,6 +192,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 			consumed: followed.entries,
 			matched: followed.deliveries,
 			paused: followed.last.kind === 'paused',
+			hasMore: followed.hasMore,
 			delivery,
 		};
 	}
@@ -171,16 +211,29 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 			onError = (error) => console.error('trigger service: a round failed', error),
 		}) {
 			while (!signal?.aborted) {
+				let hasMore = false;
 				try {
-					await tick();
+					hasMore = (await tick()).hasMore;
 				} catch (error) {
 					onError(error);
 				}
+				// a round that stopped at its page bound goes on at once (a timer of 0 still yields)
+				const wait = hasMore ? 0 : intervalMs;
 				await new Promise<void>((resolve) => {
-					const timer = setTimeout(resolve, intervalMs);
-					signal?.addEventListener('abort', () => (clearTimeout(timer), resolve()), {once: true});
+					// the listener goes with the wait, so rounds in quick succession do not pile them up
+					const onAbort = () => (clearTimeout(timer), resolve());
+					const timer = setTimeout(() => (signal?.removeEventListener('abort', onAbort), resolve()), wait);
+					signal?.addEventListener('abort', onAbort, {once: true});
 				});
 			}
 		},
 	};
+}
+
+function positiveInteger(name: string, value: number | undefined, fallback: number): number {
+	if (value === undefined) return fallback;
+	if (!Number.isInteger(value) || value <= 0) {
+		throw new Error(`createTriggerService: ${name} must be a positive integer, not ${value}`);
+	}
+	return value;
 }

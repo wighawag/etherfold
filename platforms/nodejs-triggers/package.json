@@ -28,12 +28,14 @@
 		"@etherfold/triggers": "workspace:*",
 		"@hono/node-server": "^2.1.1",
 		"@libsql/client": "^0.17.3",
+		"hono": "^4.13.3",
 		"remote-sql": "^0.0.7",
 		"remote-sql-libsql": "^0.0.7"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
+		"delegated-identity": "^0.1.1",
 		"typescript": "^6.0.3",
 		"viem": "^2.52.0",
 		"vitest": "^4.1.8"
