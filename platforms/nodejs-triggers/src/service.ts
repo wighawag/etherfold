@@ -34,8 +34,11 @@ export type NodeService = {
 	 * verifier checks, prefix included); `undefined` when no app has one.
 	 */
 	api: Hono | undefined;
-	/** One round of every app, concurrently, each reported under its name (a failed round too). */
-	tick(): Promise<AppTickReport[]>;
+	/**
+	 * One round of every app (of the named apps only, when given), concurrently, each
+	 * reported under its name (a failed round too).
+	 */
+	tick(only?: string[]): Promise<AppTickReport[]>;
 	/** Every app's own loop, concurrently, until the signal aborts. */
 	run(options: {
 		signal?: AbortSignal;
@@ -111,9 +114,10 @@ export async function createNodeService(config: NodeConfig): Promise<NodeService
 	return {
 		apps,
 		api,
-		async tick() {
-			const rounds = await Promise.allSettled(Object.values(apps).map((app) => app.service.tick()));
-			return Object.values(apps).map((app, index): AppTickReport => {
+		async tick(only) {
+			const ticked = Object.values(apps).filter((app) => !only || only.includes(app.name));
+			const rounds = await Promise.allSettled(ticked.map((app) => app.service.tick()));
+			return ticked.map((app, index): AppTickReport => {
 				const round = rounds[index]!;
 				if (round.status === 'fulfilled') return {app: app.name, ...round.value};
 				const error = round.reason as {message?: unknown; code?: unknown} | undefined;

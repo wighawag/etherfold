@@ -176,15 +176,70 @@ describe('the CLI over several apps', () => {
 		expect(output.map((line) => JSON.parse(line).app)).toEqual(['board', 'forum']);
 	});
 
-	it('refuses resume and requeue, naming the apps, until they take an app', async () => {
+	it('with --app, ticks, shows the status, the outbox and the journal of that app only', async () => {
+		expect(await cli('tick', '--app', 'forum')).toBe(0);
+		expect(output.map((line) => JSON.parse(line))).toEqual([expect.objectContaining({app: 'forum', consumed: 1})]);
+		expect(rewardCalls).toBe(1);
+
+		output = [];
+		await cli('status', '--app', 'forum');
+		expect(output.map((line) => JSON.parse(line))).toEqual([expect.objectContaining({app: 'forum', generation: 'g'})]);
 		await cli('tick');
-		expect(await cli('resume')).toBe(1);
-		expect(errors.at(-1)).toMatch(/several apps \(board, forum\)/);
-		expect(await cli('requeue', '1')).toBe(1);
-		expect(errors.at(-1)).toMatch(/several apps \(board, forum\)/);
+		output = [];
+		await cli('deliveries', '--status', 'dead', '--app', 'board');
+		expect(output.map((line) => JSON.parse(line).app)).toEqual(['board']);
+		output = [];
+		await cli('journal', '--kind', 'dead-lettered', '--app', 'forum');
+		expect(output.map((line) => JSON.parse(line).app)).toEqual(['forum']);
+	});
+
+	it('refuses an unknown --app, listing the configured apps', async () => {
+		for (const command of ['status', 'tick', 'resume', 'deliveries', 'journal']) {
+			expect(await cli(command, '--app', 'nope')).toBe(1);
+			expect(errors.at(-1)).toMatch(/no app .nope. in this config \(its apps: board, forum\)/);
+		}
+		expect(await cli('requeue', '1', '--app', 'nope')).toBe(1);
+		expect(errors.at(-1)).toMatch(/no app .nope. in this config \(its apps: board, forum\)/);
+		expect(output).toEqual([]);
+	});
+
+	it('requeues a row of the app it names, refuses a row of another app, and says whose row it was', async () => {
+		await cli('tick');
+		output = [];
+		await cli('deliveries', '--status', 'dead');
+		const ids = Object.fromEntries(output.map((line) => JSON.parse(line)).map((row) => [row.app, row.id]));
+
+		expect(await cli('requeue', String(ids['forum']), '--app', 'board')).toBe(1);
+		expect(errors.at(-1)).toMatch(new RegExp(`delivery ${ids['forum']} belongs to the app forum, not board`));
 		output = [];
 		await cli('deliveries', '--status', 'dead');
 		expect(output).toHaveLength(2);
+
+		output = [];
+		expect(await cli('requeue', String(ids['board']), '--app', 'board')).toBe(0);
+		expect(JSON.parse(output[0]!)).toEqual({app: 'board', requeued: ids['board']});
+		output = [];
+		expect(await cli('requeue', String(ids['forum']))).toBe(0);
+		expect(JSON.parse(output[0]!)).toEqual({app: 'forum', requeued: ids['forum']});
+		output = [];
+		await cli('deliveries', '--status', 'pending');
+		expect(output.map((line) => JSON.parse(line).app)).toEqual(['board', 'forum']);
+		expect(await cli('requeue', '999')).toBe(1);
+		expect(errors.at(-1)).toMatch(/no app of this config has a delivery 999/);
+	});
+
+	it('names every app holding a row of an id when the apps keep their own databases', async () => {
+		config = {
+			...config,
+			apps: {
+				board: {...app, database: `file:${join(dir, 'board.db')}`},
+				forum: {...app, database: `file:${join(dir, 'forum.db')}`},
+			},
+		};
+		await cli('tick');
+		expect(await cli('requeue', '1')).toBe(1);
+		expect(errors.at(-1)).toMatch(/several apps have a delivery 1 \(board, forum\): name one with --app/);
+		expect(await cli('requeue', '1', '--app', 'forum')).toBe(0);
 	});
 
 	it('reports a failed round of one app beside the other, and exits 1', async () => {
@@ -197,6 +252,74 @@ describe('the CLI over several apps', () => {
 			{app: 'board', error: 'no gate'},
 			expect.objectContaining({app: 'forum', consumed: 1}),
 		]);
+	});
+});
+
+describe('the CLI over several apps paused on a generation change', () => {
+	/** A canonical view whose fold changes after its first page: `g1`, then `g2`. */
+	const promotingFeed = () => {
+		let reads = 0;
+		return (async () =>
+			Response.json({
+				success: true,
+				stream: 's',
+				generation: reads++ === 0 ? 'g1' : 'g2',
+				entries: [],
+				cursor: 'c',
+				hasMore: false,
+			})) as unknown as typeof fetch;
+	};
+
+	beforeEach(() => {
+		const fed = (indexer: string): AppConfig => ({
+			...app,
+			etherfold: {url: 'http://etherfold.test', indexer, fetch: promotingFeed()},
+		});
+		config = {...config, apps: {board: fed('board'), forum: fed('forum'), quiet: app}};
+	});
+
+	it('says which app is paused, the generation it left and the one it found', async () => {
+		await cli('tick');
+		await cli('tick');
+		output = [];
+		await cli('status', '--app', 'forum');
+		expect(output.map((line) => JSON.parse(line))).toEqual([
+			{
+				app: 'forum',
+				cursor: 'c',
+				stream: 's',
+				generation: 'g1',
+				paused: {kind: 'generation-changed', from: 'g1', to: 'g2'},
+			},
+		]);
+		output = [];
+		await cli('status');
+		expect(output.map((line) => JSON.parse(line)).map((status) => [status.app, status.paused?.kind])).toEqual([
+			['board', 'generation-changed'],
+			['forum', 'generation-changed'],
+			['quiet', undefined],
+		]);
+	});
+
+	it('resumes the app it names only, and without --app refuses two paused apps, naming both', async () => {
+		await cli('tick');
+		await cli('tick');
+		expect(await cli('resume')).toBe(1);
+		expect(errors.at(-1)).toMatch(/several apps are paused \(board, forum\): name one with --app/);
+
+		output = [];
+		expect(await cli('resume', '--app', 'board')).toBe(0);
+		expect(JSON.parse(output[0]!)).toEqual({app: 'board', cursor: 'c', stream: 's', generation: 'g2'});
+		output = [];
+		await cli('status', '--app', 'forum');
+		expect(JSON.parse(output[0]!)).toMatchObject({app: 'forum', paused: {kind: 'generation-changed'}});
+
+		// one paused app left: resume acts on it, and says which
+		output = [];
+		expect(await cli('resume')).toBe(0);
+		expect(JSON.parse(output[0]!)).toEqual({app: 'forum', cursor: 'c', stream: 's', generation: 'g2'});
+		expect(await cli('resume')).toBe(1);
+		expect(errors.at(-1)).toMatch(/no app is paused/);
 	});
 });
 

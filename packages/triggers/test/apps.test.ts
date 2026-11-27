@@ -254,6 +254,9 @@ describe('the journal names its app', () => {
 		// b's deliverer cannot requeue a's dead letter
 		const [deadAgain] = await listDeliveries(db, 'a', {status: 'dead'});
 		expect(await b.service.deliverer.requeue(deadAgain!.id)).toBe(false);
+		// and b's outbox does not hold it, by its id
+		expect(await listDeliveries(db, 'a', {id: deadAgain!.id})).toEqual([deadAgain]);
+		expect(await listDeliveries(db, 'b', {id: deadAgain!.id})).toEqual([]);
 		now += 365 * 24 * 60 * 60 * 1000;
 		await a.service.tick();
 
