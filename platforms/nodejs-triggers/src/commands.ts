@@ -1,17 +1,17 @@
 import {parseArgs} from 'node:util';
 import {listDeliveries, readJournal, type DeliveryStatus, type JournalKind} from '@etherfold/triggers';
 import {loadConfig, type NodeConfig} from './config.js';
-import {createNodeService} from './service.js';
+import {createNodeService, type NodeApp} from './service.js';
 
 export const USAGE = `etherfold-triggers <command> [--config <file>]
 
-Commands:
-  run                      follow the feed, deliver, and serve the registration API (until SIGINT/SIGTERM)
-  tick                     one round (expire, follow the feed to the gate, deliver what is due), then exit
-  status                   the consumer's app and position, and why it is paused if it is
-  resume                   an operator's decision after a pause: follow the new generation or stream
+Commands (every app of the config, each JSON line naming its app):
+  run                      every app's loop, and their registration APIs under /{app}/ (until SIGINT/SIGTERM)
+  tick                     one round of every app (expire, follow the feed to the gate, deliver what is due), then exit
+  status                   each app's consumer position, and why it is paused if it is
+  resume                   an operator's decision after a pause: follow the new generation or stream (one app only)
   deliveries [--status s]  the outbox (pending, delivered, expired, dead, retracted), as JSON lines
-  requeue <id>             put a dead letter back in the queue
+  requeue <id>             put a dead letter back in the queue (one app only)
   journal [--kind k]       what happened that an operator must see (rewind, paused, expired, dead-lettered, ...)
 
 Options:
@@ -47,26 +47,45 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 		return 0;
 	}
 
-	const {service, db, close} = await createNodeService(config);
+	const node = await createNodeService(config);
+	const apps = Object.values(node.apps);
+	/**
+	 * The one app an operator's action acts on. Until the CLI takes `--app`, an action on a config
+	 * of several apps is refused: resuming every paused app at once is not a decision anyone made.
+	 */
+	const onlyApp = (action: string): NodeApp | undefined => {
+		if (apps.length === 1) return apps[0];
+		io.stderr(
+			`${action} acts on one app, and this config declares several apps (${apps.map((app) => app.name).join(', ')}): run it with a config of that app alone`,
+		);
+		return undefined;
+	};
 	try {
 		switch (command) {
-			case 'tick':
-				io.stdout(JSON.stringify(await service.tick()));
-				return 0;
+			case 'tick': {
+				const reports = await node.tick();
+				for (const report of reports) io.stdout(JSON.stringify(report));
+				return reports.some((report) => 'error' in report) ? 1 : 0;
+			}
 			case 'status':
-				io.stdout(JSON.stringify(await service.consumer.status()));
+				for (const app of apps) io.stdout(JSON.stringify(await app.service.consumer.status()));
 				return 0;
-			case 'resume':
-				await service.consumer.resume();
-				io.stdout(JSON.stringify(await service.consumer.status()));
+			case 'resume': {
+				const app = onlyApp('resume');
+				if (!app) return 1;
+				await app.service.consumer.resume();
+				io.stdout(JSON.stringify(await app.service.consumer.status()));
 				return 0;
+			}
 			case 'deliveries':
-				for (const delivery of await listDeliveries(
-					db,
-					service.app,
-					values.status ? {status: values.status as DeliveryStatus} : {},
-				)) {
-					io.stdout(JSON.stringify(delivery));
+				for (const app of apps) {
+					for (const delivery of await listDeliveries(
+						app.db,
+						app.name,
+						values.status ? {status: values.status as DeliveryStatus} : {},
+					)) {
+						io.stdout(JSON.stringify(delivery));
+					}
 				}
 				return 0;
 			case 'requeue': {
@@ -75,13 +94,21 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 					io.stderr('requeue <id>: the id of a dead delivery');
 					return 1;
 				}
-				const requeued = await service.deliverer.requeue(id);
+				const app = onlyApp('requeue');
+				if (!app) return 1;
+				const requeued = await app.service.deliverer.requeue(id);
 				if (!requeued) io.stderr(`delivery ${id} is not a dead letter`);
 				return requeued ? 0 : 1;
 			}
 			case 'journal':
-				for (const entry of await readJournal(db, service.app, values.kind ? {kind: values.kind as JournalKind} : {})) {
-					io.stdout(JSON.stringify(entry));
+				for (const app of apps) {
+					for (const entry of await readJournal(
+						app.db,
+						app.name,
+						values.kind ? {kind: values.kind as JournalKind} : {},
+					)) {
+						io.stdout(JSON.stringify(entry));
+					}
 				}
 				return 0;
 			default:
@@ -89,6 +116,6 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 				return 1;
 		}
 	} finally {
-		close();
+		node.close();
 	}
 }

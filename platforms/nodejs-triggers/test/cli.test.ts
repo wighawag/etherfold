@@ -10,6 +10,7 @@ import {
 	loadConfig,
 	rewardAction,
 	runCLI,
+	type AppConfig,
 	type NodeConfig,
 } from '../src/index.js';
 
@@ -60,15 +61,15 @@ let output: string[];
 let errors: string[];
 let rewardCalls: number;
 let config: NodeConfig;
+let app: AppConfig;
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), 'etherfold-triggers-cli-'));
 	output = [];
 	errors = [];
 	rewardCalls = 0;
-	config = defineConfig({
+	app = {
 		chainId: '1',
-		database: `file:${join(dir, 'triggers.db')}`,
 		etherfold: {url: 'http://etherfold.test', indexer: 'board', fetch: feedFetch},
 		gate: async () => 1000,
 		triggers: {
@@ -95,7 +96,8 @@ beforeEach(() => {
 				}) as unknown as typeof fetch,
 			}),
 		},
-	});
+	};
+	config = defineConfig({database: `file:${join(dir, 'triggers.db')}`, apps: {board: app}});
 });
 afterEach(() => rmSync(dir, {recursive: true, force: true}));
 
@@ -109,7 +111,7 @@ const cli = (...argv: string[]) =>
 describe('the CLI', () => {
 	it('runs one round, then shows the outbox, the journal and the consumer', async () => {
 		expect(await cli('tick')).toBe(0);
-		expect(JSON.parse(output[0]!)).toMatchObject({consumed: 1, matched: 1, delivery: {dead: 1}});
+		expect(JSON.parse(output[0]!)).toMatchObject({app: 'board', consumed: 1, matched: 1, delivery: {dead: 1}});
 		expect(rewardCalls).toBe(1);
 
 		output = [];
@@ -151,30 +153,81 @@ describe('the CLI', () => {
 	});
 });
 
+describe('the CLI over several apps', () => {
+	beforeEach(() => {
+		config = {...config, apps: {board: app, forum: {...app, etherfold: {...app.etherfold, indexer: 'forum'}}}};
+	});
+
+	it('ticks, shows the status, the outbox and the journal of every app, each line naming its app', async () => {
+		expect(await cli('tick')).toBe(0);
+		expect(output.map((line) => JSON.parse(line))).toEqual([
+			expect.objectContaining({app: 'board', consumed: 1}),
+			expect.objectContaining({app: 'forum', consumed: 1}),
+		]);
+
+		output = [];
+		await cli('status');
+		expect(output.map((line) => JSON.parse(line).app)).toEqual(['board', 'forum']);
+		output = [];
+		await cli('deliveries', '--status', 'dead');
+		expect(output.map((line) => JSON.parse(line).app)).toEqual(['board', 'forum']);
+		output = [];
+		await cli('journal', '--kind', 'dead-lettered');
+		expect(output.map((line) => JSON.parse(line).app)).toEqual(['board', 'forum']);
+	});
+
+	it('refuses resume and requeue, naming the apps, until they take an app', async () => {
+		await cli('tick');
+		expect(await cli('resume')).toBe(1);
+		expect(errors.at(-1)).toMatch(/several apps \(board, forum\)/);
+		expect(await cli('requeue', '1')).toBe(1);
+		expect(errors.at(-1)).toMatch(/several apps \(board, forum\)/);
+		output = [];
+		await cli('deliveries', '--status', 'dead');
+		expect(output).toHaveLength(2);
+	});
+
+	it('reports a failed round of one app beside the other, and exits 1', async () => {
+		config = {
+			...config,
+			apps: {...config.apps, board: {...app, gate: async () => Promise.reject(new Error('no gate'))}},
+		};
+		expect(await cli('tick')).toBe(1);
+		expect(output.map((line) => JSON.parse(line))).toEqual([
+			{app: 'board', error: 'no gate'},
+			expect.objectContaining({app: 'forum', consumed: 1}),
+		]);
+	});
+});
+
 describe('the per-call timeout', () => {
 	it("is the config's `callTimeoutMs`: a gate that never answers fails the round after it", async () => {
-		const {service, close} = await createNodeService({
+		const node = await createNodeService({
 			...config,
-			gate: () => new Promise<number>(() => {}),
-			callTimeoutMs: 30,
+			apps: {board: {...app, gate: () => new Promise<number>(() => {}), callTimeoutMs: 30}},
 		});
 		try {
-			await expect(service.tick()).rejects.toMatchObject({code: 'gate-timeout'});
+			expect(await node.tick()).toEqual([{app: 'board', error: expect.any(String), code: 'gate-timeout'}]);
 		} finally {
-			close();
+			node.close();
 		}
 	});
 });
 
 describe('the registration API `run` serves', () => {
 	it("answers CORS for the served app's origin, with nothing more in the config than its verifier", async () => {
-		const {service, close} = await createNodeService({
+		const node = await createNodeService({
 			...config,
-			verifier: delegatedIdentityVerifier({serverOrigin: 'https://triggers.test', domain: 'game.test'}),
+			apps: {
+				board: {
+					...app,
+					verifier: delegatedIdentityVerifier({serverOrigin: 'https://triggers.test', domain: 'game.test'}),
+				},
+			},
 		});
 		try {
 			const preflight = (origin: string) =>
-				service.api!.request('https://triggers.test/subscriptions', {
+				node.api!.request('https://triggers.test/board/subscriptions', {
 					method: 'OPTIONS',
 					headers: {
 						Origin: origin,
@@ -187,14 +240,22 @@ describe('the registration API `run` serves', () => {
 			expect(allowed.headers.get('Access-Control-Allow-Origin')).toBe('https://game.test');
 			expect((await preflight('https://evil.test')).headers.get('Access-Control-Allow-Origin')).toBeNull();
 		} finally {
-			close();
+			node.close();
 		}
 	});
 });
 
 describe('a config file', () => {
 	it('is its module default export', async () => {
-		expect(await loadConfig(join(import.meta.dirname, 'fixtures/minimal.config.mjs'))).toMatchObject({chainId: '1'});
+		expect(await loadConfig(join(import.meta.dirname, 'fixtures/minimal.config.mjs'))).toMatchObject({
+			apps: {board: {chainId: '1'}},
+		});
 		await expect(loadConfig(join(import.meta.dirname, 'fixtures/no-default.mjs'))).rejects.toThrow(/no default export/);
+	});
+
+	it('in the old flat shape is refused, showing the `apps` shape', async () => {
+		await expect(loadConfig(join(import.meta.dirname, 'fixtures/flat.config.mjs'))).rejects.toThrow(
+			/no `apps`[\s\S]*export default defineConfig\(\{[\s\S]*apps: \{/,
+		);
 	});
 });

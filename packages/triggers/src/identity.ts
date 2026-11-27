@@ -26,8 +26,9 @@ export type DelegatedIdentityVerifierOptions = {
 	 * This service's own public origin, the one a client signs its requests for
 	 * (`https://triggers.example`), as push-notification-server's `PUBLIC_ORIGIN`.
 	 * Configured rather than read from the request, which a proxy in front may
-	 * rewrite. The routes are checked at the path the service sees
-	 * (`/subscriptions`), which is the path a client signs, so the API must be
+	 * rewrite. The routes are checked at the full path the service sees
+	 * (`/subscriptions`, or `/{app}/subscriptions` where a platform mounts the
+	 * API under the app's name), which is the path a client signs, so the API must be
 	 * reached at this origin's ROOT with no path rewritten: an origin with a path
 	 * (`https://example.com/triggers`) is refused here rather than refusing every
 	 * request later with nothing saying why.

@@ -1,8 +1,8 @@
 # @etherfold/platform-nodejs-triggers
 
-etherfold's reference trigger service on Node.js and libSQL: the `etherfold-triggers` command. It follows an indexer's canonical feed (`etherfold run`'s `/{indexer}/canonical`) and fires authenticated, idempotent actions when a trigger matches, such as a Web Push through [push-notification-server](https://github.com/wighawag/push-notification-server) or a call to an operator's reward service.
+etherfold's reference trigger service on Node.js and libSQL: the `etherfold-triggers` command. One process hosts several apps from one config; each app follows its indexer's canonical feed (`etherfold run`'s `/{indexer}/canonical`) and fires authenticated, idempotent actions when a trigger matches, such as a Web Push through [push-notification-server](https://github.com/wighawag/push-notification-server) or a call to an operator's reward service.
 
-It runs as its own process beside the indexer, never inside it ([ADR-0005](https://github.com/wighawag/etherfold/blob/main/docs/adr/0005-triggers-run-outside-the-indexer-server.md), [ADR-0100](https://github.com/wighawag/etherfold/blob/main/docs/adr/0100-the-reference-trigger-service-lives-in-this-repo-as-its-own-packages-and-runs-as-its-own-process.md)): it owns its database, its cursor, its gate, its outbox and its auth, and the indexer stores nothing about it. How it works (the consumer, the two kinds of trigger, the outbox, the actions) is in the core's README, [`@etherfold/triggers`](https://github.com/wighawag/etherfold/tree/main/packages/triggers); this package adds a libSQL database, the safe lane's RPC gate, the registration API's HTTP server and the command, and re-exports the core, so a config file imports everything from here.
+It runs as its own process beside the indexer, never inside it ([ADR-0005](https://github.com/wighawag/etherfold/blob/main/docs/adr/0005-triggers-run-outside-the-indexer-server.md), [ADR-0100](https://github.com/wighawag/etherfold/blob/main/docs/adr/0100-the-reference-trigger-service-lives-in-this-repo-as-its-own-packages-and-runs-as-its-own-process.md)): each app owns its cursor, its gate, its outbox and its auth, in an app-keyed slice of the database it shares (or one of its own), and the indexer stores nothing about it. How it works (the consumer, the two kinds of trigger, the outbox, the actions) is in the core's README, [`@etherfold/triggers`](https://github.com/wighawag/etherfold/tree/main/packages/triggers); this package adds a libSQL database, the safe lane's RPC gate, the registration API's HTTP server and the command, and re-exports the core, so a config file imports everything from here.
 
 ## Running it
 
@@ -12,6 +12,8 @@ Install it in the project that holds your config module (the module imports from
 npm i @etherfold/platform-nodejs-triggers
 npx etherfold-triggers run --config triggers.config.js
 ```
+
+One process hosts several APPS ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)): the config's default export is `{database?, api?, intervalMs?, apps}`, and `apps` maps each app's NAME to everything that app is: its chain, its feed (the etherfold server and named indexer it follows), its gate, its triggers, its actions with their tokens, and its verifier. A single app is an `apps` of one, so there is one shape and one route layout however many apps you run, and adding a second app changes nothing for the first. This one hosts a greetings demo and a game, on different chains and indexers:
 
 ```js
 // triggers.config.js
@@ -32,6 +34,15 @@ const MessageChanged = {
 		{indexed: false, name: 'message', type: 'string'},
 	],
 };
+const Game = '0x...';
+const TurnPlayed = {
+	type: 'event',
+	name: 'TurnPlayed',
+	inputs: [
+		{indexed: true, name: 'player', type: 'address'},
+		{indexed: true, name: 'next', type: 'address'},
+	],
+};
 
 // the indexer's state as of a log's block, over the same etherfold server's `/graphql`
 const state = stateReader({url: 'http://localhost:34002'});
@@ -39,74 +50,120 @@ const GREETINGS_OF = `query GreetingsOf($block: BlockAddress!, $account: String!
 	greeter(where: {account: {eq: $account}}, first: 1, block: $block) { greetings }
 }`;
 
+// this service's public origin, what every app's clients sign their requests for
+const serverOrigin = 'https://triggers.example.com';
+
 export default defineConfig({
-	chainId: '31337',
+	// one database for every app, unless an app names its own; `file:triggers.db` when absent
 	database: 'file:triggers.db',
-	etherfold: {url: 'http://localhost:34002', indexer: 'greetings'},
-	// the safe lane: the finalized block, or `depth` blocks below the tip on a chain without the tag
-	gate: {rpcUrl: 'http://localhost:8545', depth: 0},
+	// one HTTP server for every app's registration API
+	api: {port: 8787},
 
-	triggers: {
-		// what can be decoded: users never send an ABI
-		events: {greeting: {address: GreetingsRegistry, abi: MessageChanged}},
+	apps: {
+		// the app's NAME, a URL-safe slug: its routes are /greetings/subscriptions, ...
+		greetings: {
+			chainId: '31337',
+			etherfold: {url: 'http://localhost:34002', indexer: 'greetings'},
+			// the safe lane: the finalized block, or `depth` blocks below the tip on a chain without the tag
+			gate: {rpcUrl: 'http://localhost:8545', depth: 0},
 
-		// what a user may register for themself (the recipient is whoever the proof recovers)
-		subscriptions: {
-			'new-greeting': {
-				event: 'greeting',
-				notFrom: 'user', // "from anyone but me"
-				filterable: ['user'], // a registration may ask for one author only
-				action: 'push',
-				ttlMs: 90 * 24 * 60 * 60 * 1000, // expires unless the app renews it
-				render: (log) => ({
-					message: {web_push: 8030, notification: {title: 'New greeting', body: log.args.message, navigate: '/'}},
-					topic: 'new-greeting',
+			triggers: {
+				// what can be decoded: users never send an ABI
+				events: {greeting: {address: GreetingsRegistry, abi: MessageChanged}},
+
+				// what a user may register for themself (the recipient is whoever the proof recovers)
+				subscriptions: {
+					'new-greeting': {
+						event: 'greeting',
+						notFrom: 'user', // "from anyone but me"
+						filterable: ['user'], // a registration may ask for one author only
+						action: 'push',
+						ttlMs: 90 * 24 * 60 * 60 * 1000, // expires unless the app renews it
+						render: (log) => ({
+							message: {web_push: 8030, notification: {title: 'New greeting', body: log.args.message, navigate: '/'}},
+							topic: 'new-greeting',
+						}),
+					},
+				},
+
+				// what fires on its own, for a computed recipient
+				rules: {
+					'third-greeting': {
+						event: 'greeting',
+						recipients: (log) => log.args.user,
+						// a predicate is operator code. `MessageChanged` carries no count, so it reads the
+						// indexer's state as of the log's block, pinned by its hash (etherfold ADR-0011). Its
+						// `signal` aborts at the per-call timeout: pass it to each read, so they are cancelled with it
+						predicate: async (log, recipient, {signal}) => {
+							const data = await state.query(GREETINGS_OF, log, {account: recipient}, {signal});
+							return (data.greeter[0]?.greetings ?? 0) >= 3;
+						},
+						action: 'reward',
+						// the SEMANTIC key: the same account is never rewarded twice for it
+						key: (log, recipient) => `third-greeting:${recipient}`,
+						render: (log, recipient) => ({achievement: 'third-greeting', account: recipient}),
+					},
+				},
+			},
+
+			actions: {
+				// pushes under THIS app's domain, with this app's token
+				push: pushAction({
+					url: 'https://push.example.com/api',
+					domain: 'greetings.example.com',
+					token: process.env.GREETINGS_PUSH_TOKEN,
+				}),
+				reward: rewardAction({url: 'https://rewards.example.com/award', token: process.env.REWARD_TOKEN}),
+			},
+
+			// how a registration proves its address; without one this app serves no routes.
+			// delegated-identity's proof, the one push-notification-server's `/register` checks:
+			// `domain` is this app's, and a proof for any other app is refused on its routes
+			verifier: delegatedIdentityVerifier({serverOrigin, domain: 'greetings.example.com'}),
+			// the bound on each call to the outside (the gate, a feed read, a predicate, a delivery); 10 s when absent
+			callTimeoutMs: 10_000,
+		},
+
+		game: {
+			chainId: '10',
+			etherfold: {url: 'https://indexer.example.com', indexer: 'game'},
+			gate: {rpcUrl: 'https://mainnet.optimism.io'},
+			// this app keeps its rows in a database of its own
+			database: 'libsql://game-triggers.example.turso.io?authToken=' + process.env.GAME_DB_TOKEN,
+			triggers: {
+				events: {turn: {address: Game, abi: TurnPlayed}},
+				subscriptions: {
+					'my-turn': {
+						event: 'turn',
+						filterable: ['next'],
+						action: 'push',
+						render: () => ({message: {web_push: 8030, notification: {title: 'Your turn', navigate: '/'}}}),
+					},
+				},
+			},
+			actions: {
+				// also named `push`: an action name, a subscription kind or a rule key never collides across apps
+				push: pushAction({
+					url: 'https://push.example.com/api',
+					domain: 'game.example.com',
+					token: process.env.GAME_PUSH_TOKEN,
 				}),
 			},
-		},
-
-		// what fires on its own, for a computed recipient
-		rules: {
-			'third-greeting': {
-				event: 'greeting',
-				recipients: (log) => log.args.user,
-				// a predicate is operator code. `MessageChanged` carries no count, so it reads the
-				// indexer's state as of the log's block, pinned by its hash (etherfold ADR-0011). Its
-				// `signal` aborts at the per-call timeout: pass it to each read, so they are cancelled with it
-				predicate: async (log, recipient, {signal}) => {
-					const data = await state.query(GREETINGS_OF, log, {account: recipient}, {signal});
-					return (data.greeter[0]?.greetings ?? 0) >= 3;
-				},
-				action: 'reward',
-				// the SEMANTIC key: the same account is never rewarded twice for it
-				key: (log, recipient) => `third-greeting:${recipient}`,
-				render: (log, recipient) => ({achievement: 'third-greeting', account: recipient}),
-			},
+			verifier: delegatedIdentityVerifier({serverOrigin, domain: 'game.example.com'}),
 		},
 	},
-
-	actions: {
-		push: pushAction({
-			url: 'https://push.example.com/api',
-			domain: 'greetings.example.com',
-			token: process.env.PUSH_TOKEN,
-		}),
-		reward: rewardAction({url: 'https://rewards.example.com/award', token: process.env.REWARD_TOKEN}),
-	},
-
-	// how a registration proves its address; without one the registration API is not served.
-	// delegated-identity's proof, the one push-notification-server's `/register` checks:
-	// `serverOrigin` is this service's public origin (what clients sign for), `domain` the ONE app it serves
-	// (the push action pushes under one domain, so one service serves one app)
-	verifier: delegatedIdentityVerifier({
-		serverOrigin: 'https://triggers.example.com',
-		domain: 'greetings.example.com',
-	}),
-	api: {port: 8787},
-	// the bound on each call to the outside (the gate, a feed read, a predicate, a delivery); 10 s when absent
-	callTimeoutMs: 10_000,
 });
 ```
+
+The config's top level holds only what the process shares: `database`, `api` (`port` 8787 and `hostname` 127.0.0.1 when absent) and `intervalMs` (the wait between one app's rounds, 5000 when absent). An app's name is its key in `apps`: lower-case letters, digits and inner hyphens, at most 64 characters, so it reads cleanly in a route and a log line whatever the app's domain (`localhost:5173` included). A config whose `apps` is missing (the one-app shape of earlier versions, with `chainId`, `etherfold` and the rest at the top) is refused at start with the shape to write instead, and so is an app name that is not such a slug.
+
+### One database, or one per app
+
+All apps share ONE database by default (`database`, `file:triggers.db` when absent); an app that names its own `database` keeps every row there and none in the shared one. The schema is the same either way, because every row is keyed by the app ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)), so moving an app between the two is copying its rows, never a redesign. The shared database is the default for fewer moving parts, not for price: an extra database costs next to nothing on Turso or D1 (`work/notes/findings/a-database-costs-almost-nothing-on-d1-and-turso.md` in this repo). Apps naming the same URL share one connection. A database written before the app key is refused at start: start from an empty one.
+
+### One loop per app
+
+`run` runs each app's own loop, concurrently, in the one process: its own consumer, cursor, gate, outbox and registration API, so one app's slow or failing round (a predicate that throws, a feed that does not answer) delays no other app's, and the journal records the stall under that app's name. Each round is bounded: at most `maxPagesPerRound` pages of the app's feed (100 when absent; a round that reaches it is not a stall, and the next starts at once) and at most `maxDeliveriesPerRound` due deliveries (100 when absent; the rest wait for the next round), both per app. What the process does NOT isolate is a synchronous infinite loop in one app's own code (a `render`, `recipients` or `predicate` that never returns without awaiting): it freezes the whole process, every app with it, because the apps share one event loop. That is acceptable because every app here is the one operator's own; running mutually untrusted apps' code in one process would need a sandbox, which this is not.
 
 ### A reward target
 
@@ -134,31 +191,31 @@ Every call the service makes to the outside is bounded by `callTimeoutMs` (10 s 
 
 ### Registration
 
-With a verifier configured, the service serves these routes. Each acts for the address the proof recovers, never one the body names:
+Each app with a verifier is served at `/{app}/...` on the one server, whatever the number of apps (`/greetings/subscriptions` and `/game/subscriptions` above); an app without a verifier serves no routes, and only its global rules fire. Each route acts for the address the proof recovers, never one the body names:
 
-- `POST /subscriptions` `{kind, filter?}`: register, or renew the same `(kind, filter)`.
-- `POST /subscriptions/renew`: renew every subscription of the prover.
-- `POST /subscriptions/cancel` `{kind, filter?}`.
-- `POST /subscriptions/list`.
+- `POST /{app}/subscriptions` `{kind, filter?}`: register, or renew the same `(kind, filter)`.
+- `POST /{app}/subscriptions/renew`: renew every subscription of the prover in that app.
+- `POST /{app}/subscriptions/cancel` `{kind, filter?}`.
+- `POST /{app}/subscriptions/list`.
 
-With `delegatedIdentityVerifier`, the proof is [delegated-identity](https://github.com/wighawag/delegated-identity)'s, the same a client sends to push-notification-server's `/register`, so one identity in the app registers its device there and its triggers here. Each body also carries `{address, domain, ownershipSignature}`: the wallet's address, the app's domain (a bare host, `localhost:5173` for `http://`, or an origin), and the wallet's signature authorizing the app's delegate key for that origin. The `SIGNATURE` header is the delegate key's signature over the request (`signRequest({serverOrigin, method: 'POST', path, body}, delegateKey)`, with `serverOrigin` this service's public origin and `body` the exact bytes sent). A request is refused with `401 invalid-proof` and the reason when the header is missing or malformed, its timestamp is more than a minute off, the app is not the configured `domain`, or the proofs do not recover `address` (another account's key, a proof signed for another app, a request signed for another route or server, a changed body). Each signed request is accepted once: a replay within the minute is refused (`replayed`), so a captured registration cannot undo a later cancel; the service remembers each accepted request until its signature would have expired anyway.
+With `delegatedIdentityVerifier`, the proof is [delegated-identity](https://github.com/wighawag/delegated-identity)'s, the same a client sends to push-notification-server's `/register`, so one identity in the app registers its device there and its triggers here. Each body also carries `{address, domain, ownershipSignature}`: the wallet's address, the app's domain (a bare host, `localhost:5173` for `http://`, or an origin), and the wallet's signature authorizing the app's delegate key for that origin. The `SIGNATURE` header is the delegate key's signature over the request (`signRequest({serverOrigin, method: 'POST', path, body}, delegateKey)`, with `serverOrigin` this service's public origin and `body` the exact bytes sent). A request is refused with `401 invalid-proof` and the reason when the header is missing or malformed, its timestamp is more than a minute off, the app is not the `domain` of the app whose route it calls (a proof for one app is refused on another's routes), or the proofs do not recover `address` (another account's key, a proof signed for another app, a request signed for another route or server, a changed body). Each signed request is accepted once: a replay within the minute is refused (`replayed`), so a captured registration cannot undo a later cancel; the service remembers each accepted request until its signature would have expired anyway.
 
-The API answers CORS for the served app's origin (the configured `domain`'s) and no other, so the app's pages call it straight from the browser.
+Each app's routes answer CORS for that app's origin (its verifier's `domain`'s) and no other, so the app's pages call its routes straight from the browser and no app's pages can call another's.
 
-The routes are checked at the path the service sees, which is the path the client signs, so serve the API at the root of `serverOrigin`: a proxy that strips a prefix or rewrites the path would refuse every request, and a `serverOrigin` with a path is refused when the verifier is built.
+The routes are checked at the full path the service sees, the `/{app}` prefix included, which is the path the client signs: a client of the app `greetings` signs `/greetings/subscriptions`, and a request signed for `/subscriptions` is refused there. So serve the API at the root of `serverOrigin`: a proxy that strips a prefix or rewrites the path would refuse every request, and a `serverOrigin` with a path is refused when the verifier is built.
 
 ### Operating it
 
 ```sh
-etherfold-triggers status                     # the app, where its consumer is, and why it is paused
+etherfold-triggers status                     # each app, where its consumer is, and why it is paused
 etherfold-triggers resume                     # after a pause: follow the new generation or stream
 etherfold-triggers deliveries --status dead   # the dead letters, as JSON lines
 etherfold-triggers requeue <id>               # send a dead letter again
 etherfold-triggers journal                    # rewinds, pauses, stalls, expiries, dead letters
-etherfold-triggers tick                       # one round, then exit
+etherfold-triggers tick                       # one round of every app, then exit
 ```
 
-The config's `name` (the indexer's when absent) is the APP the service serves, and every row the service writes is keyed by it ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)), so two configs naming the same `database` stay apart as long as they name different apps; `deliveries` and `journal` show this app's rows only. A database written before the app key is refused at start: start from an empty one.
+`status`, `deliveries`, `journal` and `tick` cover every app of the config, one JSON line per row, each naming its `app`; `tick` exits 1 when any app's round failed, and reports that app's error beside the others' rounds. `resume` and `requeue` act on ONE app, so with several apps configured they are refused, naming the apps, until the CLI takes an app to act on: resuming every paused app at once is not a decision anyone made. Every row the service writes is keyed by its app, so `deliveries` and `journal` never mix two apps' rows under one name.
 
 ## Status
 
