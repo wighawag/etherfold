@@ -11,7 +11,9 @@ covers: [17, 18]
 With several apps in one config and an app-keyed schema, a database can hold rows of an app the config does not declare for it: a config pointed at the wrong database, or another operator's service sharing it. Make `etherfold-triggers` refuse to start then, and give the operator a way to say an app is retired:
 
 - **Guard, in the platform** (the core knows nothing about several apps): at start, for each database the config opens, read its `consumers` rows and refuse when one names an app that the config neither declares for THAT database nor lists in a new top-level `retired: string[]`, naming the app and the database.
-- **`retired`** is how an operator removes an app (deletes it from `apps`) or moves one to its own database: the old rows stay (ADR-0012: never a quiet DELETE), and the guard lets them be. An app both declared and listed in `retired` is refused as a contradiction.
+- **`retired`** is how an operator removes an app (deletes it from `apps`) or moves one to its own database: the old rows stay (ADR-0012: never a quiet DELETE), and the guard lets them be. `retired` applies only to databases where the app is NOT declared: an app may be in both `apps` and `retired` (that is exactly the move case), so being in both is NOT refused.
+
+> DECISION (maintainer wighawag, 2026-11-27, during the drive): the original "an app both declared and listed in `retired` is refused as a contradiction" rule contradicted the move-to-its-own-database criterion, so it is DROPPED. `retired` stays a top-level `string[]` meaning "leave this app's rows alone in every database the config does not declare it for". Do not add a per-database `retired` shape and do not refuse an app that is in both lists.
 - Document `retired` and the guard in the platform README.
 
 ## Acceptance criteria
@@ -20,7 +22,7 @@ With several apps in one config and an app-keyed schema, a database can hold row
 - [ ] Listing `a` in `retired` lets the same config start, and `a`'s rows are untouched.
 - [ ] Removing an app from `apps` (and adding it to `retired`) leaves all its rows in the database.
 - [ ] Moving app `a` from the shared database to its own: the shared database still holding `a`'s old rows is accepted once `a` is in `retired`, and `a` runs on its own database.
-- [ ] An app both in `apps` and in `retired` is refused.
+- [ ] An app both in `apps` and in `retired` starts normally on its declared database (the move case); no contradiction refusal exists.
 - [ ] The platform README documents `retired` and the guard.
 - [ ] A changeset for `@etherfold/platform-nodejs-triggers` (0.x: minor).
 - [ ] Tests cover the new behaviour (mirror `platforms/nodejs-triggers/test`).
