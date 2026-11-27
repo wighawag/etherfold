@@ -1,9 +1,10 @@
 import {
 	REQUEST_SIGNATURE_HEADER,
-	delegatePublicKey,
+	deriveKeySet,
 	fromDomainToOrigin,
 	originPublicKeyPublicationMessage,
 	signRequest,
+	type KeySet,
 } from 'delegated-identity';
 import {encodeAbiParameters, encodeEventTopics} from 'viem';
 import {generatePrivateKey, privateKeyToAccount} from 'viem/accounts';
@@ -93,16 +94,16 @@ export function recordingAction(): ActionAdapter & {delivered: DeliveryRecord[]}
 	};
 }
 
-export type AppUser = {address: string; domain: string; delegateKey: `0x${string}`; ownershipSignature: string};
+export type AppUser = {address: string; domain: string; keySet: KeySet; ownershipSignature: string};
 
-/** A wallet that authorized a delegate key for the app at `domain`. */
+/** A wallet that authorized a key set (an Ed25519 signing key, an X25519 encryption key) for the app at `domain`. */
 export async function appUser(domain: string): Promise<AppUser> {
 	const wallet = privateKeyToAccount(generatePrivateKey());
-	const delegateKey = generatePrivateKey();
+	const keySet = deriveKeySet(generatePrivateKey());
 	const ownershipSignature = await wallet.signMessage({
-		message: originPublicKeyPublicationMessage(fromDomainToOrigin(domain), delegatePublicKey(delegateKey)),
+		message: originPublicKeyPublicationMessage(fromDomainToOrigin(domain), keySet),
 	});
-	return {address: wallet.address.toLowerCase(), domain, delegateKey, ownershipSignature};
+	return {address: wallet.address.toLowerCase(), domain, keySet, ownershipSignature};
 }
 
 /** A POST as the app's client sends it, signed for `serverOrigin` and `signedPath` (the path it is sent to when absent). */
@@ -113,12 +114,16 @@ export async function signedPost(
 	const body = JSON.stringify({
 		address: user.address,
 		domain: user.domain,
+		keySet: {
+			signing: {publicKey: user.keySet.signing.publicKey},
+			encryption: {publicKey: user.keySet.encryption.publicKey},
+		},
 		ownershipSignature: user.ownershipSignature,
 		...request.fields,
 	});
 	const signature = await signRequest(
 		{serverOrigin: request.serverOrigin, method: 'POST', path: request.signedPath ?? request.path, body},
-		user.delegateKey,
+		user.keySet.signing.privateKey,
 	);
 	return {method: 'POST', headers: {'Content-Type': 'application/json', [REQUEST_SIGNATURE_HEADER]: signature}, body};
 }
