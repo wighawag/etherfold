@@ -13,16 +13,21 @@ import {createRegistrationAPI, type RegistrationVerifier} from './registration.j
 import {createTriggerRegistry, defineTriggers, type TriggerDefinitions, type TriggerRegistry} from './triggers.js';
 
 // ---------------------------------------------------------------------------
-// THE TRIGGER SERVICE, composed: one consumer over one named indexer, its
-// trigger registry, its deliverer, and (when a verifier is given) the
-// registration API. A platform (the nodejs CLI) adds a database, a gate and a
+// THE TRIGGER SERVICE, composed for ONE app: one consumer over one named
+// indexer, its trigger registry, its deliverer, and (when a verifier is given)
+// the registration API. Each of them is keyed by the app (etherfold ADR-0101),
+// so several services, one per app, may share one database. A platform (the nodejs CLI) adds a database, a gate and a
 // server around it; nothing here opens a port or reads the environment.
 // ---------------------------------------------------------------------------
 
 export type TriggerServiceOptions = {
 	db: RemoteSQL;
-	/** The consumer's name; also the `consumer` of every delivery. */
-	name: string;
+	/**
+	 * The APP this service serves, an operator-chosen slug (etherfold ADR-0101):
+	 * its consumer's name, and the key of every row it writes and every query it
+	 * makes, so apps sharing a database never cross.
+	 */
+	app: string;
 	chainId: string;
 	feed: CanonicalFeed;
 	gate: () => Promise<number>;
@@ -45,6 +50,8 @@ export type TickReport = {
 };
 
 export type TriggerService = {
+	/** The app it serves: what an operator read of the outbox or the journal is scoped to. */
+	app: string;
 	consumer: Consumer;
 	registry: TriggerRegistry;
 	deliverer: Deliverer;
@@ -63,8 +70,10 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	assertActionsFitLane(definitions, options.actions, lane);
 	const clock = options.clock ?? Date.now;
 
+	const {app} = options;
 	const registry = createTriggerRegistry({
 		db: options.db,
+		app,
 		definitions,
 		clock,
 		...(options.maxSubscriptionsPerRecipient === undefined
@@ -73,7 +82,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	});
 	const consumer = createConsumer({
 		db: options.db,
-		name: options.name,
+		app,
 		chainId: options.chainId,
 		feed: options.feed,
 		gate: options.gate,
@@ -82,7 +91,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		clock,
 		...(options.limit === undefined ? {} : {limit: options.limit}),
 	});
-	const deliverer = createDeliverer({db: options.db, actions: options.actions, clock});
+	const deliverer = createDeliverer({db: options.db, app, actions: options.actions, clock});
 	const api = options.verifier ? createRegistrationAPI({registry, verifier: options.verifier}) : undefined;
 
 	// The failure the journal last recorded, so a consumer held at one page journals it once
@@ -94,7 +103,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		if (failure === undefined) {
 			if (stalledOn === undefined) return;
 			stalledOn = undefined;
-			await options.db.batch([journalStatement(options.db, clock(), 'recovered', {consumer: options.name})]);
+			await options.db.batch([journalStatement(options.db, app, clock(), 'recovered', {})]);
 			return;
 		}
 		const error = failure instanceof Error ? failure.message : String(failure);
@@ -103,8 +112,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		if (signature === stalledOn) return;
 		stalledOn = signature;
 		await options.db.batch([
-			journalStatement(options.db, clock(), 'stalled', {
-				consumer: options.name,
+			journalStatement(options.db, app, clock(), 'stalled', {
 				error,
 				...(typeof code === 'string' ? {code} : {}),
 			}),
@@ -137,6 +145,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	}
 
 	return {
+		app,
 		consumer,
 		registry,
 		deliverer,

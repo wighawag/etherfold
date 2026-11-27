@@ -10,7 +10,11 @@ import type {ActionAdapter, Lane, RegistrationVerifier, TriggerDefinitions} from
 // ---------------------------------------------------------------------------
 
 export type NodeConfig = {
-	/** The consumer's name; the indexer's when absent. */
+	/**
+	 * The consumer's name, which is the APP this service serves and the key of
+	 * every row it writes (etherfold ADR-0101), so two configs sharing a database
+	 * must name different apps; the indexer's name when absent.
+	 */
 	name?: string;
 	chainId: string;
 	/** A libSQL URL (`file:./triggers.db`, `libsql://...`); `file:triggers.db` when absent. */

@@ -124,7 +124,7 @@ describe('the CLI', () => {
 
 		output = [];
 		await cli('status');
-		expect(JSON.parse(output[0]!)).toMatchObject({name: 'board', cursor: 'c', generation: 'g'});
+		expect(JSON.parse(output[0]!)).toMatchObject({app: 'board', cursor: 'c', generation: 'g'});
 	});
 
 	it('requeues a dead letter, and refuses anything else', async () => {

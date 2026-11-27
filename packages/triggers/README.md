@@ -16,14 +16,14 @@ Triggers run outside the indexer-server by design, as their own process ([ADR-00
 
 ## Using the core
 
-`createTriggerService` composes one consumer over one named indexer, its trigger registry, its deliverer and, with a verifier, the registration API. A platform supplies the database, the gate and a server around `service.api`:
+`createTriggerService` composes, for ONE app, one consumer over one named indexer, its trigger registry, its deliverer and, with a verifier, the registration API. A platform supplies the database, the gate and a server around `service.api`:
 
 ```ts
 import {canonicalFeed, createTriggerService, pushAction, rpcGate} from '@etherfold/triggers';
 
 const service = createTriggerService({
 	db, // a RemoteSQL
-	name: 'greetings',
+	app: 'greetings', // the app's slug: the key of every row it writes
 	chainId: '31337',
 	feed: canonicalFeed({url: 'http://localhost:34002', indexer: 'greetings'}),
 	gate: rpcGate({url: 'http://localhost:8545', depth: 0}),
@@ -35,6 +35,12 @@ await service.run({signal}); // or `await service.tick()` for one round
 ```
 
 The trigger definitions, the actions and the verifier are written exactly as in the platform package's config file, whose README has a full example.
+
+### One database, several apps
+
+The schema is keyed by the APP ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)): every table carries an `app` column (the consumer's name, the `app` option) and every unique and lookup index leads with it, so services of different apps can share one database without crossing. Two apps may both name an action `push`, a subscription kind `new-greeting` or a rule key `third-greeting:<account>`: their deliveries, subscriptions, accepted requests and journal rows stay apart, and each app's deliverer sends only its own rows through its own adapters. The operator reads take the app too: `listDeliveries(db, app, filter)` and `readJournal(db, app, options)`; `service.app` names it.
+
+There is no migration from the layout before the app key: `setup` over a database written by an earlier version refuses with `the trigger service's schema changed: every table is now keyed by app (etherfold ADR-0101), and there is no migration; start from an empty database`.
 
 ## Development
 

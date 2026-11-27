@@ -18,7 +18,8 @@ export async function createNodeService(
 	const opened = options.db ? {db: options.db, close: () => undefined} : openDatabase(config);
 	const service = createTriggerService({
 		db: opened.db,
-		name: config.name ?? config.etherfold.indexer,
+		// ONE app per process for now: its consumer name is the app it serves (etherfold ADR-0101)
+		app: config.name ?? config.etherfold.indexer,
 		chainId: config.chainId,
 		feed: canonicalFeed({
 			url: config.etherfold.url,

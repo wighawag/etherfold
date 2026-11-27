@@ -20,7 +20,7 @@ const definitions = defineTriggers({
 let registry: TriggerRegistry;
 let app: ReturnType<typeof createRegistrationAPI>;
 beforeEach(async () => {
-	registry = createTriggerRegistry({db: memoryDB(), definitions, maxSubscriptionsPerRecipient: 1});
+	registry = createTriggerRegistry({db: memoryDB(), app: 'app', definitions, maxSubscriptionsPerRecipient: 1});
 	await registry.setup();
 	app = createRegistrationAPI({registry, verifier: testVerifier});
 });

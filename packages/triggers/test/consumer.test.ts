@@ -50,7 +50,7 @@ beforeEach(async () => {
 function consumerOn(db: ReturnType<typeof memoryDB>, gate: {value: number}, match: Matcher = everyLog) {
 	return createConsumer({
 		db,
-		name: INDEXER,
+		app: INDEXER,
 		chainId: CHAIN_ID,
 		feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
 		gate: async () => gate.value,
@@ -73,16 +73,16 @@ describe('following the canonical view', () => {
 		await consumer.setup();
 
 		await consumer.catchUp();
-		expect((await listDeliveries(db)).map((d) => d.blockNumber)).toEqual([101, 103, 104]);
+		expect((await listDeliveries(db, INDEXER)).map((d) => d.blockNumber)).toEqual([101, 103, 104]);
 
 		// caught up: another pass at the same gate changes nothing
 		const again = await consumer.catchUp();
 		expect(again.deliveries).toBe(0);
-		expect(await listDeliveries(db)).toHaveLength(3);
+		expect(await listDeliveries(db, INDEXER)).toHaveLength(3);
 
 		gate.value = 110;
 		await consumer.catchUp();
-		expect((await listDeliveries(db)).map((d) => d.blockNumber)).toEqual([101, 103, 104, 108]);
+		expect((await listDeliveries(db, INDEXER)).map((d) => d.blockNumber)).toEqual([101, 103, 104, 108]);
 	});
 
 	it('records each delivery pending, with the log it came from', async () => {
@@ -91,9 +91,9 @@ describe('following the canonical view', () => {
 		const consumer = consumerOn(db, {value: 105});
 		await consumer.setup();
 		await consumer.catchUp();
-		const [delivery] = await listDeliveries(db);
+		const [delivery] = await listDeliveries(db, INDEXER);
 		expect(delivery).toMatchObject({
-			consumer: INDEXER,
+			app: INDEXER,
 			action: 'record',
 			key: '0xa102:0',
 			status: 'pending',
@@ -121,10 +121,10 @@ describe('the cursor and the outbox move together', () => {
 
 		failing.failNext();
 		await expect(consumer.step()).rejects.toThrow(/went away/);
-		expect(await listDeliveries(failing.db)).toEqual([]);
+		expect(await listDeliveries(failing.db, INDEXER)).toEqual([]);
 
 		await consumer.catchUp();
-		expect((await listDeliveries(failing.db)).map((d) => d.blockNumber)).toEqual([101, 102, 103]);
+		expect((await listDeliveries(failing.db, INDEXER)).map((d) => d.blockNumber)).toEqual([101, 102, 103]);
 	});
 
 	it('survives a restart: a new process on the same database resumes where the last commit left it', async () => {
@@ -145,7 +145,7 @@ describe('the cursor and the outbox move together', () => {
 			const second = consumerOn(db, {value: 110});
 			await second.setup();
 			await second.catchUp();
-			expect((await listDeliveries(db)).map((d) => d.blockNumber)).toEqual([101, 102, 103, 104]);
+			expect((await listDeliveries(db, INDEXER)).map((d) => d.blockNumber)).toEqual([101, 102, 103, 104]);
 		} finally {
 			disk.remove();
 		}
@@ -161,7 +161,7 @@ describe('the cursor and the outbox move together', () => {
 		const consumer = consumerOn(db, {value: 105}, sameKey);
 		await consumer.setup();
 		await consumer.catchUp();
-		expect(await listDeliveries(db)).toHaveLength(1);
+		expect(await listDeliveries(db, INDEXER)).toHaveLength(1);
 	});
 });
 
@@ -178,7 +178,7 @@ describe('a rewind answered by the canonical view', () => {
 		const consumer = consumerOn(db, {value: 200});
 		await consumer.setup();
 		await consumer.catchUp();
-		expect(await listDeliveries(db)).toHaveLength(4);
+		expect(await listDeliveries(db, INDEXER)).toHaveLength(4);
 
 		// block 103 comes back with another hash: 103, 104 and 105 are reorged out
 		await etherfold.ingest(102, 106, [
@@ -188,14 +188,14 @@ describe('a rewind answered by the canonical view', () => {
 		const rewound = await consumer.step();
 		expect(rewound).toMatchObject({kind: 'rewound', forkBlock: 103, retracted: 3});
 
-		const retracted = await listDeliveries(db, {status: 'retracted'});
+		const retracted = await listDeliveries(db, INDEXER, {status: 'retracted'});
 		expect(retracted.map((d) => d.blockHash)).toEqual(['0xa103', '0xa104', '0xa105']);
-		expect(await readJournal(db)).toContainEqual(
+		expect(await readJournal(db, INDEXER)).toContainEqual(
 			expect.objectContaining({kind: 'rewind', detail: expect.objectContaining({forkBlock: 103, retracted: 3})}),
 		);
 
 		await consumer.catchUp();
-		expect((await listDeliveries(db, {status: 'pending'})).map((d) => d.blockHash)).toEqual([
+		expect((await listDeliveries(db, INDEXER, {status: 'pending'})).map((d) => d.blockHash)).toEqual([
 			'0xa101',
 			'0xb103',
 			'0xb106',
@@ -253,26 +253,26 @@ describe('the consumer pauses for an operator', () => {
 				hasMore: false,
 			},
 		]);
-		const consumer = createConsumer({db, name: 'x', chainId: '1', feed, gate: async () => 200, match: everyLog});
+		const consumer = createConsumer({db, app: 'x', chainId: '1', feed, gate: async () => 200, match: everyLog});
 		await consumer.setup();
 		await consumer.step();
 
 		const paused = await consumer.step();
 		expect(paused).toMatchObject({kind: 'paused', reason: {kind: 'generation-changed', from: 'g1', to: 'g2'}});
 		// nothing from the new fold was acted on, and the next step stays paused without reading
-		expect(await listDeliveries(db)).toHaveLength(1);
+		expect(await listDeliveries(db, 'x')).toHaveLength(1);
 		expect(await consumer.step()).toMatchObject({kind: 'paused'});
 
 		await consumer.resume();
 		await consumer.step();
-		expect((await listDeliveries(db)).map((d) => d.blockNumber)).toEqual([101, 102]);
-		expect((await readJournal(db)).map((j) => j.kind)).toEqual(['paused', 'resumed']);
+		expect((await listDeliveries(db, 'x')).map((d) => d.blockNumber)).toEqual([101, 102]);
+		expect((await readJournal(db, 'x')).map((j) => j.kind)).toEqual(['paused', 'resumed']);
 	});
 
 	it('when the stream it followed is no longer the one served', async () => {
 		db = memoryDB();
 		const feed = scripted([{kind: 'refused', status: 400, error: 'stream-mismatch', body: {startCursor: 'start'}}]);
-		const consumer = createConsumer({db, name: 'x', chainId: '1', feed, gate: async () => 200, match: everyLog});
+		const consumer = createConsumer({db, app: 'x', chainId: '1', feed, gate: async () => 200, match: everyLog});
 		await consumer.setup();
 		expect(await consumer.step()).toMatchObject({kind: 'paused', reason: {kind: 'refused', error: 'stream-mismatch'}});
 		expect((await consumer.status()).paused).toMatchObject({kind: 'refused', error: 'stream-mismatch'});

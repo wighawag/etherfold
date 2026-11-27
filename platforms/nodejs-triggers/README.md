@@ -115,7 +115,7 @@ The reward service is yours. It receives, with `Authorization: Bearer <token>` a
 	"recipient": "0xabc...",
 	"reward": {"achievement": "third-greeting", "account": "0xabc..."},
 	"trigger": "rule:third-greeting",
-	"log": {"consumer": "greetings", "blockNumber": 123, "blockHash": "0x...", "logIndex": 0, "transactionHash": "0x..."}
+	"log": {"app": "greetings", "blockNumber": 123, "blockHash": "0x...", "logIndex": 0, "transactionHash": "0x..."}
 }
 ```
 
@@ -143,13 +143,15 @@ The routes are checked at the path the service sees, which is the path the clien
 ### Operating it
 
 ```sh
-etherfold-triggers status                     # where the consumer is, and why it is paused
+etherfold-triggers status                     # the app, where its consumer is, and why it is paused
 etherfold-triggers resume                     # after a pause: follow the new generation or stream
 etherfold-triggers deliveries --status dead   # the dead letters, as JSON lines
 etherfold-triggers requeue <id>               # send a dead letter again
 etherfold-triggers journal                    # rewinds, pauses, stalls, expiries, dead letters
 etherfold-triggers tick                       # one round, then exit
 ```
+
+The config's `name` (the indexer's when absent) is the APP the service serves, and every row the service writes is keyed by it ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)), so two configs naming the same `database` stay apart as long as they name different apps; `deliveries` and `journal` show this app's rows only. A database written before the app key is refused at start: start from an empty one.
 
 ## Status
 

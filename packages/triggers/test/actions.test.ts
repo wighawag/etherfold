@@ -10,7 +10,7 @@ import {recordingTarget} from './utils/target.js';
 
 const delivery: DeliveryRecord = {
 	id: 7,
-	consumer: 'board',
+	app: 'board',
 	action: 'push',
 	key: '31337:0xa101:0:0xalice',
 	recipient: '0xalice',
@@ -92,7 +92,7 @@ describe('the reward adapter (an operator reward service, S2-6)', () => {
 				recipient: '0xalice',
 				reward: {achievement: 'third-post'},
 				trigger: 'subscription:1',
-				log: {consumer: 'board', blockNumber: 101, blockHash: '0xa101', logIndex: 0, transactionHash: '0x01'},
+				log: {app: 'board', blockNumber: 101, blockHash: '0xa101', logIndex: 0, transactionHash: '0x01'},
 			},
 		});
 	});
