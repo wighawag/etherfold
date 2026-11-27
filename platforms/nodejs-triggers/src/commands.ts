@@ -7,7 +7,8 @@ export const USAGE = `etherfold-triggers <command> [--app <name>] [--config <fil
 
 Commands (every app of the config, or the one --app names; each JSON line names its app):
   run                      every app's loop, and their registration APIs under /{app}/ (until SIGINT/SIGTERM)
-  tick                     one round of each app (expire, follow the feed to the gate, deliver what is due), then exit
+  tick                     one round of each app (expire, follow the feed to the gate, deliver what is due) under
+                           its lease, then release the lease and exit (another ticker's: "lease": "not-leased")
   status                   each app's consumer position, and why it is paused if it is
   resume                   an operator's decision after a pause: follow the new generation or stream
                            (without --app: the one paused app, refused when several are)
@@ -68,7 +69,9 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 	try {
 		switch (command) {
 			case 'tick': {
-				const reports = await node.tick(apps.map((app) => app.name));
+				const ticked = apps.map((app) => app.name);
+				// a finished one-shot round gives the lease up, so the next one need not wait for it to lapse
+				const reports = await node.tick(ticked).finally(() => node.release(ticked));
 				for (const report of reports) io.stdout(JSON.stringify(report));
 				return reports.some((report) => 'error' in report) ? 1 : 0;
 			}

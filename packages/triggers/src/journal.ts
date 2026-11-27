@@ -1,4 +1,5 @@
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
+import type {LeaseGuard} from './lease.js';
 
 export type JournalKind =
 	| 'rewind'
@@ -15,17 +16,26 @@ export type JournalKind =
 /** One recorded entry, named by the app whose consumer, deliverer or registry recorded it. */
 export type JournalEntry = {id: number; app: string; at: number; kind: JournalKind; detail: Record<string, unknown>};
 
-/** The statement that records one entry for an app, so it can join the batch whose effect it records. */
+/**
+ * The statement that records one entry for an app, so it can join the batch whose effect it records.
+ * Given the ticker's lease `guard`, it records nothing unless the lease is held (etherfold ADR-0101).
+ */
 export function journalStatement(
 	db: RemoteSQL,
 	app: string,
 	at: number,
 	kind: JournalKind,
 	detail: Record<string, unknown>,
+	guard?: LeaseGuard,
 ): SQLPreparedStatement {
+	if (!guard) {
+		return db
+			.prepare(`INSERT INTO journal (app, at, kind, detail) VALUES (?, ?, ?, ?)`)
+			.bind(app, at, kind, JSON.stringify(detail));
+	}
 	return db
-		.prepare(`INSERT INTO journal (app, at, kind, detail) VALUES (?, ?, ?, ?)`)
-		.bind(app, at, kind, JSON.stringify(detail));
+		.prepare(`INSERT INTO journal (app, at, kind, detail) SELECT ?, ?, ?, ? WHERE ${guard.sql}`)
+		.bind(app, at, kind, JSON.stringify(detail), ...guard.args);
 }
 
 /** Everything recorded for one app, oldest first. */

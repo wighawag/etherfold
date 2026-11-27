@@ -3,6 +3,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {
 	canonicalFeed,
 	createTriggerService,
+	DEFAULT_LEASE_MS,
 	defineTriggers,
 	listDeliveries,
 	pushAction,
@@ -134,11 +135,14 @@ describe('a subscription trigger, end to end', () => {
 
 		// the first push the target is sent fails; everything after it succeeds
 		pushAnswer = (_, index) => (index === 0 ? {status: 503} : {status: 200, body: {success: true}});
-		// one page, then the process stops
+		// one page under the app's lease, then the process stops
+		await service.lease.acquire();
 		await service.consumer.step();
 		await service.deliverer.deliverDue();
 		disk.close();
 
+		// it crashed: its lease lapses before the restarted process may tick
+		now += DEFAULT_LEASE_MS + 1;
 		service = await start();
 		await service.tick();
 		now += 10_000; // past the retry's backoff
@@ -192,9 +196,11 @@ describe('a global rule, end to end', () => {
 			posted({block: 106, hash: '0xa106', author: ALICE, count: 4n}),
 		]);
 		await service.tick();
+		// a graceful stop releases the lease
+		await service.lease.release();
 		// a restart replays nothing: the cursor and the outbox were committed together
 		const again = await start();
-		await again.tick();
+		expect(await again.tick()).toMatchObject({lease: 'held', consumed: 0, matched: 0});
 
 		expect(keysOf(reward)).toEqual([`third-post:${ALICE.toLowerCase()}`]);
 		expect(reward.requests[0]).toMatchObject({

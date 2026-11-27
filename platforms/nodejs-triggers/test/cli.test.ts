@@ -337,6 +337,53 @@ describe('the per-call timeout', () => {
 	});
 });
 
+describe("the app's lease", () => {
+	it('is released at the end of a `tick`, so two `tick` commands in a row both deliver', async () => {
+		app.actions = {
+			reward: rewardAction({
+				url: 'https://rewards.test',
+				token: 't',
+				policy: {maxAttempts: 2, backoff: {initialMs: 1, maxMs: 1}},
+				fetch: (async () => {
+					rewardCalls++;
+					return new Response('down', {status: 500});
+				}) as unknown as typeof fetch,
+			}),
+		};
+		expect(await cli('tick')).toBe(0);
+		expect(JSON.parse(output[0]!)).toMatchObject({app: 'board', lease: 'held', delivery: {retried: 1}});
+		await new Promise((resolve) => setTimeout(resolve, 5)); // past the retry's backoff
+
+		// a second process, with a lease of its own: the first gave its up
+		output = [];
+		expect(await cli('tick')).toBe(0);
+		expect(JSON.parse(output[0]!)).toMatchObject({app: 'board', lease: 'held', delivery: {attempted: 1, dead: 1}});
+		expect(rewardCalls).toBe(2);
+
+		const node = await createNodeService(config);
+		try {
+			const {results} = await node.apps['board']!.db.prepare(`SELECT lease_expires FROM consumers`).all();
+			expect(results).toEqual([{lease_expires: 0}]);
+		} finally {
+			node.close();
+		}
+	});
+
+	it("is the config's `leaseMs`, and a `callTimeoutMs` too long for it is refused at start, naming both", async () => {
+		await expect(createNodeService({...config, apps: {board: {...app, callTimeoutMs: 25_000}}})).rejects.toThrow(
+			/25000 ms.*60000 ms/,
+		);
+		const node = await createNodeService({...config, apps: {board: {...app, callTimeoutMs: 25_000, leaseMs: 120_000}}});
+		try {
+			expect(node.apps['board']!.service.lease.durationMs).toBe(120_000);
+			expect(await node.tick()).toEqual([expect.objectContaining({app: 'board', lease: 'held'})]);
+		} finally {
+			await node.release();
+			node.close();
+		}
+	});
+});
+
 describe('the registration API `run` serves', () => {
 	it("answers CORS for the served app's origin, with nothing more in the config than its verifier", async () => {
 		const node = await createNodeService({

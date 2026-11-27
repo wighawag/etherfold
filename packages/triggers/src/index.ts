@@ -40,7 +40,15 @@ export type {ActionAdapter, Deliverer, DeliveryOutcome, DeliveryPolicy, Delivery
 export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction} from './actions.js';
 export type {PushPayload} from './actions.js';
 export {createTriggerService, DEFAULT_MAX_DELIVERIES_PER_ROUND, DEFAULT_MAX_PAGES_PER_ROUND} from './service.js';
-export type {TickReport, TriggerService, TriggerServiceOptions} from './service.js';
+export type {RoundReport, TickReport, TriggerService, TriggerServiceOptions} from './service.js';
+export {
+	createLease,
+	DEFAULT_LEASE_MS,
+	LEASE_CLOCK_SKEW_ALLOWANCE_MS,
+	LEASE_COMMIT_ALLOWANCE_MS,
+	LeaseLostError,
+} from './lease.js';
+export type {Lease, LeaseColumns, LeaseGuard} from './lease.js';
 export {rpcGate} from './gate.js';
 export {CallTimeoutError, DEFAULT_CALL_TIMEOUT_MS} from './timeout.js';
 export type {BoundedCall} from './timeout.js';

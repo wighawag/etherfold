@@ -38,6 +38,13 @@ export type AppConfig = {
 	 * (etherfold ADR-0101); 10000 when absent.
 	 */
 	callTimeoutMs?: number;
+	/**
+	 * How long this app's lease lasts, in ms (etherfold ADR-0101): 60000 when
+	 * absent. One ticker of the app works at a time, renewing under half of it;
+	 * the fence margin (`callTimeoutMs` plus 10000) must be under half of it, or
+	 * the process refuses to start.
+	 */
+	leaseMs?: number;
 	/** The most feed pages one round of this app reads; 100 when absent. */
 	maxPagesPerRound?: number;
 	/** The most due deliveries one round of this app takes; 100 when absent. */

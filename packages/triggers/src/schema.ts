@@ -16,14 +16,17 @@ import type {RemoteSQL} from 'remote-sql';
 
 const STATEMENTS = [
 	// ONE row per app's consumer: where it is, which stream and fold it was
-	// following, and why it is paused, if it is.
+	// following, why it is paused, if it is, and who holds the app's lease
+	// until when (ms since the epoch; 0 once released, ADR-0101).
 	`CREATE TABLE IF NOT EXISTS consumers (
 		app TEXT PRIMARY KEY,
 		cursor TEXT,
 		stream TEXT,
 		generation TEXT,
 		paused TEXT,
-		updated_at INTEGER NOT NULL
+		updated_at INTEGER NOT NULL,
+		lease_owner TEXT,
+		lease_expires INTEGER NOT NULL DEFAULT 0
 	)`,
 	// THE OUTBOX. A row is written in the same batch as the cursor advance that
 	// implies it, and ends in a recorded terminal state, never a DELETE.
@@ -119,11 +122,15 @@ const TABLES = [
 export const OLD_LAYOUT_MESSAGE =
 	"the trigger service's schema changed: every table is now keyed by app (etherfold ADR-0101), and there is no migration; start from an empty database";
 
+/** What `setup` says over a database written before the consumer's row carried the app's lease (etherfold ADR-0101). */
+export const NO_LEASE_MESSAGE =
+	"the trigger service's schema changed: the consumers table now holds each app's lease (etherfold ADR-0101), and there is no migration; start from an empty database";
+
 /**
  * Create every table and index this service uses. Idempotent. Refuses a
  * database in the layout before the schema was keyed by app (a table of the
  * schema without an `app` column), rather than writing app-keyed rows beside
- * rows that name no app.
+ * rows that name no app, and one whose `consumers` table has no lease columns.
  */
 export async function setupDatabase(db: RemoteSQL): Promise<void> {
 	// `PRAGMA table_info` answers no row for a table that does not exist, on SQLite, libSQL and D1
@@ -132,6 +139,9 @@ export async function setupDatabase(db: RemoteSQL): Promise<void> {
 		const names = ((columns[index]?.results ?? []) as {name: string}[]).map((column) => column.name);
 		if (names.length > 0 && !names.includes('app')) {
 			throw new Error(`${OLD_LAYOUT_MESSAGE} (the table "${table}" has no "app" column)`);
+		}
+		if (table === 'consumers' && names.length > 0 && !names.includes('lease_expires')) {
+			throw new Error(NO_LEASE_MESSAGE);
 		}
 	});
 	await db.batch(STATEMENTS.map((sql) => db.prepare(sql)));

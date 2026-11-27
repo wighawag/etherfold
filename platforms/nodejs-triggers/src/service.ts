@@ -39,6 +39,12 @@ export type NodeService = {
 	 * reported under its name (a failed round too).
 	 */
 	tick(only?: string[]): Promise<AppTickReport[]>;
+	/**
+	 * Give up the lease of every app (of the named apps only, when given) this
+	 * process holds, so the next ticker need not wait for it to lapse: what a
+	 * one-shot `tick` does at the end of its round (etherfold ADR-0101).
+	 */
+	release(only?: string[]): Promise<void>;
 	/** Every app's own loop, concurrently, until the signal aborts. */
 	run(options: {
 		signal?: AbortSignal;
@@ -71,6 +77,7 @@ function appService(name: string, app: AppConfig, db: RemoteSQL): TriggerService
 			? {}
 			: {maxSubscriptionsPerRecipient: app.maxSubscriptionsPerRecipient}),
 		...(app.callTimeoutMs === undefined ? {} : {callTimeoutMs: app.callTimeoutMs}),
+		...(app.leaseMs === undefined ? {} : {leaseMs: app.leaseMs}),
 		...(app.maxPagesPerRound === undefined ? {} : {maxPagesPerRound: app.maxPagesPerRound}),
 		...(app.maxDeliveriesPerRound === undefined ? {} : {maxDeliveriesPerRound: app.maxDeliveriesPerRound}),
 	});
@@ -163,6 +170,12 @@ export async function createNodeService(config: NodeConfig): Promise<NodeService
 					...(typeof error?.code === 'string' ? {code: error.code} : {}),
 				};
 			});
+		},
+		async release(only) {
+			const held = Object.values(apps).filter((app) => !only || only.includes(app.name));
+			const released = await Promise.allSettled(held.map((app) => app.service.lease.release()));
+			const failed = released.find((result) => result.status === 'rejected');
+			if (failed) throw failed.reason;
 		},
 		async run({signal, intervalMs = 5000, onError = (app, error) => console.error(`${app}: a round failed`, error)}) {
 			await Promise.all(

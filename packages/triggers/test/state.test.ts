@@ -186,7 +186,7 @@ describe('a consumer held at a page by a read that keeps failing', () => {
 		expect(stalled[0]?.detail).toMatchObject({error: expect.stringMatching(/503/)});
 
 		answer = 'up';
-		expect((await service.tick()).consumed).toBe(4);
+		expect(await service.tick()).toMatchObject({lease: 'held', consumed: 4});
 		expect(await readJournal(db, INDEXER, {kind: 'recovered'})).toHaveLength(1);
 	});
 });
