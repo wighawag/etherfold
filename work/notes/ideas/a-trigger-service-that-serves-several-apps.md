@@ -8,7 +8,7 @@ slug: a-trigger-service-that-serves-several-apps
 
 # A trigger service that serves several apps
 
-> **2026-11-26, split in two.** The multi-app half (several apps in one process, one app-keyed schema that one database or several can hold) is now the spec `work/specs/proposed/one-trigger-service-serves-several-apps.md`. What stays incubating here is the UPLOADED-BUNDLE half ("definitions arrive as a bundle" and the hot-reload dev loop), deferred for the reasons under "Why the bundle half waits" below.
+> **2026-11-26, split in two.** The multi-app half (several apps in one process, one app-keyed schema that one database or several can hold) is now the spec `work/specs/ready/one-trigger-service-serves-several-apps.md`. What stays incubating here is the UPLOADED-BUNDLE half ("definitions arrive as a bundle" and the hot-reload dev loop), deferred for the reasons under "Why the bundle half waits" below.
 
 ## Why
 
