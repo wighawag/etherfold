@@ -417,27 +417,37 @@ export function createTriggerRegistry(options: {
 			).results;
 			if (due.length === 0) return 0;
 			const guard = lease?.guard();
+			// a renewal (lease-free) may land between the read above and this batch: the update re-checks the
+			// expiry, so it never overwrites a renewed row, and the journal records only a row this batch expired
 			await db.batch(
-				due.flatMap((row) => [
-					db
-						.prepare(
-							`UPDATE subscriptions SET status = 'expired' WHERE app = ? AND id = ? AND status = 'active'${guard ? ` AND ${guard.sql}` : ''}`,
-						)
-						.bind(app, row.id, ...(guard?.args ?? [])),
-					journalStatement(
-						db,
-						app,
-						now,
-						'expired',
-						{
-							subscription: Number(row.id),
-							kind: row.kind,
-							recipient: row.recipient,
-							expiresAt: Number(row.expires_at),
-						},
-						guard,
-					),
-				]),
+				due.flatMap((row) => {
+					const expiredHere = {
+						sql: `EXISTS (SELECT 1 FROM subscriptions WHERE app = ? AND id = ? AND status = 'expired' AND expires_at <= ?)`,
+						args: [app, row.id, now],
+					};
+					return [
+						db
+							.prepare(
+								`UPDATE subscriptions SET status = 'expired' WHERE app = ? AND id = ? AND status = 'active' AND expires_at <= ?${guard ? ` AND ${guard.sql}` : ''}`,
+							)
+							.bind(app, row.id, now, ...(guard?.args ?? [])),
+						journalStatement(
+							db,
+							app,
+							now,
+							'expired',
+							{
+								subscription: Number(row.id),
+								kind: row.kind,
+								recipient: row.recipient,
+								expiresAt: Number(row.expires_at),
+							},
+							guard
+								? {sql: `${guard.sql} AND ${expiredHere.sql}`, args: [...guard.args, ...expiredHere.args]}
+								: expiredHere,
+						),
+					];
+				}),
 			);
 			return due.length;
 		},

@@ -40,7 +40,7 @@ describe('the push adapter (push-notification-server, S1-1 and S1-4)', () => {
 				method: 'POST',
 				headers: expect.objectContaining({
 					authorization: 'Bearer s3cret',
-					'idempotency-key': '31337:0xa101:0:0xalice',
+					'idempotency-key': 'board:31337:0xa101:0:0xalice',
 					'content-type': 'application/json',
 				}),
 				body: {
@@ -86,15 +86,31 @@ describe('the reward adapter (an operator reward service, S2-6)', () => {
 		expect(await reward.deliver(award)).toEqual({kind: 'delivered'});
 		expect(target.requests[0]).toMatchObject({
 			url: 'https://rewards.test/award',
-			headers: {authorization: 'Bearer r', 'idempotency-key': 'third-post:0xalice'},
+			headers: {authorization: 'Bearer r', 'idempotency-key': 'board:third-post:0xalice'},
 			body: {
-				key: 'third-post:0xalice',
+				key: 'board:third-post:0xalice',
 				recipient: '0xalice',
 				reward: {achievement: 'third-post'},
 				trigger: 'subscription:1',
 				log: {app: 'board', blockNumber: 101, blockHash: '0xa101', logIndex: 0, transactionHash: '0x01'},
 			},
 		});
+	});
+
+	it('sends a key prefixed by the app, so two apps sharing one reward service never absorb each other', async () => {
+		const target = recordingTarget(() => ({status: 201}));
+		const reward = rewardAction({url: 'https://rewards.test/award', token: 'r', fetch: target.fetch});
+		const award = {...delivery, action: 'reward', key: 'third-post:0xalice', payload: {achievement: 'third-post'}};
+		await reward.deliver(award);
+		await reward.deliver({...award, app: 'forum'});
+		expect(target.requests.map((r) => r.headers['idempotency-key'])).toEqual([
+			'board:third-post:0xalice',
+			'forum:third-post:0xalice',
+		]);
+		expect(target.requests.map((r) => (r.body as {key: string}).key)).toEqual([
+			'board:third-post:0xalice',
+			'forum:third-post:0xalice',
+		]);
 	});
 
 	it('fires from the safe lane only, never expires, and retries for days', () => {

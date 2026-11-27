@@ -5,8 +5,17 @@ import type {DeliveryRecord} from './outbox.js';
 // THE ACTION ADAPTERS: push (push-notification-server) and reward (an
 // operator's reward service). Both send the key as `Idempotency-Key` (the IETF
 // httpapi draft's header), because a target must honour it and we cannot
-// enforce that from here (etherfold ADR-0009).
+// enforce that from here (etherfold ADR-0009). The key sent is prefixed by the
+// app (`<app>:<key>`, `wireKeyOf`): a rule key or a positional key is unique
+// within its app only (ADR-0101), and two apps may share one reward service or
+// one push domain, which would otherwise absorb one app's call as a replay of
+// the other's.
 // ---------------------------------------------------------------------------
+
+/** The idempotency key a delivery carries to its target: its key, prefixed by its app so two apps never collide there. */
+export function wireKeyOf(delivery: Pick<DeliveryRecord, 'app' | 'key'>): string {
+	return `${delivery.app}:${delivery.key}`;
+}
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -94,7 +103,7 @@ export function pushAction(options: {
 				doFetch,
 				endpoint,
 				options.token,
-				delivery.key,
+				wireKeyOf(delivery),
 				{
 					address: delivery.recipient,
 					domain: options.domain,
@@ -133,9 +142,9 @@ export function rewardAction(options: {
 				doFetch,
 				options.url,
 				options.token,
-				delivery.key,
+				wireKeyOf(delivery),
 				{
-					key: delivery.key,
+					key: wireKeyOf(delivery),
 					recipient: delivery.recipient,
 					reward: delivery.payload,
 					trigger: delivery.trigger,

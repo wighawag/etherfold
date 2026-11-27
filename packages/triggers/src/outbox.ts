@@ -50,7 +50,7 @@ export type DeliveryRecord = NewDelivery &
  * The statement that writes one delivery, or nothing when a standing row holds
  * its key already (a replayed page, a level-triggered rule firing again). Given
  * the ticker's lease `guard`, nothing either unless the lease is held (etherfold
- * ADR-0101): 18 bound parameters, well under D1's 100.
+ * ADR-0101): 16 bound parameters, well under D1's 100.
  */
 export function insertDeliveryStatement(
 	db: RemoteSQL,

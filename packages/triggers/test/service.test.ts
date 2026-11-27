@@ -159,7 +159,8 @@ describe('a subscription trigger, end to end', () => {
 		// the target was called once per delivery, plus the one retry, which carried the same key
 		const calls = keysOf(push);
 		expect(calls).toHaveLength(5);
-		expect([...new Set(calls)].sort()).toEqual(expected.sort());
+		// the key sent is the delivery's, prefixed by its app
+		expect([...new Set(calls)].sort()).toEqual(expected.map((key) => `${INDEXER}:${key}`).sort());
 		expect(calls.filter((key) => key === calls[0])).toHaveLength(2);
 		expect(push.requests[1]).toMatchObject({
 			url: 'https://push.test/api/push',
@@ -202,7 +203,7 @@ describe('a global rule, end to end', () => {
 		const again = await start();
 		expect(await again.tick()).toMatchObject({lease: 'held', consumed: 0, matched: 0});
 
-		expect(keysOf(reward)).toEqual([`third-post:${ALICE.toLowerCase()}`]);
+		expect(keysOf(reward)).toEqual([`${INDEXER}:third-post:${ALICE.toLowerCase()}`]);
 		expect(reward.requests[0]).toMatchObject({
 			headers: {authorization: 'Bearer reward-token'},
 			body: {recipient: ALICE.toLowerCase(), reward: {achievement: 'third-post'}, log: {blockNumber: 104}},

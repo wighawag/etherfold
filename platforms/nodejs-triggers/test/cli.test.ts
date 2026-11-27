@@ -147,6 +147,18 @@ describe('the CLI', () => {
 			serve: async (given) => void (served = given),
 		});
 		expect(served).toBe(config);
+		served = undefined;
+		const errors: string[] = [];
+		expect(
+			await runCLI(['run', '--app', 'board'], {
+				stdout: () => undefined,
+				stderr: (line) => void errors.push(line),
+				loadConfig: async () => config,
+				serve: async (given) => void (served = given),
+			}),
+		).toBe(1);
+		expect(served).toBeUndefined();
+		expect(errors.join('\n')).toMatch(/--app/);
 		expect(await cli('--help')).toBe(0);
 		expect(output.join('\n')).toMatch(/requeue <id>/);
 		expect(await cli('nope')).toBe(1);

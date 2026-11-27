@@ -37,7 +37,7 @@ export type {StateReader} from './state.js';
 export type {DelegatedIdentityVerifierOptions} from './identity.js';
 export {assertActionsFitLane, createDeliverer} from './delivery.js';
 export type {ActionAdapter, Deliverer, DeliveryOutcome, DeliveryPolicy, DeliveryReport} from './delivery.js';
-export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction} from './actions.js';
+export {DEFAULT_PUSH_POLICY, DEFAULT_REWARD_POLICY, pushAction, rewardAction, wireKeyOf} from './actions.js';
 export type {PushPayload} from './actions.js';
 export {createTriggerService, DEFAULT_MAX_DELIVERIES_PER_ROUND, DEFAULT_MAX_PAGES_PER_ROUND} from './service.js';
 export type {RoundReport, TickReport, TriggerService, TriggerServiceOptions} from './service.js';
