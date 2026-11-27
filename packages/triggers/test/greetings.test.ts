@@ -3,6 +3,7 @@ import type {RemoteSQL} from 'remote-sql';
 import {
 	canonicalFeed,
 	createTriggerService,
+	DEFAULT_LEASE_MS,
 	defineTriggers,
 	delegatedIdentityVerifier,
 	listDeliveries,
@@ -173,15 +174,18 @@ describe('a subscription trigger on the greetings, through the real push server'
 		pushServer.script(devices.carol, [500]);
 
 		await etherfold.ingest(100, 110, [greeting(101, bob, 'hello from bob'), greeting(102, alice, 'hello from alice')]);
-		// one page, its deliveries attempted, then the process stops
+		// one page, its deliveries attempted under the app's lease, then the process stops
+		await service.lease.acquire();
 		await service.consumer.step();
 		await service.deliverer.deliverDue();
 		disk.close();
 
+		// it crashed: its lease lapses before the restarted process may tick
+		now += DEFAULT_LEASE_MS + 1;
 		service = await start();
 		// the restarted consumer resumes from the committed cursor: it reads only the second page
 		expect((await service.consumer.status()).cursor).toBeDefined();
-		expect((await service.tick()).consumed).toBe(1);
+		expect(await service.tick()).toMatchObject({lease: 'held', consumed: 1});
 		now += 10_000; // past the push's backoff
 		await service.tick();
 
@@ -232,6 +236,8 @@ describe("a global rule on the greetings: every account's third greeting", () =>
 			greeting(106, bob, 'four'),
 		]);
 		await service.tick();
+		// a graceful stop releases the lease
+		await service.lease.release();
 		// a restart replays nothing: the cursor and the outbox were committed together
 		const restarted = await (await start()).tick();
 		expect(restarted).toMatchObject({consumed: 0, matched: 0});

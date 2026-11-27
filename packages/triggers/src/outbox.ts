@@ -1,4 +1,5 @@
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
+import type {LeaseGuard} from './lease.js';
 
 // ---------------------------------------------------------------------------
 // THE OUTBOX: one row per delivery a match implies (etherfold ADR-0005, 0009).
@@ -47,7 +48,9 @@ export type DeliveryRecord = NewDelivery &
 
 /**
  * The statement that writes one delivery, or nothing when a standing row holds
- * its key already (a replayed page, a level-triggered rule firing again).
+ * its key already (a replayed page, a level-triggered rule firing again). Given
+ * the ticker's lease `guard`, nothing either unless the lease is held (etherfold
+ * ADR-0101): 18 bound parameters, well under D1's 100.
  */
 export function insertDeliveryStatement(
 	db: RemoteSQL,
@@ -55,12 +58,14 @@ export function insertDeliveryStatement(
 	at: number,
 	position: LogPosition,
 	delivery: NewDelivery,
+	guard?: LeaseGuard,
 ): SQLPreparedStatement {
+	// `INSERT ... SELECT` keeps the WHERE SQLite asks of an upsert's SELECT
 	return db
 		.prepare(
 			`INSERT INTO deliveries (app, action, key, recipient, payload, trigger, block_number, block_hash, log_index,
 				transaction_hash, status, attempts, created_at, next_attempt_at, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ? WHERE ${guard ? guard.sql : '1'}
 			ON CONFLICT DO NOTHING`,
 		)
 		.bind(
@@ -77,6 +82,7 @@ export function insertDeliveryStatement(
 			at,
 			at,
 			delivery.expiresAt ?? null,
+			...(guard ? guard.args : []),
 		);
 }
 

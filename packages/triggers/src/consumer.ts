@@ -1,6 +1,7 @@
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 import type {CanonicalEntry, CanonicalFeed} from './feed.js';
 import {journalStatement} from './journal.js';
+import {LeaseLostError, type Lease, type LeaseGuard} from './lease.js';
 import {insertDeliveryStatement, type NewDelivery} from './outbox.js';
 import {setupDatabase} from './schema.js';
 import {callTimeoutOf, withTimeout} from './timeout.js';
@@ -76,6 +77,15 @@ export type ConsumerOptions = {
 	 * honours its signal; nothing is committed for that page.
 	 */
 	callTimeoutMs?: number;
+	/**
+	 * The app's lease (etherfold ADR-0101), which `createTriggerService` always
+	 * gives. With it, a step checks the lease on the state row it reads, fences
+	 * the gate and each feed read (`lease.fence()`), and guards every statement
+	 * of its commit, so a ticker that does not hold it writes nothing (a step
+	 * that finds so throws a `LeaseLostError`). Without it, the consumer is
+	 * unfenced: for a database it alone ticks.
+	 */
+	lease?: Lease;
 };
 
 /** The safe lane's gate: the highest block to act on, given a signal that aborts at the per-call timeout. */
@@ -117,10 +127,19 @@ type StateRow = {
 	stream: string | null;
 	generation: string | null;
 	paused: string | null;
+	lease_owner: string | null;
+	lease_expires: number | null;
+};
+
+type State = {
+	cursor: string | null;
+	stream: string | null;
+	generation: string | null;
+	paused: PauseReason | null;
 };
 
 export function createConsumer(options: ConsumerOptions): Consumer {
-	const {db, app, feed, match} = options;
+	const {db, app, feed, match, lease} = options;
 	const lane = options.lane ?? 'safe';
 	if (lane !== 'safe') throw new Error(`the ${lane} lane is not built: only the safe lane (etherfold ADR-0007) is`);
 	const clock = options.clock ?? Date.now;
@@ -129,18 +148,45 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 
 	async function readState(): Promise<StateRow | undefined> {
 		const {results} = await db
-			.prepare(`SELECT cursor, stream, generation, paused FROM consumers WHERE app = ?`)
+			// the lease comes with the state, so checking it costs a step no extra query
+			.prepare(`SELECT cursor, stream, generation, paused, lease_owner, lease_expires FROM consumers WHERE app = ?`)
 			.bind(app)
 			.all<StateRow>();
 		return results[0];
 	}
 
-	function writeState(state: {
-		cursor: string | null;
-		stream: string | null;
-		generation: string | null;
-		paused: PauseReason | null;
-	}): SQLPreparedStatement {
+	/**
+	 * The state write of a step's commit: under the lease, an UPDATE of the row
+	 * the lease created, guarded, returning the row only when it was written.
+	 */
+	function commitState(state: State, guard: LeaseGuard | undefined): SQLPreparedStatement {
+		if (!guard) return writeState(state);
+		return db
+			.prepare(
+				`UPDATE consumers SET cursor = ?, stream = ?, generation = ?, paused = ?, updated_at = ?
+				WHERE app = ? AND ${guard.sql} RETURNING app`,
+			)
+			.bind(
+				state.cursor,
+				state.stream,
+				state.generation,
+				state.paused === null ? null : JSON.stringify(state.paused),
+				clock(),
+				app,
+				...guard.args,
+			);
+	}
+
+	/** Commit a step's batch, its state write last; under the lease, a batch that wrote no state was a stale holder's. */
+	async function commit(statements: SQLPreparedStatement[]): Promise<void> {
+		const results = await db.batch(statements);
+		if (lease && (results[results.length - 1]?.results?.length ?? 0) === 0) {
+			throw new LeaseLostError(`the lease of the app "${app}" was lost before its commit: nothing was written`);
+		}
+	}
+
+	/** The unguarded state write: a consumer without a lease, and an operator's `resume`. */
+	function writeState(state: State): SQLPreparedStatement {
 		return db
 			.prepare(
 				`INSERT INTO consumers (app, cursor, stream, generation, paused, updated_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -159,23 +205,30 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 
 	async function pause(state: StateRow | undefined, reason: PauseReason): Promise<StepResult> {
 		const now = clock();
-		await db.batch([
-			writeState({
-				cursor: state?.cursor ?? null,
-				stream: state?.stream ?? null,
-				generation: state?.generation ?? null,
-				paused: reason,
-			}),
-			journalStatement(db, app, now, 'paused', {reason}),
+		const guard = lease?.guard();
+		await commit([
+			journalStatement(db, app, now, 'paused', {reason}, guard),
+			commitState(
+				{
+					cursor: state?.cursor ?? null,
+					stream: state?.stream ?? null,
+					generation: state?.generation ?? null,
+					paused: reason,
+				},
+				guard,
+			),
 		]);
 		return {kind: 'paused', reason};
 	}
 
 	async function step(): Promise<StepResult> {
 		const state = await readState();
+		lease?.observe(state);
 		if (state?.paused) return {kind: 'paused', reason: JSON.parse(state.paused) as PauseReason};
 
+		await lease?.fence();
 		const gate = await withTimeout('gate', callTimeoutMs, (signal) => options.gate({signal}));
+		await lease?.fence();
 		const page = await withTimeout('feed', callTimeoutMs, (signal) =>
 			feed.read(
 				{
@@ -198,28 +251,34 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 				.bind(app, page.forkBlock)
 				.all<{n: number}>();
 			const retracted = Number(results[0]?.n ?? 0);
-			await db.batch([
+			const guard = lease?.guard();
+			const fenced = guard ? ` AND ${guard.sql}` : '';
+			const fencedArgs = guard?.args ?? [];
+			await commit([
 				// what was not sent is taken back, and frees its key for the new branch
 				db
 					.prepare(
 						`UPDATE deliveries SET status = 'retracted', settled_at = ?
-						WHERE app = ? AND block_number >= ? AND status = 'pending'`,
+						WHERE app = ? AND block_number >= ? AND status = 'pending'${fenced}`,
 					)
-					.bind(now, app, page.forkBlock),
+					.bind(now, app, page.forkBlock, ...fencedArgs),
 				// what was already sent (or expired, or dead-lettered) is marked, never rewritten
 				db
 					.prepare(
 						`UPDATE deliveries SET retracted_at = ?
-						WHERE app = ? AND block_number >= ? AND status != 'retracted' AND retracted_at IS NULL`,
+						WHERE app = ? AND block_number >= ? AND status != 'retracted' AND retracted_at IS NULL${fenced}`,
 					)
-					.bind(now, app, page.forkBlock),
-				writeState({
-					cursor: page.rewindCursor,
-					stream: page.stream ?? state?.stream ?? null,
-					generation: state?.generation ?? null,
-					paused: null,
-				}),
-				journalStatement(db, app, now, 'rewind', {forkBlock: page.forkBlock, retracted}),
+					.bind(now, app, page.forkBlock, ...fencedArgs),
+				journalStatement(db, app, now, 'rewind', {forkBlock: page.forkBlock, retracted}, guard),
+				commitState(
+					{
+						cursor: page.rewindCursor,
+						stream: page.stream ?? state?.stream ?? null,
+						generation: state?.generation ?? null,
+						paused: null,
+					},
+					guard,
+				),
 			]);
 			return {kind: 'rewound', forkBlock: page.forkBlock, retracted};
 		}
@@ -228,15 +287,20 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 			return pause(state, {kind: 'generation-changed', from: state.generation, to: page.generation});
 		}
 
-		const now = clock();
-		const statements: SQLPreparedStatement[] = [];
+		const matched: {entry: CanonicalEntry; delivery: NewDelivery}[] = [];
 		for (const entry of page.entries) {
-			for (const delivery of await match(entry, context)) {
-				statements.push(insertDeliveryStatement(db, app, now, entry, delivery));
-			}
+			for (const delivery of await match(entry, context)) matched.push({entry, delivery});
 		}
-		statements.push(writeState({cursor: page.cursor, stream: page.stream, generation: page.generation, paused: null}));
-		await db.batch(statements);
+		// the guard is taken after the last call, so it holds the commit to the lease as of now
+		const now = clock();
+		const guard = lease?.guard();
+		const statements = matched.map(({entry, delivery}) =>
+			insertDeliveryStatement(db, app, now, entry, delivery, guard),
+		);
+		statements.push(
+			commitState({cursor: page.cursor, stream: page.stream, generation: page.generation, paused: null}, guard),
+		);
+		await commit(statements);
 		return {kind: 'advanced', entries: page.entries.length, deliveries: statements.length - 1, hasMore: page.hasMore};
 	}
 

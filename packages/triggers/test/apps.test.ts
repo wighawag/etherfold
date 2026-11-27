@@ -126,7 +126,8 @@ describe('two apps on one database', () => {
 			expect((await call(target, '/subscriptions', ALICE, {kind: 'new-post'})).status).toBe(200);
 		await ingestBoth(100, 110, [{block: 101, hash: '0xa101', author: BOB, count: 3n, text: 'from bob'}]);
 
-		// both outboxes hold their rows before either app delivers
+		// both outboxes hold their rows before either app delivers (each under its own app's lease)
+		for (const target of [a, b]) await target.service.lease.acquire();
 		await a.service.consumer.catchUp();
 		await b.service.consumer.catchUp();
 		await a.service.tick();

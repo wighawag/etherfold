@@ -122,6 +122,9 @@ export default defineConfig({
 			verifier: delegatedIdentityVerifier({serverOrigin, domain: 'greetings.example.com'}),
 			// the bound on each call to the outside (the gate, a feed read, a predicate, a delivery); 10 s when absent
 			callTimeoutMs: 10_000,
+			// how long this app's lease lasts (one ticker of the app at a time); 60 s when absent,
+			// and the timeout plus 10 s must be under half of it
+			leaseMs: 60_000,
 		},
 
 		game: {
@@ -185,6 +188,10 @@ An app may be in both `apps` and `retired`, which is the move: it runs on the da
 
 `run` runs each app's own loop, concurrently, in the one process: its own consumer, cursor, gate, outbox and registration API, so one app's slow or failing round (a predicate that throws, a feed that does not answer) delays no other app's, and the journal records the stall under that app's name. Each round is bounded: at most `maxPagesPerRound` pages of the app's feed (100 when absent; a round that reaches it is not a stall, and the next starts at once) and at most `maxDeliveriesPerRound` due deliveries (100 when absent; the rest wait for the next round), both per app. What the process does NOT isolate is a synchronous infinite loop in one app's own code (a `render`, `recipients` or `predicate` that never returns without awaiting): it freezes the whole process, every app with it, because the apps share one event loop. That is acceptable because every app here is the one operator's own; running mutually untrusted apps' code in one process would need a sandbox, which this is not.
 
+### One ticker per app
+
+Two processes ticking one app over one database (a rolling deploy's overlap, a `tick` from cron beside a `run`) never work at once: each app's round runs under a LEASE held in its database ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)). The holder renews it under half of `leaseMs` (60 s when absent), about one row written per 30 s per app; the other reports `"lease": "not-leased"` for that app and does nothing. `run` releases its leases when it stops on SIGINT or SIGTERM, and `tick` releases them at the end of its round, so the next process ticks at once; a process that crashes holds its lease until it lapses, at most `leaseMs` later. The lease assumes the hosts' clocks agree within 5 s (NTP). A `callTimeoutMs` too long for the lease (the timeout plus 10 s not under half of `leaseMs`) is refused at start, naming both: lengthen the lease or shorten the timeout.
+
 ### A reward target
 
 The reward service is yours. It receives, with `Authorization: Bearer <token>` and `Idempotency-Key: <key>`:
@@ -234,10 +241,10 @@ etherfold-triggers resume --app greetings        # that app, whichever others ar
 etherfold-triggers deliveries --status dead      # every app's dead letters, as JSON lines
 etherfold-triggers requeue <id> [--app <name>]   # send a dead letter again
 etherfold-triggers journal [--app <name>]        # rewinds, pauses, stalls, expiries, dead letters
-etherfold-triggers tick [--app <name>]           # one round of every app (or of that one), then exit
+etherfold-triggers tick [--app <name>]           # one round of every app (or of that one), then release its lease and exit
 ```
 
-Every command but `run` takes `--app <name>`, the app's key in the config's `apps`: with it, the command reports or acts on that app only; an unknown name is refused before any database is opened, listing the configured apps. Without it, `status`, `deliveries`, `journal` and `tick` cover every app, one JSON line per row, each naming its `app`; `tick` exits 1 when any app's round failed, and reports that app's error beside the others' rounds.
+Every command but `run` takes `--app <name>`, the app's key in the config's `apps`: with it, the command reports or acts on that app only; an unknown name is refused before any database is opened, listing the configured apps. Without it, `status`, `deliveries`, `journal` and `tick` cover every app, one JSON line per row, each naming its `app`; `tick` exits 1 when any app's round failed, and reports that app's error beside the others' rounds. Each `tick` line says `"lease": "held"` for a round it ran, `"not-leased"` when another process held that app's lease (it did nothing), or `"lost"` when the round stopped part-way because the lease was taken (what it committed stays committed).
 
 `status` of a paused app says why under `paused`, beside its `app`: a generation change is `{"kind": "generation-changed", "from": "<old>", "to": "<new>"}`, a refused cursor is `{"kind": "refused", ...}`. Resuming is a decision about ONE app, so `resume` without `--app` acts only when exactly one app is paused, and otherwise refuses, naming the paused apps (or saying none is), so an operator never resumes the wrong one by accident.
 

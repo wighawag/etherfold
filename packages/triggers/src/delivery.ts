@@ -1,6 +1,7 @@
 import type {RemoteSQL} from 'remote-sql';
 import type {Lane} from './consumer.js';
 import {journalStatement} from './journal.js';
+import {LeaseLostError, type Lease} from './lease.js';
 import {deliveryFromRow, type DeliveryRecord} from './outbox.js';
 import {callTimeoutOf, withTimeout} from './timeout.js';
 import type {TriggerDefinitions} from './triggers.js';
@@ -97,8 +98,15 @@ export function createDeliverer(options: {
 	batchSize?: number;
 	/** The bound on each attempt, in ms: 10 s when absent. An attempt past it is a retry (`delivery-timeout`). */
 	callTimeoutMs?: number;
+	/**
+	 * The app's lease (etherfold ADR-0101), which `createTriggerService` always
+	 * gives: each attempt is fenced (`lease.fence()`) and every settle guarded,
+	 * so a ticker that does not hold it settles nothing (`deliverDue` then throws
+	 * a `LeaseLostError`). `requeue`, an operator's action, is not.
+	 */
+	lease?: Lease;
 }): Deliverer {
-	const {db, app, actions} = options;
+	const {db, app, actions, lease} = options;
 	const clock = options.clock ?? Date.now;
 	const callTimeoutMs = callTimeoutOf(options.callTimeoutMs);
 	const batchSize = options.batchSize ?? 100;
@@ -110,25 +118,42 @@ export function createDeliverer(options: {
 		attempts: number,
 		error?: string,
 	) {
-		await db.batch([
+		const guard = lease?.guard();
+		const [settled] = await db.batch([
 			db
 				.prepare(
-					`UPDATE deliveries SET status = ?, attempts = ?, settled_at = ?, last_error = COALESCE(?, last_error) WHERE id = ?`,
+					`UPDATE deliveries SET status = ?, attempts = ?, settled_at = ?, last_error = COALESCE(?, last_error)
+					WHERE id = ?${guard ? ` AND ${guard.sql}` : ''} RETURNING id`,
 				)
-				.bind(status, attempts, now, error ?? null, delivery.id),
+				.bind(status, attempts, now, error ?? null, delivery.id, ...(guard?.args ?? [])),
 			...(status === 'delivered'
 				? []
 				: [
-						journalStatement(db, app, now, status === 'dead' ? 'dead-lettered' : 'expired', {
-							delivery: delivery.id,
-							action: delivery.action,
-							key: delivery.key,
-							recipient: delivery.recipient,
-							attempts,
-							...(error === undefined ? {} : {error}),
-						}),
+						journalStatement(
+							db,
+							app,
+							now,
+							status === 'dead' ? 'dead-lettered' : 'expired',
+							{
+								delivery: delivery.id,
+								action: delivery.action,
+								key: delivery.key,
+								recipient: delivery.recipient,
+								attempts,
+								...(error === undefined ? {} : {error}),
+							},
+							guard,
+						),
 					]),
 		]);
+		assertSettled(settled?.results);
+	}
+
+	/** Under the lease, a settle that wrote nothing was a stale holder's: the round stops. */
+	function assertSettled(written: unknown[] | undefined) {
+		if (lease && (written?.length ?? 0) === 0) {
+			throw new LeaseLostError(`the lease of the app "${app}" was lost before a settle: nothing was written`);
+		}
 	}
 
 	return {
@@ -163,6 +188,8 @@ export function createDeliverer(options: {
 					continue;
 				}
 
+				// the attempt is the call the fence covers: started only with the margin left on the lease
+				await lease?.fence();
 				report.attempted++;
 				let outcome: DeliveryOutcome;
 				try {
@@ -180,10 +207,15 @@ export function createDeliverer(options: {
 					report.dead++;
 				} else {
 					const wait = outcome.retryAfterMs ?? backoffOf(adapter.policy, attempts);
-					await db
-						.prepare(`UPDATE deliveries SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?`)
-						.bind(attempts, now + wait, outcome.error, delivery.id)
+					const guard = lease?.guard();
+					const {results: retried} = await db
+						.prepare(
+							`UPDATE deliveries SET attempts = ?, next_attempt_at = ?, last_error = ?
+							WHERE id = ?${guard ? ` AND ${guard.sql}` : ''} RETURNING id`,
+						)
+						.bind(attempts, now + wait, outcome.error, delivery.id, ...(guard?.args ?? []))
 						.all();
+					assertSettled(retried);
 					report.retried++;
 				}
 			}

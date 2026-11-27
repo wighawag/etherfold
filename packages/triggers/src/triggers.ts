@@ -3,6 +3,7 @@ import {decodeEventLog, toEventSelector, type AbiEvent} from 'viem';
 import type {MatchContext, Matcher} from './consumer.js';
 import type {CanonicalEntry} from './feed.js';
 import {journalStatement} from './journal.js';
+import type {Lease} from './lease.js';
 import type {NewDelivery} from './outbox.js';
 import {setupDatabase} from './schema.js';
 import {callTimeoutOf, withTimeout} from './timeout.js';
@@ -125,8 +126,12 @@ export type TriggerRegistry = {
 	renewAll(recipient: string): Promise<number>;
 	unsubscribe(request: {recipient: string; kind: string; filter?: Record<string, string>}): Promise<boolean>;
 	list(recipient: string): Promise<Subscription[]>;
-	/** Mark what is past its expiry as expired, one journal entry each (never a quiet DELETE). */
-	expire(): Promise<number>;
+	/**
+	 * Mark what is past its expiry as expired, one journal entry each (never a
+	 * quiet DELETE). Given the ticker's `lease` (a tick's expiry), it writes only
+	 * while the lease is held (etherfold ADR-0101).
+	 */
+	expire(options?: {lease?: Lease}): Promise<number>;
 	/**
 	 * Record a signed request as accepted, unless it already was: `false` for a
 	 * replay. Remembered until `until`, when its signature expires anyway.
@@ -137,6 +142,8 @@ export type TriggerRegistry = {
 		onUndecodable?: (entry: CanonicalEntry, error: unknown) => void;
 		/** The bound on each predicate invocation, in ms: 10 s when absent. */
 		callTimeoutMs?: number;
+		/** Run before each predicate invocation: the lease's fence (etherfold ADR-0101), which may renew or stop the round. */
+		fence?: () => Promise<void>;
 	}): Matcher;
 };
 
@@ -274,7 +281,12 @@ export function createTriggerRegistry(options: {
 		return deliveries;
 	}
 
-	async function matchRules(log: DecodedLog, context: MatchContext, callTimeoutMs: number): Promise<NewDelivery[]> {
+	async function matchRules(
+		log: DecodedLog,
+		context: MatchContext,
+		callTimeoutMs: number,
+		fence: (() => Promise<void>) | undefined,
+	): Promise<NewDelivery[]> {
 		const deliveries: NewDelivery[] = [];
 		for (const [ruleName, rule] of rulesOf.get(log.event) ?? []) {
 			const computed = rule.recipients(log);
@@ -282,11 +294,12 @@ export function createTriggerRegistry(options: {
 			for (const raw of recipients) {
 				const recipient = raw.toLowerCase();
 				const predicate = rule.predicate;
-				if (
-					predicate &&
-					!(await withTimeout('predicate', callTimeoutMs, (signal) => predicate(log, recipient, {signal})))
-				)
-					continue;
+				if (predicate) {
+					await fence?.();
+					if (!(await withTimeout('predicate', callTimeoutMs, (signal) => predicate(log, recipient, {signal})))) {
+						continue;
+					}
+				}
 				deliveries.push({
 					action: rule.action,
 					key:
@@ -394,7 +407,7 @@ export function createTriggerRegistry(options: {
 			return results.map(subscriptionFromRow);
 		},
 
-		async expire() {
+		async expire({lease} = {}) {
 			const now = clock();
 			const due = (
 				await db
@@ -403,17 +416,27 @@ export function createTriggerRegistry(options: {
 					.all<SubscriptionRow>()
 			).results;
 			if (due.length === 0) return 0;
+			const guard = lease?.guard();
 			await db.batch(
 				due.flatMap((row) => [
 					db
-						.prepare(`UPDATE subscriptions SET status = 'expired' WHERE app = ? AND id = ? AND status = 'active'`)
-						.bind(app, row.id),
-					journalStatement(db, app, now, 'expired', {
-						subscription: Number(row.id),
-						kind: row.kind,
-						recipient: row.recipient,
-						expiresAt: Number(row.expires_at),
-					}),
+						.prepare(
+							`UPDATE subscriptions SET status = 'expired' WHERE app = ? AND id = ? AND status = 'active'${guard ? ` AND ${guard.sql}` : ''}`,
+						)
+						.bind(app, row.id, ...(guard?.args ?? [])),
+					journalStatement(
+						db,
+						app,
+						now,
+						'expired',
+						{
+							subscription: Number(row.id),
+							kind: row.kind,
+							recipient: row.recipient,
+							expiresAt: Number(row.expires_at),
+						},
+						guard,
+					),
 				]),
 			);
 			return due.length;
@@ -425,6 +448,7 @@ export function createTriggerRegistry(options: {
 				((entry: CanonicalEntry, error: unknown) =>
 					console.error(`undecodable log ${entry.blockHash}:${entry.logIndex}`, error));
 			const callTimeoutMs = callTimeoutOf(matcherOptions.callTimeoutMs);
+			const {fence} = matcherOptions;
 			return async (entry, context) => {
 				// a consumer of another app would write this app's subscribers into its own outbox
 				if (context.app !== app) {
@@ -446,7 +470,7 @@ export function createTriggerRegistry(options: {
 					return [];
 				}
 				const log: DecodedLog = {event: known.name, args, entry, chainId: context.chainId};
-				return [...(await matchSubscriptions(log, context)), ...(await matchRules(log, context, callTimeoutMs))];
+				return [...(await matchSubscriptions(log, context)), ...(await matchRules(log, context, callTimeoutMs, fence))];
 			};
 		},
 	};

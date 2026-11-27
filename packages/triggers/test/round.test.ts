@@ -168,10 +168,10 @@ describe("a service's round", () => {
 				),
 			),
 		);
-		expect((await triggers.tick()).delivery).toMatchObject({attempted: 2, delivered: 2});
+		expect(await triggers.tick()).toMatchObject({lease: 'held', delivery: {attempted: 2, delivered: 2}});
 		expect((await listDeliveries(db, 'a', {status: 'pending'})).length).toBe(3);
-		expect((await triggers.tick()).delivery).toMatchObject({attempted: 2, delivered: 2});
-		expect((await triggers.tick()).delivery).toMatchObject({attempted: 1, delivered: 1});
+		expect(await triggers.tick()).toMatchObject({lease: 'held', delivery: {attempted: 2, delivered: 2}});
+		expect(await triggers.tick()).toMatchObject({lease: 'held', delivery: {attempted: 1, delivered: 1}});
 		expect(delivered.map((d) => d.key)).toEqual(['k0', 'k1', 'k2', 'k3', 'k4']);
 	});
 });

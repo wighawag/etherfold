@@ -9,6 +9,7 @@ import {
 } from './delivery.js';
 import type {CanonicalFeed} from './feed.js';
 import {journalStatement} from './journal.js';
+import {createLease, LeaseLostError, type Lease} from './lease.js';
 import {createRegistrationAPI, type RegistrationVerifier} from './registration.js';
 import {callTimeoutOf} from './timeout.js';
 import {createTriggerRegistry, defineTriggers, type TriggerDefinitions, type TriggerRegistry} from './triggers.js';
@@ -51,6 +52,14 @@ export type TriggerServiceOptions = {
 	 */
 	callTimeoutMs?: number;
 	/**
+	 * How long the app's lease lasts, in ms (etherfold ADR-0101): 60 s when
+	 * absent. A tick works only under it, renews it under half of it, and starts
+	 * no call with less than the fence margin left (the per-call timeout plus
+	 * 5 s for the commit and 5 s for clock skew), which must be under half the
+	 * lease: a service whose timeout does not fit is refused, naming both.
+	 */
+	leaseMs?: number;
+	/**
 	 * The most pages of the feed ONE round reads (etherfold ADR-0101): 100 when
 	 * absent. A round that reaches it returns normally with `hasMore` set and is
 	 * not a stall; the next round goes on from there, and `run` starts it at once.
@@ -68,7 +77,8 @@ export type TriggerServiceOptions = {
 export const DEFAULT_MAX_PAGES_PER_ROUND = 100;
 export const DEFAULT_MAX_DELIVERIES_PER_ROUND = 100;
 
-export type TickReport = {
+/** What a round did, under the lease. */
+export type RoundReport = {
 	expired: number;
 	consumed: number;
 	matched: number;
@@ -78,25 +88,40 @@ export type TickReport = {
 	delivery: DeliveryReport;
 };
 
+/**
+ * One tick (etherfold ADR-0101): a round under the app's lease (`held`); nothing
+ * at all because another ticker holds it (`not-leased`); or a round stopped at
+ * a fence (`lost`) because the lease was taken, or too little of it was left to
+ * start the next call, what it committed before staying committed.
+ */
+export type TickReport = ({lease: 'held'} & RoundReport) | {lease: 'not-leased'} | {lease: 'lost'; reason: string};
+
 export type TriggerService = {
 	/** The app it serves: what an operator read of the outbox or the journal is scoped to. */
 	app: string;
 	consumer: Consumer;
 	registry: TriggerRegistry;
 	deliverer: Deliverer;
+	/**
+	 * The app's lease, as this service holds it (etherfold ADR-0101). A one-shot
+	 * host calls `lease.release()` after its tick, so the next ticker need not
+	 * wait for it to lapse; `run` releases it when its signal aborts.
+	 */
+	lease: Lease;
 	/** The registration API (a Hono app), when a verifier was given. */
 	api: ReturnType<typeof createRegistrationAPI> | undefined;
 	setup(): Promise<void>;
 	/**
-	 * One round: expire what is due, follow the feed to the gate (at most
-	 * `maxPagesPerRound` pages), attempt what is due (at most
-	 * `maxDeliveriesPerRound`).
+	 * One round, under the app's lease: expire what is due, follow the feed to
+	 * the gate (at most `maxPagesPerRound` pages), attempt what is due (at most
+	 * `maxDeliveriesPerRound`). Without the lease, nothing (`not-leased`).
 	 */
 	tick(): Promise<TickReport>;
 	/**
 	 * Tick until the signal aborts, waiting `intervalMs` between rounds, except
 	 * after a round that stopped at its page bound (`hasMore`), whose next round
-	 * starts at once; a failed round is reported and retried.
+	 * starts at once; a failed round is reported and retried. Releases the lease
+	 * once the signal aborts (a graceful stop).
 	 */
 	run(options: {signal?: AbortSignal; intervalMs?: number; onError?: (error: unknown) => void}): Promise<void>;
 };
@@ -115,6 +140,14 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	);
 
 	const {app} = options;
+	// first, so a timeout too long for the lease is refused before anything else is built
+	const lease = createLease({
+		db: options.db,
+		app,
+		clock,
+		callTimeoutMs,
+		...(options.leaseMs === undefined ? {} : {durationMs: options.leaseMs}),
+	});
 	const registry = createTriggerRegistry({
 		db: options.db,
 		app,
@@ -130,10 +163,11 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		chainId: options.chainId,
 		feed: options.feed,
 		gate: options.gate,
-		match: registry.matcher({callTimeoutMs}),
+		match: registry.matcher({callTimeoutMs, fence: () => lease.fence()}),
 		lane,
 		clock,
 		callTimeoutMs,
+		lease,
 		...(options.limit === undefined ? {} : {limit: options.limit}),
 	});
 	const deliverer = createDeliverer({
@@ -143,6 +177,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		clock,
 		callTimeoutMs,
 		batchSize: maxDeliveriesPerRound,
+		lease,
 	});
 	const api = options.verifier ? createRegistrationAPI({registry, verifier: options.verifier}) : undefined;
 
@@ -155,7 +190,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		if (failure === undefined) {
 			if (stalledOn === undefined) return;
 			stalledOn = undefined;
-			await options.db.batch([journalStatement(options.db, app, clock(), 'recovered', {})]);
+			await options.db.batch([journalStatement(options.db, app, clock(), 'recovered', {}, lease.guard())]);
 			return;
 		}
 		const error = failure instanceof Error ? failure.message : String(failure);
@@ -164,15 +199,33 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		if (signature === stalledOn) return;
 		stalledOn = signature;
 		await options.db.batch([
-			journalStatement(options.db, app, clock(), 'stalled', {
-				error,
-				...(typeof code === 'string' ? {code} : {}),
-			}),
+			journalStatement(
+				options.db,
+				app,
+				clock(),
+				'stalled',
+				{
+					error,
+					...(typeof code === 'string' ? {code} : {}),
+				},
+				lease.guard(),
+			),
 		]);
 	}
 
 	async function tick(): Promise<TickReport> {
-		const expired = await registry.expire();
+		// another ticker holds the lease: no expiry, no feed, no delivery
+		if (!(await lease.acquire())) return {lease: 'not-leased'};
+		try {
+			return {lease: 'held', ...(await round())};
+		} catch (error) {
+			if (error instanceof LeaseLostError) return {lease: 'lost', reason: error.message};
+			throw error;
+		}
+	}
+
+	async function round(): Promise<RoundReport> {
+		const expired = await registry.expire({lease});
 		// a feed that is down must not hold back what is already in the outbox: deliver either way,
 		// then report the feed's failure
 		let followed: Awaited<ReturnType<Consumer['catchUp']>> | undefined;
@@ -180,6 +233,8 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		try {
 			followed = await consumer.catchUp({maxPages: maxPagesPerRound});
 		} catch (error) {
+			// a round that lost its lease stops: the next ticker delivers
+			if (error instanceof LeaseLostError) throw error;
 			failure = error;
 		}
 		const delivery = await deliverer.deliverDue();
@@ -202,6 +257,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		consumer,
 		registry,
 		deliverer,
+		lease,
 		api,
 		setup: () => registry.setup(),
 		tick,
@@ -213,7 +269,8 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 			while (!signal?.aborted) {
 				let hasMore = false;
 				try {
-					hasMore = (await tick()).hasMore;
+					const report = await tick();
+					hasMore = report.lease === 'held' && report.hasMore;
 				} catch (error) {
 					onError(error);
 				}
@@ -225,6 +282,12 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 					const timer = setTimeout(() => (signal?.removeEventListener('abort', onAbort), resolve()), wait);
 					signal?.addEventListener('abort', onAbort, {once: true});
 				});
+			}
+			// a graceful stop: the next ticker need not wait for the lease to lapse
+			try {
+				await lease.release();
+			} catch (error) {
+				onError(error);
 			}
 		},
 	};

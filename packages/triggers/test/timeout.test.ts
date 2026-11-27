@@ -141,7 +141,7 @@ describe('a feed or a gate that never answers', () => {
 		expect(await readJournal(db, INDEXER, {kind: 'stalled'})).toHaveLength(1);
 
 		up = true;
-		expect((await triggers.tick()).consumed).toBe(1);
+		expect(await triggers.tick()).toMatchObject({lease: 'held', consumed: 1});
 		expect(await readJournal(db, INDEXER, {kind: 'recovered'})).toHaveLength(1);
 	});
 
@@ -161,7 +161,7 @@ describe('a feed or a gate that never answers', () => {
 		expect((await triggers.consumer.status()).cursor).toBeUndefined();
 
 		up = true;
-		expect((await triggers.tick()).consumed).toBe(1);
+		expect(await triggers.tick()).toMatchObject({lease: 'held', consumed: 1});
 		expect(await readJournal(db, INDEXER, {kind: 'recovered'})).toHaveLength(1);
 	});
 });
@@ -240,7 +240,7 @@ describe('callees that ignore the signal', () => {
 		const started = Date.now();
 		const report = await triggers.tick();
 		expect(Date.now() - started).toBeLessThan(2000);
-		expect(report.delivery).toMatchObject({attempted: 1, retried: 1});
+		expect(report).toMatchObject({lease: 'held', delivery: {attempted: 1, retried: 1}});
 		const [pending] = await listDeliveries(db, INDEXER);
 		expect(pending).toMatchObject({status: 'pending', attempts: 1});
 		expect(pending?.lastError).toMatch(/did not answer within 40 ms/);
