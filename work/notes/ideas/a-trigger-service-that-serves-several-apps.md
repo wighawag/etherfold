@@ -8,7 +8,7 @@ slug: a-trigger-service-that-serves-several-apps
 
 # A trigger service that serves several apps
 
-> **2026-11-26, split in two.** The multi-app half (several apps in one process, one app-keyed schema that one database or several can hold) is now the spec `work/specs/ready/one-trigger-service-serves-several-apps.md`. What stays incubating here is the UPLOADED-BUNDLE half ("definitions arrive as a bundle" and the hot-reload dev loop), deferred for the reasons under "Why the bundle half waits" below.
+> **2026-11-26, split in two.** The multi-app half (several apps in one process, one app-keyed schema that one database or several can hold) is now the spec `work/specs/tasked/one-trigger-service-serves-several-apps.md`. What stays incubating here is the UPLOADED-BUNDLE half ("definitions arrive as a bundle" and the hot-reload dev loop), deferred for the reasons under "Why the bundle half waits" below.
 
 ## Why
 
@@ -42,3 +42,8 @@ One trigger service process (and one database) hosting several APPS, each an ent
 - **A Worker cannot run one.** `work/notes/findings/a-worker-cannot-instantiate-a-processor-from-bytes.md`: no `import(data:)`, `blob:`, `eval` or `new Function` in-isolate, so on Cloudflare the definitions must be bundled into the deployed script (or reach a separate isolate through Dynamic Workers). Uploads would be a Node-only feature.
 - **The dev loop is mostly available already.** `node --watch` on the config file restarts the process, and the cursor, outbox and subscriptions are durable, so a restart loses nothing.
 - **Trust**: an upload route runs code, so it needs operator authentication, and it stays acceptable only while the uploader is the operator (ADR-0013's "user-supplied code is never executed").
+
+## Hosting it on Cloudflare (from the spec's further notes, 2026-11-26)
+
+- The core is already platform-neutral (Hono, viem, `remote-sql`, `fetch`; no Node API), and `TriggerService.tick()` is already one round callable by any host, so a Cloudflare host is mostly a new platform package: a `scheduled` or alarm handler calling `tick()` per app, a fetch handler mounting the registration APIs, D1 through `remote-sql`, and a config that is a function of the Worker's `env` (secrets are bindings, not `process.env`). The constraints it must respect are in the finding above: Workers Paid, 1,000 D1 queries and 10,000 subrequests per invocation (each feed page, gate read, state read and delivery is at least one), bounded rounds, and no overlapping ticks of one app, which the core's lease now enforces (a Cron Trigger suffices; a Durable Object alarm is only for sub-minute latency).
+- A synchronous infinite loop in one app's render or predicate still freezes the whole process; acceptable for one operator's own apps, and the README should say so.

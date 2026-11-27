@@ -1,5 +1,7 @@
 # Triggers run outside the indexer-server
 
+> **Complemented 2026-11-26 by [ADR-0101](0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md): a consumer's "own database" may be an app-keyed slice of a database one operator shares across several apps.** Everything below still holds: the consumer owns its state, its cursor, its gate, its outbox and its auth, and the indexer-server holds none of it.
+
 Trigger evaluation and action delivery (webhooks, push notifications) do **not** run inside the indexer-server. They run in N independent consumer services, each owning its own database, its own cursor, its own gate, its own delivery outbox and its own auth. The indexer-server holds no trigger state whatsoever: no registrations, no subscriptions, no per-consumer cursors, no delivery table. We chose this to keep the indexer-server simple and to allow different trigger purposes, run by different entities, to exist without any change to it.
 
 This **reverses** `work/specs/dropped/trigger-system.md`, which records that "triggers evaluate in the log-processor component (it has the events + historical state + DB)" and asks its open question 5 to confirm that. The answer is no.
