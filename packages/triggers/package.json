@@ -1,6 +1,6 @@
 {
 	"name": "@etherfold/triggers",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "The core of etherfold's reference trigger service: follow an indexer's canonical feed, match triggers held as data, and deliver idempotent actions (a Web Push, a reward call) through a durable outbox. Platform-neutral: it takes a remote-sql database and a fetch. It runs as its own process, never inside the indexer-server (ADR-0005).",
 	"publishConfig": {
 		"access": "public"

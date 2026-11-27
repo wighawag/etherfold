@@ -1,6 +1,0 @@
----
-'@etherfold/triggers': minor
-'@etherfold/platform-nodejs-triggers': minor
----
-
-The trigger service's schema is keyed by APP (ADR-0101), so two apps sharing one database never cross. Breaking: `createTriggerService`'s and `createConsumer`'s `name` option is now `app`; `createTriggerRegistry` and `createDeliverer` take an `app`; the delivery record's `consumer`, `MatchContext.consumer` and `ConsumerStatus.name` are `app`; the reward target's body carries `log.app` instead of `log.consumer`; `listDeliveries(db, app, filter)` and `readJournal(db, app, options)` take the app, and every journal entry names it (the consumer's entries no longer repeat it in their detail). Every table carries an `app` column and every unique and lookup index leads with it: deliveries are unique on `(app, action, key)`, subscriptions on `(app, kind, recipient, filter)`, accepted requests on `(app, key)`, and the deliverer's due scan, the rewind, the matcher, the quota, renew-all, list, cancel, expiry and requeue are all scoped to the app. There is no migration: `setup` over a database in the old layout refuses with an error saying the schema changed and to start from an empty database.
