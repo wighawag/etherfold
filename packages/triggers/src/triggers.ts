@@ -5,6 +5,7 @@ import type {CanonicalEntry} from './feed.js';
 import {journalStatement} from './journal.js';
 import type {NewDelivery} from './outbox.js';
 import {setupDatabase} from './schema.js';
+import {callTimeoutOf, withTimeout} from './timeout.js';
 
 // ---------------------------------------------------------------------------
 // TRIGGERS: conditions are data, predicates and actions are code (etherfold
@@ -50,8 +51,14 @@ export type GlobalRule = {
 	event: string;
 	/** Who it is for: an address, several, or nobody. */
 	recipients: (log: DecodedLog) => string | string[] | undefined;
-	/** Whether it fires for that recipient (level-triggered: the key absorbs repeats). */
-	predicate?: (log: DecodedLog, recipient: string) => boolean | Promise<boolean>;
+	/**
+	 * Whether it fires for that recipient (level-triggered: the key absorbs
+	 * repeats). Each invocation is bounded by the per-call timeout (etherfold
+	 * ADR-0101): `signal` aborts then, so pass it to every `state.query` it makes
+	 * and the reads are cancelled with it. Past the timeout the page fails
+	 * (`predicate-timeout`) whether or not the predicate honours the signal.
+	 */
+	predicate?: (log: DecodedLog, recipient: string, context: {signal: AbortSignal}) => boolean | Promise<boolean>;
 	action: string;
 	/** The SEMANTIC idempotency key (ADR-0009); the log's position and the recipient when absent. */
 	key?: (log: DecodedLog, recipient: string) => string;
@@ -126,7 +133,11 @@ export type TriggerRegistry = {
 	 */
 	acceptOnce(key: string, until: number): Promise<boolean>;
 	/** The consumer's matcher over both archetypes, for a consumer of the registry's own app only. */
-	matcher(options?: {onUndecodable?: (entry: CanonicalEntry, error: unknown) => void}): Matcher;
+	matcher(options?: {
+		onUndecodable?: (entry: CanonicalEntry, error: unknown) => void;
+		/** The bound on each predicate invocation, in ms: 10 s when absent. */
+		callTimeoutMs?: number;
+	}): Matcher;
 };
 
 const DEFAULT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -263,14 +274,19 @@ export function createTriggerRegistry(options: {
 		return deliveries;
 	}
 
-	async function matchRules(log: DecodedLog, context: MatchContext): Promise<NewDelivery[]> {
+	async function matchRules(log: DecodedLog, context: MatchContext, callTimeoutMs: number): Promise<NewDelivery[]> {
 		const deliveries: NewDelivery[] = [];
 		for (const [ruleName, rule] of rulesOf.get(log.event) ?? []) {
 			const computed = rule.recipients(log);
 			const recipients = computed === undefined ? [] : Array.isArray(computed) ? computed : [computed];
 			for (const raw of recipients) {
 				const recipient = raw.toLowerCase();
-				if (rule.predicate && !(await rule.predicate(log, recipient))) continue;
+				const predicate = rule.predicate;
+				if (
+					predicate &&
+					!(await withTimeout('predicate', callTimeoutMs, (signal) => predicate(log, recipient, {signal})))
+				)
+					continue;
 				deliveries.push({
 					action: rule.action,
 					key:
@@ -408,6 +424,7 @@ export function createTriggerRegistry(options: {
 				matcherOptions.onUndecodable ??
 				((entry: CanonicalEntry, error: unknown) =>
 					console.error(`undecodable log ${entry.blockHash}:${entry.logIndex}`, error));
+			const callTimeoutMs = callTimeoutOf(matcherOptions.callTimeoutMs);
 			return async (entry, context) => {
 				// a consumer of another app would write this app's subscribers into its own outbox
 				if (context.app !== app) {
@@ -429,7 +446,7 @@ export function createTriggerRegistry(options: {
 					return [];
 				}
 				const log: DecodedLog = {event: known.name, args, entry, chainId: context.chainId};
-				return [...(await matchSubscriptions(log, context)), ...(await matchRules(log, context))];
+				return [...(await matchSubscriptions(log, context)), ...(await matchRules(log, context, callTimeoutMs))];
 			};
 		},
 	};

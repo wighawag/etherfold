@@ -49,16 +49,18 @@ function outcomeOfStatus(response: Response, text: string, retryAlso: number[] =
 	return {kind: 'dead', error};
 }
 
-/** The call, or the transport failure as a retry (nothing answered, so nothing was refused). */
+/** The call, or the transport failure as a retry (nothing answered, so nothing was refused); an abort (the deliverer's timeout) is one. */
 async function post(
 	doFetch: typeof fetch,
 	url: string,
 	token: string,
 	key: string,
 	body: unknown,
+	signal: AbortSignal | undefined,
 ): Promise<{response: Response; text: string} | {kind: 'retry'; error: string}> {
 	try {
 		const response = await doFetch(url, {
+			...(signal ? {signal} : {}),
 			method: 'POST',
 			headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'Idempotency-Key': key},
 			body: JSON.stringify(body),
@@ -86,15 +88,22 @@ export function pushAction(options: {
 	const doFetch = options.fetch ?? fetch;
 	return {
 		policy: options.policy ?? DEFAULT_PUSH_POLICY,
-		async deliver(delivery: DeliveryRecord) {
+		async deliver(delivery: DeliveryRecord, {signal}: {signal?: AbortSignal} = {}) {
 			const payload = delivery.payload as PushPayload;
-			const answered = await post(doFetch, endpoint, options.token, delivery.key, {
-				address: delivery.recipient,
-				domain: options.domain,
-				message: payload.message,
-				...(payload.topic === undefined ? {} : {topic: payload.topic}),
-				...(payload.urgency === undefined ? {} : {urgency: payload.urgency}),
-			});
+			const answered = await post(
+				doFetch,
+				endpoint,
+				options.token,
+				delivery.key,
+				{
+					address: delivery.recipient,
+					domain: options.domain,
+					message: payload.message,
+					...(payload.topic === undefined ? {} : {topic: payload.topic}),
+					...(payload.urgency === undefined ? {} : {urgency: payload.urgency}),
+				},
+				signal,
+			);
 			if (!('response' in answered)) return answered;
 			// 200 delivered (or nothing to deliver); 502 a send failed and 409 the same key still sending,
 			// both retried under the key, which reaches only the devices not yet delivered; 400, 401 and
@@ -119,20 +128,27 @@ export function rewardAction(options: {
 	return {
 		lanes: ['safe'],
 		policy: options.policy ?? DEFAULT_REWARD_POLICY,
-		async deliver(delivery: DeliveryRecord) {
-			const answered = await post(doFetch, options.url, options.token, delivery.key, {
-				key: delivery.key,
-				recipient: delivery.recipient,
-				reward: delivery.payload,
-				trigger: delivery.trigger,
-				log: {
-					app: delivery.app,
-					blockNumber: delivery.blockNumber,
-					blockHash: delivery.blockHash,
-					logIndex: delivery.logIndex,
-					transactionHash: delivery.transactionHash,
+		async deliver(delivery: DeliveryRecord, {signal}: {signal?: AbortSignal} = {}) {
+			const answered = await post(
+				doFetch,
+				options.url,
+				options.token,
+				delivery.key,
+				{
+					key: delivery.key,
+					recipient: delivery.recipient,
+					reward: delivery.payload,
+					trigger: delivery.trigger,
+					log: {
+						app: delivery.app,
+						blockNumber: delivery.blockNumber,
+						blockHash: delivery.blockHash,
+						logIndex: delivery.logIndex,
+						transactionHash: delivery.transactionHash,
+					},
 				},
-			});
+				signal,
+			);
 			if (!('response' in answered)) return answered;
 			// a 409 is the same key still in flight at the target: try again later
 			return outcomeOfStatus(answered.response, answered.text, [409]);

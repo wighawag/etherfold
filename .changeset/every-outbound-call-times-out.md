@@ -1,0 +1,6 @@
+---
+'@etherfold/triggers': minor
+'@etherfold/platform-nodejs-triggers': minor
+---
+
+Every call the trigger service makes to the outside times out (ADR-0101): the gate, each feed read, each predicate invocation and each delivery get an `AbortSignal` that aborts after a per-call timeout, `callTimeoutMs` (10 s when absent, `DEFAULT_CALL_TIMEOUT_MS`), one option on `createTriggerService` (and on `createConsumer`, `createDeliverer` and `registry.matcher`) and on the nodejs platform's config. The core gives up at the timeout whether or not the callee honours the signal. A timed-out gate, feed read or predicate fails the round with a `CallTimeoutError` (code `gate-timeout`, `feed-timeout` or `predicate-timeout`), journalled as `stalled` then `recovered`, the page not committed and read again next round; a timed-out delivery is retried like a `5xx`. New parameters: the gate is `(context: {signal}) => Promise<number>` (the new `Gate` type; `rpcGate` passes the signal to `fetch`), `CanonicalFeed.read(query, {signal}?)`, `ActionAdapter.deliver(delivery, {signal}?)`, a predicate's third argument `{signal}`, and `StateReader.query(document, at, variables?, {signal}?)`; each is optional for an existing implementation, and the built-ins (`canonicalFeed`, `rpcGate`, `stateReader`, `pushAction`, `rewardAction`) pass the signal to `fetch`.

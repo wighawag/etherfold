@@ -2,6 +2,7 @@ import type {RemoteSQL} from 'remote-sql';
 import type {Lane} from './consumer.js';
 import {journalStatement} from './journal.js';
 import {deliveryFromRow, type DeliveryRecord} from './outbox.js';
+import {callTimeoutOf, withTimeout} from './timeout.js';
 import type {TriggerDefinitions} from './triggers.js';
 
 // ---------------------------------------------------------------------------
@@ -35,8 +36,14 @@ export type ActionAdapter = {
 	policy: DeliveryPolicy;
 	/** The lanes a trigger using this action may fire from (etherfold ADR-0007); absent, any. */
 	lanes?: readonly Lane[];
-	/** One attempt. A throw is a transport failure and is retried. */
-	deliver(delivery: DeliveryRecord): Promise<DeliveryOutcome>;
+	/**
+	 * One attempt. A throw is a transport failure and is retried. The deliverer
+	 * passes a `signal` that aborts at its per-call timeout (etherfold ADR-0101),
+	 * and counts an attempt that has not answered by then as a retry whether or
+	 * not it honours the signal; the target's idempotency key absorbs one that
+	 * still lands.
+	 */
+	deliver(delivery: DeliveryRecord, options?: {signal?: AbortSignal}): Promise<DeliveryOutcome>;
 };
 
 /**
@@ -88,9 +95,12 @@ export function createDeliverer(options: {
 	actions: Record<string, ActionAdapter>;
 	clock?: () => number;
 	batchSize?: number;
+	/** The bound on each attempt, in ms: 10 s when absent. An attempt past it is a retry (`delivery-timeout`). */
+	callTimeoutMs?: number;
 }): Deliverer {
 	const {db, app, actions} = options;
 	const clock = options.clock ?? Date.now;
+	const callTimeoutMs = callTimeoutOf(options.callTimeoutMs);
 	const batchSize = options.batchSize ?? 100;
 
 	async function settle(
@@ -156,7 +166,7 @@ export function createDeliverer(options: {
 				report.attempted++;
 				let outcome: DeliveryOutcome;
 				try {
-					outcome = await adapter.deliver(delivery);
+					outcome = await withTimeout('delivery', callTimeoutMs, (signal) => adapter.deliver(delivery, {signal}));
 				} catch (error) {
 					outcome = {kind: 'retry', error: error instanceof Error ? error.message : String(error)};
 				}

@@ -41,12 +41,15 @@ export type StateReader = {
 	 * Run a GraphQL document as of a block: a log's (its `entry.blockHash`) or a
 	 * `{blockHash}`. The document declares `$block: BlockAddress!` and passes it
 	 * to each root field (`greeter(..., block: $block)`); `variables` are the
-	 * others. Answers the `data`, or throws a `StateReadError`.
+	 * others. Answers the `data`, or throws a `StateReadError`. A predicate
+	 * passes its own `signal` (`predicate(log, recipient, {signal})`), so each
+	 * read is cancelled when the predicate's per-call timeout fires.
 	 */
 	query<T = Record<string, unknown>>(
 		document: string,
 		at: DecodedLog | {blockHash: string},
 		variables?: Record<string, unknown>,
+		options?: {signal?: AbortSignal},
 	): Promise<T>;
 };
 
@@ -67,12 +70,18 @@ export function stateReader(options: {url: string; fetch?: typeof fetch}): State
 	const endpoint = `${options.url.replace(/\/+$/, '')}/graphql`;
 	const doFetch = options.fetch ?? fetch;
 	return {
-		async query<T>(document: string, at: DecodedLog | {blockHash: string}, variables: Record<string, unknown> = {}) {
+		async query<T>(
+			document: string,
+			at: DecodedLog | {blockHash: string},
+			variables: Record<string, unknown> = {},
+			{signal}: {signal?: AbortSignal} = {},
+		) {
 			const hash = 'entry' in at ? at.entry.blockHash : at.blockHash;
 			let response: Response;
 			let text: string;
 			try {
 				response = await doFetch(endpoint, {
+					...(signal ? {signal} : {}),
 					method: 'POST',
 					headers: {'Content-Type': 'application/json', Accept: 'application/json'},
 					body: JSON.stringify({query: document, variables: {...variables, block: {hash}}}),

@@ -37,6 +37,7 @@ export async function createNodeService(
 		...(config.maxSubscriptionsPerRecipient === undefined
 			? {}
 			: {maxSubscriptionsPerRecipient: config.maxSubscriptionsPerRecipient}),
+		...(config.callTimeoutMs === undefined ? {} : {callTimeoutMs: config.callTimeoutMs}),
 	});
 	await service.setup();
 	return {service, db: opened.db, close: opened.close};

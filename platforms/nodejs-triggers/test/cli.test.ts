@@ -151,6 +151,21 @@ describe('the CLI', () => {
 	});
 });
 
+describe('the per-call timeout', () => {
+	it("is the config's `callTimeoutMs`: a gate that never answers fails the round after it", async () => {
+		const {service, close} = await createNodeService({
+			...config,
+			gate: () => new Promise<number>(() => {}),
+			callTimeoutMs: 30,
+		});
+		try {
+			await expect(service.tick()).rejects.toMatchObject({code: 'gate-timeout'});
+		} finally {
+			close();
+		}
+	});
+});
+
 describe('the registration API `run` serves', () => {
 	it("answers CORS for the served app's origin, with nothing more in the config than its verifier", async () => {
 		const {service, close} = await createNodeService({

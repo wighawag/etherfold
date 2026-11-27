@@ -3,6 +3,7 @@ import type {CanonicalEntry, CanonicalFeed} from './feed.js';
 import {journalStatement} from './journal.js';
 import {insertDeliveryStatement, type NewDelivery} from './outbox.js';
 import {setupDatabase} from './schema.js';
+import {callTimeoutOf, withTimeout} from './timeout.js';
 
 // ---------------------------------------------------------------------------
 // THE CONSUMER: the canonical view in, the outbox out (etherfold ADR-0005).
@@ -57,15 +58,28 @@ export type ConsumerOptions = {
 	app: string;
 	chainId: string;
 	feed: CanonicalFeed;
-	/** The highest block to act on (ADR-0007: the consumer's decision, never the server's). */
-	gate: () => Promise<number>;
+	/**
+	 * The highest block to act on (ADR-0007: the consumer's decision, never the
+	 * server's). Bounded by `callTimeoutMs`: its `signal` aborts at the timeout.
+	 */
+	gate: Gate;
 	match: Matcher;
 	lane?: Lane;
 	/** Entries per page (the server's default when absent). */
 	limit?: number;
 	/** ms since the epoch. */
 	clock?: () => number;
+	/**
+	 * The bound on each gate and feed read, in ms (etherfold ADR-0101): 10 s when
+	 * absent. A call that has not answered by then fails the step with a
+	 * `CallTimeoutError` (`gate-timeout`, `feed-timeout`), whether or not it
+	 * honours its signal; nothing is committed for that page.
+	 */
+	callTimeoutMs?: number;
 };
+
+/** The safe lane's gate: the highest block to act on, given a signal that aborts at the per-call timeout. */
+export type Gate = (context: {signal: AbortSignal}) => Promise<number>;
 
 export type Consumer = {
 	/** Create the database's tables. Idempotent. */
@@ -91,6 +105,7 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 	const lane = options.lane ?? 'safe';
 	if (lane !== 'safe') throw new Error(`the ${lane} lane is not built: only the safe lane (etherfold ADR-0007) is`);
 	const clock = options.clock ?? Date.now;
+	const callTimeoutMs = callTimeoutOf(options.callTimeoutMs);
 	const context: MatchContext = {chainId: options.chainId, lane, app};
 
 	async function readState(): Promise<StateRow | undefined> {
@@ -141,12 +156,17 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 		const state = await readState();
 		if (state?.paused) return {kind: 'paused', reason: JSON.parse(state.paused) as PauseReason};
 
-		const gate = await options.gate();
-		const page = await feed.read({
-			gate,
-			...(state?.cursor ? {cursor: state.cursor} : {}),
-			...(options.limit === undefined ? {} : {limit: options.limit}),
-		});
+		const gate = await withTimeout('gate', callTimeoutMs, (signal) => options.gate({signal}));
+		const page = await withTimeout('feed', callTimeoutMs, (signal) =>
+			feed.read(
+				{
+					gate,
+					...(state?.cursor ? {cursor: state.cursor} : {}),
+					...(options.limit === undefined ? {} : {limit: options.limit}),
+				},
+				{signal},
+			),
+		);
 
 		if (page.kind === 'refused') {
 			return pause(state, {kind: 'refused', error: page.error, status: page.status, body: page.body});

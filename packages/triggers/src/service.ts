@@ -1,5 +1,5 @@
 import type {RemoteSQL} from 'remote-sql';
-import {createConsumer, type Consumer, type Lane} from './consumer.js';
+import {createConsumer, type Consumer, type Gate, type Lane} from './consumer.js';
 import {
 	assertActionsFitLane,
 	createDeliverer,
@@ -10,6 +10,7 @@ import {
 import type {CanonicalFeed} from './feed.js';
 import {journalStatement} from './journal.js';
 import {createRegistrationAPI, type RegistrationVerifier} from './registration.js';
+import {callTimeoutOf} from './timeout.js';
 import {createTriggerRegistry, defineTriggers, type TriggerDefinitions, type TriggerRegistry} from './triggers.js';
 
 // ---------------------------------------------------------------------------
@@ -30,7 +31,7 @@ export type TriggerServiceOptions = {
 	app: string;
 	chainId: string;
 	feed: CanonicalFeed;
-	gate: () => Promise<number>;
+	gate: Gate;
 	definitions: TriggerDefinitions;
 	actions: Record<string, ActionAdapter>;
 	/** Without one, nobody can register: only global rules fire. */
@@ -39,6 +40,16 @@ export type TriggerServiceOptions = {
 	limit?: number;
 	maxSubscriptionsPerRecipient?: number;
 	clock?: () => number;
+	/**
+	 * The bound, in ms, on EACH call the core makes to the outside (etherfold
+	 * ADR-0101): the gate, each feed read, each predicate invocation (with the
+	 * state reads it makes) and each delivery; 10 s when absent. Each gets a
+	 * `signal` that aborts at it, and the core gives up then whether or not the
+	 * callee honours it: a timed-out gate, feed read or predicate fails the round
+	 * as a stall (`gate-timeout`, `feed-timeout`, `predicate-timeout`), a
+	 * timed-out delivery is retried like a `5xx`.
+	 */
+	callTimeoutMs?: number;
 };
 
 export type TickReport = {
@@ -69,6 +80,7 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 	const definitions = defineTriggers(options.definitions);
 	assertActionsFitLane(definitions, options.actions, lane);
 	const clock = options.clock ?? Date.now;
+	const callTimeoutMs = callTimeoutOf(options.callTimeoutMs);
 
 	const {app} = options;
 	const registry = createTriggerRegistry({
@@ -86,12 +98,13 @@ export function createTriggerService(options: TriggerServiceOptions): TriggerSer
 		chainId: options.chainId,
 		feed: options.feed,
 		gate: options.gate,
-		match: registry.matcher(),
+		match: registry.matcher({callTimeoutMs}),
 		lane,
 		clock,
+		callTimeoutMs,
 		...(options.limit === undefined ? {} : {limit: options.limit}),
 	});
-	const deliverer = createDeliverer({db: options.db, app, actions: options.actions, clock});
+	const deliverer = createDeliverer({db: options.db, app, actions: options.actions, clock, callTimeoutMs});
 	const api = options.verifier ? createRegistrationAPI({registry, verifier: options.verifier}) : undefined;
 
 	// The failure the journal last recorded, so a consumer held at one page journals it once

@@ -1,6 +1,6 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import type {ActionAdapter, Lane, RegistrationVerifier, TriggerDefinitions} from '@etherfold/triggers';
+import type {ActionAdapter, Gate, Lane, RegistrationVerifier, TriggerDefinitions} from '@etherfold/triggers';
 
 // ---------------------------------------------------------------------------
 // ONE CONFIG FILE per service, written by the operator in JavaScript or
@@ -21,8 +21,8 @@ export type NodeConfig = {
 	database?: string;
 	/** The etherfold server (`etherfold run`) and the named indexer to follow. */
 	etherfold: {url: string; indexer: string; fetch?: typeof fetch};
-	/** The safe lane's gate: the `finalized` block of this node, or `latest - depth`. */
-	gate: {rpcUrl: string; depth?: number} | (() => Promise<number>);
+	/** The safe lane's gate: the `finalized` block of this node, or `latest - depth`, or your own (given a `signal`). */
+	gate: {rpcUrl: string; depth?: number} | Gate;
 	triggers: TriggerDefinitions;
 	actions: Record<string, ActionAdapter>;
 	/** How a registration proves its address. Without one, the registration API is not served. */
@@ -33,6 +33,12 @@ export type NodeConfig = {
 	/** Milliseconds between rounds; 5000 when absent. */
 	intervalMs?: number;
 	maxSubscriptionsPerRecipient?: number;
+	/**
+	 * The bound, in ms, on each call the service makes to the outside: the gate,
+	 * each feed read, each predicate invocation and each delivery (etherfold
+	 * ADR-0101); 10000 when absent.
+	 */
+	callTimeoutMs?: number;
 };
 
 /** Types a config file's default export. */

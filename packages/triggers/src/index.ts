@@ -5,6 +5,7 @@ export type {
 	Consumer,
 	ConsumerOptions,
 	ConsumerStatus,
+	Gate,
 	Lane,
 	MatchContext,
 	Matcher,
@@ -40,3 +41,5 @@ export type {PushPayload} from './actions.js';
 export {createTriggerService} from './service.js';
 export type {TickReport, TriggerService, TriggerServiceOptions} from './service.js';
 export {rpcGate} from './gate.js';
+export {CallTimeoutError, DEFAULT_CALL_TIMEOUT_MS} from './timeout.js';
+export type {BoundedCall} from './timeout.js';
