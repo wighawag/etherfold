@@ -94,7 +94,10 @@ export type Gate = (context: {signal: AbortSignal}) => Promise<number>;
 export type Consumer = {
 	/** Create the database's tables. Idempotent. */
 	setup(): Promise<void>;
-	/** Read, match and commit ONE page (or act on the view's refusal). */
+	/**
+	 * Read, match and commit ONE page (or act on the view's refusal). An idle page
+	 * (no entry, the stream and generation unchanged) commits nothing.
+	 */
 	step(): Promise<StepResult>;
 	/**
 	 * Step until the view says there is no more below the gate, or until it
@@ -285,6 +288,23 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 
 		if (state?.generation && page.generation !== state.generation) {
 			return pause(state, {kind: 'generation-changed', from: state.generation, to: page.generation});
+		}
+
+		// AN IDLE ROUND WRITES NOTHING (etherfold ADR-0101), the lease renewal aside: a page that carried
+		// no entry and left the stream and generation as they were is not committed. Its cursor may
+		// differ (it carries the stream's newer high-water `since` mark), but its POSITION has not
+		// moved, so keeping the older cursor is safe: an older mark only makes the fork check more
+		// conservative, and the next guarded commit (a non-empty page, a rewind, a pause) writes the
+		// newest one. An empty canonical page always says `hasMore: false`; one that did not would be
+		// read again from the same cursor, so it is committed rather than trusted.
+		if (
+			page.entries.length === 0 &&
+			!page.hasMore &&
+			state !== undefined &&
+			page.stream === state.stream &&
+			page.generation === state.generation
+		) {
+			return {kind: 'advanced', entries: 0, deliveries: 0, hasMore: false};
 		}
 
 		const matched: {entry: CanonicalEntry; delivery: NewDelivery}[] = [];

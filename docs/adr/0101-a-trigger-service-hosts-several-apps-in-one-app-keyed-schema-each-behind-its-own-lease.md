@@ -1,7 +1,3 @@
----
-status: accepted, not yet implemented
----
-
 # A trigger service hosts several apps in one app-keyed schema, each app behind its own lease
 
 One `etherfold-triggers` process (and one database, by default) hosts several APPS, each named by an operator-chosen slug and each carrying its own feed, chain and gate, actions, verifier and trigger definitions. Every table and every unique index of the service's schema is keyed by the app, so one shared database and one database per app are the same schema; and each app's tick runs under a lease held in that database, so two tickers of one app never work at once. We chose this because a family of small apps run by one operator (a demo of jolly-roger and the games built on it) should cost one deployment, as push-notification-server and missiv already do, and because the schema was only half keyed by consumer: two services sharing a database would cross their deliveries and subscriptions. Decided by the maintainer on 2026-11-26, from the spec `one-trigger-service-serves-several-apps`, before any trigger-service deployment held live data, so it is a clean 0.x break with no migration. It complements ADR-0005 and ADR-0100 rather than superseding them: the trigger service still runs outside the indexer-server and owns its state; what ADR-0005 calls "its own database" may now be an app-keyed slice of a database the operator shares across apps.
