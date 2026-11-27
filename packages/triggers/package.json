@@ -22,7 +22,7 @@
 		"directory": "packages/triggers"
 	},
 	"dependencies": {
-		"delegated-identity": "^0.1.1",
+		"delegated-identity": "^0.2.0",
 		"hono": "^4.13.3",
 		"remote-sql": "^0.0.7",
 		"viem": "^2.52.0"
@@ -33,7 +33,7 @@
 		"@etherfold/processor-sqlite": "workspace:*",
 		"@etherfold/server": "workspace:*",
 		"@libsql/client": "^0.17.3",
-		"@push-notification/cli": "^0.1.2",
+		"@push-notification/cli": "^0.3.0",
 		"@types/node": "^25.9.1",
 		"as-soon": "^0.1.5",
 		"remote-sql-libsql": "^0.0.7",

@@ -817,8 +817,8 @@ importers:
   packages/triggers:
     dependencies:
       delegated-identity:
-        specifier: ^0.1.1
-        version: 0.1.1
+        specifier: ^0.2.0
+        version: 0.2.0
       hono:
         specifier: ^4.13.3
         version: 4.13.3
@@ -845,8 +845,8 @@ importers:
         specifier: ^0.17.3
         version: 0.17.4
       '@push-notification/cli':
-        specifier: ^0.1.2
-        version: 0.1.2(hono@4.13.3)
+        specifier: ^0.3.0
+        version: 0.3.0(hono@4.13.3)
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -1030,8 +1030,8 @@ importers:
         specifier: ^0.1.5
         version: 0.1.6
       delegated-identity:
-        specifier: ^0.1.1
-        version: 0.1.1
+        specifier: ^0.2.0
+        version: 0.2.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2135,6 +2135,10 @@ packages:
     resolution: {integrity: sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA==}
     engines: {node: ^14.21.3 || >=16}
 
+  '@noble/curves@1.9.7':
+    resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
+    engines: {node: ^14.21.3 || >=16}
+
   '@noble/hashes@1.7.1':
     resolution: {integrity: sha512-B8XBPsn4vT/KJAGqDzbwztd+6Yte3P4V7iafm24bxgDe/mlRuK6xmWPuCNrKt2vDafZ8MfJLlchDG/vYafQEjQ==}
     engines: {node: ^14.21.3 || >=16}
@@ -2254,12 +2258,12 @@ packages:
     peerDependencies:
       graphql: ^16.10.0 || ^17.0.0
 
-  '@push-notification/cli@0.1.2':
-    resolution: {integrity: sha512-j+Hh8MXAbrjPT0gm4CK1e05EBMlYQoBqYh2BBtghAwNkSpRhW59de2pcHKWBaPuvVWq0GvgPXl0/dGTidMfkOg==}
+  '@push-notification/cli@0.3.0':
+    resolution: {integrity: sha512-ExkhpkS/10x6RFq9F2BoJwG9ACNtvwdcIAk+uDzdTi1ejX4xoDe8aM5FXqtsEB1s3TcLQ9gAVzYTyOj4DiYJ/g==}
     hasBin: true
 
-  '@push-notification/server@0.1.2':
-    resolution: {integrity: sha512-YAn/8MWDR2T2BlDnpNN1gP4bWkRMSdP3kC55WUZBLGzIPHULf/9bectT744Ye2W9cM3aNyfUAskKoWO/FchUAQ==}
+  '@push-notification/server@0.3.0':
+    resolution: {integrity: sha512-kKonz51aFRpNcbTPmKdRD0cO8PRdmSNlgNQNO7BXFGu/raTwQSx/RT757CIVKS6JB8/kVDkLmKAAEic2d3rlLw==}
 
   '@repeaterjs/repeater@3.1.0':
     resolution: {integrity: sha512-TaoVksZRSx2KWYYpyLQtMQXXeS98VsgZImzW65xmiVgbYhXLk+aEsmzPLirqVuE4/XuUapH2iMtxUzaBNDzdSQ==}
@@ -3189,8 +3193,8 @@ packages:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
 
-  delegated-identity@0.1.1:
-    resolution: {integrity: sha512-JnsY+IMX/ebUAb8buUgr4/LYbLe4sWHD96wwvmwqtNxi6zGpbilpBdDM5cxKHwFiZGehP2/Zl03t2t+b1o1jDg==}
+  delegated-identity@0.2.0:
+    resolution: {integrity: sha512-UOysSpobqDIzv6SzJ+a5HOTyJRWIOC34vqrZEH4MSoNcCPboxm3XIduCR8UYtRrrhgukzBrXGBP/vXLvwrny8Q==}
 
   delegates@1.0.0:
     resolution: {integrity: sha512-bd2L678uiWATM6m5Z1VzNCErI3jiGzt6HGY8OVICs40JQq/HALfbyNJmp0UDakEY4pMMaN0Ly5om/B1VI/+xfQ==}
@@ -6046,6 +6050,10 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
 
+  '@noble/curves@1.9.7':
+    dependencies:
+      '@noble/hashes': 1.8.0
+
   '@noble/hashes@1.7.1': {}
 
   '@noble/hashes@1.8.0': {}
@@ -6136,11 +6144,11 @@ snapshots:
     dependencies:
       graphql: 16.14.2
 
-  '@push-notification/cli@0.1.2(hono@4.13.3)':
+  '@push-notification/cli@0.3.0(hono@4.13.3)':
     dependencies:
       '@hono/node-server': 1.19.19(hono@4.13.3)
       '@libsql/client': 0.15.15
-      '@push-notification/server': 0.1.2
+      '@push-notification/server': 0.3.0
       ldenv: 0.3.16
       remote-sql-libsql: 0.0.6
     transitivePeerDependencies:
@@ -6157,13 +6165,13 @@ snapshots:
       - zod-openapi
       - zod-to-json-schema
 
-  '@push-notification/server@0.1.2':
+  '@push-notification/server@0.3.0':
     dependencies:
       '@block65/webcrypto-web-push': 1.0.2
       '@hono/standard-validator': 0.4.1(@standard-schema/spec@1.1.0)(hono@4.13.3)
       '@hono/swagger-ui': 0.5.3(hono@4.13.3)
       '@standard-schema/spec': 1.1.0
-      delegated-identity: 0.1.1
+      delegated-identity: 0.2.0
       hono: 4.13.3
       hono-openapi: 1.6.0(hono@4.13.3)(zod@4.4.3)
       named-logs: 0.3.2
@@ -7004,8 +7012,9 @@ snapshots:
 
   delayed-stream@1.0.0: {}
 
-  delegated-identity@0.1.1:
+  delegated-identity@0.2.0:
     dependencies:
+      '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
       '@noble/secp256k1': 2.3.0
 

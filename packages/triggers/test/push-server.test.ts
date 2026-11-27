@@ -1,7 +1,18 @@
 import {beforeEach, describe, expect, it} from 'vitest';
-import {pushAction, type ActionAdapter, type DeliveryRecord} from '../src/index.js';
-import {appIdentity, type AppIdentity} from './utils/identity.js';
-import {PUSH_API, startPushServer, type PushServer} from './utils/push-server.js';
+import {REQUEST_SIGNATURE_HEADER, signRequest} from 'delegated-identity';
+import {
+	createRegistrationAPI,
+	createTriggerRegistry,
+	defineTriggers,
+	delegatedIdentityVerifier,
+	pushAction,
+	type ActionAdapter,
+	type DeliveryRecord,
+} from '../src/index.js';
+import {memoryDB} from './utils/db.js';
+import {BOARD, boardAbi} from './utils/etherfold.js';
+import {appIdentity, identityFields, type AppIdentity} from './utils/identity.js';
+import {PUSH_API, PUSH_ORIGIN, startPushServer, type PushServer} from './utils/push-server.js';
 
 // ---------------------------------------------------------------------------
 // THE PUSH ADAPTER AGAINST THE REAL SERVER (step S2b): push-notification-
@@ -87,5 +98,55 @@ describe('pushAction against push-notification-server', () => {
 		const noToken = pushAction({url: PUSH_API, domain: DOMAIN, token: 'not-a-token', fetch: server.fetch});
 		expect((await noToken.deliver(deliveryTo(alice.address, 'k5'))).kind).toBe('dead');
 		expect(server.sent).toEqual([]);
+	});
+});
+
+describe('one client body for both services', () => {
+	it('registers at push-notification-server and at the trigger service: the same bytes, each signed for its server', async () => {
+		const TRIGGERS_ORIGIN = 'https://triggers.test';
+		const registry = createTriggerRegistry({
+			db: memoryDB(),
+			app: 'app',
+			definitions: defineTriggers({
+				events: {posted: {address: BOARD, abi: boardAbi[0]}},
+				subscriptions: {'new-post': {event: 'posted', notFrom: 'author', action: 'push', render: () => ({})}},
+			}),
+		});
+		await registry.setup();
+		const triggers = createRegistrationAPI({
+			registry,
+			verifier: delegatedIdentityVerifier({serverOrigin: TRIGGERS_ORIGIN, domain: DOMAIN}),
+		});
+		// what the app sends: its identity `{address, domain, keySet, ownershipSignature}`, a
+		// device for the push server, a kind for the trigger service; each ignores the other's
+		const subscription = {
+			endpoint: 'https://push-service.invalid/shared-body',
+			expirationTime: null,
+			keys: {p256dh: 'p256dh-shared', auth: 'auth-shared'},
+		};
+		const body = JSON.stringify({...identityFields(alice), subscription, kind: 'new-post'});
+		const post = async (serverOrigin: string, path: string): Promise<RequestInit> => ({
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				[REQUEST_SIGNATURE_HEADER]: await signRequest(
+					{serverOrigin, method: 'POST', path, body},
+					alice.keySet.signing.privateKey,
+				),
+			},
+			body,
+		});
+
+		const atPush = await server.fetch(`${PUSH_ORIGIN}/api/register`, await post(PUSH_ORIGIN, '/api/register'));
+		expect(atPush.status, await atPush.clone().text()).toBe(200);
+		const atTriggers = await triggers.request(
+			`${TRIGGERS_ORIGIN}/subscriptions`,
+			await post(TRIGGERS_ORIGIN, '/subscriptions'),
+		);
+		expect(atTriggers.status, await atTriggers.clone().text()).toBe(200);
+
+		expect(await registry.list(alice.address)).toMatchObject([{recipient: alice.address, kind: 'new-post'}]);
+		expect(await push.deliver(deliveryTo(alice.address, 'shared'))).toEqual({kind: 'delivered'});
+		expect(server.sent.map((s) => s.endpoint)).toEqual([subscription.endpoint]);
 	});
 });

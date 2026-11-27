@@ -1,3 +1,5 @@
+import {REQUEST_SIGNATURE_HEADER, requestMessage} from 'delegated-identity';
+import {generatePrivateKey, privateKeyToAccount} from 'viem/accounts';
 import {beforeEach, describe, expect, it} from 'vitest';
 import {
 	createRegistrationAPI,
@@ -8,14 +10,15 @@ import {
 } from '../src/index.js';
 import {memoryDB} from './utils/db.js';
 import {BOARD, boardAbi} from './utils/etherfold.js';
-import {appIdentity, signedPost, type AppIdentity} from './utils/identity.js';
+import {appIdentity, identityFields, signedPost, type AppIdentity} from './utils/identity.js';
 
 // ---------------------------------------------------------------------------
 // THE REAL REGISTRATION PROOF (S1-3's, step S2b): delegated-identity's, the one
 // push-notification-server checks at `/register`. The wallet signed once for
-// the app's origin (the ownership proof in the body), the delegate key signs
-// each request (the SIGNATURE header), and the routes act for the account both
-// proofs recover. Run through the registration API, so the request is checked
+// the app's origin and a key set (the ownership proof and the key set in the
+// body), the key set's Ed25519 signing key signs each request (the SIGNATURE
+// header, naming its key), and the routes act for the account both proofs
+// recover. Run through the registration API, so the request is checked
 // as it was sent: method, path and the raw body.
 // ---------------------------------------------------------------------------
 
@@ -71,6 +74,50 @@ describe('delegatedIdentityVerifier', () => {
 		const body = JSON.parse(bare.body as string) as Record<string, unknown>;
 		delete body['ownershipSignature'];
 		expect((await send('/subscriptions', {...bare, body: JSON.stringify(body)})).status).toBe(401);
+		const noKeys = await subscribe(alice);
+		const keyless = JSON.parse(noKeys.body as string) as Record<string, unknown>;
+		delete keyless['keySet'];
+		expect(await send('/subscriptions', {...noKeys, body: JSON.stringify(keyless)})).toMatchObject({
+			status: 401,
+			body: {error: 'invalid-proof', message: expect.stringContaining('keySet')},
+		});
+		expect(await registry.list(alice.address)).toEqual([]);
+	});
+
+	it('refuses another key set: one the wallet did not authorize, or the right one with another key signing', async () => {
+		// Bob's key set, signed by Bob's key, under Alice's ownership proof: the proof is for Alice's key set
+		expect((await send('/subscriptions', await subscribe(alice, {keySet: bob.keySet, signer: bob}))).status).toBe(401);
+		// Bob's key set named, Alice's key signing: the header names a key the body does not
+		expect((await send('/subscriptions', await subscribe(alice, {keySet: bob.keySet}))).status).toBe(401);
+		// a malformed key
+		const bad = {signing: {publicKey: '0x1234' as const}, encryption: alice.keySet.encryption};
+		expect(await send('/subscriptions', await subscribe(alice, {keySet: bad}))).toMatchObject({
+			status: 401,
+			body: {message: 'malformed'},
+		});
+		expect(await registry.list(alice.address)).toEqual([]);
+		expect(await registry.list(bob.address)).toEqual([]);
+	});
+
+	it("refuses delegated-identity 0.1's proof: a secp256k1 request signature and a single origin key", async () => {
+		// 0.1's SIGNATURE header was `<timestamp>:<65-byte secp256k1 signature>`, recovered rather than named
+		const delegate = privateKeyToAccount(generatePrivateKey());
+		const body = JSON.stringify({...identityFields(alice), kind: 'new-post'});
+		const timestamp = Date.now();
+		const signed = await requestMessage({
+			serverOrigin: SERVER_ORIGIN,
+			method: 'POST',
+			path: '/subscriptions',
+			body,
+			timestamp,
+		});
+		const old = `${timestamp}:${await delegate.signMessage({message: signed})}`;
+		const answer = await send('/subscriptions', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json', [REQUEST_SIGNATURE_HEADER]: old},
+			body,
+		});
+		expect(answer).toMatchObject({status: 401, body: {error: 'invalid-proof', message: 'malformed'}});
 		expect(await registry.list(alice.address)).toEqual([]);
 	});
 
@@ -150,6 +197,18 @@ describe('delegatedIdentityVerifier', () => {
 		expect((await registry.list(alice.address)).map((s) => s.status)).toEqual(['cancelled']);
 		// the same intent signed afresh (a later timestamp) is a new request
 		expect((await send('/subscriptions', await subscribe(alice, {timestamp: Date.now() + 5}))).status).toBe(200);
+	});
+
+	it('names a request by the envelope its key signed, so another spelling of the header is the same request', async () => {
+		const registration = await subscribe(alice);
+		expect((await send('/subscriptions', registration)).status).toBe(200);
+		// the header in upper-case hex: parsed to the same key and signature, it signs the same envelope
+		const headers = registration.headers as Record<string, string>;
+		const respelled = {
+			...registration,
+			headers: {...headers, [REQUEST_SIGNATURE_HEADER]: headers[REQUEST_SIGNATURE_HEADER]!.toUpperCase()},
+		};
+		expect(await send('/subscriptions', respelled)).toMatchObject({status: 401, body: {message: 'replayed'}});
 	});
 
 	it('refuses a server origin with a path: the API is reached at the origin root, the path a client signs', async () => {

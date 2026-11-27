@@ -4,8 +4,9 @@ import {
 	fromDomainToOrigin,
 	requestMessage,
 	verifyRequest,
+	type PublicKeySet,
 } from 'delegated-identity';
-import {keccak256, stringToHex} from 'viem';
+import {sha256} from 'delegated-identity/ed25519';
 import type {RegistrationVerifier} from './registration.js';
 
 // ---------------------------------------------------------------------------
@@ -13,12 +14,16 @@ import type {RegistrationVerifier} from './registration.js';
 // checks at `/register` (S1-3: ONE implementation of the ownership proof,
 // shared by the push server, this service and missiv).
 // ---------------------------------------------------------------------------
-// A user's wallet signs ONCE, authorizing a delegate key for an app's origin
-// (the OWNERSHIP PROOF, `ownershipSignature` in the body); the app then signs
-// each request with that delegate key (the `SIGNATURE` header: this service's
-// origin, the method and path, a timestamp and the raw body's hash). Both
-// together recover the wallet's address, and that address is the registrant:
-// the body's `address` is only the claim being checked.
+// A user's wallet signs ONCE, authorizing a KEY SET for an app's origin (an
+// Ed25519 signing key and an X25519 encryption key, `keySet` in the body; the
+// OWNERSHIP PROOF, `ownershipSignature`); the app then signs each request with
+// the signing key (the `SIGNATURE` header, `<timestamp>:<key>:<signature>`, an
+// Ed25519 signature over an envelope naming this service's origin, the method
+// and path, the timestamp and the raw body's SHA-256). The header's key must be
+// the key set's, and the proof must recover the body's `address`: that address
+// is the registrant, the body only claims it. Nothing here recovers a request
+// signature (Ed25519 has no recovery); the one secp256k1 recovery left is the
+// wallet's EIP-191 proof, inside delegated-identity.
 // ---------------------------------------------------------------------------
 
 export type DelegatedIdentityVerifierOptions = {
@@ -54,9 +59,10 @@ export type DelegatedIdentityVerifierOptions = {
 
 /**
  * A `RegistrationVerifier` over delegated-identity, for one app. A registration's body is
- * `{address, domain, ownershipSignature, ...}` and its `SIGNATURE` header the
- * delegate key's signature over the request, exactly what a client sends to
- * push-notification-server's `/register`.
+ * `{address, domain, keySet, ownershipSignature, ...}` (`keySet` the public
+ * `{signing: {publicKey}, encryption: {publicKey}}`) and its `SIGNATURE` header
+ * the signing key's signature over the request, exactly what a client sends to
+ * push-notification-server's `/register`, so one body serves both.
  *
  * Its `appOrigin` is that app's origin (`fromDomainToOrigin(domain)`), so the
  * registration API answers CORS for the app's pages and no other origin's.
@@ -64,8 +70,10 @@ export type DelegatedIdentityVerifierOptions = {
  * Each signed request is accepted ONCE (`once`, which the registration API
  * remembers until the signature expires anyway): a request replayed within the
  * time window would otherwise re-register a subscription its owner has since
- * cancelled. It is named by the message the delegate key signed, so a second
- * spelling of the same signature names the same request.
+ * cancelled. It is named by the SHA-256 of the envelope the signing key signed
+ * (the server, route, timestamp and body's hash; the body names the key set, so
+ * the envelope binds the key too), not by the header: a second spelling of the
+ * same header names the same request.
  */
 export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOptions): RegistrationVerifier {
 	const serverOrigin = rootOrigin(options.serverOrigin);
@@ -77,14 +85,17 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 		async verify({method, path, rawBody, body, headers}) {
 			const signature = headers.get(REQUEST_SIGNATURE_HEADER);
 			if (!signature) return {ok: false, reason: `no ${REQUEST_SIGNATURE_HEADER} header`};
-			const {address, domain, ownershipSignature} = body;
+			const {address, domain, keySet, ownershipSignature} = body;
 			if (
 				typeof address !== 'string' ||
 				typeof domain !== 'string' ||
+				typeof keySet !== 'object' ||
+				keySet === null ||
+				Array.isArray(keySet) ||
 				typeof ownershipSignature !== 'string' ||
 				!/^0x[0-9a-fA-F]+$/.test(ownershipSignature)
 			) {
-				return {ok: false, reason: 'the body needs `address`, `domain` and `ownershipSignature`'};
+				return {ok: false, reason: 'the body needs `address`, `domain`, `keySet` and `ownershipSignature`'};
 			}
 			const appOrigin = originOf(domain);
 			if (appOrigin !== served) return {ok: false, reason: `${appOrigin ?? domain} is not the app this service serves`};
@@ -98,6 +109,8 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 					signature,
 					appOrigin: served,
 					address,
+					// its keys' format is verifyRequest's to check (`malformed`)
+					keySet: keySet as PublicKeySet,
 					ownershipSignature: ownershipSignature as `0x${string}`,
 				},
 				{
@@ -106,17 +119,21 @@ export function delegatedIdentityVerifier(options: DelegatedIdentityVerifierOpti
 				},
 			);
 			if (!verdict.ok) return {ok: false, reason: verdict.reason};
-			const signed = requestMessage({serverOrigin, method, path, body: rawBody, timestamp: verdict.timestamp});
+			const signed = await requestMessage({serverOrigin, method, path, body: rawBody, timestamp: verdict.timestamp});
 			return {
 				ok: true,
 				address: verdict.address.toLowerCase(),
 				once: {
-					key: keccak256(stringToHex(`${verdict.publicKey}\n${signed}`)),
+					key: hex(await sha256(new TextEncoder().encode(signed))),
 					until: verdict.timestamp + (options.maxAgeMs ?? DEFAULT_MAX_REQUEST_AGE_MS),
 				},
 			};
 		},
 	};
+}
+
+function hex(bytes: Uint8Array): string {
+	return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
 /**
