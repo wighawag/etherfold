@@ -9,3 +9,4 @@
 <!-- q1 fields: id=q1 kind=stuck -->
 
 **Your answer** (write below this line):
+Re-scope (approved by the human, 2026-11-27): the prerequisite now exists. `@push-notification/server`, `@push-notification/cli` and `@push-notification/client` 0.3.0 are on npm and read delegated-identity 0.2.0's proof; their `/register` and `/unregister` body carries the key set as `keySet: {signing: {publicKey}, encryption: {publicKey}}` (untagged 0x hex, a delegated-identity `PublicKeySet`) beside `address`, `domain` and `ownershipSignature`. Use the same field name and shape in the trigger service's registration body. Raise `@push-notification/cli` (and `@push-notification/server` where used) to ^0.3.0 beside `delegated-identity` ^0.2.0, so the suites register the same identity at the in-process push server and at the trigger service. Keep the "same client body" criterion. `@etherplay/connect` 0.19.0 is not released yet; it will hand the account's key set out as `keySet`.
