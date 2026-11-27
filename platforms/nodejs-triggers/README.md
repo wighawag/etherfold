@@ -71,9 +71,10 @@ export default defineConfig({
 				event: 'greeting',
 				recipients: (log) => log.args.user,
 				// a predicate is operator code. `MessageChanged` carries no count, so it reads the
-				// indexer's state as of the log's block, pinned by its hash (etherfold ADR-0011)
-				predicate: async (log, recipient) => {
-					const data = await state.query(GREETINGS_OF, log, {account: recipient});
+				// indexer's state as of the log's block, pinned by its hash (etherfold ADR-0011). Its
+				// `signal` aborts at the per-call timeout: pass it to each read, so they are cancelled with it
+				predicate: async (log, recipient, {signal}) => {
+					const data = await state.query(GREETINGS_OF, log, {account: recipient}, {signal});
 					return (data.greeter[0]?.greetings ?? 0) >= 3;
 				},
 				action: 'reward',
@@ -102,6 +103,8 @@ export default defineConfig({
 		domain: 'greetings.example.com',
 	}),
 	api: {port: 8787},
+	// the bound on each call to the outside (the gate, a feed read, a predicate, a delivery); 10 s when absent
+	callTimeoutMs: 10_000,
 });
 ```
 
@@ -123,7 +126,11 @@ It MUST honour the key (the same key twice is one award: answer the second with 
 
 ### The state a predicate reads
 
-`stateReader({url})` runs a GraphQL document against the etherfold server the consumer follows (its `/graphql`, the schema an app reads), AS OF a log's block: `state.query(document, log, variables)` passes `block: {hash: log.entry.blockHash}` as `$block`, which the document hands to each root field. It is the state at the end of that block, so two logs of one block see the same state; a level-triggered rule (a predicate and a semantic key) is indifferent to it. A read that cannot answer throws a `StateReadError` (a GraphQL code such as `block-not-recorded` or `block-not-retained`, `http-<status>`, or `no-answer`): the page is then not committed and is read again next round, so a trigger is never dropped because the indexer was down. The other side of that: a read that keeps failing (a broken query, a pruned block) HOLDS the consumer at that page until it answers, so nothing after it is acted on. The journal records it as `stalled` (with the error and its code, once per distinct failure) and `recovered` when it moves again; `etherfold-triggers journal` shows both. The read is pinned to a block, not to the indexer's generation: if the indexer promotes a new processor between a page and its reads, those reads answer from the new one's state, and the consumer pauses on the feed's next answer (`generation-changed`). The indexer must keep the history the consumer acts at, which is etherfold's default (`unbounded` retention); a `--retention revert-only` indexer has pruned the blocks the safe lane reads.
+`stateReader({url})` runs a GraphQL document against the etherfold server the consumer follows (its `/graphql`, the schema an app reads), AS OF a log's block: `state.query(document, log, variables, {signal})` (the signal optional, the predicate's own to bound it) passes `block: {hash: log.entry.blockHash}` as `$block`, which the document hands to each root field. It is the state at the end of that block, so two logs of one block see the same state; a level-triggered rule (a predicate and a semantic key) is indifferent to it. A read that cannot answer throws a `StateReadError` (a GraphQL code such as `block-not-recorded` or `block-not-retained`, `http-<status>`, or `no-answer`): the page is then not committed and is read again next round, so a trigger is never dropped because the indexer was down. The other side of that: a read that keeps failing (a broken query, a pruned block) HOLDS the consumer at that page until it answers, so nothing after it is acted on. The journal records it as `stalled` (with the error and its code, once per distinct failure) and `recovered` when it moves again; `etherfold-triggers journal` shows both. The read is pinned to a block, not to the indexer's generation: if the indexer promotes a new processor between a page and its reads, those reads answer from the new one's state, and the consumer pauses on the feed's next answer (`generation-changed`). The indexer must keep the history the consumer acts at, which is etherfold's default (`unbounded` retention); a `--retention revert-only` indexer has pruned the blocks the safe lane reads.
+
+### Timeouts
+
+Every call the service makes to the outside is bounded by `callTimeoutMs` (10 s when absent), so a hung endpoint holds a round for at most that long: the gate (`rpcGate`, or a gate function of yours, called with `{signal}`), each read of the canonical feed, each predicate invocation (as a whole, with the state reads it makes: pass its `{signal}` to `state.query`, as above) and each delivery (`pushAction`, `rewardAction` or an adapter of yours, called with `{signal}`). The service gives up at the timeout even when your function ignores the signal. A gate, feed read or predicate past it fails the round as a stall: nothing is committed for that page, it is read again next round, and `etherfold-triggers journal` shows `stalled` with the code `gate-timeout`, `feed-timeout` or `predicate-timeout`, then `recovered`. A delivery past it is retried like a `5xx` (backoff, then the retry budget, then a dead letter); the target may still have received it, which is why it must honour the `Idempotency-Key`.
 
 ### Registration
 

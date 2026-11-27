@@ -36,7 +36,15 @@ export type CanonicalPage =
 
 /** The seam the consumer reads through. */
 export type CanonicalFeed = {
-	read(query: {gate: number; cursor?: string; limit?: number}): Promise<CanonicalPage>;
+	/**
+	 * One page. The consumer passes a `signal` that aborts at its per-call
+	 * timeout (etherfold ADR-0101), and gives up then whether or not the read
+	 * honours it; a read that honours it frees its connection too.
+	 */
+	read(
+		query: {gate: number; cursor?: string; limit?: number},
+		options?: {signal?: AbortSignal},
+	): Promise<CanonicalPage>;
 };
 
 /**
@@ -50,11 +58,14 @@ export function canonicalFeed(options: {url: string; indexer: string; fetch?: ty
 	const base = options.url.replace(/\/+$/, '');
 	const doFetch = options.fetch ?? fetch;
 	return {
-		async read({gate, cursor, limit}) {
+		async read({gate, cursor, limit}, {signal} = {}) {
 			const params = new URLSearchParams({gate: String(gate)});
 			if (cursor !== undefined) params.set('cursor', cursor);
 			if (limit !== undefined) params.set('limit', String(limit));
-			const response = await doFetch(`${base}/${encodeURIComponent(options.indexer)}/canonical?${params}`);
+			const response = await doFetch(
+				`${base}/${encodeURIComponent(options.indexer)}/canonical?${params}`,
+				signal ? {signal} : {},
+			);
 			const text = await response.text();
 			let body: Record<string, unknown>;
 			try {

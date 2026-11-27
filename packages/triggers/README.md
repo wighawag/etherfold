@@ -36,6 +36,17 @@ await service.run({signal}); // or `await service.tick()` for one round
 
 The trigger definitions, the actions and the verifier are written exactly as in the platform package's config file, whose README has a full example.
 
+### Every call times out
+
+The core bounds each call it makes to the outside by one per-call timeout, `callTimeoutMs` (10 s when absent, `DEFAULT_CALL_TIMEOUT_MS`), so a hung endpoint holds a round for at most that long ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)). The four calls it bounds:
+
+- **the gate**: `gate({signal})`;
+- **each feed read**: `feed.read(query, {signal})`;
+- **each predicate invocation**: `predicate(log, recipient, {signal})`, which passes the signal on to each `state.query(document, log, variables, {signal})` it makes, so the predicate is bounded as a whole and each read is cancelled with it;
+- **each delivery**: `adapter.deliver(delivery, {signal})`.
+
+Each gets an `AbortSignal` that aborts at the timeout, and the built-ins (`canonicalFeed`, `rpcGate`, `stateReader`, `pushAction`, `rewardAction`) hand it to `fetch`. The core gives up at the timeout WHETHER OR NOT the callee honours the signal: a gate, feed, predicate or adapter of yours that ignores it still cannot hold the round past it (its promise is left to settle on its own, its result ignored). A timed-out gate, feed read or predicate fails the round with a `CallTimeoutError` (its `code` is `gate-timeout`, `feed-timeout` or `predicate-timeout`): nothing is committed for that page, it is read again next round, and the journal records `stalled` with that code and `recovered` once it moves again, as for an unreachable feed or a failing state read. A timed-out delivery is retried, like a `5xx` (backoff, then the retry budget, then a dead letter, ADR-0009, its `lastError` saying it did not answer in time); the attempt may still land at the target, which is what its idempotency key absorbs.
+
 ### One database, several apps
 
 The schema is keyed by the APP ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)): every table carries an `app` column (the consumer's name, the `app` option) and every unique and lookup index leads with it, so services of different apps can share one database without crossing. Two apps may both name an action `push`, a subscription kind `new-greeting` or a rule key `third-greeting:<account>`: their deliveries, subscriptions, accepted requests and journal rows stay apart, and each app's deliverer sends only its own rows through its own adapters. The operator reads take the app too: `listDeliveries(db, app, filter)` and `readJournal(db, app, options)`; `service.app` names it.
