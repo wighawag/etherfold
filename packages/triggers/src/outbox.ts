@@ -11,7 +11,7 @@ export type DeliveryStatus = 'pending' | 'delivered' | 'expired' | 'dead' | 'ret
 export type NewDelivery = {
 	/** The action type, which names the adapter and its delivery policy. */
 	action: string;
-	/** The semantic idempotency key: unique per action among the rows that stand. */
+	/** The semantic idempotency key: unique per app and action among the rows that stand. */
 	key: string;
 	recipient: string;
 	/** Frozen at match time: a retry sends exactly these bytes. */
@@ -33,7 +33,8 @@ export type LogPosition = {
 export type DeliveryRecord = NewDelivery &
 	LogPosition & {
 		id: number;
-		consumer: string;
+		/** The app whose consumer wrote it, and whose adapters alone deliver it (etherfold ADR-0101). */
+		app: string;
 		status: DeliveryStatus;
 		attempts: number;
 		createdAt: number;
@@ -50,20 +51,20 @@ export type DeliveryRecord = NewDelivery &
  */
 export function insertDeliveryStatement(
 	db: RemoteSQL,
-	consumer: string,
+	app: string,
 	at: number,
 	position: LogPosition,
 	delivery: NewDelivery,
 ): SQLPreparedStatement {
 	return db
 		.prepare(
-			`INSERT INTO deliveries (consumer, action, key, recipient, payload, trigger, block_number, block_hash, log_index,
+			`INSERT INTO deliveries (app, action, key, recipient, payload, trigger, block_number, block_hash, log_index,
 				transaction_hash, status, attempts, created_at, next_attempt_at, expires_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
 			ON CONFLICT DO NOTHING`,
 		)
 		.bind(
-			consumer,
+			app,
 			delivery.action,
 			delivery.key,
 			delivery.recipient,
@@ -81,7 +82,7 @@ export function insertDeliveryStatement(
 
 type Row = {
 	id: number;
-	consumer: string;
+	app: string;
 	action: string;
 	key: string;
 	recipient: string;
@@ -104,7 +105,7 @@ type Row = {
 export function deliveryFromRow(row: Row): DeliveryRecord {
 	return {
 		id: Number(row.id),
-		consumer: row.consumer,
+		app: row.app,
 		action: row.action,
 		key: row.key,
 		recipient: row.recipient,
@@ -125,20 +126,19 @@ export function deliveryFromRow(row: Row): DeliveryRecord {
 	};
 }
 
-/** The outbox, oldest first: what an operator inspects (dead letters, what a rewind took back). */
+/** One app's outbox, oldest first: what an operator inspects (dead letters, what a rewind took back). */
 export async function listDeliveries(
 	db: RemoteSQL,
-	filter: {status?: DeliveryStatus; action?: string; recipient?: string; consumer?: string} = {},
+	app: string,
+	filter: {status?: DeliveryStatus; action?: string; recipient?: string} = {},
 ): Promise<DeliveryRecord[]> {
-	const clauses: string[] = [];
-	const args: unknown[] = [];
+	const clauses: string[] = ['app = ?'];
+	const args: unknown[] = [app];
 	if (filter.status !== undefined) (clauses.push('status = ?'), args.push(filter.status));
 	if (filter.action !== undefined) (clauses.push('action = ?'), args.push(filter.action));
 	if (filter.recipient !== undefined) (clauses.push('recipient = ?'), args.push(filter.recipient));
-	if (filter.consumer !== undefined) (clauses.push('consumer = ?'), args.push(filter.consumer));
-	const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 	const {results} = await db
-		.prepare(`SELECT * FROM deliveries ${where} ORDER BY id`)
+		.prepare(`SELECT * FROM deliveries WHERE ${clauses.join(' AND ')} ORDER BY id`)
 		.bind(...args)
 		.all<Row>();
 	return results.map(deliveryFromRow);

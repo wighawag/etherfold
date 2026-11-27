@@ -112,7 +112,7 @@ export type Subscription = {
 
 export type TriggerRegistry = {
 	setup(): Promise<void>;
-	/** Register, or renew when the same `(kind, recipient, filter)` exists: never a second one. */
+	/** Register, or renew when the same `(kind, recipient, filter)` exists in its app: never a second one. */
 	subscribe(request: {recipient: string; kind: string; filter?: Record<string, string>}): Promise<Subscription>;
 	/** Renew every live or expired registration of a recipient (ADR-0012: renewal is per subscriber). */
 	renewAll(recipient: string): Promise<number>;
@@ -125,7 +125,7 @@ export type TriggerRegistry = {
 	 * replay. Remembered until `until`, when its signature expires anyway.
 	 */
 	acceptOnce(key: string, until: number): Promise<boolean>;
-	/** The consumer's matcher over both archetypes. */
+	/** The consumer's matcher over both archetypes, for a consumer of the registry's own app only. */
 	matcher(options?: {onUndecodable?: (entry: CanonicalEntry, error: unknown) => void}): Matcher;
 };
 
@@ -169,11 +169,16 @@ function subscriptionFromRow(row: SubscriptionRow): Subscription {
 
 export function createTriggerRegistry(options: {
 	db: RemoteSQL;
+	/**
+	 * The app whose subscriptions, conditions and accepted requests it holds
+	 * (etherfold ADR-0101): every query it makes is scoped to it.
+	 */
+	app: string;
 	definitions: TriggerDefinitions;
 	clock?: () => number;
 	maxSubscriptionsPerRecipient?: number;
 }): TriggerRegistry {
-	const {db, definitions} = options;
+	const {db, app, definitions} = options;
 	const kinds = definitions.subscriptions ?? {};
 	const rules = definitions.rules ?? {};
 	const clock = options.clock ?? Date.now;
@@ -212,8 +217,8 @@ export function createTriggerRegistry(options: {
 
 	async function find(kind: string, recipient: string, filterKey: string): Promise<Subscription | undefined> {
 		const {results} = await db
-			.prepare(`SELECT * FROM subscriptions WHERE kind = ? AND recipient = ? AND filter = ?`)
-			.bind(kind, recipient, filterKey)
+			.prepare(`SELECT * FROM subscriptions WHERE app = ? AND kind = ? AND recipient = ? AND filter = ?`)
+			.bind(app, kind, recipient, filterKey)
 			.all<SubscriptionRow>();
 		return results[0] && subscriptionFromRow(results[0]);
 	}
@@ -225,18 +230,20 @@ export function createTriggerRegistry(options: {
 			const conditions = (kind.filterable ?? []).map((arg) => [arg, normaliseValue(log.args[arg])] as const);
 			const live = `s.status = 'active' AND s.expires_at > ?`;
 			const unfiltered = db
-				.prepare(`SELECT s.id, s.recipient FROM subscriptions s WHERE s.kind = ? AND s.condition_count = 0 AND ${live}`)
-				.bind(kindName, now);
+				.prepare(
+					`SELECT s.id, s.recipient FROM subscriptions s WHERE s.app = ? AND s.kind = ? AND s.condition_count = 0 AND ${live}`,
+				)
+				.bind(app, kindName, now);
 			const found = (await unfiltered.all<{id: number; recipient: string}>()).results;
 			if (conditions.length > 0) {
 				const any = conditions.map(() => `(c.arg = ? AND c.value = ?)`).join(' OR ');
 				const filtered = db
 					.prepare(
 						`SELECT s.id, s.recipient FROM subscription_conditions c JOIN subscriptions s ON s.id = c.subscription_id
-						WHERE c.kind = ? AND (${any}) AND ${live}
+						WHERE c.app = ? AND c.kind = ? AND (${any}) AND ${live}
 						GROUP BY s.id HAVING COUNT(*) = s.condition_count`,
 					)
-					.bind(kindName, ...conditions.flat(), now);
+					.bind(app, kindName, ...conditions.flat(), now);
 				found.push(...(await filtered.all<{id: number; recipient: string}>()).results);
 			}
 			const sender = kind.notFrom === undefined ? undefined : normaliseValue(log.args[kind.notFrom]);
@@ -283,10 +290,12 @@ export function createTriggerRegistry(options: {
 
 		async acceptOnce(key, until) {
 			const [, inserted] = await db.batch([
-				db.prepare(`DELETE FROM accepted_requests WHERE until < ?`).bind(clock()),
+				db.prepare(`DELETE FROM accepted_requests WHERE app = ? AND until < ?`).bind(app, clock()),
 				db
-					.prepare(`INSERT INTO accepted_requests (key, until) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING key`)
-					.bind(key, until),
+					.prepare(
+						`INSERT INTO accepted_requests (app, key, until) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING key`,
+					)
+					.bind(app, key, until),
 			]);
 			return (inserted?.results?.length ?? 0) > 0;
 		},
@@ -296,8 +305,8 @@ export function createTriggerRegistry(options: {
 			const existing = await find(request.kind, recipient, filterKey);
 			if (!existing || existing.status !== 'active') {
 				const {results} = await db
-					.prepare(`SELECT COUNT(*) AS n FROM subscriptions WHERE recipient = ? AND status = 'active'`)
-					.bind(recipient)
+					.prepare(`SELECT COUNT(*) AS n FROM subscriptions WHERE app = ? AND recipient = ? AND status = 'active'`)
+					.bind(app, recipient)
 					.all<{n: number}>();
 				if (Number(results[0]?.n ?? 0) >= quota) {
 					throw new RegistrationError('quota-exceeded', `${recipient} already has ${quota} live subscriptions`);
@@ -309,20 +318,20 @@ export function createTriggerRegistry(options: {
 			await db.batch([
 				db
 					.prepare(
-						`INSERT INTO subscriptions (kind, recipient, filter, condition_count, status, created_at, renewed_at, expires_at)
-						VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
-						ON CONFLICT (kind, recipient, filter) DO UPDATE SET status = 'active', renewed_at = excluded.renewed_at,
+						`INSERT INTO subscriptions (app, kind, recipient, filter, condition_count, status, created_at, renewed_at, expires_at)
+						VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+						ON CONFLICT (app, kind, recipient, filter) DO UPDATE SET status = 'active', renewed_at = excluded.renewed_at,
 							expires_at = excluded.expires_at`,
 					)
-					.bind(request.kind, recipient, filterKey, conditions.length, now, now, expiresAt),
+					.bind(app, request.kind, recipient, filterKey, conditions.length, now, now, expiresAt),
 				...conditions.map(([arg, value]) =>
 					db
 						.prepare(
-							`INSERT INTO subscription_conditions (subscription_id, kind, arg, value)
-							SELECT id, kind, ?, ? FROM subscriptions WHERE kind = ? AND recipient = ? AND filter = ?
+							`INSERT INTO subscription_conditions (subscription_id, app, kind, arg, value)
+							SELECT id, app, kind, ?, ? FROM subscriptions WHERE app = ? AND kind = ? AND recipient = ? AND filter = ?
 							ON CONFLICT DO NOTHING`,
 						)
-						.bind(arg, value, request.kind, recipient, filterKey),
+						.bind(arg, value, app, request.kind, recipient, filterKey),
 				),
 			]);
 			return (await find(request.kind, recipient, filterKey)) as Subscription;
@@ -333,16 +342,18 @@ export function createTriggerRegistry(options: {
 			const now = clock();
 			const renewable = (
 				await db
-					.prepare(`SELECT * FROM subscriptions WHERE recipient = ? AND status != 'cancelled'`)
-					.bind(owner)
+					.prepare(`SELECT * FROM subscriptions WHERE app = ? AND recipient = ? AND status != 'cancelled'`)
+					.bind(app, owner)
 					.all<SubscriptionRow>()
 			).results;
 			if (renewable.length === 0) return 0;
 			await db.batch(
 				renewable.map((row) =>
 					db
-						.prepare(`UPDATE subscriptions SET status = 'active', renewed_at = ?, expires_at = ? WHERE id = ?`)
-						.bind(now, now + (kinds[row.kind]?.ttlMs ?? DEFAULT_TTL_MS), row.id),
+						.prepare(
+							`UPDATE subscriptions SET status = 'active', renewed_at = ?, expires_at = ? WHERE app = ? AND id = ?`,
+						)
+						.bind(now, now + (kinds[row.kind]?.ttlMs ?? DEFAULT_TTL_MS), app, row.id),
 				),
 			);
 			return renewable.length;
@@ -353,16 +364,16 @@ export function createTriggerRegistry(options: {
 			const existing = await find(request.kind, recipient, filterKey);
 			if (!existing || existing.status === 'cancelled') return false;
 			await db
-				.prepare(`UPDATE subscriptions SET status = 'cancelled', renewed_at = ? WHERE id = ?`)
-				.bind(clock(), existing.id)
+				.prepare(`UPDATE subscriptions SET status = 'cancelled', renewed_at = ? WHERE app = ? AND id = ?`)
+				.bind(clock(), app, existing.id)
 				.all();
 			return true;
 		},
 
 		async list(recipient) {
 			const {results} = await db
-				.prepare(`SELECT * FROM subscriptions WHERE recipient = ? ORDER BY id`)
-				.bind(recipient.toLowerCase())
+				.prepare(`SELECT * FROM subscriptions WHERE app = ? AND recipient = ? ORDER BY id`)
+				.bind(app, recipient.toLowerCase())
 				.all<SubscriptionRow>();
 			return results.map(subscriptionFromRow);
 		},
@@ -371,15 +382,17 @@ export function createTriggerRegistry(options: {
 			const now = clock();
 			const due = (
 				await db
-					.prepare(`SELECT * FROM subscriptions WHERE status = 'active' AND expires_at <= ?`)
-					.bind(now)
+					.prepare(`SELECT * FROM subscriptions WHERE app = ? AND status = 'active' AND expires_at <= ?`)
+					.bind(app, now)
 					.all<SubscriptionRow>()
 			).results;
 			if (due.length === 0) return 0;
 			await db.batch(
 				due.flatMap((row) => [
-					db.prepare(`UPDATE subscriptions SET status = 'expired' WHERE id = ? AND status = 'active'`).bind(row.id),
-					journalStatement(db, now, 'expired', {
+					db
+						.prepare(`UPDATE subscriptions SET status = 'expired' WHERE app = ? AND id = ? AND status = 'active'`)
+						.bind(app, row.id),
+					journalStatement(db, app, now, 'expired', {
 						subscription: Number(row.id),
 						kind: row.kind,
 						recipient: row.recipient,
@@ -396,6 +409,10 @@ export function createTriggerRegistry(options: {
 				((entry: CanonicalEntry, error: unknown) =>
 					console.error(`undecodable log ${entry.blockHash}:${entry.logIndex}`, error));
 			return async (entry, context) => {
+				// a consumer of another app would write this app's subscribers into its own outbox
+				if (context.app !== app) {
+					throw new Error(`the trigger registry of the app "${app}" was asked to match for the app "${context.app}"`);
+				}
 				const known = byLog.get(`${entry.address.toLowerCase()}:${entry.topics[0]?.toLowerCase()}`);
 				if (!known) return [];
 				let args: Record<string, unknown>;

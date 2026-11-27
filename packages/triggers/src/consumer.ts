@@ -22,8 +22,8 @@ import {setupDatabase} from './schema.js';
 /** The lanes of etherfold ADR-0007. Only `safe` is built. */
 export type Lane = 'safe' | 'fast';
 
-/** What a match is told besides the entry itself. */
-export type MatchContext = {chainId: string; lane: Lane; consumer: string};
+/** What a match is told besides the entry itself: `app` is the app the consumer follows the feed for. */
+export type MatchContext = {chainId: string; lane: Lane; app: string};
 
 /** Turns one canonical entry into the deliveries it implies (the trigger engine, or a test's). */
 export type Matcher = (entry: CanonicalEntry, context: MatchContext) => Promise<NewDelivery[]>;
@@ -41,7 +41,7 @@ export type StepResult =
 	| {kind: 'paused'; reason: PauseReason};
 
 export type ConsumerStatus = {
-	name: string;
+	app: string;
 	cursor?: string;
 	stream?: string;
 	generation?: string;
@@ -50,8 +50,11 @@ export type ConsumerStatus = {
 
 export type ConsumerOptions = {
 	db: RemoteSQL;
-	/** The consumer's name: one row of state, and the `consumer` of every delivery it writes. */
-	name: string;
+	/**
+	 * The APP the consumer follows the feed for (etherfold ADR-0101): its one row
+	 * of state, the `app` of every delivery it writes and of every journal row.
+	 */
+	app: string;
 	chainId: string;
 	feed: CanonicalFeed;
 	/** The highest block to act on (ADR-0007: the consumer's decision, never the server's). */
@@ -84,16 +87,16 @@ type StateRow = {
 };
 
 export function createConsumer(options: ConsumerOptions): Consumer {
-	const {db, name, feed, match} = options;
+	const {db, app, feed, match} = options;
 	const lane = options.lane ?? 'safe';
 	if (lane !== 'safe') throw new Error(`the ${lane} lane is not built: only the safe lane (etherfold ADR-0007) is`);
 	const clock = options.clock ?? Date.now;
-	const context: MatchContext = {chainId: options.chainId, lane, consumer: name};
+	const context: MatchContext = {chainId: options.chainId, lane, app};
 
 	async function readState(): Promise<StateRow | undefined> {
 		const {results} = await db
-			.prepare(`SELECT cursor, stream, generation, paused FROM consumers WHERE name = ?`)
-			.bind(name)
+			.prepare(`SELECT cursor, stream, generation, paused FROM consumers WHERE app = ?`)
+			.bind(app)
 			.all<StateRow>();
 		return results[0];
 	}
@@ -106,12 +109,12 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 	}): SQLPreparedStatement {
 		return db
 			.prepare(
-				`INSERT INTO consumers (name, cursor, stream, generation, paused, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-				ON CONFLICT (name) DO UPDATE SET cursor = excluded.cursor, stream = excluded.stream,
+				`INSERT INTO consumers (app, cursor, stream, generation, paused, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT (app) DO UPDATE SET cursor = excluded.cursor, stream = excluded.stream,
 					generation = excluded.generation, paused = excluded.paused, updated_at = excluded.updated_at`,
 			)
 			.bind(
-				name,
+				app,
 				state.cursor,
 				state.stream,
 				state.generation,
@@ -129,7 +132,7 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 				generation: state?.generation ?? null,
 				paused: reason,
 			}),
-			journalStatement(db, now, 'paused', {consumer: name, reason}),
+			journalStatement(db, app, now, 'paused', {reason}),
 		]);
 		return {kind: 'paused', reason};
 	}
@@ -152,8 +155,8 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 		if (page.kind === 'rewind') {
 			const now = clock();
 			const {results} = await db
-				.prepare(`SELECT COUNT(*) AS n FROM deliveries WHERE consumer = ? AND block_number >= ? AND status = 'pending'`)
-				.bind(name, page.forkBlock)
+				.prepare(`SELECT COUNT(*) AS n FROM deliveries WHERE app = ? AND block_number >= ? AND status = 'pending'`)
+				.bind(app, page.forkBlock)
 				.all<{n: number}>();
 			const retracted = Number(results[0]?.n ?? 0);
 			await db.batch([
@@ -161,23 +164,23 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 				db
 					.prepare(
 						`UPDATE deliveries SET status = 'retracted', settled_at = ?
-						WHERE consumer = ? AND block_number >= ? AND status = 'pending'`,
+						WHERE app = ? AND block_number >= ? AND status = 'pending'`,
 					)
-					.bind(now, name, page.forkBlock),
+					.bind(now, app, page.forkBlock),
 				// what was already sent (or expired, or dead-lettered) is marked, never rewritten
 				db
 					.prepare(
 						`UPDATE deliveries SET retracted_at = ?
-						WHERE consumer = ? AND block_number >= ? AND status != 'retracted' AND retracted_at IS NULL`,
+						WHERE app = ? AND block_number >= ? AND status != 'retracted' AND retracted_at IS NULL`,
 					)
-					.bind(now, name, page.forkBlock),
+					.bind(now, app, page.forkBlock),
 				writeState({
 					cursor: page.rewindCursor,
 					stream: page.stream ?? state?.stream ?? null,
 					generation: state?.generation ?? null,
 					paused: null,
 				}),
-				journalStatement(db, now, 'rewind', {consumer: name, forkBlock: page.forkBlock, retracted}),
+				journalStatement(db, app, now, 'rewind', {forkBlock: page.forkBlock, retracted}),
 			]);
 			return {kind: 'rewound', forkBlock: page.forkBlock, retracted};
 		}
@@ -190,7 +193,7 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 		const statements: SQLPreparedStatement[] = [];
 		for (const entry of page.entries) {
 			for (const delivery of await match(entry, context)) {
-				statements.push(insertDeliveryStatement(db, name, now, entry, delivery));
+				statements.push(insertDeliveryStatement(db, app, now, entry, delivery));
 			}
 		}
 		statements.push(writeState({cursor: page.cursor, stream: page.stream, generation: page.generation, paused: null}));
@@ -219,7 +222,7 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 		async status() {
 			const state = await readState();
 			return {
-				name,
+				app,
 				...(state?.cursor ? {cursor: state.cursor} : {}),
 				...(state?.stream ? {stream: state.stream} : {}),
 				...(state?.generation ? {generation: state.generation} : {}),
@@ -238,10 +241,7 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 						? // a stream mismatch: re-subscribe deliberately, from where the new stream begins
 							{cursor: reason.body['startCursor'], stream: null, generation: null}
 						: {cursor: state.cursor, stream: state.stream, generation: state.generation};
-			await db.batch([
-				writeState({...next, paused: null}),
-				journalStatement(db, now, 'resumed', {consumer: name, after: reason}),
-			]);
+			await db.batch([writeState({...next, paused: null}), journalStatement(db, app, now, 'resumed', {after: reason})]);
 		},
 	};
 }

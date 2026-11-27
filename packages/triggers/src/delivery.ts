@@ -70,9 +70,9 @@ export function assertActionsFitLane(
 export type DeliveryReport = {attempted: number; delivered: number; retried: number; expired: number; dead: number};
 
 export type Deliverer = {
-	/** Attempt every pending delivery that is due, oldest first, up to `batchSize`. */
+	/** Attempt every pending delivery of its app that is due, oldest first, up to `batchSize`. */
 	deliverDue(): Promise<DeliveryReport>;
-	/** An operator's decision: a dead letter back to pending, its attempts reset. */
+	/** An operator's decision: a dead letter of its app back to pending, its attempts reset. */
 	requeue(id: number): Promise<boolean>;
 };
 
@@ -83,11 +83,13 @@ function backoffOf(policy: DeliveryPolicy, attempts: number): number {
 
 export function createDeliverer(options: {
 	db: RemoteSQL;
+	/** The app whose deliveries it attempts, through its own adapters only (etherfold ADR-0101). */
+	app: string;
 	actions: Record<string, ActionAdapter>;
 	clock?: () => number;
 	batchSize?: number;
 }): Deliverer {
-	const {db, actions} = options;
+	const {db, app, actions} = options;
 	const clock = options.clock ?? Date.now;
 	const batchSize = options.batchSize ?? 100;
 
@@ -107,7 +109,7 @@ export function createDeliverer(options: {
 			...(status === 'delivered'
 				? []
 				: [
-						journalStatement(db, now, status === 'dead' ? 'dead-lettered' : 'expired', {
+						journalStatement(db, app, now, status === 'dead' ? 'dead-lettered' : 'expired', {
 							delivery: delivery.id,
 							action: delivery.action,
 							key: delivery.key,
@@ -123,8 +125,10 @@ export function createDeliverer(options: {
 		async deliverDue() {
 			const report: DeliveryReport = {attempted: 0, delivered: 0, retried: 0, expired: 0, dead: 0};
 			const {results} = await db
-				.prepare(`SELECT * FROM deliveries WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?`)
-				.bind(clock(), batchSize)
+				.prepare(
+					`SELECT * FROM deliveries WHERE app = ? AND status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?`,
+				)
+				.bind(app, clock(), batchSize)
 				.all();
 			for (const delivery of results.map(deliveryFromRow)) {
 				const adapter = actions[delivery.action];
@@ -177,7 +181,7 @@ export function createDeliverer(options: {
 		},
 
 		async requeue(id) {
-			const {results} = await db.prepare(`SELECT * FROM deliveries WHERE id = ?`).bind(id).all();
+			const {results} = await db.prepare(`SELECT * FROM deliveries WHERE app = ? AND id = ?`).bind(app, id).all();
 			const row = results[0];
 			if (!row) return false;
 			const delivery = deliveryFromRow(row as never);
@@ -189,7 +193,7 @@ export function createDeliverer(options: {
 						`UPDATE deliveries SET status = 'pending', attempts = 0, next_attempt_at = ?, settled_at = NULL WHERE id = ?`,
 					)
 					.bind(now, id),
-				journalStatement(db, now, 'requeued', {delivery: id, action: delivery.action, key: delivery.key}),
+				journalStatement(db, app, now, 'requeued', {delivery: id, action: delivery.action, key: delivery.key}),
 			]);
 			return true;
 		},

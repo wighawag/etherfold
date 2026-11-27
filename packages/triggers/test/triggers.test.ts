@@ -71,14 +71,14 @@ beforeEach(async () => {
 	etherfold = await startEtherfold();
 	db = memoryDB();
 	now = 1_800_000_000_000;
-	registry = createTriggerRegistry({db, definitions, clock: () => now, maxSubscriptionsPerRecipient: 3});
+	registry = createTriggerRegistry({db, app: INDEXER, definitions, clock: () => now, maxSubscriptionsPerRecipient: 3});
 	await registry.setup();
 });
 
 function consumer() {
 	return createConsumer({
 		db,
-		name: INDEXER,
+		app: INDEXER,
 		chainId: CHAIN_ID,
 		feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
 		gate: async () => 1000,
@@ -100,7 +100,7 @@ describe('a subscription trigger', () => {
 
 		await run({block: 101, hash: '0xa101', author: BOB, count: 1n, text: 'hi all'});
 
-		const pushes = await listDeliveries(db, {action: 'push'});
+		const pushes = await listDeliveries(db, INDEXER, {action: 'push'});
 		expect(pushes.map((d) => d.recipient).sort()).toEqual([ALICE, CAROL].map((a) => a.toLowerCase()).sort());
 		expect(pushes[0]?.key).toBe(`${CHAIN_ID}:0xa101:0:${pushes[0]?.recipient}`);
 		expect(pushes[0]?.payload).toEqual({title: 'A new post', body: 'hi all'});
@@ -119,7 +119,7 @@ describe('a subscription trigger', () => {
 			{block: 102, hash: '0xa102', author: ALICE, count: 1n},
 		);
 
-		expect((await listDeliveries(db, {action: 'push'})).map((d) => d.blockNumber)).toEqual([102]);
+		expect((await listDeliveries(db, INDEXER, {action: 'push'})).map((d) => d.blockNumber)).toEqual([102]);
 	});
 
 	it('refuses a kind nobody declared, an argument the kind does not let a user filter on, and past the quota', async () => {
@@ -145,11 +145,11 @@ describe('a subscription trigger', () => {
 
 		now = expiresAt + 1;
 		expect(await registry.expire()).toBe(1);
-		expect(await readJournal(db, {kind: 'expired'})).toHaveLength(1);
+		expect(await readJournal(db, INDEXER, {kind: 'expired'})).toHaveLength(1);
 		expect((await registry.list(ALICE))[0]?.status).toBe('expired');
 
 		await run({block: 101, hash: '0xa101', author: BOB, count: 1n});
-		expect(await listDeliveries(db, {action: 'push'})).toEqual([]);
+		expect(await listDeliveries(db, INDEXER, {action: 'push'})).toEqual([]);
 
 		expect(await registry.renewAll(ALICE)).toBe(1);
 		expect((await registry.list(ALICE))[0]).toMatchObject({status: 'active', expiresAt: now + 30 * DAY});
@@ -159,14 +159,14 @@ describe('a subscription trigger', () => {
 		const {expiresAt} = await registry.subscribe({recipient: ALICE, kind: 'new-post'});
 		now = expiresAt + 1;
 		await run({block: 101, hash: '0xa101', author: BOB, count: 1n});
-		expect(await listDeliveries(db, {action: 'push'})).toEqual([]);
+		expect(await listDeliveries(db, INDEXER, {action: 'push'})).toEqual([]);
 	});
 
 	it('is gone for good once cancelled', async () => {
 		await registry.subscribe({recipient: ALICE, kind: 'new-post'});
 		expect(await registry.unsubscribe({recipient: ALICE, kind: 'new-post'})).toBe(true);
 		await run({block: 101, hash: '0xa101', author: BOB, count: 1n});
-		expect(await listDeliveries(db, {action: 'push'})).toEqual([]);
+		expect(await listDeliveries(db, INDEXER, {action: 'push'})).toEqual([]);
 		expect((await registry.list(ALICE))[0]?.status).toBe('cancelled');
 	});
 });
@@ -182,7 +182,7 @@ describe('a global rule', () => {
 			{block: 105, hash: '0xa105', author: ALICE, count: 4n},
 		);
 
-		const rewards = await listDeliveries(db, {action: 'reward'});
+		const rewards = await listDeliveries(db, INDEXER, {action: 'reward'});
 		expect(rewards).toHaveLength(1);
 		expect(rewards[0]).toMatchObject({
 			recipient: ALICE.toLowerCase(),

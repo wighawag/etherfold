@@ -38,7 +38,7 @@ let app: ReturnType<typeof createRegistrationAPI>;
 let alice: AppIdentity;
 
 beforeEach(async () => {
-	registry = createTriggerRegistry({db: memoryDB(), definitions});
+	registry = createTriggerRegistry({db: memoryDB(), app: 'app', definitions});
 	await registry.setup();
 	app = createRegistrationAPI({
 		registry,

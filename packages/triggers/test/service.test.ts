@@ -87,7 +87,7 @@ afterEach(() => disk.remove());
 async function start(db: RemoteSQL = disk.open(), lane: 'safe' | 'fast' = 'safe'): Promise<TriggerService> {
 	const service = createTriggerService({
 		db,
-		name: INDEXER,
+		app: INDEXER,
 		chainId: CHAIN_ID,
 		feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
 		gate: async () => 1000,
@@ -150,7 +150,7 @@ describe('a subscription trigger, end to end', () => {
 			`${CHAIN_ID}:0xa102:0:${BOB.toLowerCase()}`,
 			`${CHAIN_ID}:0xa102:0:${CAROL.toLowerCase()}`,
 		];
-		const delivered = await listDeliveries(disk.open(), {action: 'push', status: 'delivered'});
+		const delivered = await listDeliveries(disk.open(), INDEXER, {action: 'push', status: 'delivered'});
 		expect(delivered.map((d) => d.key).sort()).toEqual(expected.sort());
 		// the target was called once per delivery, plus the one retry, which carried the same key
 		const calls = keysOf(push);
@@ -174,7 +174,7 @@ describe('a subscription trigger, end to end', () => {
 		await service.tick();
 
 		expect(push.requests.map((r) => (r.body as {address: string}).address)).toEqual([ALICE.toLowerCase()]);
-		expect(await readJournal(disk.open(), {kind: 'expired'})).toEqual([
+		expect(await readJournal(disk.open(), INDEXER, {kind: 'expired'})).toEqual([
 			expect.objectContaining({detail: expect.objectContaining({recipient: DAVE.toLowerCase()})}),
 		]);
 	});
@@ -217,10 +217,10 @@ describe('a global rule, end to end', () => {
 		}
 
 		expect(reward.requests).toHaveLength(3);
-		const [dead] = await listDeliveries(disk.open(), {status: 'dead'});
+		const [dead] = await listDeliveries(disk.open(), INDEXER, {status: 'dead'});
 		expect(dead).toMatchObject({action: 'reward', key: `third-post:${CAROL.toLowerCase()}`, attempts: 3});
 		expect(dead?.lastError).toMatch(/^500: .*mint queue is down/);
-		expect(await readJournal(disk.open(), {kind: 'dead-lettered'})).toHaveLength(1);
+		expect(await readJournal(disk.open(), INDEXER, {kind: 'dead-lettered'})).toHaveLength(1);
 	});
 });
 
@@ -243,8 +243,8 @@ describe('a rewind, end to end', () => {
 		await service.tick();
 
 		const db = disk.open();
-		expect((await listDeliveries(db, {status: 'retracted'})).map((d) => d.blockHash)).toEqual(['0xa104']);
-		expect((await listDeliveries(db, {status: 'delivered'})).map((d) => d.blockHash).sort()).toEqual([
+		expect((await listDeliveries(db, INDEXER, {status: 'retracted'})).map((d) => d.blockHash)).toEqual(['0xa104']);
+		expect((await listDeliveries(db, INDEXER, {status: 'delivered'})).map((d) => d.blockHash).sort()).toEqual([
 			'0xa101',
 			'0xb104',
 		]);

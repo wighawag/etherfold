@@ -113,10 +113,10 @@ describe('a predicate reading the state', () => {
 			},
 		});
 		const db = memoryDB();
-		const registry = createTriggerRegistry({db, definitions});
+		const registry = createTriggerRegistry({db, app: INDEXER, definitions});
 		const consumer = createConsumer({
 			db,
-			name: INDEXER,
+			app: INDEXER,
 			chainId: CHAIN_ID,
 			feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
 			gate: async () => 1000,
@@ -125,12 +125,12 @@ describe('a predicate reading the state', () => {
 		await consumer.setup();
 
 		await expect(consumer.step()).rejects.toBeInstanceOf(StateReadError);
-		expect(await listDeliveries(db)).toEqual([]);
+		expect(await listDeliveries(db, INDEXER)).toEqual([]);
 		expect((await consumer.status()).cursor).toBeUndefined();
 
 		failing = false;
 		await consumer.catchUp();
-		const deliveries = await listDeliveries(db);
+		const deliveries = await listDeliveries(db, INDEXER);
 		expect(deliveries.map((d) => [d.key, d.blockNumber])).toEqual([[`third-post:${ALICE.toLowerCase()}`, 104]]);
 	});
 });
@@ -150,7 +150,7 @@ describe('a consumer held at a page by a read that keeps failing', () => {
 		const db = memoryDB();
 		const service = createTriggerService({
 			db,
-			name: INDEXER,
+			app: INDEXER,
 			chainId: CHAIN_ID,
 			feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
 			gate: async () => 1000,
@@ -180,12 +180,13 @@ describe('a consumer held at a page by a read that keeps failing', () => {
 		await expect(service.tick()).rejects.toBeInstanceOf(StateReadError);
 		answer = 'broken';
 		await expect(service.tick()).rejects.toBeInstanceOf(StateReadError);
-		const stalled = await readJournal(db, {kind: 'stalled'});
+		const stalled = await readJournal(db, INDEXER, {kind: 'stalled'});
+		expect(stalled[0]?.app).toBe(INDEXER);
 		expect(stalled.map((e) => e.detail['code'])).toEqual(['http-503', 'invalid-query']);
-		expect(stalled[0]?.detail).toMatchObject({consumer: INDEXER, error: expect.stringMatching(/503/)});
+		expect(stalled[0]?.detail).toMatchObject({error: expect.stringMatching(/503/)});
 
 		answer = 'up';
 		expect((await service.tick()).consumed).toBe(4);
-		expect(await readJournal(db, {kind: 'recovered'})).toHaveLength(1);
+		expect(await readJournal(db, INDEXER, {kind: 'recovered'})).toHaveLength(1);
 	});
 });

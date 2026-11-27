@@ -126,7 +126,7 @@ export function rewardAction(options: {
 				reward: delivery.payload,
 				trigger: delivery.trigger,
 				log: {
-					consumer: delivery.consumer,
+					app: delivery.app,
 					blockNumber: delivery.blockNumber,
 					blockHash: delivery.blockHash,
 					logIndex: delivery.logIndex,

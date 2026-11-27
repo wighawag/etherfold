@@ -38,10 +38,11 @@ export type DelegatedIdentityVerifierOptions = {
 	 * takes it: a bare host (`game.example` is `https://game.example`,
 	 * `localhost:5173` is `http://`) or an origin. A proof for any other app is
 	 * refused, so a page elsewhere cannot register on this service's users'
-	 * behalf. One app per service because a subscription records no app: the push
-	 * action names one domain, so a second app's users would be pushed under the
-	 * first's domain (or to no device, reported delivered). Its origin is also
-	 * the one the registration API answers CORS for (`appOrigin`).
+	 * behalf. The domain is per app because each app has its own verifier and
+	 * its own push action, which pushes under that app's domain: a verifier
+	 * serving a second domain would let that domain's users register with an app
+	 * whose pushes go out under the first (etherfold ADR-0101). Its origin is
+	 * also the one the registration API answers CORS for (`appOrigin`).
 	 */
 	domain: string;
 	/** The clock a request's timestamp is checked against; `Date.now` when absent. */

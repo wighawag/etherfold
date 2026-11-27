@@ -117,7 +117,7 @@ function definitions() {
 async function start(db: RemoteSQL = disk.open(), lane: 'safe' | 'fast' = 'safe'): Promise<TriggerService> {
 	const service = createTriggerService({
 		db,
-		name: INDEXER,
+		app: INDEXER,
 		chainId: CHAIN_ID,
 		feed: canonicalFeed({url: BASE_URL, indexer: INDEXER, fetch: etherfold.fetch}),
 		gate: async () => 1000,
@@ -191,7 +191,7 @@ describe('a subscription trigger on the greetings, through the real push server'
 		expect(receivedBy(devices.carol).sort()).toEqual(['hello from alice', 'hello from bob']);
 		expect(pushServer.sent).toHaveLength(4);
 
-		const delivered = await listDeliveries(disk.open(), {action: 'push', status: 'delivered'});
+		const delivered = await listDeliveries(disk.open(), INDEXER, {action: 'push', status: 'delivered'});
 		expect(delivered.map((d) => d.key).sort()).toEqual(
 			[
 				`${CHAIN_ID}:${blockHash(101)}:0:${alice.address}`,
@@ -214,7 +214,7 @@ describe('a subscription trigger on the greetings, through the real push server'
 
 		expect(receivedBy(alicesDevice)).toEqual(['hello']);
 		expect(receivedBy(carolsDevice)).toEqual([]);
-		expect(await readJournal(disk.open(), {kind: 'expired'})).toEqual([
+		expect(await readJournal(disk.open(), INDEXER, {kind: 'expired'})).toEqual([
 			expect.objectContaining({detail: expect.objectContaining({recipient: carol.address})}),
 		]);
 	});
@@ -261,10 +261,10 @@ describe("a global rule on the greetings: every account's third greeting", () =>
 		}
 
 		expect(reward.requests).toHaveLength(3);
-		const [dead] = await listDeliveries(disk.open(), {status: 'dead'});
+		const [dead] = await listDeliveries(disk.open(), INDEXER, {status: 'dead'});
 		expect(dead).toMatchObject({action: 'reward', key: `third-greeting:${carol.address}`, attempts: 3});
 		expect(dead?.lastError).toMatch(/^500: .*mint queue is down/);
-		expect(await readJournal(disk.open(), {kind: 'dead-lettered'})).toHaveLength(1);
+		expect(await readJournal(disk.open(), INDEXER, {kind: 'dead-lettered'})).toHaveLength(1);
 	});
 });
 
@@ -289,7 +289,7 @@ describe('a rewind on the greetings', () => {
 		}
 
 		const db = disk.open();
-		const retracted = await listDeliveries(db, {status: 'retracted'});
+		const retracted = await listDeliveries(db, INDEXER, {status: 'retracted'});
 		expect(retracted.map((d) => [d.action, d.blockHash]).sort()).toEqual([
 			['push', blockHash(105)],
 			['reward', blockHash(105)],
@@ -299,7 +299,7 @@ describe('a rewind on the greetings', () => {
 		expect(reward.requests.every((r) => (r.body as {log: {blockHash: string}}).log.blockHash === blockHash(105))).toBe(
 			true,
 		);
-		expect(await listDeliveries(db, {action: 'reward', status: 'delivered'})).toEqual([]);
+		expect(await listDeliveries(db, INDEXER, {action: 'reward', status: 'delivered'})).toEqual([]);
 		expect(receivedBy(alicesDevice).sort()).toEqual(['first', 'on the branch that wins', 'second']);
 	});
 });

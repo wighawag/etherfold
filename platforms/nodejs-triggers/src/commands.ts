@@ -8,7 +8,7 @@ export const USAGE = `etherfold-triggers <command> [--config <file>]
 Commands:
   run                      follow the feed, deliver, and serve the registration API (until SIGINT/SIGTERM)
   tick                     one round (expire, follow the feed to the gate, deliver what is due), then exit
-  status                   the consumer's position, and why it is paused if it is
+  status                   the consumer's app and position, and why it is paused if it is
   resume                   an operator's decision after a pause: follow the new generation or stream
   deliveries [--status s]  the outbox (pending, delivered, expired, dead, retracted), as JSON lines
   requeue <id>             put a dead letter back in the queue
@@ -63,6 +63,7 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 			case 'deliveries':
 				for (const delivery of await listDeliveries(
 					db,
+					service.app,
 					values.status ? {status: values.status as DeliveryStatus} : {},
 				)) {
 					io.stdout(JSON.stringify(delivery));
@@ -79,7 +80,7 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 				return requeued ? 0 : 1;
 			}
 			case 'journal':
-				for (const entry of await readJournal(db, values.kind ? {kind: values.kind as JournalKind} : {})) {
+				for (const entry of await readJournal(db, service.app, values.kind ? {kind: values.kind as JournalKind} : {})) {
 					io.stdout(JSON.stringify(entry));
 				}
 				return 0;

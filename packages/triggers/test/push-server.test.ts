@@ -23,7 +23,7 @@ let push: ActionAdapter;
 function deliveryTo(recipient: string, key: string): DeliveryRecord {
 	return {
 		id: 1,
-		consumer: 'greetings',
+		app: 'greetings',
 		action: 'push',
 		key,
 		recipient,
