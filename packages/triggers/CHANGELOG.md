@@ -1,5 +1,15 @@
 # @etherfold/triggers
 
+## 0.4.0
+
+### Minor Changes
+
+- af0d67c: Follow-ups to the multi-app trigger service's review. Core: a lease that a guarded write finds lost forgets the expiry it held, so the next tick reports `not-leased` rather than `lost`; a round whose feed failed journals the stall before it delivers, and when a delivery then loses the lease the `lost` report carries the feed's failure (`followFailure`); the settle, retry and requeue statements name the app too; a subscription kind declaring more than `MAX_FILTERABLE` (48) filterable arguments is refused by `defineTriggers`, as its match query would pass D1's 100 bound parameters. Platform: a config's top level is refused when it holds anything but `database`, `api`, `intervalMs`, `retired` and `apps` (a per-app setting misplaced there was silently ignored); apps naming one `file:` database spelled two ways share one connection, compared by absolute path, so the start-up guard no longer refuses them.
+
+### Patch Changes
+
+- cf071cf: A round's `stalled` and `recovered` journal entries are now confirmed written before the service remembers them: a guarded journal row carries `RETURNING`, so a lease lost just before the write stops the round (`lost`, with `followFailure`) instead of silently dropping the entry, and the next round that holds the lease journals it. A journal write that fails for another reason no longer holds back the round's deliveries: they go out, then the round reports its failure.
+
 ## 0.3.0
 
 ### Minor Changes
