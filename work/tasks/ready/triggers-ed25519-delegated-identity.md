@@ -45,8 +45,8 @@ Done means: the acceptance criteria hold and `dorfl.json`'s `verify` passes (the
 ### Claiming this task
 
 ```sh
-dorfl claim triggers-ed25519-delegated-identity --arbiter <remote>
-git fetch <remote> && git switch -c work/triggers-ed25519-delegated-identity <remote>/main
+dorfl claim <slug> --arbiter <remote>
+git fetch <remote> && git switch -c work/<slug> <remote>/main
 # on completion, in the work branch's PR/merge:
-git mv work/tasks/ready/triggers-ed25519-delegated-identity.md work/tasks/done/triggers-ed25519-delegated-identity.md
+git mv work/tasks/ready/<slug>.md work/tasks/done/<slug>.md
 ```
