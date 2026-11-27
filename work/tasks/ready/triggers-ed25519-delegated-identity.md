@@ -3,6 +3,7 @@ title: The trigger service's registrations proven with delegated-identity's Ed25
 slug: triggers-ed25519-delegated-identity
 blockedBy: []
 covers: []
+needsAnswers: true
 ---
 
 ## What to build
