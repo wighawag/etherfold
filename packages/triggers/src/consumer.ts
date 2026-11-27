@@ -1,7 +1,7 @@
 import type {RemoteSQL, SQLPreparedStatement} from 'remote-sql';
 import type {CanonicalEntry, CanonicalFeed} from './feed.js';
 import {journalStatement} from './journal.js';
-import {LeaseLostError, type Lease, type LeaseGuard} from './lease.js';
+import type {Lease, LeaseGuard} from './lease.js';
 import {insertDeliveryStatement, type NewDelivery} from './outbox.js';
 import {setupDatabase} from './schema.js';
 import {callTimeoutOf, withTimeout} from './timeout.js';
@@ -184,7 +184,7 @@ export function createConsumer(options: ConsumerOptions): Consumer {
 	async function commit(statements: SQLPreparedStatement[]): Promise<void> {
 		const results = await db.batch(statements);
 		if (lease && (results[results.length - 1]?.results?.length ?? 0) === 0) {
-			throw new LeaseLostError(`the lease of the app "${app}" was lost before its commit: nothing was written`);
+			throw lease.lost(`the lease of the app "${app}" was lost before its commit: nothing was written`);
 		}
 	}
 

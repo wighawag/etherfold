@@ -1,6 +1,6 @@
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join, relative} from 'node:path';
 import {createClient} from '@libsql/client';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {
@@ -221,6 +221,34 @@ describe('two apps over one shared database', () => {
 		expect(node.apps['c']!.db).not.toBe(node.apps['a']!.db);
 		// an app without a verifier serves no routes
 		expect(node.api).toBeUndefined();
+	});
+
+	it('one database spelled two ways is one connection, and its guard sees both apps as declared', async () => {
+		const absolute = join(dir, 'triggers.db');
+		const config: NodeConfig = {
+			database: `file:${absolute}`,
+			apps: {
+				a: appConfig({
+					indexer: 'board',
+					chainId: '1',
+					feed: scriptedFeed('board', [[post(101, BOB, 3n)]]).fetch,
+					action: recordingAction(),
+				}),
+				b: appConfig({
+					indexer: 'board',
+					chainId: '1',
+					feed: scriptedFeed('board', [[post(101, BOB, 3n)]]).fetch,
+					action: recordingAction(),
+					extra: {database: `file:${relative(process.cwd(), dir)}/./triggers.db`},
+				}),
+			},
+		};
+		const node = await start(config);
+		expect(node.apps['a']!.db).toBe(node.apps['b']!.db);
+		await node.tick();
+		node.close();
+		// both apps now have their rows in it: a restart refuses neither
+		await expect(start(config)).resolves.toBeDefined();
 	});
 });
 
@@ -476,6 +504,18 @@ describe('an app name', () => {
 		const app = appConfig({indexer: 'board', chainId: '1', feed: hangingFetch, action: recordingAction()});
 		expect(() => validateConfig({apps: {a: {...app, name: 'a'}}})).toThrow(/the key of `apps`/);
 		expect(() => validateConfig({apps: {}})).toThrow(/declares no app/);
+	});
+});
+
+describe('the top of a config', () => {
+	it('holds only the process-level settings: an app setting or a typo there is refused', () => {
+		const app = appConfig({indexer: 'board', chainId: '1', feed: hangingFetch, action: recordingAction()});
+		for (const key of ['leaseMs', 'callTimeoutMs', 'maxPagesPerRound', 'maxDeliveriesPerRound', 'databse']) {
+			expect(() => validateConfig({apps: {a: app}, [key]: 1}), key).toThrow(new RegExp(`\`${key}\` at the top`));
+		}
+		expect(() =>
+			validateConfig({database: 'file:x.db', api: {port: 1}, intervalMs: 1, retired: [], apps: {a: app}}),
+		).not.toThrow();
 	});
 });
 

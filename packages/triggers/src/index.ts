@@ -18,7 +18,7 @@ export type {DeliveryRecord, DeliveryStatus, LogPosition, NewDelivery} from './o
 export {readJournal} from './journal.js';
 export type {JournalEntry, JournalKind} from './journal.js';
 export {setupDatabase} from './schema.js';
-export {createTriggerRegistry, defineTriggers, normaliseValue, RegistrationError} from './triggers.js';
+export {createTriggerRegistry, defineTriggers, MAX_FILTERABLE, normaliseValue, RegistrationError} from './triggers.js';
 export type {
 	DecodedLog,
 	EventDefinition,

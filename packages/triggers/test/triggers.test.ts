@@ -4,6 +4,7 @@ import {
 	createConsumer,
 	createTriggerRegistry,
 	defineTriggers,
+	MAX_FILTERABLE,
 	listDeliveries,
 	readJournal,
 	type TriggerRegistry,
@@ -216,5 +217,25 @@ describe('a global rule', () => {
 			trigger: 'rule:third-post',
 			payload: {achievement: 'third-post', account: ALICE.toLowerCase()},
 		});
+	});
+});
+
+describe('a subscription kind', () => {
+	it(`declaring more than ${MAX_FILTERABLE} filterable arguments is refused, its match query past D1's 100 parameters`, () => {
+		const inputs = Array.from({length: MAX_FILTERABLE + 1}, (_, i) => ({name: `a${i}`, type: 'uint256' as const}));
+		const define = (count: number) =>
+			defineTriggers({
+				events: {wide: {address: BOARD, abi: {type: 'event', name: 'Wide', inputs}}},
+				subscriptions: {
+					wide: {
+						event: 'wide',
+						filterable: inputs.slice(0, count).map((input) => input.name),
+						action: 'push',
+						render: () => ({}),
+					},
+				},
+			});
+		expect(() => define(MAX_FILTERABLE)).not.toThrow();
+		expect(() => define(MAX_FILTERABLE + 1)).toThrow(/more than 48/);
 	});
 });

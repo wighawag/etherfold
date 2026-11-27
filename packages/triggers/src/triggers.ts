@@ -72,6 +72,12 @@ export type TriggerDefinitions = {
 	rules?: Record<string, GlobalRule>;
 };
 
+/**
+ * The most filterable arguments a subscription kind may declare: its match query
+ * binds 3 parameters plus 2 per argument, and D1 caps a query at 100.
+ */
+export const MAX_FILTERABLE = 48;
+
 /** Checks a set of definitions once, at startup, so a typo fails there and not on the first log. */
 export function defineTriggers<T extends TriggerDefinitions>(definitions: T): T {
 	const {events, subscriptions = {}, rules = {}} = definitions;
@@ -85,6 +91,11 @@ export function defineTriggers<T extends TriggerDefinitions>(definitions: T): T 
 	};
 	for (const [name, kind] of Object.entries(subscriptions)) {
 		const args = argsOf(kind.event, `subscription kind "${name}"`);
+		if ((kind.filterable?.length ?? 0) > MAX_FILTERABLE) {
+			throw new Error(
+				`subscription kind "${name}": ${kind.filterable!.length} filterable arguments, more than ${MAX_FILTERABLE}: its match query would bind more than the 100 parameters D1 allows`,
+			);
+		}
 		for (const arg of [...(kind.filterable ?? []), ...(kind.notFrom ? [kind.notFrom] : [])]) {
 			if (!args.has(arg))
 				throw new Error(`subscription kind "${name}": "${arg}" is not an argument of "${kind.event}"`);

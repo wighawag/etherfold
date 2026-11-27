@@ -1,3 +1,4 @@
+import {resolve} from 'node:path';
 import {createClient} from '@libsql/client';
 import {canonicalFeed, createTriggerService, rpcGate, type TickReport, type TriggerService} from '@etherfold/triggers';
 import {Hono} from 'hono';
@@ -18,6 +19,18 @@ import {DEFAULT_DATABASE, validateConfig, type AppConfig, type NodeConfig} from 
 export function openDatabase(url: string): {db: RemoteSQL; close(): void} {
 	const client = createClient({url});
 	return {db: new RemoteLibSQL(client), close: () => client.close()};
+}
+
+/**
+ * The identity of a database URL: a `file:` URL by its absolute path (so
+ * `file:triggers.db` and `file:./triggers.db` are one database, one connection),
+ * any other URL as written.
+ */
+export function databaseKey(url: string): string {
+	if (!url.startsWith('file:') || url.startsWith('file://')) return url;
+	const query = url.indexOf('?');
+	const path = query < 0 ? url.slice('file:'.length) : url.slice('file:'.length, query);
+	return `file:${resolve(path)}${query < 0 ? '' : url.slice(query)}`;
 }
 
 /** One app of the process: its core service, and the database it reads and writes. */
@@ -123,19 +136,20 @@ export async function createNodeService(config: NodeConfig): Promise<NodeService
 	const apps: Record<string, NodeApp> = {};
 	try {
 		for (const [name, app] of Object.entries(config.apps)) {
-			const database = app.database ?? config.database ?? DEFAULT_DATABASE;
-			let handle = opened.get(database);
+			const url = app.database ?? config.database ?? DEFAULT_DATABASE;
+			const key = databaseKey(url);
+			let handle = opened.get(key);
 			if (!handle) {
-				handle = openDatabase(database);
-				opened.set(database, handle);
+				handle = openDatabase(url);
+				opened.set(key, handle);
 			}
-			apps[name] = {name, service: appService(name, app, handle.db), db: handle.db, database};
+			apps[name] = {name, service: appService(name, app, handle.db), db: handle.db, database: url};
 		}
 		// setup creates the tables and writes no row, so the guard reads a fresh database as empty
 		for (const app of Object.values(apps)) await app.service.setup();
 		for (const [database, handle] of opened) {
 			const declared = Object.values(apps)
-				.filter((app) => app.database === database)
+				.filter((app) => databaseKey(app.database) === database)
 				.map((app) => app.name);
 			await refuseUndeclaredApps(database, handle.db, declared, config.retired ?? []);
 		}
