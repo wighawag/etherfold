@@ -1,7 +1,6 @@
 ---
 title: 'One trigger service serves several apps'
 slug: one-trigger-service-serves-several-apps
-humanOnly: true
 ---
 
 > Launch snapshot, records intent at creation, NOT maintained. Current truth: `docs/adr/` (decisions) + the code; remaining work: `work/tasks/ready/` tasks. (The technical-detail sections below are trimmed by `to-task` once the work is tasked; they move into tasks/ADRs and this spec settles to its durable framing: Problem / Solution / User Stories / Out of Scope.)
@@ -86,7 +85,7 @@ One `etherfold-triggers` process hosts several APPS, each declared in the one co
 
 ### Autonomy notes
 
-- `humanOnly: true`: the maintainer wants to drive the tasking of this spec, because it is the first change to the trigger service since its move into this repo and it fixes the service's multi-app shape (an ADR); the tasks it yields may still be agent-buildable.
+- `humanOnly` omitted: nothing in the tasking needs a human decision. The design forks were answered by the maintainer and the gaps of two reviews are decided above, so an agent may task it.
 - `needsAnswers` omitted: the maintainer answered the open questions on 2026-11-26 (no live apps, so a clean 0.x break with no migration; routes always `/{app}/...`; the lease in the core, its cost being negligible), and the review's gaps (fencing, guard override, lease bootstrap and release, timeouts, per-app queries) are decided above.
 
 ## Out of Scope
