@@ -40,3 +40,13 @@ With several apps in one process, an operator must see WHICH app is paused, stal
 > FIRST, check this task against current reality (written 2026-11-26). If the multi-app task already added per-app flags, or shaped the config differently, adapt or route to needs-attention (WORK-CONTRACT.md, "Drift is a needs-attention signal").
 >
 > RECORD every non-obvious choice in a `## Decisions` block at the end of your final report. Never write an em dash character. Bound exploratory shell commands (`timeout`, `head`), and never grep `node_modules`, `dist`, `.git` or minified bundles.
+
+## Decisions
+
+- **`resume` with no app paused is refused.** Without `--app`, if no app is paused it says "no app is paused" and exits 1. This applies to single-app configs too, which used to get a silent no-op and exit 0. I chose it because the task says `resume` acts "only when exactly one app is paused, and otherwise refuses". The alternative was a no-op with exit 0 when nothing is paused. `resume --app x` on an app that is not paused stays a no-op that prints its status and exits 0. This touches only the `resume` command.
+- **`requeue` when two apps hold the same id.** Apps on their own databases can each have a row with the same id. Without `--app`, `requeue` then refuses, naming the apps that hold it, and asks for `--app`. Guessing would requeue the wrong app's row, so I refused instead. It touches only `requeue`.
+- **`requeue` prints a line on success.** It now writes `{"app": ..., "requeued": <id>}` to stdout, where before it printed nothing. This is how it "says which app it belonged to"; the README documents it. It touches only `requeue`.
+- **New `id` filter on `listDeliveries` in the core.** The CLI needs to know which app a row belongs to. The core deliverer's `requeue` returns `false` both for "not this app's row" and for "not a dead letter", so it cannot tell them apart. I chose to add the filter rather than write raw SQL in the platform or scan a whole outbox. It touches the public API of `@etherfold/triggers`, which is why that package is in the changeset.
+- **`NodeService.tick(only?: string[])`.** `tick --app` needs to run one app's round. Adding a name filter to the existing `tick` keeps one code path for reports and exit codes. The alternative was the CLI calling `app.service.tick()` and duplicating the report formatting. It touches the platform's public `NodeService` type.
+- **The app name is checked before any database is opened.** A typo then never sets up a database or ticks anything. It applies to every command except `run`.
+- **`status` stays JSON.** The pause reason (`{"kind": "generation-changed", "from", "to"}`) is already in the JSON line beside `app`, so I added no human-readable sentence.

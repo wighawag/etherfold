@@ -207,15 +207,21 @@ The routes are checked at the full path the service sees, the `/{app}` prefix in
 ### Operating it
 
 ```sh
-etherfold-triggers status                     # each app, where its consumer is, and why it is paused
-etherfold-triggers resume                     # after a pause: follow the new generation or stream
-etherfold-triggers deliveries --status dead   # the dead letters, as JSON lines
-etherfold-triggers requeue <id>               # send a dead letter again
-etherfold-triggers journal                    # rewinds, pauses, stalls, expiries, dead letters
-etherfold-triggers tick                       # one round of every app, then exit
+etherfold-triggers status                        # each app, where its consumer is, and why it is paused
+etherfold-triggers status --app greetings        # that app only
+etherfold-triggers resume                        # after a pause: the ONE paused app follows the new generation or stream
+etherfold-triggers resume --app greetings        # that app, whichever others are paused
+etherfold-triggers deliveries --status dead      # every app's dead letters, as JSON lines
+etherfold-triggers requeue <id> [--app <name>]   # send a dead letter again
+etherfold-triggers journal [--app <name>]        # rewinds, pauses, stalls, expiries, dead letters
+etherfold-triggers tick [--app <name>]           # one round of every app (or of that one), then exit
 ```
 
-`status`, `deliveries`, `journal` and `tick` cover every app of the config, one JSON line per row, each naming its `app`; `tick` exits 1 when any app's round failed, and reports that app's error beside the others' rounds. `resume` and `requeue` act on ONE app, so with several apps configured they are refused, naming the apps, until the CLI takes an app to act on: resuming every paused app at once is not a decision anyone made. Every row the service writes is keyed by its app, so `deliveries` and `journal` never mix two apps' rows under one name.
+Every command but `run` takes `--app <name>`, the app's key in the config's `apps`: with it, the command reports or acts on that app only; an unknown name is refused before any database is opened, listing the configured apps. Without it, `status`, `deliveries`, `journal` and `tick` cover every app, one JSON line per row, each naming its `app`; `tick` exits 1 when any app's round failed, and reports that app's error beside the others' rounds.
+
+`status` of a paused app says why under `paused`, beside its `app`: a generation change is `{"kind": "generation-changed", "from": "<old>", "to": "<new>"}`, a refused cursor is `{"kind": "refused", ...}`. Resuming is a decision about ONE app, so `resume` without `--app` acts only when exactly one app is paused, and otherwise refuses, naming the paused apps (or saying none is), so an operator never resumes the wrong one by accident.
+
+`requeue <id>` prints `{"app": ..., "requeued": <id>}`. With `--app`, it refuses an id whose row belongs to another app, naming that app. Without it, it works on any app's row and says which app it belonged to; when the apps keep their own databases and two of them hold a row of that id, it refuses, naming them, until `--app` picks one. Every row the service writes is keyed by its app, so `deliveries` and `journal` never mix two apps' rows under one name.
 
 ## Status
 

@@ -126,14 +126,18 @@ export function deliveryFromRow(row: Row): DeliveryRecord {
 	};
 }
 
-/** One app's outbox, oldest first: what an operator inspects (dead letters, what a rewind took back). */
+/**
+ * One app's outbox, oldest first: what an operator inspects (dead letters, what a rewind took back).
+ * `id` narrows it to that one row, if it is this app's.
+ */
 export async function listDeliveries(
 	db: RemoteSQL,
 	app: string,
-	filter: {status?: DeliveryStatus; action?: string; recipient?: string} = {},
+	filter: {id?: number; status?: DeliveryStatus; action?: string; recipient?: string} = {},
 ): Promise<DeliveryRecord[]> {
 	const clauses: string[] = ['app = ?'];
 	const args: unknown[] = [app];
+	if (filter.id !== undefined) (clauses.push('id = ?'), args.push(filter.id));
 	if (filter.status !== undefined) (clauses.push('status = ?'), args.push(filter.status));
 	if (filter.action !== undefined) (clauses.push('action = ?'), args.push(filter.action));
 	if (filter.recipient !== undefined) (clauses.push('recipient = ?'), args.push(filter.recipient));
