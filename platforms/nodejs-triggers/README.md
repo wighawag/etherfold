@@ -13,7 +13,7 @@ npm i @etherfold/platform-nodejs-triggers
 npx etherfold-triggers run --config triggers.config.js
 ```
 
-One process hosts several APPS ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)): the config's default export is `{database?, api?, intervalMs?, apps}`, and `apps` maps each app's NAME to everything that app is: its chain, its feed (the etherfold server and named indexer it follows), its gate, its triggers, its actions with their tokens, and its verifier. A single app is an `apps` of one, so there is one shape and one route layout however many apps you run, and adding a second app changes nothing for the first. This one hosts a greetings demo and a game, on different chains and indexers:
+One process hosts several APPS ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)): the config's default export is `{database?, api?, intervalMs?, retired?, apps}`, and `apps` maps each app's NAME to everything that app is: its chain, its feed (the etherfold server and named indexer it follows), its gate, its triggers, its actions with their tokens, and its verifier. A single app is an `apps` of one, so there is one shape and one route layout however many apps you run, and adding a second app changes nothing for the first. This one hosts a greetings demo and a game, on different chains and indexers:
 
 ```js
 // triggers.config.js
@@ -145,7 +145,8 @@ export default defineConfig({
 				},
 			},
 			actions: {
-				// also named `push`: an action name, a subscription kind or a rule key never collides across apps
+				// also named `push`: an action name, a subscription kind or a rule key never collides across apps,
+				// in the service's state or at a target the apps share (the key sent is prefixed by the app)
 				push: pushAction({
 					url: 'https://push.example.com/api',
 					domain: 'game.example.com',
@@ -194,11 +195,11 @@ Two processes ticking one app over one database (a rolling deploy's overlap, a `
 
 ### A reward target
 
-The reward service is yours. It receives, with `Authorization: Bearer <token>` and `Idempotency-Key: <key>`:
+The reward service is yours. It receives, with `Authorization: Bearer <token>` and `Idempotency-Key: <app>:<key>` (the rule's key prefixed by the app, so two apps calling one reward service with the same rule key never collide there):
 
 ```json
 {
-	"key": "third-greeting:0xabc...",
+	"key": "greetings:third-greeting:0xabc...",
 	"recipient": "0xabc...",
 	"reward": {"achievement": "third-greeting", "account": "0xabc..."},
 	"trigger": "rule:third-greeting",

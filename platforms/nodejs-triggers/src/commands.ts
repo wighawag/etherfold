@@ -5,7 +5,7 @@ import {createNodeService, type NodeApp} from './service.js';
 
 export const USAGE = `etherfold-triggers <command> [--app <name>] [--config <file>]
 
-Commands (every app of the config, or the one --app names; each JSON line names its app):
+Commands (every app of the config, or the one --app names, except run; each JSON line names its app):
   run                      every app's loop, and their registration APIs under /{app}/ (until SIGINT/SIGTERM)
   tick                     one round of each app (expire, follow the feed to the gate, deliver what is due) under
                            its lease, then release the lease and exit (another ticker's: "lease": "not-leased")
@@ -17,7 +17,7 @@ Commands (every app of the config, or the one --app names; each JSON line names 
   journal [--kind k]       what happened that an operator must see (rewind, paused, expired, dead-lettered, ...)
 
 Options:
-  --app <name>     act on, or report, that app of the config only
+  --app <name>     act on, or report, that app of the config only (not with run)
   --config <file>  the service's config module (default: ./triggers.config.js)
 `;
 
@@ -51,6 +51,12 @@ export async function runCLI(argv: string[], io: IO): Promise<number> {
 	const config = await (io.loadConfig ?? loadConfig)(values.config ?? 'triggers.config.js');
 
 	if (command === 'run') {
+		if (values.app !== undefined) {
+			io.stderr(
+				'run serves every app of the config; --app is for the operator commands (run a config of that app alone instead)',
+			);
+			return 1;
+		}
 		if (!io.serve) throw new Error('run needs a server');
 		await io.serve(config, io.signal ?? new AbortController().signal);
 		return 0;

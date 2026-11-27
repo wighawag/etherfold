@@ -155,6 +155,31 @@ describe('a subscription trigger', () => {
 		expect((await registry.list(ALICE))[0]).toMatchObject({status: 'active', expiresAt: now + 30 * DAY});
 	});
 
+	it('is never expired over a renewal that lands between the sweep reading it and writing it', async () => {
+		const {expiresAt} = await registry.subscribe({recipient: ALICE, kind: 'new-post'});
+		now = expiresAt + 1;
+		// the registration API is lease-free: a renewal runs on its own, here just before the sweep's batch
+		let renewal: (() => Promise<unknown>) | undefined = () => registry.renewAll(ALICE);
+		const racing = new Proxy(db, {
+			get(target, property, receiver) {
+				if (property === 'batch') {
+					return async (...args: Parameters<typeof db.batch>) => {
+						const pending = renewal;
+						renewal = undefined;
+						if (pending) await pending();
+						return target.batch(...args);
+					};
+				}
+				const value: unknown = Reflect.get(target, property, receiver);
+				return typeof value === 'function' ? value.bind(target) : value;
+			},
+		});
+		const sweeping = createTriggerRegistry({db: racing, app: INDEXER, definitions, clock: () => now});
+		await sweeping.expire();
+		expect((await registry.list(ALICE))[0]).toMatchObject({status: 'active', expiresAt: now + 30 * DAY});
+		expect(await readJournal(db, INDEXER, {kind: 'expired'})).toEqual([]);
+	});
+
 	it('produces nothing past its expiry even before the sweep has marked it', async () => {
 		const {expiresAt} = await registry.subscribe({recipient: ALICE, kind: 'new-post'});
 		now = expiresAt + 1;

@@ -242,7 +242,9 @@ describe("a global rule on the greetings: every account's third greeting", () =>
 		const restarted = await (await start()).tick();
 		expect(restarted).toMatchObject({consumed: 0, matched: 0});
 
-		expect(reward.requests.map((r) => r.headers['idempotency-key'])).toEqual([`third-greeting:${bob.address}`]);
+		expect(reward.requests.map((r) => r.headers['idempotency-key'])).toEqual([
+			`${INDEXER}:third-greeting:${bob.address}`,
+		]);
 		expect(reward.requests[0]).toMatchObject({
 			headers: {authorization: 'Bearer reward-token'},
 			body: {
