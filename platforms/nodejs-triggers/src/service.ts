@@ -76,6 +76,35 @@ function appService(name: string, app: AppConfig, db: RemoteSQL): TriggerService
 	});
 }
 
+/** A database URL as a message may show it: without its query string, which may carry a token. */
+function shownDatabase(url: string): string {
+	const query = url.indexOf('?');
+	return query < 0 ? url : url.slice(0, query);
+}
+
+/**
+ * Refuse a database holding an app the config neither declares for it nor lists as `retired`
+ * (etherfold ADR-0101): a config pointed at the wrong database, or another service sharing it,
+ * would otherwise cross data. An app is known to a database by its consumer's row, the one row
+ * every app that ever ran a round there has. Only reads: a retired app's rows stay (ADR-0012).
+ */
+async function refuseUndeclaredApps(
+	database: string,
+	db: RemoteSQL,
+	declared: string[],
+	retired: readonly string[],
+): Promise<void> {
+	const {results} = await db.prepare('SELECT app FROM consumers ORDER BY app').all<{app: string}>();
+	const unknown = results.map((row) => row.app).filter((app) => !declared.includes(app) && !retired.includes(app));
+	if (unknown.length === 0) return;
+	const named = unknown.map((app) => `"${app}"`).join(', ');
+	throw new Error(
+		`the database ${shownDatabase(database)} holds rows of ${unknown.length === 1 ? 'the app' : 'the apps'} ${named}, which this config does not declare for it (it declares ${declared.map((app) => `"${app}"`).join(', ')} there): ` +
+			`if the config points at the wrong database, or another service shares it, fix that; ` +
+			`if ${unknown.length === 1 ? 'that app was' : 'those apps were'} removed or moved to a database of ${unknown.length === 1 ? 'its' : 'their'} own, list ${unknown.length === 1 ? 'it' : 'them'} in the config's \`retired\` (its rows are left where they are)`,
+	);
+}
+
 /** The process a config describes, its databases opened and set up. */
 export async function createNodeService(config: NodeConfig): Promise<NodeService> {
 	validateConfig(config);
@@ -95,7 +124,14 @@ export async function createNodeService(config: NodeConfig): Promise<NodeService
 			}
 			apps[name] = {name, service: appService(name, app, handle.db), db: handle.db, database};
 		}
+		// setup creates the tables and writes no row, so the guard reads a fresh database as empty
 		for (const app of Object.values(apps)) await app.service.setup();
+		for (const [database, handle] of opened) {
+			const declared = Object.values(apps)
+				.filter((app) => app.database === database)
+				.map((app) => app.name);
+			await refuseUndeclaredApps(database, handle.db, declared, config.retired ?? []);
+		}
 	} catch (error) {
 		close();
 		throw error;

@@ -478,3 +478,103 @@ describe('an app name', () => {
 		expect(() => validateConfig({apps: {}})).toThrow(/declares no app/);
 	});
 });
+
+describe('a database holding an app the config does not declare for it', () => {
+	/** An app over `database`, its feed one page with bob's third post: a round writes its consumer and a delivery. */
+	function appOn(indexer: string, database?: string): AppConfig {
+		return appConfig({
+			indexer,
+			chainId: '1',
+			feed: scriptedFeed(indexer, [[post(101, BOB, 3n)]]).fetch,
+			action: recordingAction(),
+			...(database ? {extra: {database}} : {}),
+		});
+	}
+
+	/** Run one round of `config`'s every app, then close it: the rows it leaves behind. */
+	async function seed(config: NodeConfig): Promise<void> {
+		const node = await createNodeService(config);
+		try {
+			for (const report of await node.tick()) expect(report).not.toHaveProperty('error');
+		} finally {
+			node.close();
+		}
+	}
+
+	it('is refused at start, naming the app and the database', async () => {
+		const shared = `file:${join(dir, 'triggers.db')}`;
+		await seed({database: shared, apps: {a: appOn('board')}});
+		await expect(createNodeService({database: shared, apps: {b: appOn('forum')}})).rejects.toThrow(
+			new RegExp(`${shared}[\\s\\S]*"a"[\\s\\S]*retired`),
+		);
+		// refused before any app of the config wrote a row
+		expect(await rowsByApp(shared, 'consumers')).toEqual(['a']);
+	});
+
+	it('names the database without its query string, which may carry a token', async () => {
+		const shared = `file:${join(dir, 'triggers.db')}`;
+		await seed({database: shared, apps: {a: appOn('board')}});
+		const refusal = createNodeService({database: `${shared}?authToken=secret`, apps: {b: appOn('forum')}});
+		await expect(refusal).rejects.toThrow(shared);
+		await expect(refusal).rejects.not.toThrow(/secret/);
+	});
+
+	it('starts once the app is `retired`, and leaves every row of it where it was', async () => {
+		const shared = `file:${join(dir, 'triggers.db')}`;
+		await seed({database: shared, apps: {a: appOn('board'), b: appOn('forum')}});
+		const before = {
+			consumers: await rowsByApp(shared, 'consumers'),
+			deliveries: await rowsByApp(shared, 'deliveries'),
+		};
+		expect(before).toEqual({consumers: ['a', 'b'], deliveries: ['a', 'b']});
+
+		// `a` removed from `apps`, and retired: `b` goes on, `a`'s rows stay
+		const node = await start({database: shared, retired: ['a'], apps: {b: appOn('forum')}});
+		for (const report of await node.tick()) expect(report).toMatchObject({app: 'b'});
+		expect(Object.keys(node.apps)).toEqual(['b']);
+		expect(await rowsByApp(shared, 'consumers')).toEqual(['a', 'b']);
+		expect(await rowsByApp(shared, 'deliveries')).toEqual(['a', 'b']);
+		expect(await listDeliveries(node.apps['b']!.db, 'a')).toHaveLength(1);
+	});
+
+	it('accepts the shared database still holding a moved app once it is `retired`, the app running on its own', async () => {
+		const shared = `file:${join(dir, 'triggers.db')}`;
+		const own = `file:${join(dir, 'a.db')}`;
+		await seed({database: shared, apps: {a: appOn('board'), b: appOn('forum')}});
+
+		// moved without retiring it: the shared database holds an app the config declares elsewhere
+		await expect(
+			createNodeService({database: shared, apps: {a: appOn('board', own), b: appOn('forum')}}),
+		).rejects.toThrow(new RegExp(`${shared}[\\s\\S]*"a"`));
+
+		const node = await start({database: shared, retired: ['a'], apps: {a: appOn('board', own), b: appOn('forum')}});
+		expect(node.apps['a']!.database).toBe(own);
+		for (const report of await node.tick()) expect(report).not.toHaveProperty('error');
+		expect(await rowsByApp(own, 'consumers')).toEqual(['a']);
+		expect(await rowsByApp(own, 'deliveries')).toEqual(['a']);
+		// the old rows stay in the shared database, untouched
+		expect(await rowsByApp(shared, 'consumers')).toEqual(['a', 'b']);
+		expect(await rowsByApp(shared, 'deliveries')).toEqual(['a', 'b']);
+	});
+
+	it('lets an app both in `apps` and `retired` start normally on its declared database', async () => {
+		const shared = `file:${join(dir, 'triggers.db')}`;
+		await seed({database: shared, apps: {a: appOn('board')}});
+		const node = await start({database: shared, retired: ['a'], apps: {a: appOn('board')}});
+		expect((await node.tick())[0]).toMatchObject({app: 'a'});
+		expect((await node.tick())[0]).not.toHaveProperty('error');
+	});
+
+	it('starts over an empty database, and over one holding only the apps it declares', async () => {
+		const shared = `file:${join(dir, 'triggers.db')}`;
+		await seed({database: shared, apps: {a: appOn('board')}});
+		await start({database: shared, apps: {a: appOn('board'), b: appOn('forum')}});
+	});
+
+	it('`retired` is a list of app names, or the config is refused', () => {
+		const apps = {a: appOn('board')};
+		expect(() => validateConfig({apps, retired: 'a'})).toThrow(/`retired`/);
+		expect(() => validateConfig({apps, retired: [1]})).toThrow(/`retired`/);
+		expect(() => validateConfig({apps, retired: ['old-app']})).not.toThrow();
+	});
+});

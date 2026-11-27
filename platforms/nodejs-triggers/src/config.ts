@@ -57,6 +57,14 @@ export type NodeConfig = {
 	 * the key of every row it writes (etherfold ADR-0101).
 	 */
 	apps: Record<string, AppConfig>;
+	/**
+	 * The apps whose rows a database may keep where the config does not declare them: an app
+	 * removed from `apps`, or moved to a database of its own. Its rows are left alone (etherfold
+	 * ADR-0012: never a quiet DELETE); without it, a database holding an app the config does not
+	 * declare for it is refused at start (etherfold ADR-0101). An app may be both here and in
+	 * `apps`: it runs on its declared database, and its old rows stay in the others.
+	 */
+	retired?: string[];
 };
 
 /** What an app may be named: a URL-safe slug, so it reads cleanly in a route, a flag and a log line. */
@@ -97,6 +105,13 @@ export function validateConfig(config: unknown): NodeConfig {
 		throw new Error(
 			`the config has ${stray.map((field) => `\`${field}\``).join(', ')} beside \`apps\`: they belong to each app, under its name:\n\n${APPS_SHAPE}`,
 		);
+	}
+	const retired = record['retired'];
+	if (
+		retired !== undefined &&
+		(!Array.isArray(retired) || !retired.every((name): name is string => typeof name === 'string'))
+	) {
+		throw new Error('the config\'s `retired` is not a list of app names: `retired: ["old-app"]`');
 	}
 	const names = Object.keys(apps);
 	if (names.length === 0) throw new Error(`the config declares no app: \`apps\` is empty\n\n${APPS_SHAPE}`);

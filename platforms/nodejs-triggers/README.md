@@ -161,6 +161,26 @@ The config's top level holds only what the process shares: `database`, `api` (`p
 
 All apps share ONE database by default (`database`, `file:triggers.db` when absent); an app that names its own `database` keeps every row there and none in the shared one. The schema is the same either way, because every row is keyed by the app ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)), so moving an app between the two is copying its rows, never a redesign. The shared database is the default for fewer moving parts, not for price: an extra database costs next to nothing on Turso or D1 (`work/notes/findings/a-database-costs-almost-nothing-on-d1-and-turso.md` in this repo). Apps naming the same URL share one connection. A database written before the app key is refused at start: start from an empty one.
 
+### A database holds only the apps the config declares for it
+
+At start, before any round, each database the config opens is checked against the apps the config declares FOR IT: one holding rows of any other app (an app whose consumer ran a round there) is refused, naming the app and the database (without its query string, so an `authToken` is not printed). That is what catches a config pointed at the wrong database, or a second service sharing one, before two services cross data ([ADR-0101](https://github.com/wighawag/etherfold/blob/main/docs/adr/0101-a-trigger-service-hosts-several-apps-in-one-app-keyed-schema-each-behind-its-own-lease.md)). Every command checks it, `run` and the operator commands alike.
+
+Removing an app, or moving it to a database of its own, leaves its rows where they were: nothing is ever quietly deleted ([ADR-0012](https://github.com/wighawag/etherfold/blob/main/docs/adr/0012-triggers-expire-unless-renewed.md)). Say so with the top-level `retired`, a list of app names whose rows a database may keep where the config does not declare them:
+
+```js
+export default defineConfig({
+	database: 'file:triggers.db',
+	// `board` was removed, and `game` moved to its own database: their old rows stay in triggers.db
+	retired: ['board', 'game'],
+	apps: {
+		greetings: {/* ... */},
+		game: {database: 'file:game.db' /* ... */},
+	},
+});
+```
+
+An app may be in both `apps` and `retired`, which is the move: it runs on the database it is declared for, and its old rows in the others are left alone. `retired` never deletes or changes those rows; to bring an app back, declare it again on the database that holds its rows.
+
 ### One loop per app
 
 `run` runs each app's own loop, concurrently, in the one process: its own consumer, cursor, gate, outbox and registration API, so one app's slow or failing round (a predicate that throws, a feed that does not answer) delays no other app's, and the journal records the stall under that app's name. Each round is bounded: at most `maxPagesPerRound` pages of the app's feed (100 when absent; a round that reaches it is not a stall, and the next starts at once) and at most `maxDeliveriesPerRound` due deliveries (100 when absent; the rest wait for the next round), both per app. What the process does NOT isolate is a synchronous infinite loop in one app's own code (a `render`, `recipients` or `predicate` that never returns without awaiting): it freezes the whole process, every app with it, because the apps share one event loop. That is acceptable because every app here is the one operator's own; running mutually untrusted apps' code in one process would need a sandbox, which this is not.
