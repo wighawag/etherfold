@@ -39,7 +39,7 @@ export class LeaseLostError extends Error {
 	readonly code = 'lease-lost';
 	constructor(
 		message: string,
-		/** The feed's failure earlier in the same round, which the lost lease kept out of the journal. */
+		/** The round's earlier failure to follow the feed, reported beside the lost lease. */
 		readonly followFailure?: {error: string; code?: string},
 	) {
 		super(message);
